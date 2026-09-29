@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-09-29T22:40Z by claude-alrust, the sole writer of this
+_Last updated: 2026-09-29T23:25Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -25,14 +25,17 @@ review.
 | Item | Author | Head | Disposition |
 |---|---|---|---|
 | PR #1 (`claude/scaffold`) | claude | `e839ceaf8cb43d6ed996c8fe12f884d0bb141743` | Codex: **guard correction APPROVE at `e839ceaf`**. The collaboration-doc reconciliation is a separate head (`claude/charter-sync`) pending its own review and integration. Historical: REQUEST_CHANGES at `a674546648c9ea6fd40e9915b23137b8cfaad150`. Hosted gate blocked. Draft; the `main` merge is the owner's |
-| `codex/conformance-harness` | codex | `9d70dc2e4e09c95901d1f8be2096e6ec2effa2bc` | Claude: **APPROVE** for the reference-only HTTP smoke scope and for the offline corrections. **Not approved** for two-server differential execution (HF-2 clock policy open) |
-| `claude/spec-customer-mapping` | claude | `adcc502c85ce132fb1822447dba97b645f7abed9` | Codex: **APPROVE** for its source-derived scope. The HTTP evidence is NOT_RUN |
+| `codex/conformance-harness` | codex | `9d70dc2e4e09c95901d1f8be2096e6ec2effa2bc` | Claude: **APPROVE** for the reference-only HTTP smoke and offline scopes (the basis of window 03) |
+| `codex/receive-clock-correction` | codex | `db06ce44f1fdbc3b0dbeb66b6f2952eb0d702071` | Claude: **APPROVE** for the offline `receive-clock-v1` scope (controlled fixture) and the reference-only HTTP smoke at this head. The smoke needs a new signed window. No two-server run has been requested; there is no candidate server yet |
+| `codex/…` HF-5 credential correction (on `db06ce44`) | codex | `e91dcabea1291b6540bc4d97636e6eef8df2bef0` | Claude: **APPROVE** for the differential-CLI credential contract (`SYNTHETIC-` plus 48 hex) |
+| `codex/customer-conformance` (on `9d70dc2e`) | codex | `a7426411181f4dd3cc859581cc203ee4067c07b4` | Claude: **APPROVE** for the 4 customer HTTP vectors as source-derived expectations. Runtime is **NOT_RUN** and needs its own window, with CLI-seeded synthetic keys |
+| `claude/spec-customer-mapping` | claude | `207f1bcac270afa40b8efc1bb2464e1886e48857` | Codex APPROVE at `edb13f94` (C19). The newer citation-only commit is pending review |
 | `claude/spec-lifecycle-receive` | claude | `a1de491c6677a3134c65d0e0b086cae08b925087` | Codex: **APPROVE** for its source-derived scope (receive slice only). HTTP beyond the 2 smoke cases is NOT_RUN |
-| `claude/spec-lifecycle-actions` (on receive) | claude | `9307790ae2128a60de3df2afee74018a028b4e10` | A0–A6 submitted; awaiting review |
-| `claude/spec-lifecycle-housekeeping` (on actions) | claude | `0560cc5ab061cf8bf57cca4613662974bc768468` | K0–K5 (data-loss surface) submitted; awaiting review |
-| `claude/spec-lifecycle-heartbeats` (on housekeeping) | claude | `993c5ddc65d1d279a5084fee4df76796c7cf9f1a` | HB0–HB6 submitted; awaiting review |
-| `claude/charter-sync` | claude | this head | Codex **APPROVE** at `ad92685a` (CHARTER-02 closed). The later STATUS/recommendation commits on this branch need their own review |
-| ALRUST-P0-CLOCK-01 policy | codex | proposal `ff2082ae…` | Claude: CONCUR with the design, plus CK-1..CK-3, before implementation. The implementation needs its own review |
+| `claude/spec-lifecycle-actions` (on receive) | claude | `cedfcdff5afb8198bfb3588836156ca8510d076c` | ACTION-01..03 corrections submitted (the previous head `9307790a` got REQUEST_CHANGES) |
+| `claude/spec-lifecycle-housekeeping` (on actions) | claude | `c6aecf66d55d476c2ff936588e2f68d9a9ed9648` | HOUSEKEEPING-01 correction submitted (the previous head `0560cc5a` got REQUEST_CHANGES) |
+| `claude/spec-lifecycle-heartbeats` (on housekeeping) | claude | `d3383b8a882b6b708b4b3c41d9405fca568d25e0` | HEARTBEAT-01 corrected. HEARTBEAT-02 partly disputed with a citation: an empty filtered result does return `total: 0`. Previous head `993c5ddc` |
+| `claude/charter-sync` | claude | this head | Codex **APPROVE** at `ac667cf8`. This STATUS refresh needs its own review |
+| ALRUST-P0-CLOCK-01 policy | codex | design02 `67bb59f5…` | Claude: concurred, and approved as implemented in `db06ce44` |
 
 ## Checks
 
@@ -45,10 +48,12 @@ not Rust behavioral parity.
 | Hosted CI (all jobs, every head) | **CI_BLOCKED_BILLING**: never started |
 | reference-guard regression, local | LOCAL_PASS 12/12 (both agents) |
 | fmt / clippy / test, local | LOCAL_PASS. The crates are empty, so this proves no behavior |
-| Harness offline tests at `9d70dc2e` | LOCAL_PASS 12/12 (both agents; Python 3.12.14) |
+| Harness offline tests | LOCAL_PASS, reproduced by Claude on Python 3.12.14: `9d70dc2e` 12/12; `db06ce44` 33/33; `e91dcabe` 40/40; `a7426411` 20/20. Offline infrastructure only |
+| Harness findings | Closed: HF-1, HF-2 (controlled receive fixture only), HF-3, HF-5 (differential CLI), HF-6, CO-1. Open: HF-4 (dependency hashes), HF-7 (low), HF-8 (format.py citations) |
 | Reference HTTP smoke (Python 3.12 / Postgres 16, one reference) | **LOCAL_PASS**: 2 cases (health; create/dedup/detail/delete), window `alrust-ref-smoke-20260929-03`, harness `9d70dc2e`, reference `f4312727`. Cleanup confirmed by Codex and independently verified by Claude. This is **reference behavior only**: not conformance of alrust, not Rust parity. Windows 01 and 02 were released NOT_RUN before start |
 | Two-server differential | **NOT_RUN**, and not yet approved |
-| Customer/auth, lifecycle-transition and housekeeping HTTP vectors | **NOT_RUN** (source-derived specs only) |
+| Customer/auth HTTP vectors (`a7426411`), lifecycle-transition, housekeeping and heartbeat HTTP vectors | **NOT_RUN**. The customer vectors are approved as source; the others are planned |
+| Reference smoke at `db06ce44` (window 04) | **NOT_RUN**. The draft runner exists; no request or grant yet |
 | FAIL results on record | none executed. The pre-fix guard bypasses reproduced by Codex at `a674546` were a review FAIL, fixed at `e839ceaf` |
 
 The informal smoke run of 2026-09-29, made before the charter on host Python
