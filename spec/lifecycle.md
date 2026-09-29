@@ -523,9 +523,16 @@ and goes to the owner.
   This includes `closed`, `ack`, `shelved` and `blackout` alerts.
 - **K2.2 [V]** **A NULL `timeout` never expires.** `COALESCE` appears only in
   the `!= 0` test. The interval uses the raw column, so NULL makes the
-  comparison NULL. Combined with A1.3, **any `PUT /status` without a
-  `timeout` makes that alert immune to expiry**, until something (a receive,
-  or a status call with a timeout) writes a non-NULL timeout.
+  comparison NULL. Combined with A1.3, **a `PUT /status` without a `timeout`
+  makes that alert immune to expiry** until something writes a non-NULL
+  timeout again. That happens on:
+  - a receive (dedup or correlate writes the incoming timeout);
+  - a `/status` call with a timeout;
+  - **any operator action**, which writes back the hydrated `ALERT_TIMEOUT`
+    (A4.1).
+
+  The immunity is therefore not permanent. The API still shows a non-null
+  timeout throughout (A1.3a).
 - **K2.3 [V]** Timeout `0` never expires.
 - **K2.4 [V]** The expiry clock is `last_receive_time`, which a duplicate
   refreshes (R5.2). A steady stream of duplicates therefore keeps an alert
@@ -549,9 +556,13 @@ and goes to the owner.
   the timeout. The entry is *any* matching entry (DISTINCT ON id), not
   necessarily the latest. A NULL `h.timeout` never fires (same reasoning as
   K2.2).
-- **K3.3 [V]** By default, **auto-unack never fires**. `ACK_TIMEOUT` is 0,
-  and an `ack` without a request timeout records history timeout 0 (A4).
-  Auto-unshelve fires after 7200 s by default.
+- **K3.3 [V]** With the default `ACK_TIMEOUT` of 0, an `ack` **without a
+  request timeout** records history timeout 0, and that ack never
+  auto-unacks. An `ack` with an explicit request timeout (for example
+  `timeout: 1`) records it as `h.timeout` (`alert.py:652-653`). That ack
+  **does** qualify for auto-unack under the same default config
+  (`pg.py:1522-1534`). Auto-unshelve defaults to 7200 s, or uses the request
+  timeout.
 - **K3.4 [V]** Each selected alert gets the `timeout` action. The rule is
   ACK-0 when the **second-newest history status** (not the ack/shelve
   lookback that A2.4 uses for manual unack) is `ack`, otherwise OPEN-0
@@ -578,12 +589,16 @@ and goes to the owner.
   K2.2 (NULL timeout means never expires) are the reference contract. alrust
   reproduces them unless the owner approves a data-loss ADR. K1.2 **deletes
   data**, so any change is owner-gated.
-- **K5.2** The housekeeping vectors need a controllable clock or long
-  sleeps. The thresholds' smallest unit through the API is 1 hour; timeouts
-  are in seconds. Suggest synthetic alerts with small `timeout` values, and
-  checking only expiry and timeout, not deletion, over HTTP. Deletion needs
-  seeded `last_receive_time` values in the disposable DB (harness owner's
-  choice).
+- **K5.2** The housekeeping vectors need short times.
+  - The query parameters are in hours.
+  - `DELETE_EXPIRED_AFTER` and `DELETE_INFO_AFTER` are in **seconds**
+    (`config.py:86-96`). An isolated reference instance configured with
+    short positive thresholds can therefore test deletion over HTTP without
+    DB manipulation (Codex's observation).
+  - Synthetic alerts with small `timeout` values cover expiry and timeout.
+
+  Any such run needs its own granted window. The design choice is the
+  harness owner's.
 
 ## Open questions
 
