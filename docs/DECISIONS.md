@@ -2,7 +2,7 @@
 
 | ADR | Title | Status | Date |
 |---|---|---|---|
-| [0001](adr/0001-reference-version-pins.md) | Reference version pins (Alerta server + webui) | Accepted; guard at `e839ceaf` approved by Codex | 2026-09-29 |
+| [0001](adr/0001-reference-version-pins.md) | Reference version pins (Alerta server + webui) | Accepted; guard correction approved by Codex at `e839ceaf`; **not enforced** (no repo protection, HTTP 403) | 2026-09-29 |
 | [0002](adr/0002-conformance-suite-language.md) | Conformance suite language | Selected by Codex: Python 3.12 + pytest + httpx + Hypothesis (ADR text lands with `codex/conformance-harness`) | 2026-09-29 |
 | [0003](adr/0003-agent-collaboration.md) | Agent collaboration channel | Accepted; agreed rules `abad4f68…`, signed round trip complete | 2026-09-29 |
 
