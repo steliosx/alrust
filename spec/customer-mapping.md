@@ -156,7 +156,11 @@ Rules:
   sets only `g.customers` (plural), so the value is always `None` and the
   query uses `1=1`. A customer-scoped key can therefore read or delete **any**
   heartbeat by id or id prefix (`id LIKE '<id>%'`, `pg.py:863-872`).
-  `views/blackouts.py:132` has the same pattern. The **list** endpoint
+  For blackouts, the per-id **DELETE** has the same singular pattern
+  (`views/blackouts.py:132`). The per-id **GET** passes **no customer at
+  all** (`Blackout.find_by_id(blackout_id)`, `views/blackouts.py:49-57`), so
+  both are unfiltered by different mechanisms (Codex's observation). The
+  **list** endpoint
   `GET /heartbeats` does filter by `g.customers`. This contrasts with alerts
   (C16–C17). It is the reference contract. alrust preserves it unless the
   owner approves an authentication-contract ADR (see `lifecycle.md` HB4.2).
