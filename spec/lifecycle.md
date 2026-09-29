@@ -662,10 +662,28 @@ The model ignores the `latency` and `since` columns the SQL returns
 ### HB4. Reads, deletes and customer scope (`hbv.py:43-110`)
 
 - **HB4.1 [V]** `GET /heartbeats` filters by `customers=g.customers` (as
-  C16) and accepts repeated `status=ok|slow|expired`. That filter is
-  evaluated in SQL against `NOW() at time zone 'utc'`, with the same
-  boundaries as HB2 (`pg.py:886-918`). An empty result returns **200** with
-  `message: "not found"`, `heartbeats: []` and `total: 0`.
+  C16) and accepts repeated `status=ok|slow|expired`. That status filter is
+  evaluated **in SQL** against `NOW() at time zone 'utc'` (`pg.py:886-918`).
+  Its boundaries are **not identical** to the serialized `status` (HB2):
+  - **Latency:** SQL compares the untruncated
+    `EXTRACT(EPOCH …) * 1000 > maxLatency`, while the model truncates
+    (`int(ms)`). At a latency of 2000.5 ms with `maxLatency` 2000, the SQL
+    `slow` filter selects the heartbeat, but it serializes as
+    `latency: 2000`, `status: "ok"`.
+  - **Time:** the SQL `since` uses the query's `NOW()`, and the model
+    recomputes `utcnow()` later on the app clock. A heartbeat near the
+    `timeout` boundary can be filtered as one status and serialized as
+    another.
+- **HB4.1a [V]** `total` and paging are computed from
+  `Heartbeat.count(query)` **before** the status filter is applied
+  (`hbv.py:62-66`).
+  - When the status-filtered page is **non-empty**, the response `total`
+    (and `pages`/`more`) counts every heartbeat the customer/query selects,
+    **not** the status-filtered subset.
+  - When it is **empty**, the else-branch returns `total: 0` explicitly, with
+    `message: "not found"` and `heartbeats: []` (`hbv.py:78-87`).
+  - Candidate vector: two heartbeats, one `ok` and one `expired`, then
+    `?status=expired` → one heartbeat with `total: 2`.
 - **HB4.2 [V]** **Per-id `GET` and `DELETE /heartbeat/<id>` apply no
   customer filter.** They read `g.get('customer')` (singular), which
   `permission()` never sets (`hbv.py:48`, `:96`; compare
