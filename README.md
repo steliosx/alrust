@@ -1,0 +1,2 @@
+# alrust
+alerta in rust
