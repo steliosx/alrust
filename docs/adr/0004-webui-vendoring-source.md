@@ -10,16 +10,20 @@
 
 | | A: tag plus one fix | B: exact upstream commit |
 |---|---|---|
-| Source | `v8.7.1` (`2687e4af`, 2024-04-11) plus a cherry-pick of `02ff632` (#575) | `master` @ `e6eb99e90901a32e63ee96588ac4dd8804d6831a` (2026-04-13), not a release |
+| Source | `v8.7.1` (`2687e4afa93b41c4fa1d46201bba9ea38be0d491`, 2024-04-11) plus a cherry-pick of `02ff632b342c43d12014e5cde96235e027489fdc` (#575) | `master` @ `e6eb99e90901a32e63ee96588ac4dd8804d6831a` (2026-04-13), not a release |
 | Reference pin | Unchanged (ADR-0001) | Diverges from the pinned `reference/alerta-webui`. Either the owner approves a re-pin, or the vendored tree and the reference differ |
 | Commits beyond the tag | 1 | 9 (`f81a02f` … `e6eb99e`) |
 
 ## What differs (from `git diff v8.7.1 e6eb99e`, 66 files, +18587/−40540)
 
-1. **The consumed API surface is identical.** Every change under
-   `src/services/api/*` is `let` → `const` (lint). No endpoint, method,
-   parameter or payload changes. The Phase 0/2 API contract extracted from
-   the webui is the same for A and B.
+1. **The API wrapper call sites are identical (SOURCE_DERIVED only).** Every
+   change under `src/services/api/*` is `let` → `const` (lint), so no
+   wrapper endpoint, method, parameter or payload changes. Codex verified
+   this independently. It does **not** establish identical runtime network
+   behavior. B changes the HTTP transport (axios 0.28 → 1.14) and
+   auth-related dependencies, which can change query serialization (arrays,
+   repeated parameters), headers, cancellation and error handling. Runtime
+   equivalence is E3 and is **NOT_RUN**.
 2. **Auth:** #575 changes only the **Keycloak** provider's authorization URL.
    It removes the legacy `/auth` prefix that Keycloak ≥ 17 dropped
    (`src/services/auth.ts`). The generic **`openid`** provider takes its
@@ -51,10 +55,20 @@
   for A and B, each in an isolated copy. This is also a prerequisite for the
   Phase 6 Tauri packaging.
 - **E2, dependency advisories.** Run `npm audit --omit=dev` on each lockfile.
-  Record the counts only; a report is not a decision.
+  Record advisory IDs, severities, the affected locked versions and whether
+  each applies to production (build-only or runtime). Counts alone cannot
+  justify a choice.
 - **E3, runtime equivalence against the reference.** Load both builds
-  against the pinned reference server and check the network calls. The
-  expectation is that they are identical (point 1).
+  against the pinned reference server and compare the network calls,
+  including:
+  - query serialization and repeated parameters (for example multiple
+    `status=` filters);
+  - `Authorization` and other auth headers;
+  - request cancellation;
+  - error and timeout handling.
+
+  The source-derived expectation (point 1) must not be treated as runtime
+  evidence.
 
 ## Recommendation (for review, not decided)
 
