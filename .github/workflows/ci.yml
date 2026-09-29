@@ -1,0 +1,113 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  reference-guard:
+    name: reference/ is read-only
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+      - name: Gitlinks match pinned tags
+        run: |
+          set -euo pipefail
+          fail=0
+          while read -r path sha tag; do
+            [[ -z "$path" || "$path" == \#* ]] && continue
+            actual="$(git ls-tree HEAD "$path" | awk '{print $3}')"
+            if [[ "$actual" != "$sha" ]]; then
+              echo "::error::$path is at $actual, expected $sha ($tag)"
+              fail=1
+            fi
+          done < .github/reference-pins.txt
+          extra="$(git ls-tree -r --name-only HEAD reference/ | grep -vxF -f <(awk '!/^#/ && NF {print $1}' .github/reference-pins.txt) || true)"
+          if [[ -n "$extra" ]]; then
+            echo "::error::unexpected files under reference/: $extra"
+            fail=1
+          fi
+          exit $fail
+      - name: Submodule URLs are upstream
+        run: |
+          set -euo pipefail
+          expected=$'reference/alerta https://github.com/alerta/alerta.git\nreference/alerta-webui https://github.com/alerta/alerta-webui.git'
+          actual="$(git config -f .gitmodules --get-regexp '^submodule\..*\.(path|url)$' \
+            | awk '$1 ~ /\.path$/ {p=$2} $1 ~ /\.url$/ {print p, $2}' | sort)"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "::error::.gitmodules differs from the pinned upstreams:"
+            echo "$actual"
+            exit 1
+          fi
+
+  rust:
+    name: fmt / clippy / test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: alrust
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/alrust
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  conformance-reference:
+    name: conformance vs reference alerta
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: alerta
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Boot reference server
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/alerta
+        run: conformance/scripts/run-reference.sh
+      - name: Smoke check
+        run: curl -fsS http://127.0.0.1:8080/management/healthcheck
+      # Phase 0: the black-box suite runs here against ALRUST_TARGET=http://127.0.0.1:8080
+      # once conformance/ has one (language pending ADR-0002).

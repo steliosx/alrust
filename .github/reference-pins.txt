@@ -1,0 +1,4 @@
+# Expected gitlinks for the read-only reference submodules.
+# Changing a pin requires an ADR (see docs/DECISIONS.md) and Codex concurrence.
+reference/alerta f4312727783dad64198b62ed778bbca98a5144a3 v9.1.0
+reference/alerta-webui 2687e4afa93b41c4fa1d46201bba9ea38be0d491 v8.7.1
