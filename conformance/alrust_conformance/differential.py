@@ -1,22 +1,26 @@
 """Small seeded synthetic replay foundation, not the complete Phase 0 gate."""
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
 import random
 import subprocess
+import time
+from urllib.parse import urlsplit
 import uuid
 
 from .client import Client, redact_secrets
 from .normalize import POLICY, normalize
+from .receive_clock import POLICY as CLOCK_POLICY, ReceiveClock
 
 
 def sequence(seed: int, count: int, namespace: str, create_time: str):
     if count < 1 or not namespace.startswith('alrust-synthetic-'):
         raise ValueError('positive request count and labeled synthetic namespace required')
     rng = random.Random(seed)
+    initial = datetime.fromisoformat(create_time.replace('Z', '+00:00'))
     for index in range(count):
         yield {'method': 'POST', 'path': '/alert', 'payload': {
             'id': str(uuid.uuid5(uuid.NAMESPACE_URL, f'{namespace}/{index}')),
@@ -26,22 +30,40 @@ def sequence(seed: int, count: int, namespace: str, create_time: str):
             'service': ['alrust-conformance'], 'origin': 'alrust-synthetic',
             'tags': ['SYNTHETIC', 'alrust-phase0'],
             'text': 'Synthetic fixture; not captured production data.',
-            'createTime': create_time, 'timeout': 86400,
+            'createTime': (initial + timedelta(milliseconds=index)).isoformat(
+                timespec='milliseconds').replace('+00:00', 'Z'), 'timeout': 86400,
         }}
 
 
-def replay(reference, candidate, requests):
+def replay(reference, candidate, requests, *, checked_clocks=False, on_progress=None):
     rows = []
     ids = [set(), set()]
     failure = False
     cleanup = []
+    clocks = [ReceiveClock(), ReceiveClock()]
+    last_response = [None, None]
+    result = {'status': 'FAIL', 'policy': CLOCK_POLICY if checked_clocks else POLICY,
+              'requests': rows, 'cleanup': cleanup}
+    def progress():
+        if on_progress:
+            on_progress(result)
     try:
         for request in requests:
             row = {'request': request, 'responses': []}
             rows.append(row)  # preserve the attempted request even if transport fails
+            projections = []
+            progress()
             for side, client in enumerate([reference, candidate]):
+                if checked_clocks and last_response[side] is not None:
+                    time.sleep(max(0, 0.05 - (time.monotonic() - last_response[side])))
+                sent = datetime.now(timezone.utc).isoformat(timespec='microseconds')
                 response = client.request(request['method'], request['path'], request['payload'])
-                row['responses'].append({'status': response.status, 'body': response.body})
+                received = datetime.now(timezone.utc).isoformat(timespec='microseconds')
+                last_response[side] = time.monotonic()
+                record = {'status': response.status, 'body': response.body,
+                          'client_send_time': sent, 'client_receive_time': received}
+                row['responses'].append(record)
+                progress()
                 if response.status == 201:
                     body = response.body
                     alert = body.get('alert') if isinstance(body, dict) else None
@@ -54,14 +76,20 @@ def replay(reference, candidate, requests):
                     ids[side].add(alert_id)
                     if body.get('status') != 'ok' or alert.get('id') != alert_id:
                         raise ValueError('invalid created alert response')
+                if checked_clocks and response.status == 201:
+                    projected, observation = clocks[side].project(request, response.body, client.base_url)
+                    record['clock_observation'] = observation
+                    projections.append(projected)
+                else:
+                    projections.append(normalize(response.body, client.base_url))
             left, right = row['responses']
             row['equal'] = (left['status'] == right['status']
-                            and normalize(left['body'], reference.base_url)
-                            == normalize(right['body'], candidate.base_url))
+                            and projections[0] == projections[1])
             row['successful'] = left['status'] == right['status'] == 201
             if not row['equal'] or not row['successful']:
                 failure = True
                 break
+            progress()
     except Exception as error:
         failure = True
         # No credential-bearing exception message is exported.
@@ -78,8 +106,9 @@ def replay(reference, candidate, requests):
                 except Exception as error:
                     cleanup.append({'side': side, 'id': alert_id, 'error_type': type(error).__name__})
                     failure = True
-    return {'status': 'FAIL' if failure or not rows else 'LOCAL_PASS', 'policy': POLICY,
-            'requests': rows, 'cleanup': cleanup}
+        progress()
+    result['status'] = 'FAIL' if failure or not rows else 'LOCAL_PASS'
+    return result
 
 
 def provenance(root):
@@ -117,6 +146,8 @@ def main():
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--steps', type=int, default=20)
     parser.add_argument('--report', type=Path, required=True)
+    parser.add_argument('--comparison', choices=['receive-clock-v1', 'strict-json-v1'],
+                        default='receive-clock-v1')
     args = parser.parse_args()
     if args.steps < 1:
         parser.error('--steps must be positive')
@@ -149,10 +180,22 @@ def main():
                 left, right = clients
                 if left.base_url == right.base_url:
                     raise ValueError('reference and candidate must be separate target instances')
+                checked_clocks = args.comparison == 'receive-clock-v1'
+                if checked_clocks and any(urlsplit(client.base_url).hostname not in
+                        ('localhost', '127.0.0.1', '::1') for client in clients):
+                    raise ValueError('receive clock fixtures require loopback targets without proxies')
                 result['targets'] = {'reference': left.base_url, 'candidate': right.base_url}
+                result.update(status='FAIL', stage='executing')
                 write_report(handle, result)
-                result.update(replay(left, right, requests))
+                def retain_partial(partial):
+                    result.update(partial)
+                    write_report(handle, result)
+                result.update(replay(left, right, requests, checked_clocks=checked_clocks,
+                                     on_progress=retain_partial))
+                result['http_result'] = result['status']
                 result['stage'] = 'completed'
+        except (KeyboardInterrupt, SystemExit) as error:
+            result.update(status='FAIL', stage='interrupted', runner_error_type=type(error).__name__)
         except Exception as error:
             result.update(status='FAIL', runner_error_type=type(error).__name__)
         finally:
@@ -161,6 +204,20 @@ def main():
                     client.close()
                 except Exception as error:
                     result.update(status='FAIL', client_close_error_type=type(error).__name__)
+            if result['stage'] in ('executing', 'completed', 'interrupted'):
+                # Capture late metadata separately: never replace the retained
+                # request/cleanup evidence with an uncaught Git error.
+                try:
+                    final = provenance(root)
+                    result['postflight_provenance'] = final
+                    if final['provenance_errors']:
+                        result.update(status='FAIL', metadata_failure='postflight provenance unavailable')
+                    elif any(final[key] != result[key] for key in
+                             ('harness_head', 'harness_dirty', 'harness_files_sha256')):
+                        result.update(status='FAIL', metadata_failure='harness source changed during execution')
+                except Exception as error:
+                    result.update(status='FAIL', metadata_failure='postflight provenance unavailable',
+                                  postflight_error_type=type(error).__name__)
             write_report(handle, result)
     print(result['status'])
     return 0 if result['status'] == 'LOCAL_PASS' else 1

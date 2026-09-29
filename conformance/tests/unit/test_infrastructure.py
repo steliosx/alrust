@@ -85,6 +85,7 @@ def test_seeded_sequence_is_identical_and_labeled():
     left = list(sequence(42, 10, 'alrust-synthetic-unit', '2026-09-29T20:00:00Z'))
     assert left == list(sequence(42, 10, 'alrust-synthetic-unit', '2026-09-29T20:00:00Z'))
     assert all(item['payload']['resource'].startswith('alrust-synthetic-') for item in left)
+    assert all(a['payload']['createTime'] < b['payload']['createTime'] for a, b in zip(left, left[1:]))
 
 
 def test_equal_http_errors_are_not_a_success():
@@ -207,3 +208,66 @@ def test_client_setup_failure_retains_evidence_and_closes_first_client(monkeypat
     assert evidence['harness_head']
     assert evidence['planned_sequence']
     assert 'SYNTHETIC-SECRET' not in report.read_text()
+
+
+def test_late_git_failure_preserves_run_rows_cleanup_and_http_outcome(monkeypatch, tmp_path):
+    report = tmp_path / 'late-metadata.json'
+    monkeypatch.setattr('sys.argv', ['differential', '--reference', 'http://127.0.0.1:18081',
+                                   '--candidate', 'http://127.0.0.1:18082', '--report', str(report)])
+    calls = 0
+    original = differential.subprocess.check_output
+    def late_git(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls > 2:
+            raise FileNotFoundError('synthetic late metadata loss')
+        return original(*args, **kwargs)
+    monkeypatch.setattr(differential.subprocess, 'check_output', late_git)
+    closed = []
+    class FakeClient:
+        def __init__(self, url, key):
+            self.base_url = url
+        def close(self):
+            closed.append(self.base_url)
+    monkeypatch.setattr(differential, 'Client', FakeClient)
+    def completed(left, right, requests, **kwargs):
+        partial = {'status': 'FAIL', 'requests': [{'request': requests[0], 'responses': []}],
+                   'cleanup': [{'side': 0, 'status': 200}]}
+        kwargs['on_progress'](partial)
+        partial['status'] = 'LOCAL_PASS'
+        return partial
+    monkeypatch.setattr(differential, 'replay', completed)
+    assert differential.main() == 1
+    evidence = json.loads(report.read_text())
+    assert evidence['status'] == 'FAIL'
+    assert evidence['http_result'] == 'LOCAL_PASS'  # injected result, no actual HTTP
+    assert len(evidence['requests']) == len(evidence['cleanup']) == 1
+    assert len(evidence['postflight_provenance']['provenance_errors']) == 2
+    assert evidence['metadata_failure'] == 'postflight provenance unavailable'
+    assert len(closed) == 2
+
+
+def test_interruption_keeps_partial_effects_and_is_not_not_run(monkeypatch, tmp_path):
+    report = tmp_path / 'interrupted.json'
+    monkeypatch.setattr('sys.argv', ['differential', '--reference', 'http://127.0.0.1:18081',
+                                   '--candidate', 'http://127.0.0.1:18082', '--report', str(report)])
+    closed = []
+    class FakeClient:
+        def __init__(self, url, key):
+            self.base_url = url
+        def close(self):
+            closed.append(self.base_url)
+    monkeypatch.setattr(differential, 'Client', FakeClient)
+    def interrupted(left, right, requests, **kwargs):
+        kwargs['on_progress']({'status': 'FAIL', 'requests': [{'request': requests[0],
+                                    'responses': [{'status': 201, 'body': {'fixture': 'SYNTHETIC'}}]}],
+                               'cleanup': [{'side': 0, 'status': 200}]})
+        raise KeyboardInterrupt()
+    monkeypatch.setattr(differential, 'replay', interrupted)
+    assert differential.main() == 1
+    evidence = json.loads(report.read_text())
+    assert evidence['status'] == 'FAIL' and evidence['stage'] == 'interrupted'
+    assert evidence['requests'][0]['responses'][0]['status'] == 201
+    assert evidence['cleanup']
+    assert evidence['runner_error_type'] == 'KeyboardInterrupt'
+    assert len(closed) == 2

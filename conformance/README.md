@@ -40,13 +40,16 @@ PYTHONPATH=conformance /tmp/alrust-harness-env/bin/python -m alrust_conformance.
 reference key. Use only synthetic test credentials. One heavy build/service test
 runs at a time under the existing laptop coordination window.
 
-Comparison policy `strict-json-v1` normalizes only the selected target base URL
-in alert/history `href` fields. It preserves unknown fields, nulls, IDs, customer,
-history order, severity/status, duplicate counts and **all timestamps**. A clock
-policy is deliberately pending source/spec and Claude review. Independent server
-timestamps ordinarily make even the first real response differ; this strict
-foundation cannot yet discriminate meaningful two-server parity. Keep that FAIL
-visible until a separately reviewed policy exists. Reports retain the full synthetic sequence,
+The CLI's `receive-clock-v1` validates receive retention/refresh semantics
+before projecting exactly `alert.receiveTime`, `lastReceiveTime` and
+`updateTime`; selected alert/history href bases are also normalized. Client
+createTime, history timestamps/order, customer, unknown fields and all other
+semantic data stay strict. The controlled fixture uses ordered client times
+and 50 ms request spacing. [The exact clock policy](receive-clock-policy.md)
+documents scope, source citations and failure behavior. Its implementation
+requires a fresh independent verdict before execution. `--comparison
+strict-json-v1` preserves every timestamp for unsupported vectors/diagnostics.
+Reports retain the full synthetic sequence,
 responses (known credential echoes redacted after comparison), cleanup results,
 target URLs, declared reference pin, source HEAD, dirty state and harness file
 hashes. The declared pin does not attest to the live server's installed source.
@@ -59,6 +62,14 @@ a retained `NOT_RUN` with error types and sends no requests; client setup
 failures retain `FAIL` evidence and close any already-created client. Existing
 report paths are refused so every attempt keeps its own evidence.
 
-Current validation labels: offline tests LOCAL_PASS; supported Python 3.12 /
-PostgreSQL 16 reference HTTP run NOT_RUN pending the coordinated service window;
-hosted Phase 0 gate CI_BLOCKED_BILLING. Never substitute a local result for CI.
+The executing record is flushed as FAIL before effects, then updated at
+request/response/cleanup boundaries. Late metadata failure retains the HTTP
+outcome, partial responses and cleanup, but makes overall verification FAIL.
+An interruption after effects is FAIL rather than NOT_RUN.
+
+Current validation labels: offline tests LOCAL_PASS. Released window03 passed
+the two initial reference smoke cases locally at frozen9d70dc2/f431272 on
+Python3.12.14/PostgreSQL16. This new correction has HTTP NOT_RUN pending fresh
+exact-head review and a new signed window; withdrawn acknowledgments are not
+reused. Two-server execution NOT_RUN; hosted Phase0 CI_BLOCKED_BILLING.
+Never substitute a local result for CI or claim Rust parity from reference smoke.
