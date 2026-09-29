@@ -46,7 +46,9 @@ history order, severity/status, duplicate counts and **all timestamps**. A clock
 policy is deliberately pending source/spec and Claude review; independent server
 clocks can therefore produce a retained FAIL. This is an unexplained divergence,
 not permission to discard fields. Reports retain the full synthetic sequence,
-raw responses, cleanup results, source HEAD, dirty state and harness file hashes.
+responses (known credential echoes redacted after comparison), cleanup results,
+target URLs, declared reference pin, source HEAD, dirty state and harness file
+hashes. The declared pin does not attest to the live server's installed source.
 Equal HTTP failures, empty runs, malformed successes or cleanup failures are FAIL.
 
 Current validation labels: offline tests LOCAL_PASS; supported Python 3.12 /

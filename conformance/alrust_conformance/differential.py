@@ -9,7 +9,7 @@ import random
 import subprocess
 import uuid
 
-from .client import Client
+from .client import Client, redact_secrets
 from .normalize import POLICY, normalize
 
 
@@ -121,7 +121,11 @@ def main():
                                             for p in Path(__file__).parent.glob('*.py')}})
     args.report.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     with args.report.open('x') as handle:
-        json.dump(result, handle, indent=2)
+        # Reference auth errors echo submitted keys (auth/decorators.py:42-45).
+        # Compare original bodies first, then remove known credential echoes.
+        exported = redact_secrets(result, [os.environ.get('ALRUST_REFERENCE_API_KEY'),
+                                          os.environ.get('ALRUST_API_KEY')])
+        json.dump(exported, handle, indent=2)
         handle.write('\n')
     print(result['status'])
     return 0 if result['status'] == 'LOCAL_PASS' else 1

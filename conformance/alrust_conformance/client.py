@@ -11,6 +11,18 @@ class Response:
     body: Any
 
 
+def redact_secrets(value, secrets):
+    """Redact credential echoes only when exporting evidence, after comparison."""
+    if isinstance(value, dict):
+        return {key: redact_secrets(item, secrets) for key, item in value.items()}
+    if isinstance(value, list):
+        return [redact_secrets(item, secrets) for item in value]
+    if isinstance(value, str):
+        for secret in sorted((secret for secret in secrets if secret), key=len, reverse=True):
+            value = value.replace(secret, '<redacted-api-key>')
+    return value
+
+
 class Client:
     def __init__(self, base_url: str, api_key: str | None = None, *, transport=None):
         url = urlsplit(base_url)

@@ -5,7 +5,7 @@ import httpx
 from hypothesis import given, strategies as st
 import pytest
 
-from alrust_conformance.client import Client
+from alrust_conformance.client import Client, redact_secrets
 from alrust_conformance.differential import replay, sequence
 from alrust_conformance.normalize import normalize
 
@@ -39,6 +39,15 @@ def test_plain_text_healthcheck_and_malformed_declared_json():
             client.request('GET', '/alert/synthetic')
     finally:
         client.close()
+
+
+def test_server_credential_echo_is_redacted_only_in_export():
+    original = {'responses': [{'status': 401, 'body': {
+        'message': "API key parameter 'SYNTHETIC-SECRET' is invalid"}}]}
+    exported = redact_secrets(original, ['SYNTHETIC-SECRET', None])
+    assert 'SYNTHETIC-SECRET' not in json.dumps(exported)
+    assert exported['responses'][0]['status'] == 401
+    assert 'SYNTHETIC-SECRET' in json.dumps(original)
 
 
 def test_normalization_preserves_semantic_differences_and_unknown_data():
