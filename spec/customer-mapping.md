@@ -150,6 +150,17 @@ Rules:
   not to customer mapping. It is recorded here because it decides which
   customer's alert a short id resolves to.
 
+- **C19 [V]** **Heartbeat and blackout per-id reads apply no customer
+  filter.** `GET` and `DELETE /heartbeat/<id>` pass `g.get('customer')`,
+  singular, to the lookup (`views/heartbeats.py:48`, `:96`). `permission()`
+  sets only `g.customers` (plural), so the value is always `None` and the
+  query uses `1=1`. A customer-scoped key can therefore read or delete **any**
+  heartbeat by id or id prefix (`id LIKE '<id>%'`, `pg.py:863-872`).
+  `views/blackouts.py:132` has the same pattern. The **list** endpoint
+  `GET /heartbeats` does filter by `g.customers`. This contrasts with alerts
+  (C16–C17). It is the reference contract. alrust preserves it unless the
+  owner approves an authentication-contract ADR (see `lifecycle.md` HB4.2).
+
 ## Positions and open questions
 
 - **Q1: read filtering for customer-scoped keys (C17): preserve.** The
