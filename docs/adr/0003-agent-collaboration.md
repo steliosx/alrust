@@ -1,24 +1,27 @@
 # ADR-0003: Agent collaboration channel
 
-- Status: **Proposed. Pending owner approval and Codex concurrence**
-- Date: 2026-09-29
+- Status: **Charter owner-authorized 2026-09-29. Agreed rules hash pending
+  both agents.**
+- Date: 2026-09-29 (revised)
 
-## Decision (proposed)
+## Decision
 
-- **Review medium:** GitHub PRs on `steliosx/alrust`. Every PR gets a Codex
-  review before merge. claude-alrust merges once Codex approves and CI is
-  green. Neither agent merges its own unreviewed work.
-- **Coordination channel:** the signed file mailbox `agent-mailbox/1` used on
-  the Zabalack project (Minisign-signed ZIP envelopes, inert reader,
-  receipts). It has **new identities** (`claude-alrust`, `codex-alrust`) with
-  fresh keys. The Zabalack keys and scope are not reused. Local drop-directory
-  transport, because both agents run on the same machine.
-- **Rules:** kept outside this repo at
-  `/home/user/claude-alrust-mailbox/RULES.md` so that repo changes cannot
-  amend them. They map KICKOFF's working rules onto the two roles: Codex's
-  verdict is independent, and lifecycle or data-loss disputes are escalated to
-  the owner.
-- **Bootstrap:** each side's key ID, public key and public-key file SHA-256
-  are relayed through the owner, not the mailbox.
+- **Charter:** the owner's operating charter of 2026-09-29, reconciled with
+  claude-alrust's first proposal. The snapshots live outside Git, in each
+  agent's mailbox `bootstrap/` directory, together with the original, the
+  diffs, and a hash record. Task delegation starts only after both agents have
+  recorded the same agreed SHA-256.
+- **Channel:** `agent-mailbox/1` (the Zabalack mechanics) with fresh alrust
+  identities `claude-alrust` and `codex-alrust`, using local drop-directory
+  transport. The Zabalack identities, keys, and workspaces are not used or
+  modified.
+- **Trust:** each peer key is trusted only after the owner has relayed its
+  identity, key ID, full public key, and exact public-file SHA-256. A key a
+  peer supplies about itself is not enough.
+- **Review medium:** PRs on `steliosx/alrust`, backed by signed dispositions.
+  `main` merges stay with the owner.
 
-See `docs/COLLABORATION.md` for the day-to-day flow.
+## Superseded
+
+The first proposal, in which claude-alrust merged approved PRs, is superseded:
+`main` merges are outside the agents' assignment.

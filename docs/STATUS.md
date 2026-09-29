@@ -1,59 +1,68 @@
 # Status
 
-_Last updated: 2026-09-29 by claude-alrust._
+_Last updated: 2026-09-29T20:20Z by claude-alrust._
 
 ## Current phase
 
-**Pre-Phase 0.** Kickoff steps 1–2 (scaffold, CI, reference pins) are done on
-branch `claude/scaffold` and await Codex review. Phase 0 (spec extraction and
-conformance harness) **has not started**. It is waiting on the collaboration
-channel and on Codex.
+**Phase 0 in progress, not gated.** The scaffold (kickoff steps 1–2) is in PR #1
+(`claude/scaffold` @ `a674546`), which is awaiting Codex review. claude-alrust
+is starting spec extraction. codex-alrust owns the conformance harness.
 
 | Phase | State | Gate |
 |---|---|---|
-| 0 Spec + conformance | not started | — |
+| 0 Spec + conformance | in progress | not met: the suite does not exist, hosted CI is unexecuted, and Codex's lifecycle review is pending |
 | 1 Domain/engine/store | blocked on 0 | — |
 | 2 HTTP API | blocked on 1 | — |
 | 3 Auth | blocked on 2 | — |
-| 4 Receivers | blocked on 3; [PIN] payloads | — |
-| 5 Ops | blocked on 4; [PIN] alertad.conf | — |
-| 6 Tauri desktop | blocked on 2; [PIN] signing certs | — |
+| 4 Receivers | blocked on 3; real payloads [PIN], synthetic fixtures allowed meanwhile | — |
+| 5 Ops | blocked on 4; alertad.conf [PIN] | — |
+| 6 Tauri desktop | blocked on 2; signing certs [PIN], test certs allowed meanwhile | — |
+
+## Checks
+
+Hosted checks and local checks are tracked separately. A local pass never
+satisfies a hosted gate.
+
+| Check | Hosted (GitHub Actions) | Local |
+|---|---|---|
+| reference-guard | **unexecuted**: billing blocker | pass (manual run of the same shell logic, 2026-09-29) |
+| fmt / clippy / test | **unexecuted**: billing blocker | pass on Rust 1.98.1 (empty crates, so this proves no behavior) |
+| conformance vs reference | **unexecuted**: billing blocker | reference server boots on Postgres 16 and answers a smoke check; no suite exists yet |
+
+**Billing blocker** (account, not code): every job in runs `36621806737` and
+`36621879628` was refused before start with "recent account payments have
+failed or your spending limit needs to be increased". This is for the owner to
+resolve. No gate is disabled and no runner is registered to work around it.
 
 ## What exists
 
-- Cargo workspace with the five crates as empty libs; `fmt`, `clippy -D
-  warnings` and `test` pass on Rust 1.98.1.
+- Cargo workspace with the five crates as empty libs.
 - `reference/alerta` @ v9.1.0 and `reference/alerta-webui` @ v8.7.1 (ADR-0001).
-- CI (`.github/workflows/ci.yml`) has three jobs. `reference-guard` checks pins,
-  upstream URLs and unexpected files. `rust` runs fmt, clippy and test with a
-  Postgres 16 service. `conformance-reference` boots the reference server on
-  Postgres 16 and runs a healthcheck smoke test; the suite itself comes later.
-- `conformance/scripts/run-reference.sh` boots the reference server locally
-  or in CI. It was verified locally on 2026-09-29: alert create and
-  `/alerts/count` work.
+- CI with three jobs (see `.github/workflows/ci.yml`).
+- `conformance/scripts/run-reference.sh`, which boots the pinned reference server.
 
 ## Open questions
 
-1. webui: vendor v8.7.1 plus a cherry-pick of #575 (Keycloak fix), or a
-   pinned `master` commit? (ADR-0001, decide before Phase 2)
-2. Conformance suite language (ADR-0002, Codex decides).
-3. Collaboration rules and mailbox (ADR-0003, owner approves, Codex concurs).
+1. webui: the v8.7.1 tag plus a specific fix, or an exact upstream commit?
+   ADR-0004 will compare the two before the Phase 2 dependency. Codex reviews
+   compatibility and evidence.
+2. Conformance suite language (ADR-0002): Codex decides.
+3. The agreed charter hash (ADR-0003) must be recorded by both agents.
 
 ## Operator inputs pending
 
-- **GitHub Actions is blocked by billing.** On 2026-09-29, PR #1's jobs were not
-  started: "recent account payments have failed or your spending limit needs to
-  be increased". Until this is fixed, no CI gate can pass.
-- [PIN] Mailbox bootstrap: relay key pins between claude-alrust and
-  codex-alrust (see `/home/user/claude-alrust-mailbox/BOOTSTRAP-REQUEST.md`)
-  and approve `RULES.md`.
-- [PIN] Captured real Veeam ONE (and ideally Zabbix 7.0 LTS) webhook payloads.
-- [PIN] Current production `alertad.conf`.
-- [PIN] Code-signing certificates for Windows and macOS.
+- Relay of the codex-alrust key pin to claude-alrust (identity, key ID, full
+  public key, exact public-file SHA-256).
+- GitHub Actions billing.
+- [PIN] Real Veeam ONE (and ideally Zabbix 7.0 LTS) webhook payloads, via an
+  owner-approved private path.
+- [PIN] Production `alertad.conf`.
+- [PIN] Code-signing certificates for Windows and macOS. Production private
+  keys are never requested through Git, chat, or the mailbox.
 
 ## Next actions
 
-1. Codex reviews the scaffold PR.
-2. Complete the mailbox bootstrap.
-3. Start Phase 0: spec extraction (claude-alrust) and conformance harness
-   (codex-alrust) in parallel.
+1. Codex reviews PR #1 @ `a674546`.
+2. Owner relays the codex-alrust pin, then the first signed round trip happens.
+3. claude-alrust: Phase 0 spec extraction, starting with
+   `spec/customer-mapping.md`.

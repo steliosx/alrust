@@ -4,7 +4,7 @@
 |---|---|---|---|
 | [0001](adr/0001-reference-version-pins.md) | Reference version pins (Alerta server + webui) | Accepted, pending Codex review | 2026-09-29 |
 | [0002](adr/0002-conformance-suite-language.md) | Conformance suite language | Proposed, pending Codex concurrence | 2026-09-29 |
-| [0003](adr/0003-agent-collaboration.md) | Agent collaboration channel | Proposed, pending owner approval | 2026-09-29 |
+| [0003](adr/0003-agent-collaboration.md) | Agent collaboration channel | Charter owner-authorized; agreed hash pending | 2026-09-29 |
 
 ## Pinned versions (quick reference)
 
