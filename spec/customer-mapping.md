@@ -48,6 +48,12 @@ Rules:
 
 ## 2. Assigning `customer` on write: `assign_customer(wanted, permission)`
 
+**Vector preconditions.** Assignment (step 1 of the receive path) runs before
+the plugin chain, but an alert is **stored** only if it then passes the
+default reject policy, which returns 403 otherwise (`lifecycle.md` R1.2). The
+alert vectors below (C7–C9, C13, C14, C16, C17) therefore use environment
+`Development`, a non-empty synthetic `service`, and no matching blackout.
+
 `alerta/utils/api.py:14-28`. `wanted` is the `customer` field of the submitted
 object. `permission` defaults to `admin:alerts`.
 
@@ -82,7 +88,9 @@ Rules:
 - **C9 [V]** A key with no customer and no admin scope: an alert that omits
   `customer` is stored with `null`; an alert with any non-empty `customer` is
   rejected with 400 (`g.customers == []`).
-- **C10 [V]** With no credentials and `AUTH_REQUIRED=False`, `g.scopes == []`.
+- **C10 [V]** With no credentials and `AUTH_REQUIRED=False`, `permission()`
+  skips the scope check entirely and sets `g.scopes == []`
+  (`auth/decorators.py:156-161`).
   An unauthenticated alert that names any `customer` is therefore **rejected
   with 400**. This is the configuration `conformance/scripts/run-reference.sh`
   uses today, and it has not been verified live.
@@ -101,7 +109,8 @@ Rules:
   must pin down which default-plugin effects it reproduces. The default chain
   is `remote_ip, reject, heartbeat, blackout, forwarder` (`settings.py:272`).
 - **C13 [V]** When a key with customer `X` sends an alert whose event is
-  `Heartbeat`, the heartbeat plugin creates a heartbeat with customer `X`
+  `Heartbeat`, with an allowed environment and a non-empty service (the reject
+  plugin runs before the heartbeat plugin), the heartbeat plugin creates a heartbeat with customer `X`
   (`plugins/heartbeat.py:30`) and the request returns `202`. This matters for
   the per-tenant "Zabbix went quiet" alerting in Phase 5.
 
@@ -141,18 +150,48 @@ Rules:
   not to customer mapping. It is recorded here because it decides which
   customer's alert a short id resolves to.
 
-## Open questions (not decided here)
+## Positions and open questions
 
-- **Q1: read filtering for customer-scoped keys (C17).** KICKOFF says
-  `customer` is "a grouping/routing attribute, not a security boundary" and
-  rules out per-customer RBAC. The reference nevertheless filters reads for
-  customer-scoped API keys, even admin ones. Either alrust keeps this for
-  compatibility, or it records an intentional divergence in an ADR. This
-  changes the **authentication contract**, so it goes to the owner once Codex
-  has reviewed the evidence. Knowing which consumers actually read with
-  customer-scoped keys would settle it.
-- **Q2 (C2):** does anything we run authenticate with a key **id** instead of
-  the key secret? If not, that path is a candidate for a drop ADR.
-- **Q3 (C10):** the black-box suite needs keys with known customers and
-  scopes. That requires either `AUTH_REQUIRED=True` plus seeded keys, or
-  creating keys through the API. The harness design is Codex's call.
+- **Q1: read filtering for customer-scoped keys (C17): preserve.** The
+  working position was agreed with codex-alrust on 2026-09-29. alrust
+  preserves the consumed API's existing API-key customer assignment (C1–C11)
+  and customer-scoped request filtering (C16–C17), as the pinned reference
+  does. The kickoff wording is compatible with this:
+  - "customer is a grouping/routing attribute, not a security boundary" means
+    no customer-facing views and no per-customer RBAC subsystem are added;
+  - it also means this metadata and filtering are not relied on as a *new*
+    tenant-isolation boundary.
+
+  It does **not** remove the existing API-key request scope. KICKOFF.md is
+  unchanged. Removing or widening the filtering would be an intentional
+  authentication-contract change: it needs an ADR naming the affected
+  consumers and endpoints, with evidence, **and** an owner decision. No such
+  change is proposed. This position is still pending live verification with
+  synthetic keys (Q3).
+- **Q2 (C2):** authenticating with a key's **id** instead of its secret is
+  part of the reference contract and is preserved. The only open task is
+  evidence-gathering: finding out whether any consumer relies on it. It is not
+  permission to drop the path; a drop would need an ADR and the same
+  escalation as Q1.
+- **Q3: provisioning synthetic keys for the vectors.** An unauthenticated
+  reference cannot mint keys:
+  - with no credentials and `AUTH_REQUIRED=False`, `POST /key` sets
+    `key.user = g.login = None` and returns **400** "An API key must be
+    associated with a 'user'" (`views/keys.py:28-36`);
+  - `AUTH_REQUIRED=True` is **not** needed for seeded keys to take effect,
+    because `permission()` validates an API key before it checks
+    `AUTH_REQUIRED` (`auth/decorators.py:31-54`, `:156-161`).
+
+  Options (the harness owner, codex-alrust, decides):
+  - (a) seed synthetic key rows directly in the disposable reference
+    database;
+  - (b) create them with the reference CLI (`alertad key`,
+    `commands.py:55`);
+  - (c) mint children through the API using an admin credential. An admin key
+    may choose `user`, `customer` and any scope it holds. A non-admin key
+    needs `write:keys`, gets its own login as `user`, may not exceed its own
+    scopes (403), and may set a customer only within C11
+    (`views/keys.py:20-41`).
+
+  All keys are synthetic and private to the isolated instance. Production
+  keys are never used.
