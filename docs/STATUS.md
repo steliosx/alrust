@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-09-29T23:25Z by claude-alrust, the sole writer of this
+_Last updated: 2026-09-29T23:35Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -29,11 +29,11 @@ review.
 | `codex/receive-clock-correction` | codex | `db06ce44f1fdbc3b0dbeb66b6f2952eb0d702071` | Claude: **APPROVE** for the offline `receive-clock-v1` scope (controlled fixture) and the reference-only HTTP smoke at this head. The smoke needs a new signed window. No two-server run has been requested; there is no candidate server yet |
 | `codex/…` HF-5 credential correction (on `db06ce44`) | codex | `e91dcabea1291b6540bc4d97636e6eef8df2bef0` | Claude: **APPROVE** for the differential-CLI credential contract (`SYNTHETIC-` plus 48 hex) |
 | `codex/customer-conformance` (on `9d70dc2e`) | codex | `a7426411181f4dd3cc859581cc203ee4067c07b4` | Claude: **APPROVE** for the 4 customer HTTP vectors as source-derived expectations. Runtime is **NOT_RUN** and needs its own window, with CLI-seeded synthetic keys |
-| `claude/spec-customer-mapping` | claude | `207f1bcac270afa40b8efc1bb2464e1886e48857` | Codex APPROVE at `edb13f94` (C19). The newer citation-only commit is pending review |
+| `claude/spec-customer-mapping` | claude | `207f1bcac270afa40b8efc1bb2464e1886e48857` | Codex: **APPROVE** for its source-derived scope (C1–C19) |
 | `claude/spec-lifecycle-receive` | claude | `a1de491c6677a3134c65d0e0b086cae08b925087` | Codex: **APPROVE** for its source-derived scope (receive slice only). HTTP beyond the 2 smoke cases is NOT_RUN |
-| `claude/spec-lifecycle-actions` (on receive) | claude | `cedfcdff5afb8198bfb3588836156ca8510d076c` | ACTION-01..03 corrections submitted (the previous head `9307790a` got REQUEST_CHANGES) |
-| `claude/spec-lifecycle-housekeeping` (on actions) | claude | `c6aecf66d55d476c2ff936588e2f68d9a9ed9648` | HOUSEKEEPING-01 correction submitted (the previous head `0560cc5a` got REQUEST_CHANGES) |
-| `claude/spec-lifecycle-heartbeats` (on housekeeping) | claude | `d3383b8a882b6b708b4b3c41d9405fca568d25e0` | HEARTBEAT-01 corrected. HEARTBEAT-02 partly disputed with a citation: an empty filtered result does return `total: 0`. Previous head `993c5ddc` |
+| `claude/spec-lifecycle-actions` (on receive) | claude | `cedfcdff5afb8198bfb3588836156ca8510d076c` | Codex: **APPROVE** for its source-derived scope (A0–A6) |
+| `claude/spec-lifecycle-housekeeping` (on actions) | claude | `c6aecf66d55d476c2ff936588e2f68d9a9ed9648` | Codex: **APPROVE** for its source-derived scope (K0–K5). Deletion semantics preserved |
+| `claude/spec-lifecycle-heartbeats` (on housekeeping) | claude | `d3383b8a882b6b708b4b3c41d9405fca568d25e0` | Codex: **APPROVE** for its source-derived scope (HB0–HB6). The HEARTBEAT-02 dispute was resolved after one exchange, with Codex's extracted-view probe |
 | `claude/charter-sync` | claude | this head | Codex **APPROVE** at `ac667cf8`. This STATUS refresh needs its own review |
 | ALRUST-P0-CLOCK-01 policy | codex | design02 `67bb59f5…` | Claude: concurred, and approved as implemented in `db06ce44` |
 
@@ -53,7 +53,7 @@ not Rust behavioral parity.
 | Reference HTTP smoke (Python 3.12 / Postgres 16, one reference) | **LOCAL_PASS**: 2 cases (health; create/dedup/detail/delete), window `alrust-ref-smoke-20260929-03`, harness `9d70dc2e`, reference `f4312727`. Cleanup confirmed by Codex and independently verified by Claude. This is **reference behavior only**: not conformance of alrust, not Rust parity. Windows 01 and 02 were released NOT_RUN before start |
 | Two-server differential | **NOT_RUN**, and not yet approved |
 | Customer/auth HTTP vectors (`a7426411`), lifecycle-transition, housekeeping and heartbeat HTTP vectors | **NOT_RUN**. The customer vectors are approved as source; the others are planned |
-| Reference smoke at `db06ce44` (window 04) | **NOT_RUN**. The draft runner exists; no request or grant yet |
+| Reference smoke at `db06ce44` (window `alrust-ref-smoke-20260929-04`) | **NOT_RUN**. Requested and granted; Claude acknowledged at 23:28Z; awaiting start and release |
 | FAIL results on record | none executed. The pre-fix guard bypasses reproduced by Codex at `a674546` were a review FAIL, fixed at `e839ceaf` |
 
 The informal smoke run of 2026-09-29, made before the charter on host Python
