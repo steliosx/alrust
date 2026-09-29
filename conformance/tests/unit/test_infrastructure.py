@@ -1,5 +1,6 @@
 from copy import deepcopy
 import json
+import os
 
 import httpx
 from hypothesis import given, strategies as st
@@ -7,6 +8,7 @@ import pytest
 
 from alrust_conformance.client import Client, redact_secrets
 from alrust_conformance.differential import replay, sequence
+from alrust_conformance import differential
 from alrust_conformance.normalize import normalize
 
 
@@ -152,3 +154,53 @@ def test_equivalent_responses_with_different_target_hrefs_pass():
     finally:
         for client in clients:
             client.close()
+
+
+def test_missing_git_retains_private_not_run_report_without_http(monkeypatch, tmp_path):
+    report = tmp_path / 'private-report.json'
+    monkeypatch.setattr('sys.argv', ['differential', '--reference', 'http://left',
+                                   '--candidate', 'http://right', '--report', str(report)])
+    def missing_git(*args, **kwargs):
+        raise FileNotFoundError('synthetic missing git')
+    def forbidden_client(*args, **kwargs):
+        raise AssertionError('HTTP must not be attempted without source provenance')
+    monkeypatch.setattr(differential.subprocess, 'check_output', missing_git)
+    monkeypatch.setattr(differential, 'Client', forbidden_client)
+    previous_umask = os.umask(0)
+    try:
+        assert differential.main() == 1
+    finally:
+        os.umask(previous_umask)
+    evidence = json.loads(report.read_text())
+    assert evidence['status'] == 'NOT_RUN'
+    assert evidence['requests'] == evidence['cleanup'] == []
+    assert evidence['planned_sequence']
+    assert len(evidence['provenance_errors']) == 2
+    assert report.stat().st_mode & 0o777 == 0o600
+    before = report.read_bytes()
+    with pytest.raises(SystemExit):
+        differential.main()
+    assert report.read_bytes() == before
+
+
+def test_client_setup_failure_retains_evidence_and_closes_first_client(monkeypatch, tmp_path):
+    report = tmp_path / 'setup-failure.json'
+    monkeypatch.setattr('sys.argv', ['differential', '--reference', 'http://left',
+                                   '--candidate', 'http://right', '--report', str(report)])
+    closed = []
+    class FirstClient:
+        def close(self):
+            closed.append(True)
+    def factory(url, key):
+        if url == 'http://left':
+            return FirstClient()
+        raise ValueError('SYNTHETIC-SECRET must not enter error evidence')
+    monkeypatch.setattr(differential, 'Client', factory)
+    assert differential.main() == 1
+    evidence = json.loads(report.read_text())
+    assert closed == [True]
+    assert evidence['status'] == 'FAIL'
+    assert evidence['runner_error_type'] == 'ValueError'
+    assert evidence['harness_head']
+    assert evidence['planned_sequence']
+    assert 'SYNTHETIC-SECRET' not in report.read_text()

@@ -43,13 +43,21 @@ runs at a time under the existing laptop coordination window.
 Comparison policy `strict-json-v1` normalizes only the selected target base URL
 in alert/history `href` fields. It preserves unknown fields, nulls, IDs, customer,
 history order, severity/status, duplicate counts and **all timestamps**. A clock
-policy is deliberately pending source/spec and Claude review; independent server
-clocks can therefore produce a retained FAIL. This is an unexplained divergence,
-not permission to discard fields. Reports retain the full synthetic sequence,
+policy is deliberately pending source/spec and Claude review. Independent server
+timestamps ordinarily make even the first real response differ; this strict
+foundation cannot yet discriminate meaningful two-server parity. Keep that FAIL
+visible until a separately reviewed policy exists. Reports retain the full synthetic sequence,
 responses (known credential echoes redacted after comparison), cleanup results,
 target URLs, declared reference pin, source HEAD, dirty state and harness file
 hashes. The declared pin does not attest to the live server's installed source.
 Equal HTTP failures, empty runs, malformed successes or cleanup failures are FAIL.
+
+Each report is reserved exclusively with mode `0600` before HTTP effects, even
+inside an existing parent directory with a permissive umask. The initial
+preflight record survives an interrupted run. Missing Git provenance produces
+a retained `NOT_RUN` with error types and sends no requests; client setup
+failures retain `FAIL` evidence and close any already-created client. Existing
+report paths are refused so every attempt keeps its own evidence.
 
 Current validation labels: offline tests LOCAL_PASS; supported Python 3.12 /
 PostgreSQL 16 reference HTTP run NOT_RUN pending the coordinated service window;

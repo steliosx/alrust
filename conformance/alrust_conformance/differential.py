@@ -82,6 +82,34 @@ def replay(reference, candidate, requests):
             'requests': rows, 'cleanup': cleanup}
 
 
+def provenance(root):
+    """Capture identity before any HTTP effects; missing identity prevents a run."""
+    result = {'harness_files_sha256': {
+        p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in Path(__file__).parent.glob('*.py')}, 'provenance_errors': []}
+    for field, command in [('harness_head', ['rev-parse', 'HEAD']),
+                           ('harness_dirty', ['status', '--porcelain'])]:
+        try:
+            value = subprocess.check_output(['git', '-C', str(root), *command],
+                                            text=True, stderr=subprocess.DEVNULL)
+            result[field] = bool(value) if field == 'harness_dirty' else value.strip()
+        except (OSError, subprocess.CalledProcessError) as error:
+            result[field] = None
+            result['provenance_errors'].append({'field': field, 'error_type': type(error).__name__})
+    return result
+
+
+def write_report(handle, result):
+    # Compare raw responses first; exported authentication errors may echo keys.
+    exported = redact_secrets(result, [os.environ.get('ALRUST_REFERENCE_API_KEY'),
+                                      os.environ.get('ALRUST_API_KEY')])
+    handle.seek(0)
+    json.dump(exported, handle, indent=2)
+    handle.write('\n')
+    handle.truncate()
+    handle.flush()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--reference', required=True)
@@ -94,39 +122,44 @@ def main():
         parser.error('--steps must be positive')
     if args.report.exists():
         parser.error('report already exists; retain it and select a fresh path')
-    left = Client(args.reference, os.environ.get('ALRUST_REFERENCE_API_KEY'))
-    right = Client(args.candidate, os.environ.get('ALRUST_API_KEY'))
-    if left.base_url == right.base_url:
-        left.close()
-        right.close()
-        parser.error('reference and candidate must be separate target instances')
     namespace = 'alrust-synthetic-' + uuid.uuid4().hex
     created = datetime.now(timezone.utc).isoformat()
     requests = list(sequence(args.seed, args.steps, namespace, created))
-    try:
-        result = replay(left, right, requests)
-    finally:
-        left.close()
-        right.close()
     root = Path(__file__).resolve().parents[2]
-    result.update({'fixture': 'SYNTHETIC', 'seed': args.seed, 'namespace': namespace,
-                   'targets': {'reference': left.base_url, 'candidate': right.base_url},
-                   'planned_sequence': requests,
-                   'declared_reference_pin': 'f4312727783dad64198b62ed778bbca98a5144a3',
-                   'harness_head': subprocess.check_output(
-                       ['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip(),
-                   'harness_dirty': bool(subprocess.check_output(
-                       ['git', '-C', str(root), 'status', '--porcelain'], text=True)),
-                   'harness_files_sha256': {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
-                                            for p in Path(__file__).parent.glob('*.py')}})
     args.report.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with args.report.open('x') as handle:
-        # Reference auth errors echo submitted keys (auth/decorators.py:42-45).
-        # Compare original bodies first, then remove known credential echoes.
-        exported = redact_secrets(result, [os.environ.get('ALRUST_REFERENCE_API_KEY'),
-                                          os.environ.get('ALRUST_API_KEY')])
-        json.dump(exported, handle, indent=2)
-        handle.write('\n')
+    # Reserve a private, unique report before HTTP effects. An interrupted run
+    # retains its preflight record; no prior attempt can be overwritten.
+    descriptor = os.open(args.report, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, 'w') as handle:
+        result = {'status': 'NOT_RUN', 'stage': 'preflight', 'fixture': 'SYNTHETIC',
+                  'seed': args.seed, 'namespace': namespace, 'planned_sequence': requests,
+                  'declared_reference_pin': 'f4312727783dad64198b62ed778bbca98a5144a3',
+                  'requests': [], 'cleanup': []}
+        write_report(handle, result)
+        clients = []
+        try:
+            result.update(provenance(root))
+            if result['provenance_errors']:
+                result['not_run_reason'] = 'harness source provenance unavailable'
+            else:
+                clients.append(Client(args.reference, os.environ.get('ALRUST_REFERENCE_API_KEY')))
+                clients.append(Client(args.candidate, os.environ.get('ALRUST_API_KEY')))
+                left, right = clients
+                if left.base_url == right.base_url:
+                    raise ValueError('reference and candidate must be separate target instances')
+                result['targets'] = {'reference': left.base_url, 'candidate': right.base_url}
+                write_report(handle, result)
+                result.update(replay(left, right, requests))
+                result['stage'] = 'completed'
+        except Exception as error:
+            result.update(status='FAIL', runner_error_type=type(error).__name__)
+        finally:
+            for client in clients:
+                try:
+                    client.close()
+                except Exception as error:
+                    result.update(status='FAIL', client_close_error_type=type(error).__name__)
+            write_report(handle, result)
     print(result['status'])
     return 0 if result['status'] == 'LOCAL_PASS' else 1
 
