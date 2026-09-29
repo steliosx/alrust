@@ -40,6 +40,20 @@ PYTHONPATH=conformance /tmp/alrust-harness-env/bin/python -m alrust_conformance.
 reference key. Use only synthetic test credentials. One heavy build/service test
 runs at a time under the existing laptop coordination window.
 
+For differential CLI reports, each key input must be absent or match
+`SYNTHETIC-` followed by 48 lowercase hexadecimal characters. An empty, short
+or differently formatted input produces a private `NOT_RUN` report before any
+client is created. Only the rejected environment field names are recorded;
+their values never enter the report. This is the runner's synthetic-fixture
+contract, independently awaiting Claude review; server authentication behavior
+and the general Client's negative-auth test inputs are unchanged.
+
+The runner captures validated inputs once and uses those same values for
+requests and export redaction. A short key cannot erase source hashes,
+namespaces or timestamp evidence. Credential echoes are still redacted only
+after raw comparison. Deliberate short-key authentication probes belong in
+separate cases using Client, with private evidence and explicit echo handling.
+
 The CLI's `receive-clock-v1` validates receive retention/refresh semantics
 before projecting exactly `alert.receiveTime`, `lastReceiveTime` and
 `updateTime`; selected alert/history href bases are also normalized. Client

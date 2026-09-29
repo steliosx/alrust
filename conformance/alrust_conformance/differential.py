@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import random
+import re
 import subprocess
 import time
 from urllib.parse import urlsplit
@@ -128,10 +129,27 @@ def provenance(root):
     return result
 
 
-def write_report(handle, result):
+def credential_inputs():
+    """Validate this CLI's fixture inputs, without exporting rejected values.
+
+    Client itself stays unrestricted, including for negative authentication
+    tests. Replay reports require long labeled synthetic keys so substring
+    redaction cannot erase ordinary hashes, timestamps or namespace text.
+    Capture once: changing the environment cannot change export redaction.
+    """
+    keys, invalid = {}, []
+    for field in ('ALRUST_REFERENCE_API_KEY', 'ALRUST_API_KEY'):
+        value = os.environ.get(field)
+        if value is None or re.fullmatch(r'SYNTHETIC-[0-9a-f]{48}', value):
+            keys[field] = value
+        else:
+            invalid.append(field)
+    return keys, invalid
+
+
+def write_report(handle, result, secrets=()):
     # Compare raw responses first; exported authentication errors may echo keys.
-    exported = redact_secrets(result, [os.environ.get('ALRUST_REFERENCE_API_KEY'),
-                                      os.environ.get('ALRUST_API_KEY')])
+    exported = redact_secrets(result, secrets)
     handle.seek(0)
     json.dump(exported, handle, indent=2)
     handle.write('\n')
@@ -164,19 +182,24 @@ def main():
     # retains its preflight record; no prior attempt can be overwritten.
     descriptor = os.open(args.report, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, 'w') as handle:
+        keys, invalid = credential_inputs()
+        secrets = tuple(value for value in keys.values() if value)
         result = {'status': 'NOT_RUN', 'stage': 'preflight', 'fixture': 'SYNTHETIC',
                   'seed': args.seed, 'namespace': namespace, 'planned_sequence': requests,
                   'declared_reference_pin': 'f4312727783dad64198b62ed778bbca98a5144a3',
                   'requests': [], 'cleanup': []}
-        write_report(handle, result)
+        write_report(handle, result, secrets)
         clients = []
         try:
             result.update(provenance(root))
-            if result['provenance_errors']:
+            if invalid:
+                result['not_run_reason'] = 'unsupported synthetic credential input'
+                result['invalid_credential_inputs'] = invalid
+            elif result['provenance_errors']:
                 result['not_run_reason'] = 'harness source provenance unavailable'
             else:
-                clients.append(Client(args.reference, os.environ.get('ALRUST_REFERENCE_API_KEY')))
-                clients.append(Client(args.candidate, os.environ.get('ALRUST_API_KEY')))
+                clients.append(Client(args.reference, keys['ALRUST_REFERENCE_API_KEY']))
+                clients.append(Client(args.candidate, keys['ALRUST_API_KEY']))
                 left, right = clients
                 if left.base_url == right.base_url:
                     raise ValueError('reference and candidate must be separate target instances')
@@ -186,10 +209,10 @@ def main():
                     raise ValueError('receive clock fixtures require loopback targets without proxies')
                 result['targets'] = {'reference': left.base_url, 'candidate': right.base_url}
                 result.update(status='FAIL', stage='executing')
-                write_report(handle, result)
+                write_report(handle, result, secrets)
                 def retain_partial(partial):
                     result.update(partial)
-                    write_report(handle, result)
+                    write_report(handle, result, secrets)
                 result.update(replay(left, right, requests, checked_clocks=checked_clocks,
                                      on_progress=retain_partial))
                 result['http_result'] = result['status']
@@ -218,7 +241,7 @@ def main():
                 except Exception as error:
                     result.update(status='FAIL', metadata_failure='postflight provenance unavailable',
                                   postflight_error_type=type(error).__name__)
-            write_report(handle, result)
+            write_report(handle, result, secrets)
     print(result['status'])
     return 0 if result['status'] == 'LOCAL_PASS' else 1
 
