@@ -49,11 +49,21 @@ Statuses: `open`, `assign`, `ack`, `shelved`, `blackout`, `closed`,
   `service` or `tags` is not a list, or if `attributes` is not an object
   (`:83-90`).
 - **R0.2 [V]** Attribute keys containing `.` or `$` give 400 (`:32-34`).
-- **R0.3 [V]** An integer `value` is stored as a string (`:35-36`).
-- **R0.4 [V]** `timeout`: a null or absent value becomes `ALERT_TIMEOUT`, and
-  a negative one gives 400 (`:41-47`). JSON that is not an integer gives 400
-  (`:91-92`).
-- **R0.5 [V]** Defaults when absent or empty:
+- **R0.3 [V]** An integer `value` is stored as a string (`:35-36`). Python's
+  `bool` is a subclass of `int`, so JSON `true`/`false` in `value` are stored
+  as the strings `"True"`/`"False"`. Floats and other types are not converted.
+- **R0.4 [V]** `timeout`:
+  - a null or absent value becomes `ALERT_TIMEOUT` (`:41`);
+  - a negative value gives 400 (`:46-47`);
+  - JSON strings and floats give 400 (`:91-92`).
+
+  JSON `true`/`false` **pass** the `isinstance(x, int)` parse check and are
+  converted by `int()` to timeout `1`/`0` (`:41-43`). Note `false` is not
+  `None`, so it does not fall back to `ALERT_TIMEOUT`. An integer-only
+  decoder would diverge here.
+- **R0.5** These are the model's parse-time defaults, when a field is absent
+  or empty. **They are not a claim that such an alert is stored**: under the
+  default plugins, R1 rejects an empty environment and an empty service first.
   - `environment` becomes `""` (`:52`) and `group` becomes `Misc` (`:59`);
   - `severity` becomes `normal` (`:53`) and `status` becomes `open` (`:57`);
   - `type` becomes `exceptionAlert`;
@@ -65,20 +75,38 @@ Statuses: `open`, `assign`, `ack`, `shelved`, `blackout`, `closed`,
 ## R1. Dispatch (`alerta/utils/api.py:31-65`)
 
 1. `assign_customer` runs (see `customer-mapping.md`). Then the pre-receive
-   plugins run in order. **If an alert already has status `blackout` when the
-   loop starts, the loop is skipped** (`:37-39`), and so are post-receive
-   plugins.
-2. With the default blackout plugin (`NOTIFICATION_BLACKOUT=False`), an alert
-   that matches a blackout is dropped with **202** and never stored
-   (`plugins/blackout.py`). An `event` of `Heartbeat` is diverted to a
-   heartbeat with **202** (`plugins/heartbeat.py`).
-3. `is_duplicate` is checked first, then `is_correlated`, else `create`
+   plugins run in order: `remote_ip`, `reject`, `heartbeat`, `blackout`,
+   `forwarder`. **If an alert already has status `blackout` when the loop
+   starts, the loop is skipped** (`:37-39`). That skips `reject`, `heartbeat`
+   and `blackout` as well as the post-receive plugins, so a client-sent
+   `status: "blackout"` bypasses policy rejection. Specify that case
+   separately.
+2. **R1.2 [V] Reject policy** (`plugins/reject.py:27-39`, `settings.py:276-278`).
+   Before any lookup or `transition()`, the request fails with **403**
+   (`views/alerts.py:57-60`) when:
+   - the origin matches `ORIGIN_BLACKLIST` (empty by default);
+   - the environment does not fully match one of `ALLOWED_ENVIRONMENTS`
+     (default `Production`, `Development`), which includes the default `""`;
+   - `service` is empty.
+3. Next, an `event` of `Heartbeat` is diverted to a heartbeat with **202**
+   (`plugins/heartbeat.py`). Then, with the default blackout plugin
+   (`NOTIFICATION_BLACKOUT=False`), an alert that matches a blackout is
+   dropped with **202** and never stored (`plugins/blackout.py`).
+4. `is_duplicate` is checked first, then `is_correlated`, else `create`
    (`:55-63`).
-4. **R1.1 [V]** Any exception raised during step 3 is re-raised as
+5. **R1.1 [V]** Any exception raised during step 4 is re-raised as
    `ApiError(str(e))` with the **default code 500** (`:64-65`,
    `exceptions.py:10`). This includes the 400 that `transition()` raises for
    an unknown severity (`sm.py:121-122`). **An alert with an unknown severity
-   therefore returns 500, not 400.**
+   that gets past steps 1–3 therefore returns 500, not 400.**
+
+**Vector preconditions.** Unless a vector tests R1.2 or R1 steps 1 and 3
+themselves, every stored-alert vector in R1.1 and R2–R7 uses:
+- an allowed environment (`Development`);
+- a non-empty synthetic `service`;
+- an event other than `Heartbeat`;
+- no matching blackout;
+- the default `status`.
 
 ## R2. Match keys (`pg.py:160-214`)
 
@@ -93,10 +121,12 @@ In every case below, `customer` joins the key as `customer=X`, or as
     alert's `correlate` list (`:190-198`).
 
   The incoming alert's own `correlate` list plays no part in matching.
-- **R2.3** Both lookups use `fetchone` with no `ORDER BY`. When several rows
-  match, which one is picked is undefined. The UPDATE statements in R4 and R5
-  use the same WHERE clause, so they can **update every matching row** and
-  return one of them.
+- **R2.3** Both lookups use `fetchone` with no `ORDER BY`
+  (`pg.py:179-198`). When several rows match, which one is picked is
+  undefined. The dedup and correlate UPDATEs in R5 and R6 re-apply the same
+  WHERE clause (R4 inserts). They can therefore **update every matching row**
+  and return one of them. Nothing guarantees that the row returned is the
+  row the lookup found.
 
 ## R3. `transition()` as used on receive (`sm.py:113-253`)
 
@@ -181,9 +211,15 @@ Rules in evaluation order (no action):
 
 ## R6. Correlate (`Alert.update`, `alert.py:338-379`, `pg.py:242-262`)
 
-- **R6.1 [V]** `previousSeverity` is set to the stored severity of the matched
-  row (`:341`). `trendIndication` = trend(`previousSeverity`, incoming
-  severity) (`:342`).
+- **R6.1 [V]** `previousSeverity` comes from a **separate**
+  `db.get_severity()` SELECT (`alert.py:341`, `pg.py:160-167`). It does not
+  use the `correlate_with` row that `is_correlated()` returned, so it is the
+  stored severity of *a* row matching the correlation predicate.
+  `trendIndication` = trend(`previousSeverity`, incoming severity) (`:342`).
+  - With exactly one matching row, that is the matched row's severity.
+  - With several matching rows, the SELECT, the `is_correlated` choice and
+    the rows the UPDATE touches are each chosen independently (R2.3), with no
+    guaranteed identity between them.
 - **R6.2** The current and previous statuses come from history (R7). Here
   ACK-4 **can** fire, so an `ack` alert that becomes more severe reopens.
 - **R6.3 [V]** The row is updated as follows:
@@ -215,6 +251,10 @@ Rules in evaluation order (no action):
 - **R7.3** Current status = the status of the first entry. Previous
   status = the status of the second entry, or `None` (treated as `open`)
   when there is only one.
+- **R7.3a** `ORDER BY update_time DESC` has **no tie-breaker** (`pg.py:449`).
+  When entries have equal `updateTime`, for example several alerts sent with
+  the same `createTime`, the current and previous statuses are **undefined**.
+  Vectors must use strictly increasing `createTime`.
 - **R7.4 [V]** Because of R7.2, an alert sent with an older `createTime` than
   earlier entries does not become the "current" entry for later transitions.
   Clock skew between monitoring sources can therefore change the transitions
@@ -222,18 +262,31 @@ Rules in evaluation order (no action):
 
 ## Zabbix OK-event consequence (for Phase 1 fixtures)
 
-Take an OK event mapped to severity `ok` (or `normal`/`cleared`) on an `open`
-`major` alert with the same event. It is **correlated** (same event, different
-severity), and CLS-* closes it with **severity stored as `ok`**, because the
-receive path does not normalize to `normal` (R3). Sending the same OK again is
-a **duplicate** of the closed alert, and the status stays `closed`. A later
-`major` is correlated again, and CLS-3 reopens the alert.
+Assumptions:
+- a single alert identity (one environment, resource, event and customer, no
+  other correlated alerts);
+- the vector preconditions of R1;
+- **strictly increasing `createTime`** t1 < t2 < t3 < t4.
+
+1. At t1, a `major` arrives and creates an `open` alert.
+2. At t2, an OK event mapped to severity `ok` (or `normal`/`cleared`) is
+   **correlated** (same event, different severity). CLS-* closes it with
+   **severity stored as `ok`**, because the receive path does not normalize
+   to `normal` (R3).
+3. At t3, the same OK again is a **duplicate** of the closed alert, and the
+   status stays `closed`.
+4. At t4, a `major` is correlated again, and CLS-3 reopens the alert.
+
+If any `createTime` is not later than the previous one, R7.3a/R7.4 apply
+instead and the vector does not hold.
 
 ## Open questions
 
-- **L1 (R1.1):** an unknown severity gives 500 in the reference. Either
-  alrust matches it, or an ADR records a divergence to 400. This is an API
-  contract change, so it needs Codex's concurrence.
+- **L1 (R1.1):** an unknown severity gives 500 in the reference. Once the
+  live run confirms it, reproducing 500 is ordinary conformance. Changing it
+  to 400 would be an **intentional, observable API-behavior divergence**.
+  That goes through the charter escalation to the owner, with an ADR; Codex's
+  concurrence alone is not enough. No divergence is proposed.
 - **L2 (R7.2, R7.4):** state is derived from client-timestamp order across
   correlated alerts, not from the row's `status`. Matching this exactly is
   needed for parity, but it is fragile. Any divergence is an **alert-behavior
