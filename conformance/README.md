@@ -18,6 +18,16 @@ Lifecycle, customer/auth, query, heartbeat, timeout and stateful shrinking
 coverage await the source-cited spec. Empty Rust crates and offline harness
 tests are not evidence of Alerta compatibility.
 
+The harness lock records SHA-256 hashes of exact supported wheels while
+preserving all 14 dependency versions. Its platform is Linux x86_64,
+CPython 3.12 and glibc 2.17 or newer: pure Python wheels where available,
+plus the matching Hypothesis binary wheel. [Wheel provenance](wheels.manifest.json)
+records each filename, size, fixed-version PyPI metadata URL and published
+digest, independently checked against the downloaded bytes. Install with
+`--require-hashes --only-binary=:all:`. This rejects altered archives and
+unlisted source distributions; it does not attest to upstream package safety
+or lock the reference server's separate dependencies.
+
 Use an isolated disposable server/database for every HTTP run. All generated
 alerts carry an `alrust-synthetic-` resource and `SYNTHETIC` tag. Credentials
 are optional environment inputs; they never enter reports or fixtures. Real
@@ -25,7 +35,7 @@ payloads, alertad.conf and signing certificates are unnecessary for these cases.
 
 ```sh
 python3.12 -m venv /tmp/alrust-harness-env
-/tmp/alrust-harness-env/bin/python -m pip install -r conformance/requirements.lock
+/tmp/alrust-harness-env/bin/python -m pip install --require-hashes --only-binary=:all: -r conformance/requirements.lock
 # Offline infrastructure verification, without a service or compatibility claim:
 /tmp/alrust-harness-env/bin/python -m pytest -c conformance/pytest.ini conformance/tests/unit
 # Black-box HTTP cases; absent ALRUST_TARGET fails rather than silently skipping:

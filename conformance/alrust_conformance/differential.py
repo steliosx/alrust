@@ -173,7 +173,7 @@ def main():
         parser.error('report already exists; retain it and select a fresh path')
     namespace = 'alrust-synthetic-' + uuid.uuid4().hex
     # Reference DateTime.parse accepts fractional seconds followed by literal Z
-    # (alerta/utils/format.py:65-72), rather than a +00:00 offset.
+    # (alerta/utils/format.py:53-61), rather than a +00:00 offset.
     created = datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
     requests = list(sequence(args.seed, args.steps, namespace, created))
     root = Path(__file__).resolve().parents[2]

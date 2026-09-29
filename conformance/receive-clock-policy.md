@@ -21,7 +21,7 @@ Only these JSON paths are projected, after validation, on successful receive:
 
 All three must exist and use UTC `YYYY-MM-DDThh:mm:ss.sssZ`; nulls, invalid
 dates, missing values and non-UTC formats fail. The source truncates output to
-milliseconds (`utils/format.py:74-76`). Source clocks need not be monotonic:
+milliseconds (`utils/format.py:63-65`). Source clocks need not be monotonic:
 the strictly later assertion is an explicitly spaced verification prerequisite,
 not a production contract. An equal/backward refresh yields FAIL(clock), with
 raw responses retained, instead of a tokenized pass. Each target waits at
