@@ -16,7 +16,9 @@
 - **Slice status:** this file covers the **receive path** (`POST /alert`,
   R0–R7) and **operator status and actions** (`PUT /alert/<id>/status` and
   `/action`, A0–A6) and **housekeeping** (`/management/housekeeping`,
-  K0–K5). Heartbeats and the ISA model are **not yet written**. The Phase 0 item 2 contract stays open until
+  K0–K5) and **heartbeats** (HB0–HB6). The ISA 18.2 model is out of scope.
+  After Codex's review of these slices, item 2's remaining open points are
+  live verification and the listed questions. The Phase 0 item 2 contract stays open until
   they are.
 
 ## Severity and status vocabulary (`sm.py:7-58`)
@@ -599,6 +601,100 @@ and goes to the owner.
 
   Any such run needs its own granted window. The design choice is the
   harness owner's.
+
+## HB. Heartbeats
+
+`models/heartbeat.py` is cited as `hb.py`, and `views/heartbeats.py` as
+`hbv.py`.
+
+### HB0. Identity and upsert (`pg.py:851-861`)
+
+- **HB0.1 [V]** A heartbeat's identity is **`(origin, customer)`**
+  (`ON CONFLICT (origin, COALESCE(customer, ''))`). A repeat from the same
+  origin and customer updates `tags`, `attributes`, `create_time`, `timeout`
+  and `receive_time`. The stored **`id` is kept**; an `id` in the request is
+  ignored on conflict. `type` is not updated on conflict.
+- **HB0.2 [V]** `POST /heartbeat` needs `write:heartbeats`. Customer
+  assignment uses `admin:heartbeats` (customer-mapping C11). It returns
+  **201** `{status, id, heartbeat}` (`hbv.py:17-40`).
+
+### HB1. Parsing and defaults (`hb.py:27-92`)
+
+- **HB1.1 [V]** `timeout`:
+  - it defaults to `HEARTBEAT_TIMEOUT` (= `ALERT_TIMEOUT`, 86400;
+    `settings.py:205`);
+  - it must be an int and non-negative, as in R0.4, and booleans behave the
+    same way;
+  - an empty `customer` gives 400; attribute keys containing `.` or `$` give
+    400.
+- **HB1.2** `origin` defaults to the server's `<argv0>/<hostname>`,
+  `createTime` defaults to server now, and `type` defaults to `Heartbeat`.
+  `maxLatency` is the config `HEARTBEAT_MAX_LATENCY` (2000 ms;
+  `settings.py:206`). It is not stored.
+
+### HB2. Derived fields: recomputed on every read (`hb.py:62-72`)
+
+The model ignores the `latency` and `since` columns the SQL returns
+(`from_record`, `hb.py:133-146`), and **recomputes both on the server clock**:
+- `latency` = `int((receiveTime - createTime) ms)`;
+- `since` = `utcnow - receiveTime`, serialized as **integer seconds**
+  (`format.py:41-42`);
+- `status`, in order:
+  - `expired` when `since > timeout`;
+  - otherwise `slow` when `latency > maxLatency`;
+  - otherwise `ok`.
+- **HB2.1** Because `createTime` comes from the client, a skewed source clock
+  shows up as latency and can make a heartbeat `slow` (or give a negative
+  latency).
+
+### HB3. Heartbeats sent as alerts (`plugins/heartbeat.py`)
+
+- **HB3.1 [V]** An alert whose event is in `HEARTBEAT_EVENTS` (default
+  `Heartbeat`) becomes a heartbeat. This happens after it passes the reject
+  policy (R1.2).
+  - It copies `origin`, `tags`, `timeout` and the assigned `customer`.
+  - Its `attributes` are `{environment, severity, service, group}`.
+  - The **alert's `createTime` is not passed**, so the heartbeat's
+    `createTime` is server now and its latency is about 0.
+  - The response is **202** `{status: "ok", message, id}`, where `id` is the
+    heartbeat id. No alert is stored.
+
+### HB4. Reads, deletes and customer scope (`hbv.py:43-110`)
+
+- **HB4.1 [V]** `GET /heartbeats` filters by `customers=g.customers` (as
+  C16) and accepts repeated `status=ok|slow|expired`. That filter is
+  evaluated in SQL against `NOW() at time zone 'utc'`, with the same
+  boundaries as HB2 (`pg.py:886-918`). An empty result returns **200** with
+  `message: "not found"`, `heartbeats: []` and `total: 0`.
+- **HB4.2 [V]** **Per-id `GET` and `DELETE /heartbeat/<id>` apply no
+  customer filter.** They read `g.get('customer')` (singular), which
+  `permission()` never sets (`hbv.py:48`, `:96`; compare
+  `auth/decorators.py`, which sets `g.customers`). So a customer-scoped key
+  can read or delete **any** heartbeat by id or id prefix (`id LIKE
+  '<id>%'`, `pg.py:863-872`). This differs from alerts (C17). The same
+  pattern appears in `views/blackouts.py:132`. **Follow-up:**
+  `spec/customer-mapping.md` should gain a rule for this in its next head.
+
+### HB5. Health check and staleness (`mgmt.py:137-154`)
+
+- **HB5.1 [V]** `GET /management/healthcheck` returns **503**
+  `HEARTBEAT_STALE: <origin>` when any heartbeat's `delta.seconds >
+  4 × timeout`. It returns 503 `HEALTH_CHECK_FAILED` on any exception, and
+  otherwise `OK`.
+- **HB5.2 [V]** It uses `timedelta.seconds`, the 0–86399 seconds
+  *component*, not `total_seconds()`. A heartbeat stale for **more than a
+  day** can therefore read as fresh, depending on the remainder. For
+  example, a stale age of 1 day plus 10 s gives `.seconds` = 10.
+- **HB5.3** The healthcheck reads **every** heartbeat with no customer
+  filter. Any tenant's stale heartbeat makes the whole server unhealthy.
+
+### HB6. What the reference does *not* do
+
+- **HB6.1** The reference server **never turns a stale heartbeat into an
+  alert.** Staleness only shows in `status` and in the healthcheck. The
+  per-tenant "source went quiet raises an alert" behavior in KICKOFF Phase 5
+  is a **new alrust feature**, not a compatibility requirement. Its design
+  must not change the HB0–HB5 contract.
 
 ## Open questions
 
