@@ -1,6 +1,7 @@
 from copy import deepcopy
 import json
 import os
+import re
 
 import httpx
 from hypothesis import given, strategies as st
@@ -175,6 +176,8 @@ def test_missing_git_retains_private_not_run_report_without_http(monkeypatch, tm
     assert evidence['status'] == 'NOT_RUN'
     assert evidence['requests'] == evidence['cleanup'] == []
     assert evidence['planned_sequence']
+    assert re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z',
+                        evidence['planned_sequence'][0]['payload']['createTime'])
     assert len(evidence['provenance_errors']) == 2
     assert report.stat().st_mode & 0o777 == 0o600
     before = report.read_bytes()

@@ -17,7 +17,8 @@ def test_synthetic_create_and_deduplicate(target):
                'event': 'SyntheticP0Smoke', 'environment': 'Development',
                'severity': 'major', 'service': ['alrust-conformance'],
                'tags': ['SYNTHETIC'], 'origin': 'alrust-synthetic',
-               'createTime': datetime.now(timezone.utc).isoformat(), 'timeout': 86400}
+               'createTime': datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z'),
+               'timeout': 86400}
     created_ids = set()
     try:
         created = target.request('POST', '/alert', payload)
