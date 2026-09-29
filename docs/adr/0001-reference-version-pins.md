@@ -18,11 +18,31 @@ Resolved on 2026-09-29 from GitHub releases:
 
 ## Decision
 
-Pin exactly those two commits. `.github/reference-pins.txt` records the
-expected gitlinks, and the `reference-guard` CI job fails if a gitlink,
-`.gitmodules` URL, or any other file under `reference/` differs. CODEOWNERS
-puts those paths under owner review. Changing a pin needs a new ADR plus
-owner approval.
+Pin exactly those two commits. Changing a pin needs a new ADR plus owner
+approval.
+
+`.github/scripts/reference-guard.sh` enforces the pins, and the
+`reference-guard` CI job runs it on every PR and on every push to `main`. The
+script requires three things:
+
+- `reference/` is the exact tree `69fd8341…`. That fixes exactly two entries,
+  each mode 160000, at the SHAs above.
+- `.gitmodules` is the exact regular blob `4c688ccc…`. That fixes every byte,
+  so no extra settings are allowed and path/url pairs cannot be swapped.
+- The repository contains no other gitlinks.
+
+Once the base commit contains `reference/` and `.gitmodules`, both must also
+equal the base tree. An unavailable base fails the check rather than skipping
+it. `.github/scripts/test-reference-guard.sh` holds the adversarial regression
+cases, run on synthetic repositories.
+
+**Limitation.** Under `pull_request`, the workflow and the guard script come
+from the candidate, so a PR could edit the policy along with the pins. Such an
+edit is visible in review, but no check inside the repo can block it. Full
+anchoring needs branch protection or a ruleset. On 2026-09-29 GitHub returned
+HTTP 403 for that API (plan upgrade required). That setting is the owner's to
+make. CODEOWNERS lists the guarded paths, but it has no effect without branch
+protection.
 
 ## Consequences and open questions
 

@@ -21,35 +21,17 @@ jobs:
         with:
           fetch-depth: 0
           submodules: false
-      - name: Gitlinks match pinned tags
+      - name: Reference policy (ADR-0001)
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          fail=0
-          while read -r path sha tag; do
-            [[ -z "$path" || "$path" == \#* ]] && continue
-            actual="$(git ls-tree HEAD "$path" | awk '{print $3}')"
-            if [[ "$actual" != "$sha" ]]; then
-              echo "::error::$path is at $actual, expected $sha ($tag)"
-              fail=1
-            fi
-          done < .github/reference-pins.txt
-          extra="$(git ls-tree -r --name-only HEAD reference/ | grep -vxF -f <(awk '!/^#/ && NF {print $1}' .github/reference-pins.txt) || true)"
-          if [[ -n "$extra" ]]; then
-            echo "::error::unexpected files under reference/: $extra"
-            fail=1
-          fi
-          exit $fail
-      - name: Submodule URLs are upstream
-        run: |
-          set -euo pipefail
-          expected=$'reference/alerta https://github.com/alerta/alerta.git\nreference/alerta-webui https://github.com/alerta/alerta-webui.git'
-          actual="$(git config -f .gitmodules --get-regexp '^submodule\..*\.(path|url)$' \
-            | awk '$1 ~ /\.path$/ {p=$2} $1 ~ /\.url$/ {print p, $2}' | sort)"
-          if [[ "$actual" != "$expected" ]]; then
-            echo "::error::.gitmodules differs from the pinned upstreams:"
-            echo "$actual"
-            exit 1
-          fi
+          if [[ "$EVENT" == "pull_request" ]]; then base="$PR_BASE"; else base="$PUSH_BEFORE"; fi
+          .github/scripts/reference-guard.sh HEAD "$base"
+      - name: Guard regression cases
+        run: .github/scripts/test-reference-guard.sh
 
   rust:
     name: fmt / clippy / test

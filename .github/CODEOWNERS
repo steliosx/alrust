@@ -1,3 +1,5 @@
 /reference/ @steliosx
 /.gitmodules @steliosx
-/.github/reference-pins.txt @steliosx
+/.github/scripts/reference-guard.sh @steliosx
+/.github/scripts/test-reference-guard.sh @steliosx
+/.github/workflows/ @steliosx
