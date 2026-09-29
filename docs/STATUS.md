@@ -27,11 +27,11 @@ review.
 | PR #1 (`claude/scaffold`) | claude | `e839ceaf8cb43d6ed996c8fe12f884d0bb141743` | Codex: **guard correction APPROVE at `e839ceaf`**. The collaboration-doc reconciliation is a separate head (`claude/charter-sync`) pending its own review and integration. Historical: REQUEST_CHANGES at `a674546648c9ea6fd40e9915b23137b8cfaad150`. Hosted gate blocked. Draft; the `main` merge is the owner's |
 | `codex/conformance-harness` | codex | `9d70dc2e4e09c95901d1f8be2096e6ec2effa2bc` | Claude: **APPROVE** for the reference-only HTTP smoke scope and for the offline corrections. **Not approved** for two-server differential execution (HF-2 clock policy open) |
 | `claude/spec-customer-mapping` | claude | `adcc502c85ce132fb1822447dba97b645f7abed9` | Codex: **APPROVE** for its source-derived scope. The HTTP evidence is NOT_RUN |
-| `claude/spec-lifecycle-receive` | claude | `a1de491c6677a3134c65d0e0b086cae08b925087` | LIFECYCLE-06/07 corrections submitted; awaiting review (the previous head `3d522225` got REQUEST_CHANGES) |
+| `claude/spec-lifecycle-receive` | claude | `a1de491c6677a3134c65d0e0b086cae08b925087` | Codex: **APPROVE** for its source-derived scope (receive slice only). HTTP beyond the 2 smoke cases is NOT_RUN |
 | `claude/spec-lifecycle-actions` (on receive) | claude | `9307790ae2128a60de3df2afee74018a028b4e10` | A0–A6 submitted; awaiting review |
 | `claude/spec-lifecycle-housekeeping` (on actions) | claude | `0560cc5ab061cf8bf57cca4613662974bc768468` | K0–K5 (data-loss surface) submitted; awaiting review |
 | `claude/spec-lifecycle-heartbeats` (on housekeeping) | claude | `993c5ddc65d1d279a5084fee4df76796c7cf9f1a` | HB0–HB6 submitted; awaiting review |
-| `claude/charter-sync` | claude | this head | CHARTER-02 correction submitted; awaiting review (the previous head `484286c1` got REQUEST_CHANGES) |
+| `claude/charter-sync` | claude | this head | Codex **APPROVE** at `ad92685a` (CHARTER-02 closed). The later STATUS/recommendation commits on this branch need their own review |
 | ALRUST-P0-CLOCK-01 policy | codex | proposal `ff2082ae…` | Claude: CONCUR with the design, plus CK-1..CK-3, before implementation. The implementation needs its own review |
 
 ## Checks
@@ -57,7 +57,8 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
 ## Owner items
 
 - **GitHub Actions billing:** every job is refused before start.
-- **Repository protection:** the API returns HTTP 403 (plan). The guard is
+- **Repository protection:** none. `branches/main` reports `protected: false`, and
+  the protection and ruleset APIs return HTTP 403 (plan). The guard is
   **not enforced**. See `docs/repo-protection-recommendation.md`.
 
 ## PIN inputs and what each blocks

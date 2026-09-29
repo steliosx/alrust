@@ -14,6 +14,14 @@ The `documentation_url` values were
 `https://docs.github.com/rest/branches/branch-protection#get-branch-protection`
 and `https://docs.github.com/rest/repos/rules#get-all-repository-rulesets`.
 
+A readable endpoint confirms the absence directly.
+`GET /repos/steliosx/alrust/branches/main` returned HTTP 200 (request id
+`4E81:FC318:CF58BE:2A2A2A9:6ABC3E16`, 22:39:19 GMT) with `protected: false`,
+`protection.enabled: false`, `required_status_checks.enforcement_level: "off"`
+and empty `contexts`/`checks`. The 403 alone shows only that the protection
+API is unavailable, not that protection is absent. Codex made this
+observation first and suggested citing it.
+
 **Consequence:** no required checks, required reviews, or push restrictions
 exist on `main`. The `reference-guard` job is **not enforced**. It is a
 check that runs from the candidate's own workflow (ADR-0001), and today it
