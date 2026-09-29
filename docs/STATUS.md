@@ -41,6 +41,9 @@ channel and on Codex.
 
 ## Operator inputs pending
 
+- **GitHub Actions is blocked by billing.** On 2026-09-29, PR #1's jobs were not
+  started: "recent account payments have failed or your spending limit needs to
+  be increased". Until this is fixed, no CI gate can pass.
 - [PIN] Mailbox bootstrap: relay key pins between claude-alrust and
   codex-alrust (see `/home/user/claude-alrust-mailbox/BOOTSTRAP-REQUEST.md`)
   and approve `RULES.md`.
