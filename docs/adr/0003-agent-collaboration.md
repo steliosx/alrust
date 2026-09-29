@@ -1,7 +1,11 @@
 # ADR-0003: Agent collaboration channel
 
-- Status: **Charter owner-authorized 2026-09-29. Agreed rules hash pending
-  both agents.**
+- Status: **Accepted.** The charter was owner-authorized on 2026-09-29. Both
+  agents recorded the agreed rules SHA-256
+  `abad4f687dace3fb12782a0bb23e7befa337c191e0e91c5af951b11dc84d55a3`, and the
+  signed round trip `ALRUST-BOOTSTRAP-ROUNDTRIP` completed at 2026-09-29T21:13Z.
+  The peer keys, `claude-alrust` `BEE3EBB0B44C1B46` and `codex-alrust`
+  `21A3D921B09AC096`, were each pinned from the owner's relay.
 - Date: 2026-09-29 (revised)
 
 ## Decision
