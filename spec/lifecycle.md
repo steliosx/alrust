@@ -100,13 +100,19 @@ Statuses: `open`, `assign`, `ack`, `shelved`, `blackout`, `closed`,
    an unknown severity (`sm.py:121-122`). **An alert with an unknown severity
    that gets past steps 1–3 therefore returns 500, not 400.**
 
-**Vector preconditions.** Unless a vector tests R1.2 or R1 steps 1 and 3
-themselves, every stored-alert vector in R1.1 and R2–R7 uses:
+**Vector preconditions.** These are the default setup for an ordinary
+stored-alert vector in R1.1 and R2–R7:
 - an allowed environment (`Development`);
 - a non-empty synthetic `service`;
 - an event other than `Heartbeat`;
 - no matching blackout;
-- the default `status`.
+- the default incoming `status`, unless the vector explicitly sets another
+  one (for example R3.1's `ack`, or the separately specified
+  `status: "blackout"` bypass).
+
+**Deliberate probes are exempt** from the defaults they exist to test. These
+are the policy and ordering probes (R1.2, R1 steps 1 and 3) and the clock
+probes (R7.3a ties, R7.4 older `createTime`). Each probe states its own setup.
 
 ## R2. Match keys (`pg.py:160-214`)
 
@@ -217,9 +223,12 @@ Rules in evaluation order (no action):
   stored severity of *a* row matching the correlation predicate.
   `trendIndication` = trend(`previousSeverity`, incoming severity) (`:342`).
   - With exactly one matching row, that is the matched row's severity.
-  - With several matching rows, the SELECT, the `is_correlated` choice and
-    the rows the UPDATE touches are each chosen independently (R2.3), with no
-    guaranteed identity between them.
+  - With several matching rows, the row the `get_severity` SELECT returns
+    and the row `is_correlated` returns are each an unordered `fetchone`
+    choice. The UPDATE is **deterministic in effect**: it applies to *every*
+    row matching its predicate (R2.3). Only the single row it **returns** is
+    an unordered choice. Nothing guarantees that the two SELECT choices and
+    the returned row are the same row.
 - **R6.2** The current and previous statuses come from history (R7). Here
   ACK-4 **can** fire, so an `ack` alert that becomes more severe reopens.
 - **R6.3 [V]** The row is updated as follows:
@@ -254,7 +263,9 @@ Rules in evaluation order (no action):
 - **R7.3a** `ORDER BY update_time DESC` has **no tie-breaker** (`pg.py:449`).
   When entries have equal `updateTime`, for example several alerts sent with
   the same `createTime`, the current and previous statuses are **undefined**.
-  Vectors must use strictly increasing `createTime`.
+  Ordinary lifecycle vectors use strictly increasing `createTime`. Tie probes
+  and older-time probes (R7.4) deliberately do not, and they assert only what
+  stays defined.
 - **R7.4 [V]** Because of R7.2, an alert sent with an older `createTime` than
   earlier entries does not become the "current" entry for later transitions.
   Clock skew between monitoring sources can therefore change the transitions
