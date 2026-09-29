@@ -327,9 +327,13 @@ receive-path vector preconditions (R1) apply to the alert being acted on.
   value.** The history entry gets `timeout or ALERT_TIMEOUT`
   (`alert.py:619`), but the row UPDATE passes the original `timeout`
   argument (`alert.py:638`, `pg.py:279-291`). A request without a timeout
-  therefore stores **NULL** in the nullable `alerts.timeout` column
-  (`sql/schema.sql:49`), and the serialized alert shows `"timeout": null`.
-  This matters for housekeeping, which is a later slice.
+  therefore stores **database NULL** in the nullable `alerts.timeout` column
+  (`sql/schema.sql:49`).
+- **A1.3a [V]** **The API never shows that NULL.** Every read hydrates the
+  row through `from_record` → `Alert.__init__`, which maps a `None` timeout
+  to `ALERT_TIMEOUT` (`alert.py:41`, `:203-231`). The serialized alert
+  therefore shows `"timeout": 86400` under the defaults, not `null`. The raw
+  NULL is visible only to SQL, which means to housekeeping (K2.2).
 - **A1.4 [V]** The row update sets `status`, `update_time = now` and
   `attributes` = the loaded alert's attributes (a full replace, which is a
   no-op unless a plugin changed them). `tags` becomes the union. One `status`
@@ -408,13 +412,20 @@ Fall-through, when no row above matched:
 
 - **A3.1 [V]** `assign` has **no transition of its own**. An `assign`
   action on an `open` alert leaves the status `open` (ALL-*), and the
-  history records `type: assign`. Only the status endpoint (A1) can store
-  the status `assign`.
+  history records `type: assign`. **Among the operator endpoints**, only
+  `/status` (A1) can store the status `assign`. A receive with an explicit
+  `status: "assign"` stores it too (R3 SET-*). For example, an incoming
+  `major` with `status: "assign"` produces `major`/`assign`.
 - **A3.2 [V]** On a `blackout` alert, `ack` (for example) does *not* ack. It
   returns the previous status (BLK-2).
-- **A3.3 [V]** `close` stores severity **`normal`** (not `ok`), and sets
+- **A3.3 [V]** When `close` **matches a closing rule** (OPEN-3, ACK-3,
+  SHL-2, BLK-1), it stores severity **`normal`** (not `ok`) and sets
   `previousSeverity` to the old severity. A later `open` (CLS-1) restores
-  that stored `previousSeverity`.
+  that stored `previousSeverity`. From an **unsupported state** (`assign`,
+  or any non-enum status) with a non-normal severity, `close` falls through
+  to ALL-*. The action then **succeeds (200) with no severity or status
+  change**: for example, `assign`/`major` stays `assign`/`major`. A history
+  entry of type `close` is still written (A5.1).
 
 ### A4. Action timeouts (`alert.py:649-657`)
 
@@ -427,8 +438,11 @@ Fall-through, when no row above matched:
      **7200**; `settings.py:208`);
    - otherwise: `timeout or <row timeout> or ALERT_TIMEOUT`.
 - **A4.1 [V]** The computed timeout is written **only to the history
-  entry**. The row's `timeout` column is written back unchanged
-  (`alert.py:693`). This contrasts with A1.3.
+  entry**. The row's `timeout` column is written from the **loaded model's**
+  `self.timeout` (`alert.py:693`), which is unchanged at the model level.
+  This is not necessarily the raw database value: when the column was NULL
+  (A1.3), the hydrated model holds `ALERT_TIMEOUT` (A1.3a), so **any action
+  writes `ALERT_TIMEOUT` back and clears the NULL**.
 - **A4.2** Timeout `0` is falsy, so an explicit request timeout of 0 falls
   through to the next default.
 
@@ -447,7 +461,7 @@ Fall-through, when no row above matched:
 - **A5.3 [V]** The row update sets `severity`, `status`, `previousSeverity`
   (A2.5) and `update_time = now`, even when nothing changed. `tags` becomes
   the union, `attributes` are replaced with the loaded ones, and `timeout` is
-  unchanged (A4.1).
+  the loaded model's value (A4.1: NULL becomes `ALERT_TIMEOUT`).
 - **A5.4 [V]** Success returns **200** `{"status": "ok"}`, without the alert
   (`views.py:187-188`).
 
