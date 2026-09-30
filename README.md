@@ -1,8 +1,9 @@
 # alrust
 
-**An alert aggregation and deduplication server for an MSP network operations
-centre: a Rust rewrite of [Alerta](https://github.com/alerta/alerta) that stays
-API-compatible with the existing Alerta web UI.**
+**A planned alert aggregation and deduplication server for an MSP network
+operations centre: a Rust rewrite of [Alerta](https://github.com/alerta/alerta).
+Its goal is to be API-compatible with the Alerta API as the existing Alerta
+web UI and our scripts use it.**
 
 > **Project stage: planning and Phase 0 (specification and conformance
 > harness).** There is no working alrust server, API or desktop app yet. The
@@ -20,16 +21,19 @@ API-compatible with the existing Alerta web UI.**
 
 ## What it is
 
-alrust receives alerts from many monitoring systems, such as per-tenant
-Zabbix instances, Veeam ONE and generic webhooks. It deduplicates and
-correlates them, and presents them to NOC operators through the existing
-Alerta web UI, wrapped as Windows and macOS desktop apps.
+The goal: alrust **will** receive alerts from many monitoring systems, such
+as per-tenant Zabbix instances, Veeam ONE and generic webhooks. It will
+deduplicate and correlate them, and present them to NOC operators through
+the existing Alerta web UI, wrapped as Windows and macOS desktop apps. None
+of this runs yet.
 
-| Design choice | Decision |
+These are the planned design decisions, fixed in the kickoff:
+
+| Design choice | Decision (planned) |
 |---|---|
 | Users | Internal NOC operators only. `customer` is a grouping and routing attribute. |
 | Backend | Rust (axum, tokio, sqlx) on PostgreSQL only |
-| Compatibility target | The Alerta API as the Alerta web UI and our scripts actually use it, verified against a pinned upstream release |
+| Compatibility target | The Alerta API as the Alerta web UI and our scripts actually use it; full documented API parity is not a goal. To be verified against a pinned upstream release; not yet verified |
 | Frontend | The upstream Alerta web UI, vendored and lightly patched. There is no frontend rewrite. |
 | Desktop | Tauri wrapper with native notifications from a new server-sent-events endpoint |
 | Inbound | Native Zabbix ≥ 7.0.25 webhook receiver, and a configurable generic webhook mapper (used for Veeam ONE) |
@@ -56,7 +60,10 @@ independently reviewed, but is not yet pushed to this repository.
 
 ## Architecture (planned)
 
-Nothing in this diagram runs yet.
+Nothing in this diagram runs yet. By design, `alrust-engine` is a pure
+library with no I/O: it computes lifecycle decisions, and the surrounding
+server code (orchestration) does the database reads and writes through
+`alrust-store-pg`.
 
 ```mermaid
 flowchart LR
@@ -64,10 +71,9 @@ flowchart LR
     V[Veeam ONE] -->|webhook via generic mapper| R
     O[Other sources] -->|generic webhook| R
     subgraph srv [alrust server - planned]
-        R[alrust-receivers] --> E[alrust-engine: dedup, correlate, lifecycle]
-        E --> S[(alrust-store-pg: PostgreSQL)]
-        A[alrust-api: Alerta-compatible HTTP and SSE] --> E
-        A --> S
+        R[alrust-receivers] --> A
+        A["alrust-api: Alerta-compatible HTTP and SSE, orchestration"] -->|calls| E["alrust-engine: pure library, no I/O - dedup, correlate, lifecycle"]
+        A -->|reads and writes| S[("alrust-store-pg: PostgreSQL")]
     end
     W[Alerta web UI, vendored] --> A
     D[Tauri desktop app] --> W
@@ -96,15 +102,23 @@ reviewed commit:
 ```sh
 git fetch origin pull/1/head
 git switch --detach e839ceaf8cb43d6ed996c8fe12f884d0bb141743
-git submodule update --init          # read-only upstream references
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace               # 0 tests: the crates are empty
 ```
 
-These commands only check that the empty scaffold compiles. They were run
-with Rust 1.98.1 at the scaffold's earlier commit `a674546`, whose Rust files
-are unchanged at `e839ceaf`. They show nothing about alrust behaviour.
+What has been checked:
+- **The git steps** were verified in a fresh clone to land on `e839ceaf`.
+- **The three `cargo` commands** passed with Rust 1.98.1 at the scaffold's
+  earlier commit `a674546`. `Cargo.toml`, `Cargo.lock`,
+  `rust-toolchain.toml`, `rustfmt.toml` and `crates/` are unchanged at
+  `e839ceaf`, so that result carries over. They were not re-run for this
+  README. They show only that the empty, zero-test scaffold compiles, not
+  anything about compatibility.
+
+The upstream reference sources are git submodules
+(`git submodule update --init`). The cargo checks don't need them, and that
+step was not run as part of validating this README.
 
 ## Roadmap
 
@@ -114,9 +128,9 @@ starts. The details are in the
 
 | Phase | Scope | Gate |
 |---|---|---|
-| 0 | Specs extracted from upstream source; conformance suite and differential fuzzer | Suite green against the upstream server in CI; lifecycle spec reviewed |
+| 0 | Specs extracted from upstream source; conformance suite and differential fuzzer | Suite green against the upstream server **in CI**; lifecycle spec reviewed. Open: local runs do not substitute for the hosted gate |
 | 1 | Domain model, pure lifecycle engine, PostgreSQL store | Property tests and spec-derived vectors pass |
-| 2 | HTTP API including the query grammar, plus a new SSE endpoint | Conformance suite green against alrust; web UI works unchanged |
+| 2 | HTTP API including the query grammar, plus a new SSE endpoint | Conformance suite green against alrust; the differential fuzzer shows no unexplained divergence over a long run; the vendored web UI works against alrust with no code changes beyond configuration |
 | 3 | API keys (one per tenant source) and OIDC for operators | Auth conformance; web UI login |
 | 4 | Zabbix receiver, generic webhook mapper, outbound forwarder | Replay of real captured payloads *(needs operator-supplied samples)* |
 | 5 | Housekeeping, per-tenant heartbeat alerts, metrics, config, Docker, shadow-run tooling | One-week shadow run with explained diffs ≈ 0 *(needs production config)* |
