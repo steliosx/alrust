@@ -272,7 +272,7 @@ components:
       in: query
       schema: {type: string}
       x-source: alerta/database/backends/postgres/utils.py:144-157; alerta/database/backends/postgres/queryparser.py:1-289
-      x-evidence: "SOURCE_DERIVED; the translations below were confirmed by Claude's pure-parser probe of the pinned queryparser.py (pyparsing 3.3.2 as pinned, run on Python 3.14; no app, SQL or HTTP). SQL execution of every translation is NOT_RUN."
+      x-evidence: "SOURCE_DERIVED; the translations below were confirmed by pure-parser probes of the pinned queryparser.py with pinned pyparsing 3.3.2: Claude's on Python 3.14 and Codex's on Python 3.12 (review 3e035b53, including the flat-chain and backslash cases). No app, SQL or HTTP. SQL execution of every translation is NOT_RUN."
       description: |
         A Lucene-like query string, parsed by `QueryParser` into a SQL
         fragment that **replaces** the initial `1=1`; the other filters are
@@ -293,8 +293,14 @@ components:
         inferred SQL error (500, NOT verified). Field names are words of
         printable characters excluding `=><(){}[]^"~*?:\/.&|`, so they
         cannot contain `"`. A `%` in a field name reaches the SQL text and
-        is an inferred driver formatting error (500, NOT verified). A
-        backslash escapes the next character in words.
+        is an inferred driver formatting error (500, NOT verified).
+        **There is no working backslash escape in words.** The word parse
+        action strips backslashes (`queryparser.py:239-241`), but `\` is
+        itself an excluded character (`:237`), so a word ends at a
+        backslash: `foo\bar` parses as `foo` with the rest dropped as
+        trailing input, and a leading `\foo` gives 400. Phrases
+        (`QuotedString('"')`) and regexes (`QuotedString('/')`) define no
+        escape character either.
 
         **Terms** (all values are bound parameters):
         - bare word `v`: `"field" ILIKE '%v%'`, a case-insensitive
@@ -326,6 +332,19 @@ components:
         **Operators**, in precedence order: the `+` and `-` modifiers, then
         `NOT`/`!`, then `AND`/`&&`, then `OR`/`||` or adjacency (**`a b`
         means OR**).
+        - **Reference defect: flat chains keep only their first two
+          operands.** `BinaryOperation` stores only `tokens[0][0]`,
+          `[1]` and `[2]` (`queryparser.py:20-26`), while pyparsing groups
+          a same-level chain into one token list. So `a AND b AND c`
+          translates to `a AND b` (**wider** results), and `a OR b OR c`,
+          `a b c` or `a b c d` translate to `a OR b` (**narrower** results).
+          This also holds inside a subquery: `resource:(web OR db OR app)`
+          keeps only `web` and `db`. The dropped operands are silently
+          ignored, with no error. Mixed-precedence chains (`a AND b OR c`)
+          and explicit parentheses (`a AND (b AND c)`) keep every operand,
+          because each level then has exactly two. Confirmed by both
+          agents' pure-parser probes; SQL/HTTP NOT_RUN. How alrust treats
+          this is not decided here.
         - **`+` and `-` are emitted verbatim as SQL unary operators**
           (`-a` becomes `- "text" ILIKE ...`), which is inferred to fail in
           SQL (500, NOT verified). They do not have Lucene's required or
