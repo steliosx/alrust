@@ -14,14 +14,16 @@ Phase 0 gate: the suite is green against the reference server in CI.
 This initial foundation is **not the full Phase 0 suite**. It includes target
 selection, synthetic create/dedup/detail/cleanup cases, strict JSON comparison
 and a seeded differential replay runner. It imports neither implementation.
-Four customer-mapping cases are authored from the reviewed source spec; their
-runtime evidence is NOT_RUN. Lifecycle, broader auth, query, heartbeat, timeout
+Four customer-mapping cases were authored from the reviewed source spec; their
+prior-head local runtime result is recorded below. New operator action cases
+remain NOT_RUN. Lifecycle, broader auth, query, heartbeat, timeout
 and stateful shrinking coverage remain incomplete. Empty Rust crates and offline harness
 tests are not evidence of Alerta compatibility.
 
 Use an isolated disposable server/database for every HTTP run. All generated
 alerts carry an `alrust-synthetic-` resource and `SYNTHETIC` tag. Credentials
-are optional environment inputs; they never enter reports or fixtures. Real
+are synthetic environment inputs or private fixture files outside Git; they
+never enter shared reports or repository fixtures. Real
 payloads, alertad.conf and signing certificates are unnecessary for these cases.
 
 ```sh
@@ -64,11 +66,22 @@ Current validation labels: offline tests LOCAL_PASS. The two initial smoke
 cases at frozen `9d70dc2e4e09c95901d1f8be2096e6ec2effa2bc` passed locally on
 Python 3.12.14/PostgreSQL 16 against reference
 `f4312727783dad64198b62ed778bbca98a5144a3` in signed window
-`alrust-ref-smoke-20260929-03`; cleanup was confirmed. Customer cases in this
-new head are NOT_RUN and await independent review and a separate signed window.
+`alrust-ref-smoke-20260929-03`; cleanup was confirmed. Customer cases passed at
+frozen `a7426411` in the separately recorded customer window below; new operator
+cases remain NOT_RUN and await independent review and a separate signed window.
 Hosted Phase 0 gate remains CI_BLOCKED_BILLING. Never substitute local results
 for CI or claim Rust parity from a reference-only smoke.
 
 See [customer fixtures](customer-fixtures.md) for prerequisites and the private
 synthetic credential schema. Running the whole HTTP directory now requires
 that fixture; missing prerequisites fail before customer HTTP requests.
+
+Five new [operator status/action vectors](operator-actions.md) are
+SOURCE_DERIVED / NOT_RUN and require fresh exact-head peer review and a new
+signed execution window. The released customer-only window did not run them.
+The four customer vectors passed locally at frozen
+`a7426411181f4dd3cc859581cc203ee4067c07b4` against reference
+`f4312727783dad64198b62ed778bbca98a5144a3` in signed window
+`alrust-customer-reference-20260930-01`, with stored-record attestation and
+confirmed cleanup. That narrow prior-head evidence is separate from this new
+head's unexecuted operator tests and the blocked hosted gate.
