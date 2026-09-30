@@ -164,6 +164,20 @@ Rules:
   `GET /heartbeats` does filter by `g.customers`. This contrasts with alerts
   (C16–C17). It is the reference contract. alrust preserves it unless the
   owner approves an authentication-contract ADR (see `lifecycle.md` HB4.2).
+- **C20** **Environment and service name lists ignore the customer scope.**
+  `GET /environments` takes its page of environment names from
+  `SELECT DISTINCT environment FROM alerts` with no WHERE clause
+  (`postgres/base.py:639`), and `GET /services` takes its
+  (environment, service) pairs from `SELECT DISTINCT environment, svc FROM
+  alerts, UNNEST(service) svc`, also unfiltered (`postgres/base.py:705-706`).
+  Only the per-name counts use the filtered query, which carries
+  `customer=ANY(g.customers)` (C16). A customer-scoped caller therefore sees
+  **other customers' environment and service names**, listed with zero
+  counts. For `/environments`, `total` is the filtered
+  `COUNT(DISTINCT environment)` and can disagree with the listed page.
+  Source-derived, NOT verified. It is recorded as the reference contract
+  without deciding alrust's behavior; any change is an owner decision
+  (see `spec/openapi.yaml` `/environments` and `/services`).
 
 ## Positions and open questions
 
