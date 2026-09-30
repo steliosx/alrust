@@ -2804,7 +2804,9 @@ paths:
         and belongs to at least one group reaches
         `SELECT customer FROM customers WHERE match=%s` with a Group object
         as the parameter (`postgres/base.py:1357-1359`), an inferred
-        adaptation error and 500 on every request. The proxy branch takes
+        adaptation error and 500 on every request that **selects the proxy
+        branch** (an API key or Bearer token is checked earlier and does not
+        reach it). No Group adapter is registered. The proxy branch takes
         its scopes from the roles header, not from groups (`:117`).
     post:
       operationId: createGroup
@@ -2869,9 +2871,28 @@ paths:
         - The body is passed as keyword arguments. Only `name` and `text`
           are written, each when **not null**, and `update_time` is always
           set, so a body with neither returns 200 with the group unchanged.
-        - **An empty-string `name` is written.** Create rejects a falsy
-          name, but update checks only `is not None`, so `{"name": ""}`
-          stores `""` (source-derived, NOT_RUN).
+        - **An empty-string `name` is committed, then the request fails
+          (GR-R1, reference defect).** Create rejects a falsy name, but
+          `update_group` checks only `is not None`, so `{"name": ""}` is
+          written (`postgres/base.py:1175-1185`) and `_updateone` commits
+          before returning the row (`:1568-1576`). `Group.update` then
+          rebuilds the row through `Group.from_db`/`from_record`
+          (`models/group.py:142-143`, `:120-125`, `:111-118`), and
+          `Group.__init__` rejects the empty name with ValueError (`:71-73`),
+          which the generic handler returns as **500 after the write**.
+          Every later reconstruction of that row fails the same way (all
+          inferred from source; only the constructor rejection was probed in
+          isolation):
+          - `GET /group/{group_id}`, and the `find_by_id` lookup that `PUT`,
+            `DELETE` and both membership operations do first, so the API
+            can neither fix nor delete the group;
+          - `GET /groups` for any page that contains the row;
+          - `user.get_groups()` for each member: `GET /user/{user_id}/groups`,
+            password login (`auth/basic.py:93`), and every auth-proxy request
+            (`auth/decorators.py:116` evaluates `get_groups()` as an argument
+            even when `CUSTOMER_VIEWS` is off).
+          Whether alrust accepts, rejects or repairs such names is an owner
+          decision; this spec records the reference path only.
         - A duplicate `name` raises inside `_updateone`, outside any handler
           (generic 500). A body key `id` collides with
           `update_group(self, id, **kwargs)`, and `self` with
@@ -2963,9 +2984,12 @@ paths:
         The same 404 and 400 checks as PUT. Removing a user who is not a
         member still returns 200. Removing the last member stores NULL
         (`array_agg` over no rows), which counts as 0. **A deleted user's
-        stale id cannot be removed here**, because the user lookup gives
-        400 first; it stays in the array (and in `count`) until the group is
-        deleted. Removal does not revoke a token already issued.
+        stale id cannot be removed here** while no user row has that id,
+        because the user lookup gives 400 first, so it stays in the array
+        (and in `count`). `User.parse` accepts a supplied `id`
+        (`models/user.py:62-64`), so a user recreated with the same id would
+        remove that obstacle (and would be a member again). Removal does not
+        revoke a token already issued.
       responses:
         "200": {description: Removed, content: {application/json: {schema: {type: object, required: [status], properties: {status: {const: ok}}}}}}
         "400": {description: "invalid user", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
@@ -2981,6 +3005,10 @@ paths:
       description: |
         Paged list of all groups (no customer filtering). Empty gives
         `message: not found` and total 0.
+        - Paging (`utils/paging.py:9-33`) uses the count query's total.
+          With a zero count, `pages` is 0 and `more` is false, and any page
+          >= 1 is accepted (page 2 included); with a nonzero count, a page
+          beyond `pages` gives 416.
         - Filters: `name`, `text`, `count`; `id` is ignored
           (EXCLUDE_FROM_QUERY). **`count` is not a column**: it is a SELECT
           alias, which PostgreSQL does not resolve in WHERE, so a `count`
