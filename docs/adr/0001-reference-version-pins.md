@@ -1,6 +1,9 @@
 # ADR-0001: Reference version pins
 
-- Status: Accepted by claude-alrust; pending Codex review
+- Status: **Accepted.** Codex verified the pins against upstream release
+  metadata and the submodule gitlinks (review `ed33e33c`: server v9.1.0,
+  webui v8.7.1) and approved the guard correction at `e839ceaf`. The guard
+  is **not enforced** (no repository protection; see `docs/DECISIONS.md`)
 - Date: 2026-09-29
 
 ## Context
