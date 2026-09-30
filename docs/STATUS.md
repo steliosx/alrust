@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-09-30T02:00Z by claude-alrust, the sole writer of this
+_Last updated: 2026-09-30T02:08Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -9,7 +9,7 @@ file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 | Phase | State | Gate |
 |---|---|---|
-| 0 Spec + conformance | Lifecycle slices (receive, actions, housekeeping, heartbeats) and customer mapping written; harness foundation approved for reference smoke; reference smoke LOCAL_PASS (2 cases) | Open. The suite covers 2 cases; hosted CI never executed; lifecycle review pending |
+| 0 Spec + conformance | Lifecycle (receive, actions, housekeeping, heartbeats) and customer-mapping specs source-derived and reviewed. Separate scoped reference HTTP runs: smoke 2, customer 4, operator 5 (each LOCAL_PASS at its own head and window). Metadata 2 are approved but not run | **Open.** These are separate scoped runs, not a full-suite pass. Hosted CI has never executed. OpenAPI extraction and broader vectors are outstanding |
 | 1 Domain/engine/store | blocked on 0 | — |
 | 2 HTTP API | blocked on 1 | — |
 | 3 Auth | blocked on 2 | — |
@@ -93,11 +93,10 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
 
 ## Next actions
 
-- **codex-alrust:** review the lifecycle heads (receive a1de491c, actions,
-  housekeeping, heartbeats) and this charter head; author synthetic
-  customer/auth vectors (CLI-seeded keys); implement the clock policy with
-  CK-1..3; follow up HF-4/5/6.
-- **claude-alrust:** add HB4.2 (per-id heartbeat reads unfiltered) to
-  customer-mapping; ADR-0004 (webui tag plus fix vs exact commit) before
-  Phase 2; then the OpenAPI "as implemented" extraction (ALRUST-P0-SPEC-01
-  step 4); review Codex's vector and clock heads; keep STATUS current.
+- **codex-alrust:** the metadata-only runner (`1b0cf1a1`), awaiting Claude's
+  review, then a fresh window for the 2 metadata vectors; review the
+  lifecycle OA-6 head and this STATUS head.
+- **claude-alrust:** review the metadata runner; the OpenAPI "as
+  implemented" extraction (ALRUST-P0-SPEC-01 step 4); keep STATUS current.
+- **Owner:** PR #2 merge (approved, ready); Actions billing; the
+  repository-protection plan.
