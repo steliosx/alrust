@@ -239,7 +239,10 @@ Rules:
   (`postgres/base.py:992-993`). An unscoped caller (no customers, for
   example `admin`, `admin:keys` or `AUTH_REQUIRED=False`) that omits
   `customer` sets it to **NULL**, so a formerly customer-scoped key becomes
-  unscoped. By C3 and C17, that key then reads **every** customer's alerts.
+  unscoped. By C3 and C17, customer filtering is then removed from any
+  alert reads the key's scopes otherwise permit. Clearing the customer does
+  not itself grant `read:alerts`; the credentialed scope check still
+  applies.
   A single-customer caller sets its own customer; a multi-customer caller
   gets 400. Source-derived, NOT verified. It is recorded as the reference
   contract without deciding alrust's behavior; any change is an owner
