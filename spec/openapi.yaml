@@ -100,11 +100,43 @@ components:
     bearer:
       type: http
       scheme: bearer
+      bearerFormat: JWT
+      description: "HS256 JWT signed with SECRET_KEY; audience OAUTH2_CLIENT_ID, else SAML2_ENTITY_ID, else absolute_url(); the `scope` claim becomes the caller's scopes (models/token.py:43-76; auth/decorators.py:69-91)"
+    basic:
+      type: http
+      scheme: basic
+      description: "login:password against the local user table (auth/decorators.py:124-151). The decoded pair is split on ':', so a password containing ':' gives 400. Every BasicAuthError (this branch, and the auth-proxy missing-scope 403 at :120) carries `WWW-Authenticate: Basic realm=<BASIC_AUTH_REALM>`, default `Alerta` (exceptions.py:110-117; settings.py:81)"
+    hawk:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: "`Authorization: Hawk id=..., ts=..., nonce=..., mac=...` (auth/decorators.py:56-67; credentials HMAC_AUTH_CREDENTIALS, auth/hmac.py). Not gated by any configuration flag. Any valid signature is given ADMIN_SCOPES and dispatched without a scope check (precedence branch 2). OpenAPI has no registered `hawk` HTTP scheme, so it is modelled as this header."
+    authProxy:
+      type: apiKey
+      in: header
+      name: X-Proxy-User
+      description: "Only when AUTH_PROXY is true (default false). The header name is AUTH_PROXY_USER_HEADER (default X-Proxy-User); roles come from AUTH_PROXY_ROLES_HEADER (default X-Proxy-Roles), split on AUTH_PROXY_ROLES_SEPARATOR (default ','); an unknown user is created when AUTH_PROXY_AUTO_SIGNUP (default true), else ApiError 403 without the header (auth/decorators.py:93-122; settings.py:92-96). The enabling flag and configurable names cannot be expressed in OpenAPI; this entry shows the defaults. Anyone who can reach the server directly can set this header, so a deployment must strip it at the proxy."
   responses:
     Unauthorized: {description: "invalid or expired API key, bad token, or no credentials while AUTH_REQUIRED (auth/decorators.py:42-45, :174-175)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     Forbidden: {description: "missing required scope (auth/decorators.py:51-52 and peers)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     ServerError: {description: "ApiError 500, or an unhandled exception with message 'An internal error has occurred!' (exceptions.py:120-136)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    UnsupportedMediaType: {description: "POST or PUT without a JSON Content-Type, rejected by the `api` blueprint before the handler (views/__init__.py:17-20), including on routes that read no body", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
   parameters:
+    ListSortBy:
+      name: sort-by
+      in: query
+      style: form
+      explode: true
+      schema: {type: array, items: {type: string}}
+      x-source: alerta/database/backends/postgres/utils.py:28-52
+      description: |
+        Repeatable. Each value is a sort name accepted by the resource (listed on
+        each operation), optionally prefixed `-` to flip that name's default
+        direction; an unknown name gives 400 `Sorting by '<name>' field not
+        supported.` Without `sort-by` the query is `ORDER BY (select 1)`: no
+        defined order. Sort columns are emitted unquoted, so `sort-by=user` on
+        `/keys` sorts by PostgreSQL's `user` (CURRENT_USER), not the column
+        (source-derived, NOT_RUN).
     WebhookName:
       name: webhook
       in: path
@@ -424,6 +456,100 @@ components:
         - A customer-scoped key gets 404 for another customer's alert
           (C17).
   schemas:
+    KeyInput:
+      type: object
+      additionalProperties: true
+      description: "Read by ApiKey.parse (models/key.py:45-61) for POST /key. Unknown members are ignored."
+      properties:
+        user: {type: [string, "null"], description: "forced to the caller unless it has admin or admin:keys (views/keys.py:28-31); no user gives 400 (:35-36)"}
+        scopes: {type: array, items: {type: string}, description: "must be a list, else 400; names are not validated (Scope is a plain str subclass); an empty list becomes USER_DEFAULT_SCOPES; above the caller's own scopes gives 403 (views/keys.py:38-41)"}
+        type: {type: string, description: "legacy; when present it replaces `scopes` via type_to_scopes (utils/key.py:36-43)"}
+        text: {type: [string, "null"]}
+        expireTime: {description: "a string in `%Y-%m-%dT%H:%M:%S.%fZ` form; an unparsable string gives 400; a non-string is ignored; absent means now + API_KEY_EXPIRE_DAYS (models/key.py:29-31; utils/format.py:55-61)"}
+        customer: {type: [string, "null"], description: "assign_customer rules (C7-C11); may give 400"}
+        key: {type: [string, "null"], description: "the client may choose the secret; falsy means generated (models/key.py:25)"}
+        id: {type: [string, "null"], description: "default uuid4"}
+    UserInput:
+      type: object
+      additionalProperties: true
+      required: [name]
+      description: "Read by User.parse (models/user.py:62-74) for POST /user. A missing `name` is a KeyError, and a missing `login` with no `email` is a ValueError; both give 400 (views/users.py:27-30). The email format is not checked on create."
+      properties:
+        name: {type: string}
+        login: {type: [string, "null"], description: "falls back to `email`"}
+        email: {type: [string, "null"]}
+        password: {type: string, description: "hashed; default '' (hash of the empty string)"}
+        status: {type: [string, "null"], description: "default active"}
+        roles: {type: array, items: {type: string}, description: "replaced by ADMIN_ROLES when `email` is listed in ADMIN_USERS (models/user.py:39); role scopes above the caller's give 403 (views/users.py:39-43)"}
+        attributes: {type: object, additionalProperties: true}
+        text: {type: [string, "null"]}
+        email_verified: {type: [boolean, "null"]}
+        id: {type: [string, "null"]}
+    UserUpdate:
+      type: object
+      additionalProperties: true
+      minProperties: 1
+      description: "PUT /user/{user_id} (views/users.py:162-199, models/user.py:173-182, postgres/base.py:1071-1100). An empty body gives 400. Each member present and not null is written. An `email` without '@' raises ValueError outside any try block: the generic 500. A changed email resets `email_verified` unless it is supplied. Legacy `role` becomes `roles: [role]`. The roles ceiling runs only when `roles` is truthy."
+      properties:
+        name: {type: string}
+        login: {type: string}
+        email: {type: string}
+        password: {type: string, description: "hashed before storing"}
+        status: {type: string}
+        roles: {type: array, items: {type: string}}
+        role: {type: string, description: "legacy single role"}
+        attributes: {type: object, additionalProperties: true, description: "merged into the stored attributes (jsonb ||)"}
+        text: {type: string}
+        email_verified: {type: boolean}
+    GroupInput:
+      type: object
+      additionalProperties: true
+      required: [name]
+      description: "Read by Group.parse (models/group.py:80-86) for POST /group. A falsy `name` gives 400 (models/group.py:72-73)."
+      properties:
+        name: {type: string, minLength: 1}
+        text: {type: [string, "null"], description: "falsy becomes ''"}
+        id: {type: [string, "null"]}
+    GroupUpdate:
+      type: object
+      additionalProperties: true
+      minProperties: 1
+      description: "PUT /group/{group_id} (views/groups.py:111-131, postgres/base.py:1170-1185). An empty body gives 400; `name` and `text` are written when present and not null."
+      properties:
+        name: {type: string}
+        text: {type: string}
+    PermInput:
+      type: object
+      additionalProperties: true
+      description: "Read by Permission.parse (models/permission.py:22-31) for POST /perm. `scopes` must be a list, else 400; scope names are NOT validated here. `match` is not validated: a missing one violates NOT NULL at insert, the generic 500 (views/permissions.py:38-41). A reserved role name gives 409 and the scope ceiling 403 (:26-36)."
+      properties:
+        match: {type: string, description: "the role name"}
+        scopes: {type: array, items: {type: string}}
+        id: {type: [string, "null"]}
+    PermUpdate:
+      type: object
+      additionalProperties: true
+      minProperties: 1
+      description: "PUT /perm/{perm_id} (views/permissions.py:132-157, postgres/base.py:1252-1267). An empty body gives 400. The only place scope names are validated: an unknown scope gives 400 (:140-142). No scope ceiling (P-SEC-1)."
+      properties:
+        match: {type: string}
+        scopes: {type: array, items: {type: string}}
+    CustomerInput:
+      type: object
+      additionalProperties: true
+      description: "Read by Customer.parse (models/customer.py:19-24) for POST /customer. Nothing is validated; a missing `match` violates NOT NULL at insert, the generic 500 (views/customers.py:26-29)."
+      properties:
+        match: {type: string}
+        customer: {type: string}
+        id: {type: [string, "null"]}
+    CustomerUpdate:
+      type: object
+      additionalProperties: true
+      minProperties: 1
+      description: "PUT /customer/{customer_id} (views/customers.py:89-110, postgres/base.py:1326-1341). An empty body gives 400; `match` and `customer` are written when present."
+      properties:
+        match: {type: string}
+        customer: {type: string}
     Error:
       type: object
       x-source: alerta/exceptions.py:98-107
@@ -879,6 +1005,7 @@ paths:
           application/json:
             schema: {$ref: '#/components/schemas/HeartbeatInput'}
       responses:
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
         "201":
           description: Created or updated
           content:
@@ -1078,6 +1205,7 @@ paths:
           application/json:
             schema: {$ref: '#/components/schemas/AlertInput'}
       responses:
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
         "201":
           description: Stored (new, duplicate or correlated). There is no Location header.
           content:
@@ -1213,6 +1341,7 @@ paths:
                 text: {type: string, default: ""}
                 timeout: {description: "unvalidated; see above"}
       responses:
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
         "200": {description: "Status set. The alert is not returned (A1.5)", content: {application/json: {schema: {type: object, required: [status], properties: {status: {const: ok}}}}}}
         "400": {description: "missing status, or a plugin RejectException", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
@@ -1246,6 +1375,7 @@ paths:
                 text: {type: string, description: "default `<action> operator action`"}
                 timeout: {description: "falsy values fall back per A4"}
       responses:
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
         "200": {description: "Action applied. The alert is not returned", content: {application/json: {schema: {type: object, required: [status], properties: {status: {const: ok}}}}}}
         "202": {description: "forwarding loop (A2.2)", content: {application/json: {schema: {$ref: '#/components/schemas/AlertIdOnly'}}}}
         "400": {description: "missing action, or a plugin RejectException", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
@@ -1287,6 +1417,7 @@ paths:
               properties:
                 tags: {type: array, items: {type: string}}
       responses:
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
         "200": {description: Tagged, content: {application/json: {schema: {type: object, required: [status], properties: {status: {const: ok}}}}}}
         "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         "401": {$ref: '#/components/responses/Unauthorized'}
@@ -1320,6 +1451,7 @@ paths:
               properties:
                 tags: {type: array, items: {type: string}}
       responses:
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
         "200": {description: Untagged, content: {application/json: {schema: {type: object, required: [status], properties: {status: {const: ok}}}}}}
         "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         "401": {$ref: '#/components/responses/Unauthorized'}
@@ -1365,6 +1497,7 @@ paths:
               properties:
                 attributes: {type: object}
       responses:
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
         "200": {description: Updated, content: {application/json: {schema: {type: object, required: [status], properties: {status: {const: ok}}}}}}
         "400": {description: "missing or empty attributes", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
@@ -1962,6 +2095,7 @@ paths:
                 text: {type: string}
                 note: {type: string, description: "used when text is falsy"}
       responses:
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
         "201":
           description: "Created. Header `Location: /alert/<alert id>/note/<note id>` (absolute)"
           content:
@@ -2079,6 +2213,7 @@ paths:
                 text: {type: [string, "null"]}
                 attributes: {type: [object, "null"]}
       responses:
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
         "200":
           description: Updated
           content:
@@ -2135,6 +2270,7 @@ paths:
           application/json:
             schema: {$ref: '#/components/schemas/BlackoutInput'}
       responses:
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
         "201":
           description: "Created. Header `Location: /blackout/<id>` (absolute)"
           content:
@@ -2225,6 +2361,7 @@ paths:
           application/json:
             schema: {type: object, additionalProperties: true}
       responses:
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
         "200":
           description: Updated
           content:
@@ -2359,7 +2496,13 @@ paths:
         - `expireTime` defaults to now + 365 days.
         - The client may choose the key `id` and **the secret itself**
           (`key`, `models/key.py:50-56`); a falsy value generates one.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/KeyInput'}
       responses:
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
         "201":
           description: "Created: `{status, key: <secret>, data: ApiKey}`"
           content:
@@ -2446,6 +2589,7 @@ paths:
           application/json:
             schema: {type: object, additionalProperties: true}
       responses:
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
         "200":
           description: Updated
           content:
@@ -2479,6 +2623,9 @@ paths:
   /keys:
     get:
       operationId: listKeys
+      x-sort-by: [key, status (no column; NOT_RUN), user (CURRENT_USER quirk), scopes, type (no column; NOT_RUN), text, -expireTime default DESC, count, -lastUsedTime default DESC, customer]
+      x-filter-names-ignored: [_, callback, token, api-key, q, q.df, id, from-date, to-date, sort-by, group-by, page, page-size, limit, show-raw-data, show-history]
+      x-filter-notes: "`status` is taken out first: active gives expire_time >= now, expired gives < now, other values do nothing; `status!` is not taken out and reaches the nonexistent column (NOT_RUN). A customer-scoped caller also gets customer=ANY. When AUTH_REQUIRED is on, a caller without admin/admin:keys gets find_by_user, which ignores every filter, sort and page (views/keys.py:84-91)."
       x-source: alerta/views/keys.py:76-113; alerta/database/backends/postgres/utils.py:312-358
       x-scope: read:keys
       description: |
@@ -2509,6 +2656,17 @@ paths:
           SQL is NOT_RUN.
         - No `sort-by` means no ordering.
       parameters:
+        - {name: key, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104)"}
+        - {name: user, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104)"}
+        - {name: scope, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104). column scopes (text[]) compared with text; source-derived error, NOT_RUN"}
+        - {name: type, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104). no `type` column exists (sql/schema.sql); source-derived SQL error, NOT_RUN"}
+        - {name: text, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104)"}
+        - {name: expireTime, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104)"}
+        - {name: count, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104)"}
+        - {name: lastUsedTime, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104)"}
+        - {name: customer, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104)"}
+        - {$ref: '#/components/parameters/ListSortBy'}
+        - {name: limit, in: query, deprecated: true, schema: {type: integer}, description: "legacy page size when page-size is absent (utils/paging.py:19-25)"}
         - {name: status, in: query, schema: {type: array, items: {type: string}}, style: form, explode: true}
         - {$ref: '#/components/parameters/Page'}
         - {name: page-size, in: query, schema: {type: integer}}
@@ -2560,7 +2718,13 @@ paths:
           data that was not stored. With verification on,
           `send_confirmation` or the audit may raise instead. Reference
           defect; source-derived, NOT verified.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UserInput'}
       responses:
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
         "201":
           description: "Created (or, per the defect above, possibly not stored)"
           content:
@@ -2628,7 +2792,13 @@ paths:
           nothing executed.
         - A body key `id` (or `self`) collides with `update_user(self, id,
           **kwargs)`, an inferred TypeError and 500 before the UPDATE.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/UserUpdate'}
       responses:
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
         "200":
           description: Updated
           content:
@@ -2686,6 +2856,7 @@ paths:
         `attributes`, which is a shallow jsonb `||` that keeps nulls. Returns
         `{status: ok}` only.
       responses:
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
         "200": {description: Updated, content: {application/json: {schema: {type: object, required: [status], properties: {status: {const: ok}}}}}}
         "400": {description: "missing attributes", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
@@ -2730,6 +2901,7 @@ paths:
         update apply (409 duplicate; the change resets `email_verified`).
         No `user_id` gives 404.
       responses:
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
         "200":
           description: Updated
           content:
@@ -2764,6 +2936,7 @@ paths:
       x-source: alerta/views/users.py:255-276
       x-scope: none
       responses:
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
         "200": {description: Updated, content: {application/json: {schema: {type: object, required: [status], properties: {status: {const: ok}}}}}}
         "400": {description: "missing attributes", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         "404": {description: "no user for this caller", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
@@ -2773,6 +2946,9 @@ paths:
   /users:
     get:
       operationId: listUsers
+      x-sort-by: [name, login, email, domain (no column; NOT_RUN), status, roles, attributes.<key>, -createTime, -lastLogin, text, -updateTime, email_verified]
+      x-filter-names-ignored: [_, callback, token, api-key, q, q.df, id, from-date, to-date, sort-by, group-by, page, page-size, limit, show-raw-data, show-history]
+      x-filter-notes: "`attributes.<key>=<value>` filters with attributes @> {key: value}; `roles` is a sort name only and gives 400 as a filter."
       x-source: alerta/views/users.py:128-160; alerta/database/backends/postgres/utils.py:360-392
       x-scope: admin:users
       description: |
@@ -2793,6 +2969,20 @@ paths:
           meaningful row order.
         Codex's six builder-body cases confirm the generated fragments.
       parameters:
+        - {name: name, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104)"}
+        - {name: login, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104)"}
+        - {name: email, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104)"}
+        - {name: domain, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104). no `domain` column (sql/schema.sql); source-derived SQL error, NOT_RUN"}
+        - {name: status, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104)"}
+        - {name: role, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104). column roles (text[]) compared with text; source-derived error, NOT_RUN"}
+        - {name: attributes, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104)"}
+        - {name: createTime, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104)"}
+        - {name: lastLogin, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104)"}
+        - {name: text, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104)"}
+        - {name: updateTime, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104)"}
+        - {name: email_verified, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104)"}
+        - {$ref: '#/components/parameters/ListSortBy'}
+        - {name: limit, in: query, deprecated: true, schema: {type: integer}, description: "legacy page size when page-size is absent (utils/paging.py:19-25)"}
         - {$ref: '#/components/parameters/Page'}
         - {name: page-size, in: query, schema: {type: integer}}
       responses:
@@ -2860,7 +3050,13 @@ paths:
           (PRIMARY KEY), gives 500 whose message is the **database error
           text** (`str(e)`, `:29-30`).
         - The success body is `{status, id, group}`; `group.count` is 0.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/GroupInput'}
       responses:
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
         "201":
           description: Created
           content:
@@ -2938,7 +3134,13 @@ paths:
           `Group.update(self, **kwargs)`: inferred TypeError and 500. A
           non-object body also fails at `**` (generic 500).
         - The body is `{status, group}` with no `total`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/GroupUpdate'}
       responses:
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
         "200":
           description: Updated
           content:
@@ -3008,7 +3210,14 @@ paths:
         named `user-attributes-updated`. Returns `{status: ok}` only. See the
         `/group` SECURITY note: membership confers the group name as a role
         at the next password login.
+      requestBody:
+        required: false
+        description: "Not read by the handler (views/groups.py:134-153), but the request must carry a JSON Content-Type or it gets 415 (views/__init__.py:17-20); `{}` is enough."
+        content:
+          application/json:
+            schema: {}
       responses:
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
         "200": {description: Added, content: {application/json: {schema: {type: object, required: [status], properties: {status: {const: ok}}}}}}
         "400": {description: "invalid user", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         "404": {description: "group not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
@@ -3039,6 +3248,8 @@ paths:
   /groups:
     get:
       operationId: listGroups
+      x-sort-by: [name, text, count]
+      x-filter-names-ignored: [_, callback, token, api-key, q, q.df, id, from-date, to-date, sort-by, group-by, page, page-size, limit, show-raw-data, show-history]
       x-source: alerta/views/groups.py:78-108; alerta/database/backends/postgres/utils.py:394-415, :28-104; alerta/database/backends/postgres/base.py:1144-1159
       x-scope: read:groups
       description: |
@@ -3061,6 +3272,11 @@ paths:
         - No `sort-by` emits `ORDER BY (select 1)`, so there is no
           meaningful row order.
       parameters:
+        - {name: name, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104)"}
+        - {name: text, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104)"}
+        - {name: count, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104). a SELECT alias, not a column; source-derived SQL error as a filter, NOT_RUN"}
+        - {$ref: '#/components/parameters/ListSortBy'}
+        - {name: limit, in: query, deprecated: true, schema: {type: integer}, description: "legacy page size when page-size is absent (utils/paging.py:19-25)"}
         - {$ref: '#/components/parameters/Page'}
         - {name: page-size, in: query, schema: {type: integer}}
       responses:
@@ -3097,7 +3313,13 @@ paths:
           the insert and endpoint outcome for such a list are NOT_RUN.
         - A missing `match` (NOT NULL) or a duplicate `match` (UNIQUE) or
           `id` gives 500 with the **database error text** (`:40-41`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PermInput'}
       responses:
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
         "201":
           description: Created
           content:
@@ -3168,7 +3390,13 @@ paths:
           token), and per request for HTTP Basic and auth-proxy callers
           (`auth/decorators.py:117`, `:148`). Traced statically; nothing
           executed. An owner decision.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PermUpdate'}
       responses:
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
         "200":
           description: Updated
           content:
@@ -3197,6 +3425,9 @@ paths:
   /perms:
     get:
       operationId: listPerms
+      x-sort-by: [match, scopes]
+      x-filter-names-ignored: [_, callback, token, api-key, q, q.df, id, from-date, to-date, sort-by, group-by, page, page-size, limit, show-raw-data, show-history]
+      x-filter-notes: "`?scopes=` gives 400 in from_params (views/permissions.py:71)."
       x-source: alerta/views/permissions.py:65-129; alerta/database/backends/postgres/utils.py:418-438, :28-104; alerta/database/backends/postgres/base.py:1235-1250
       x-scope: read:perms
       description: |
@@ -3225,6 +3456,10 @@ paths:
         - Sorts: `match`, `scopes`. No `sort-by` emits `ORDER BY (select
           1)`.
       parameters:
+        - {name: match, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104)"}
+        - {name: scope, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104). column scopes (text[]) compared with text; source-derived error, NOT_RUN"}
+        - {$ref: '#/components/parameters/ListSortBy'}
+        - {name: limit, in: query, deprecated: true, schema: {type: integer}, description: "legacy page size when page-size is absent (utils/paging.py:19-25)"}
         - {$ref: '#/components/parameters/Page'}
         - {name: page-size, in: query, schema: {type: integer}}
       responses:
@@ -3310,7 +3545,13 @@ paths:
         - A missing `match` (NOT NULL) or a duplicate `id` gives 500 with
           the **database error text** (`:26-29`). A duplicate `match` is
           accepted (no unique constraint). A null `customer` is stored.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CustomerInput'}
       responses:
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
         "201":
           description: Created
           content:
@@ -3375,7 +3616,13 @@ paths:
           signatures (inferred TypeError, 500). A non-object body fails at
           `**` (generic 500). The body is `{status, customer}` with no
           `total`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CustomerUpdate'}
       responses:
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
         "200":
           description: Updated
           content:
@@ -3405,6 +3652,8 @@ paths:
   /customers:
     get:
       operationId: listCustomers
+      x-sort-by: [match, customer]
+      x-filter-names-ignored: [_, callback, token, api-key, q, q.df, id, from-date, to-date, sort-by, group-by, page, page-size, limit, show-raw-data, show-history]
       x-source: alerta/views/customers.py:53-86; alerta/database/backends/postgres/utils.py:442-462, :28-104; alerta/database/backends/postgres/base.py:1309-1324
       x-scope: read:customers
       description: |
@@ -3433,6 +3682,10 @@ paths:
           Sorts: `match`, `customer`. No `sort-by` emits `ORDER BY (select
           1)`.
       parameters:
+        - {name: match, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104)"}
+        - {name: customer, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}, description: "Filter: exact match; a leading `~` means case-insensitive substring (ILIKE); the parameter name with a `!` suffix negates; repeating it matches any value (a regex OR when any value starts with `~`) (postgres/utils.py:55-104)"}
+        - {$ref: '#/components/parameters/ListSortBy'}
+        - {name: limit, in: query, deprecated: true, schema: {type: integer}, description: "legacy page size when page-size is absent (utils/paging.py:19-25)"}
         - {$ref: '#/components/parameters/Page'}
         - {name: page-size, in: query, schema: {type: integer}}
       responses:
@@ -4191,3 +4444,6 @@ security:
   - apiKeyQuery: []
   - bearer: []
   - {}
+  - basic: []
+  - hawk: []
+  - authProxy: []
