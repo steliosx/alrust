@@ -4003,13 +4003,21 @@ paths:
         with AttributeError, which the dispatcher turns into **400** `'str'
         object has no attribute 'get'` (WP-R1).
 
-        Exception rule for everything below: the dispatcher maps any
+        Exception rule for the `incoming()` parsing stage (everything in
+        this entry up to the produced alerts): the dispatcher maps any
         exception other than `TypeError` (and AlertaException) to 400 with
         its text, but a `TypeError` triggers the legacy retry without
         `path`, which fails again with a missing-argument TypeError: an
-        unhandled **500**. Mapping happens for the whole list before any
-        alert is processed, so one bad item fails the request with nothing
-        stored.
+        unhandled **500**. Mapping covers the whole list before any alert
+        is processed, so one bad item fails the request before any of this
+        batch's alerts enters `process_alert` or is stored by the
+        dispatcher. That is not "no side effects": a valid API key has
+        already caused its usage UPDATE (UW-R1), and the webhook
+        `before_request` logging ran before authentication (W-SEC-1). After
+        parsing, the dispatcher's processing stage applies instead
+        (`custom.py:55-73`): there a TypeError from `process_alert` becomes
+        an ApiError 500 with its text, with no legacy retry, and the reject
+        plugin gives 403 (WP-R4).
 
         `alerts` is iterated without a type check (WP-R2): an empty list,
         object or string gives no alerts, so 201 `{status: ok, ids: []}`;
