@@ -15,8 +15,8 @@ info:
       `/alerts/count`, `/alerts/history`, the top-N endpoints,
       `/environments`, `/services`, `/alerts/groups`, `/alerts/tags`) with
       their query parameters, including the `q=` grammar; **alert notes**;
-      **blackouts**; **API keys**; **users**; **groups**. Not yet written:
-      permissions, customers, `/config` and management.
+      **blackouts**; **API keys**; **users**; **groups**; **permissions**
+      (with `/scopes`). Not yet written: customers, `/config` and management.
     - **Reference security defects** are recorded where found (marked
       SECURITY). They describe the class of problem at source level only;
       no exploit was built or run. They are recorded for the owner's
@@ -636,6 +636,20 @@ components:
         login: {type: [string, "null"], description: "the user's login, or the email when the login is falsy (:42)"}
         name: {type: [string, "null"]}
         status: {type: [string, "null"]}
+    Permission:
+      type: object
+      x-source: alerta/models/permission.py:14-59; alerta/sql/schema.sql:151-155
+      description: |
+        A role-to-scopes mapping row. `match` is compared with role names
+        (and, at password login, group names) by `get_scopes_by_match`
+        (`postgres/base.py:1277-1293`); see `/group` for the lookup order.
+        `Scope` is a plain `str` subclass (`models/enums.py:56`), so
+        `Scope(s)` does **not** validate a name.
+      properties:
+        id: {type: string}
+        href: {type: string, description: "absolute URL /perm/<id>"}
+        match: {type: string}
+        scopes: {type: array, items: {type: string}}
     ApiKey:
       type: object
       x-source: alerta/models/key.py:24-78, :100-111; alerta/sql/schema.sql:123-133
@@ -2984,6 +2998,186 @@ paths:
         "200": {description: "`{status, page, pageSize, pages, more, groups, total}`", content: {application/json: {schema: {type: object, additionalProperties: true}}}}
         "400": {description: "invalid filter or sort name", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         "416": {description: "page out of range", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /perm:
+    post:
+      operationId: createPerm
+      x-source: alerta/views/permissions.py:16-49; alerta/models/permission.py:22-31, :89-110; alerta/database/backends/postgres/base.py:1223-1229
+      x-scope: admin:perms
+      description: |
+        - `scopes` that is not a list gives 400 `scopes must be a list`. A
+          non-object body raises outside that handler (inferred generic
+          500). A client-supplied `id` is used as is.
+        - `match` equal to `DEFAULT_ADMIN_ROLE`, `DEFAULT_USER_ROLE` or
+          `DEFAULT_GUEST_ROLE` (`admin`, `user`, `guest`) gives 409 `<match>
+          role already exists`. Other names in `ADMIN_ROLES`, `USER_ROLES`
+          or `GUEST_ROLES` are not reserved.
+        - **Scope ceiling:** every requested scope must pass
+          `is_in_scope(want, g.scopes)`, else 403. Names are not validated
+          against the known scopes; an unknown name passes only when the
+          ceiling derivation reaches a scope the caller has (for example an
+          `admin` caller and `read:<anything>`). Anonymous callers
+          (`AUTH_REQUIRED` false) have `g.scopes == []`, so only `scopes:
+          []` passes.
+        - A missing `match` (NOT NULL) or a duplicate `match` (UNIQUE) or
+          `id` gives 500 with the **database error text** (`:40-41`).
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, id, permission]
+                properties:
+                  status: {const: ok}
+                  id: {type: string}
+                  permission: {$ref: '#/components/schemas/Permission'}
+        "400": {description: "scopes is not a list", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "403": {description: "missing admin:perms, or a requested scope beyond the caller's", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "409": {description: "match is a default role name", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /perm/{perm_id}:
+    parameters:
+      - {name: perm_id, in: path, required: true, schema: {type: string}, description: "exact id match; the built-in admin, user and guest entries listed by GET /perms have no stored id"}
+    get:
+      operationId: getPerm
+      x-source: alerta/views/permissions.py:52-62; alerta/database/backends/postgres/base.py:1231-1233
+      x-scope: read:perms
+      responses:
+        "200":
+          description: Found
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, total, permission]
+                properties:
+                  status: {const: ok}
+                  total: {const: 1}
+                  permission: {$ref: '#/components/schemas/Permission'}
+        "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+    put:
+      operationId: updatePerm
+      x-source: alerta/views/permissions.py:132-156; alerta/models/permission.py:83-84; alerta/database/backends/postgres/base.py:1252-1267
+      x-scope: admin:perms
+      description: |
+        - An empty body gives 400 `nothing to change`. Each element of
+          `scopes` must be in `Scope.find_all()` (the built-in names plus
+          `CUSTOM_SCOPES`, `models/enums.py:94-105`), else 400 `'<s>' is not a
+          valid Scope`. This runs before the 404 check.
+        - `match` and `scopes` are written whenever the **key is present**,
+          even when null: `{"match": null}` violates NOT NULL (generic
+          500). `{"scopes": null}` fails earlier, iterating None in the
+          validation loop (generic 500). Other keys are ignored; body keys
+          `id` and `self` collide with the method signatures (inferred
+          TypeError, 500). The body is `{status, permission}` with no
+          `total`.
+        - **SECURITY (reference defect, source-derived, NOT verified):
+          no scope ceiling and no reserved names on update.** Unlike POST,
+          PUT neither compares the new `scopes` with the caller's scopes nor
+          rejects `match` values `user` or `guest`. So a holder of
+          `admin:perms` can set any valid scope, including `admin`, on any
+          row (or create a row with `scopes: []`, which passes the POST
+          ceiling, and then update it), and point it at a role they or
+          others hold. `get_scopes_by_match` adds a matching row's scopes on
+          top of the `USER_ROLES` and `GUEST_ROLES` defaults
+          (`postgres/base.py:1285-1292`), so a row renamed to `user` with
+          `admin` scope would give every `user`-role login full admin
+          scopes. Scopes are computed at password login (sealed into the
+          token), and per request for HTTP Basic and auth-proxy callers
+          (`auth/decorators.py:117`, `:148`). Traced statically; nothing
+          executed. An owner decision.
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, permission]
+                properties:
+                  status: {const: ok}
+                  permission: {$ref: '#/components/schemas/Permission'}
+        "400": {description: "nothing to change, or an invalid scope name", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+    delete:
+      operationId: deletePerm
+      x-source: alerta/views/permissions.py:159-175; alerta/database/backends/postgres/base.py:1269-1275
+      x-scope: admin:perms
+      responses:
+        "200": {description: Deleted, content: {application/json: {schema: {type: object, required: [status], properties: {status: {const: ok}}}}}}
+        "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /perms:
+    get:
+      operationId: listPerms
+      x-source: alerta/views/permissions.py:65-129; alerta/database/backends/postgres/utils.py:418-438, :28-104; alerta/database/backends/postgres/base.py:1235-1250
+      x-scope: read:perms
+      description: |
+        - **Three built-in entries are prepended on every page**: `match`
+          `DEFAULT_ADMIN_ROLE` with `ADMIN_SCOPES`, `DEFAULT_USER_ROLE` with
+          `USER_DEFAULT_SCOPES`, and `DEFAULT_GUEST_ROLE` with
+          `GUEST_DEFAULT_SCOPES` (`:75-104`). They are built in memory, so
+          each response gives them a **fresh random uuid4 `id`** and an
+          `href` that 404s. `total` is the stored count plus 3, and
+          `pages`/`more` use that total, while each page returns up to
+          `page-size` stored rows **plus** the three entries.
+        - Filters: `match`, and `scope` (singular, column `scopes`), which
+          takes the generic path `"scopes"=%(scopes)s`. The value is parsed
+          as an array literal, so a plain scope name is an inferred SQL error
+          (500); a repeated parameter uses `=ANY(...)`, comparing an array
+          with elements (also an inferred error). NOT_RUN. `id` is ignored.
+        - **`scopes` (plural) is a sort field, not a filter, so `?scopes=`
+          gives 400** in `from_params` (`:71`) before the view's
+          `'scopes' in request.args` branch (`:89-99`), which is therefore
+          unreachable. The `message: not found` branch is also unreachable,
+          because the built-in entries are always present.
+        - Sorts: `match`, `scopes`. No `sort-by` emits `ORDER BY (select
+          1)`.
+      parameters:
+        - {$ref: '#/components/parameters/Page'}
+        - {name: page-size, in: query, schema: {type: integer}}
+      responses:
+        "200": {description: "`{status, page, pageSize, pages, more, permissions, total}`", content: {application/json: {schema: {type: object, additionalProperties: true}}}}
+        "400": {description: "invalid filter or sort name (including `scopes`)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "416": {description: "page out of range", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /scopes:
+    get:
+      operationId: listScopes
+      x-source: alerta/views/permissions.py:178-189; alerta/models/enums.py:56-105
+      x-scope: read:perms
+      description: |
+        `Scope.find_all()`: every `Scope` class attribute whose value starts
+        with `admin`, `write`, `read` or `delete`, in definition order, then
+        the `CUSTOM_SCOPES` added at startup (`Scope.init_app`, each checked
+        against `(admin|write|read|delete):\w+(\.\w+)?`, `:94-100`).
+      responses:
+        "200":
+          description: All scope names
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, scopes, total]
+                properties:
+                  status: {const: ok}
+                  scopes: {type: array, items: {type: string}}
+                  total: {type: integer}
         "401": {$ref: '#/components/responses/Unauthorized'}
         "403": {$ref: '#/components/responses/Forbidden'}
         "500": {$ref: '#/components/responses/ServerError'}
