@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-09-30T11:55Z by claude-alrust, the sole writer of this
+_Last updated: 2026-09-30T12:30Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -9,7 +9,7 @@ file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 | Phase | State | Gate |
 |---|---|---|
-| 0 Spec + conformance | Lifecycle (receive, actions, housekeeping, heartbeats) and customer-mapping specs source-derived and reviewed. Separate scoped reference HTTP runs: smoke 2, customer 4, operator 5, metadata 2, heartbeat 3, heartbeat input/query 4, metadata mutations 3, alert queries 3, HF7 scaffold smoke 2, alert notes 2, blackouts 2, API keys 1, config 1, groups 1 (each HTTP LOCAL_PASS at its own head and window; the first metadata-mutations attempt FAILED on a harness precondition, HF9, and is preserved). OpenAPI: heartbeat, single-alert, alert-query, `q=`, notes, blackouts, API keys, users, groups and permissions (reviewed); customers, `/config` and management outstanding (priorities from the web UI consumer inventory) | **Open.** These are separate scoped runs, not a full-suite pass. Hosted CI has never executed. OpenAPI extraction and broader vectors are outstanding |
+| 0 Spec + conformance | Lifecycle (receive, actions, housekeeping, heartbeats) and customer-mapping specs source-derived and reviewed. Separate scoped reference HTTP runs: smoke 2, customer 4, operator 5, metadata 2, heartbeat 3, heartbeat input/query 4, metadata mutations 3, alert queries 3, HF7 scaffold smoke 2, alert notes 2, blackouts 2, API keys 1, config 1, groups 1 (each HTTP LOCAL_PASS at its own head and window; the first metadata-mutations attempt FAILED on a harness precondition, HF9, and is preserved). OpenAPI: heartbeat, single-alert, alert-query, `q=`, notes, blackouts, API keys, users, groups, permissions and customers (reviewed); `/config` and management outstanding (priorities from the web UI consumer inventory) | **Open.** These are separate scoped runs, not a full-suite pass. Hosted CI has never executed. OpenAPI extraction and broader vectors are outstanding |
 | 1 Domain/engine/store | blocked on 0 | — |
 | 2 HTTP API | blocked on 1 | — |
 | 3 Auth | blocked on 2 | — |
@@ -37,7 +37,7 @@ review.
 | `claude/spec-lifecycle-housekeeping` (on actions) | claude | `c6aecf66d55d476c2ff936588e2f68d9a9ed9648` | Codex: **APPROVE** for its source-derived scope (K0–K5). Deletion semantics preserved |
 | `claude/spec-lifecycle-heartbeats` (on housekeeping) | claude | `84b2ed5de5b15d0baac5b24a423f8f1c23cb4ad1` | Codex: **APPROVE** for the source-derived cumulative lifecycle (OA-1 through OA-6 closed). R1.3 and OA-5/A5.2 are corroborated at runtime by the metadata run (`678f1996`, window released `0f72c944`). The other exception, custom-plugin and receive-status-change edges are runtime NOT_RUN |
 | `claude/charter-sync` | claude | this head | Latest Codex review: **APPROVE_EXACT_SOURCE_WITH_COMMENT** at `48b11e3c` (`136ef825`; ST30-C1, fixed on this head). Earlier: `10bed7e8` (`c7c629aa`; ST29-C1: checking production exposure is the owner's, under the production-access gate, not an agent task). This head needs its own review |
-| `claude/spec-openapi` (on `e839ceaf`) | claude | `b4afb16739575cac2c1dcd653a0806f96931f08f` | All slices through **groups** and **permissions/`/scopes`** approved: Codex **APPROVE_SOURCE_SCHEMA** at `b4afb167` (`10a6a67a`), cumulative from `0f838ef1` (users, `39cfa00f`), after REQUEST_CHANGES at `08d751a9` (`55f80373`, GR-R1), `12631144` (`61d27586`, PR-R1) and `593f511e` (`cafc8a8f`). 48 paths, 64 operations. Records G-SEC-1, P-SEC-1, G-DEF-1 and GR-R1 (see Owner), confirmed by Codex as source traces. SQL, HTTP, auth and validator NOT_RUN |
+| `claude/spec-openapi` (on `e839ceaf`) | claude | `e6a625d9dbe0a3e196c44c9b049cf6fdc565439b` | All slices through **customers** approved: Codex **APPROVE_SOURCE_SCHEMA_WITH_COMMENT** at `e6a625d9` (`7a5fd582`; CU-C1 wording for the next head), cumulative from `b4afb167` (groups and permissions, `10a6a67a`), after REQUEST_CHANGES at `d1fdb7a8` (`702587fc`, CU-R1..R3). Earlier: REQUEST_CHANGES at `08d751a9` (`55f80373`, GR-R1), `12631144` (`61d27586`, PR-R1) and `593f511e` (`cafc8a8f`). 51 paths, 69 operations. Records G-SEC-1, P-SEC-1, C-SEC-1, G-DEF-1 and GR-R1 (see Owner), confirmed by Codex as source traces. SQL, HTTP, auth and validator NOT_RUN |
 | `codex/harness-integration` (on `e839ceaf`) | codex | `061d2a969d8fc4bd876f54885758727c5643c896` | Claude **APPROVE** for the source/offline scope: provenance verified, guard PASS, 50 offline tests, 16 collected. HTTP NOT_RUN at this head |
 | `codex/heartbeat-input-query` (on `061d2a96`) | codex | `60d2e021eeb9c1040cfa3bdb373cfe949e9b5db0` | Claude **APPROVE** for the source/offline scope (`ab47f0a4`): 4 vectors (present-null containers, unknown-only status, pre-filter total and paging). Runner `48e3f654` approved (`99738ba0`). Window `alrust-heartbeat-input-query-reference-20260930-01`: REQUEST `586679fb`, ACK `d8afb6df`, START `ff2b9fac`, **RELEASED** `ef919f45`. Runtime: **LOCAL_PASS**, 4 HTTP tests in 0.42 s plus config and stored-key attestations, frozen `60d2e021`. Cleanup and key-free capture verified by both agents (`312fdb6f`). Reference only |
 | `codex/metadata-mutations` (on `60d2e021`) | codex | `70a40be307aceeb6719e80f1bdc162a24c9c1017` | Claude **APPROVE** source/offline (`f3d8fe45`); runner `94b53328` (`9deac923`). Window `…-metadata-mutations-reference-20260930-01`: ACK `317124e0`, START `d9737019`, RELEASED `b317ee1c`: **FAIL**, 2 passed and 1 failed at a harness precondition (HF9: the default `remote_ip` plugin adds `attributes.ip`). Cleanup verified by both (`fa615dfa`). Claude's review had wrongly called the precondition runtime-corroborated; corrected on record. Preserved, not rerun |
@@ -50,7 +50,8 @@ review.
 | `codex/config-conformance` (on `b1439810`) | codex | `0c83a5a38b8d490b70263bf1058652564d4e518e` | Plan v2 `39480ddb` (v1 `b6170dc8` superseded: it expected the selector string as the model name): Claude **APPROVE_WITH_COMMENTS** (`e7a3881b`; CP-C1/C2 citations fixed in the harness, CP-N1: `/config` has no permission decorator, so a run is not authorization evidence). Harness: Claude **APPROVE** source/offline (`8a987c58`): 106 offline, 1 collected. Runner `f8811c59` (tests `574e02c7`) approved (`2d661ca9`): the pinned CLI is launched with one read-only first-request hook that attests the served app's debug, BASE_URL and ProxyFix state and binds its PID (CF-N1 to N3). Window `alrust-config-reference-20260930-01`: REQUEST `044882e3`, ACK `eb144153`, START `63776d76`, **RELEASED** `bb031d5b`. Runtime: **LOCAL_PASS**, 1 HTTP test in 0.04 s against the *instrumented* pinned reference (36 root keys, nested keysets, model name `Alerta 9.1.0`, severity/colors aliases, controlled flags and timeouts, exact endpoint), aggregate PASS. Cleanup, served PID binding and four-key plus generic exclusion verified by both (`5198b8d8`). Reference only; not authorization evidence |
 | Web UI consumer inventory (source only, not Git) | codex | helper `8efc0f9e`, summary `2e212266`, correction `d47bb458` | Lexical inventory of webui `2687e4af` service calls. Claude **APPROVE_WITH_COMMENTS** (`0fd57eab`): 71 declared calls; 59 with a direct caller (corrected from 58 in `131b3b08`, WI-R1: a relative import of `getCounts` was missed); 24 of those are not yet in OpenAPI (groups 8, permissions 5 including `/scopes`, customers 4, management 3, `/config`, auth confirm/forgot/reset 3). WI-C1: `getUserAttributes(userId)` targets a GET that exists only at `/user/me/attributes`, and has no caller. Not a call graph and not a drop justification. Codex's static route inventory (`96083962`): 82 API view declarations, 50 in OpenAPI |
 | `codex/groups-conformance` (on `0c83a5a3`) | codex | `6266212b413926e68b083c3fc9f36af179909292` | Plan GRP-S1..S5 (`039150fc`, identical resend `73f6ef60`): Claude **APPROVE** plan only (`ea14a636`; GRP-N1..N3). Harness: Claude **APPROVE** source/offline (`a64db9f9`): one `GET /groups?page=1&page-size=1` on an attested empty table; 40 focused, 146 offline, 1 collected. Runner `4579b607` (tests `d9624b48`) approved (`c3a055f6`): a read-only `COUNT(1) FROM groups` on the served app's own connection after readiness, bound to the served PID, window and config by a private hash chain (GH-N1..N3). Window `alrust-groups-reference-20260930-01`: REQUEST `9e4102fd`, ACK `73ab1e9e`, START `3001cb1e`, **RELEASED** `3b2690f6`. Runtime: **LOCAL_PASS**, 1 HTTP test in 0.05 s against the *instrumented* pinned reference (read-only before-request hook on every request; one count after readiness), with an attested count of 0; the empty page matched GRP-S2 type-exactly. Aggregate PASS. Cleanup, the count chain, 14 private hashes and four-key plus generic exclusion verified by both (`ad726311`). Reference only: no nonempty branch, `Group.count`, auth or UI-default paging claim |
-| Permissions read-only plan (source only) | codex | plan `97d1413b` | Claude **APPROVE** plan only (`6ca6658a`): one `GET /perms?page=1&page-size=1` on an attested empty perms table; seven keys, total 3, the three virtual built-ins with fresh uuid4 ids and exact hrefs (PN-1: the `urljoin` double-slash collapse was checked on Python 3.12.14). No harness, runner or window yet |
+| Permissions read-only plan (source only) | codex | plan `97d1413b` | Claude **APPROVE** plan only (`6ca6658a`): one `GET /perms?page=1&page-size=1` on an attested empty perms table; seven keys, total 3, the three virtual built-ins with fresh uuid4 ids and exact hrefs (PN-1: the `urljoin` double-slash collapse was checked on Python 3.12.14) |
+| `codex/permissions-conformance` (on `6266212b`) | codex | `49c2ec3682519dbe4f7ea50ebc5d6eed65574145` | Harness: Claude **APPROVE** source/offline (`2ca07db9`): 74 focused, 220 offline, 1 collected; PN-1..PN-4 addressed. Runner `a4822c91` (tests `116094f6`) approved (`5c870440`): the five served role settings and `COUNT(1) FROM perms` observed once after readiness on the served connection, chained to the PID, window and config (PRN-1..3). No window yet; HTTP NOT_RUN |
 | ALRUST-P0-CLOCK-01 policy | codex | design02 `67bb59f5…` | Claude: concurred, and approved as implemented in `db06ce44` |
 | `claude/adr-0004-webui` (on `c9bbfaf5`) | claude | `e5a23c46c4a735a2437657df20125617b423e37f` | Codex: **APPROVE** as a proposed assessment. No webui source is selected; E1–E3 are NOT_RUN; a re-pin would be the owner's call |
 | `claude/docs-landing` → [PR #2](https://github.com/steliosx/alrust/pull/2) (on `main`) | claude | `fcc06d7301a2048ab6fc4c73a80f5874dd3d08f4` | README only (ALRUST-DOCS-LANDING-01). Codex: **APPROVE** at `fcc06d73` (LD1–LD4 closed; `9409fde5` REQUEST_CHANGES is historical). **Marked ready for owner review**, not merged. Hosted checks for PR #2: NOT_RUN (no workflow on `main`). **The merge is the owner's** |
@@ -111,7 +112,7 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
 - **codex-alrust:** review this STATUS head; further bounded vectors as
   separate reviewed heads.
 - **claude-alrust:** next OpenAPI slices, in consumer-inventory order:
-  customers, `/config`, management. The auth confirm/forgot/reset endpoints wait for the owner's
+  `/config`, then management. The auth confirm/forgot/reset endpoints wait for the owner's
   auth-contract decision. Review Codex's heads; keep STATUS current.
 - **Owner:**
   - PR #2 merge (approved, ready);
@@ -159,7 +160,7 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
     password, an inferred takeover chain. Also: a failed user insert can
     return 201 with unsaved data, and a missing password is hashed as `''`.
     Decide alrust's behavior and check production exposure;
-  - **new, SECURITY (groups and permissions; source-level, nothing
+  - **new, SECURITY (groups, permissions and customer mappings; source-level, nothing
     executed; confirmed by Codex as source traces; same class as the users
     item):**
     - G-SEC-1: at password login, group names are passed to the role lookup
@@ -192,11 +193,22 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
       objects are bound as SQL parameters, predicting a 500
       (`auth/decorators.py:104-116`, `auth/utils.py:42-49`,
       `postgres/base.py:1351-1359`). `ADMIN_USERS` logins return `*` before
-      any SQL, and earlier authentication paths bypass the branch.
+      any SQL, and earlier authentication paths bypass the branch;
+    - C-SEC-1 (source-confirmed by both agents, static, not executed):
+      `POST` and `PUT /customer` need only `admin:customers`, and nothing
+      compares the mapped customer with the caller's own customers. So a
+      customer-scoped holder of `admin:customers` can map a name that a
+      later lookup will match for them to another customer, or to `*`,
+      which removes customer filtering. With `CUSTOMER_VIEWS` on, which
+      name matches depends on the login path: login, group names and
+      domain at password login (sealed into the token until it expires),
+      email and domain for HTTP Basic, and the auth proxy hits G-DEF-1.
+      `ADMIN_USERS` logins already see all customers. It takes effect at
+      the next successful matching lookup.
     Decide alrust's behavior (for example whether group names act as roles,
-    and whether role, group and permission edits share one ceiling) and
-    check whether production grants `admin:groups` or `admin:perms` apart
-    from `admin`;
+    and whether role, group, permission and customer-mapping edits share
+    one ceiling) and check whether production grants `admin:groups`,
+    `admin:perms` or `admin:customers` apart from `admin`;
   - **new, SECURITY (API keys; source-level, nothing executed):**
     - an edit that omits `expireTime` stores NULL, and every read rebuilds
       it as now + `API_KEY_EXPIRE_DAYS` (default 365), so with a positive
