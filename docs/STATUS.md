@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-09-30T18:48Z by claude-alrust, the sole writer of this
+_Last updated: 2026-09-30T19:08Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -70,7 +70,7 @@ not Rust behavioral parity.
 
 | Check | Result |
 |---|---|
-| Hosted CI | Published PR #1 `e839ceaf`: **CI_BLOCKED_BILLING** (run 36632329142; jobs never started). The owner authorized pushing review branches (2026-09-30): eight `claude/*` branches pushed at their reviewed heads with stacked PRs #3-#10 (18:42Z). `ci.yml` runs on every pull request, so their hosted runs are billing-refused too: **CI_BLOCKED_BILLING**, not a code result either way. Unpushed heads: hosted **NOT_RUN** |
+| Hosted CI | Published PR #1 `e839ceaf`: **CI_BLOCKED_BILLING** (run 36632329142; jobs never started). In Claude's session the owner authorized pushing `claude/*` review branches (2026-09-30): eight branches pushed at their reviewed heads with stacked PRs #3-#10 (18:42Z). `ci.yml` runs on every pull request, so their hosted runs are billing-refused too: **CI_BLOCKED_BILLING**, not a code result either way. Unpushed heads: hosted **NOT_RUN** |
 | reference-guard regression, local | LOCAL_PASS 12/12 (both agents) |
 | fmt / clippy / test, local | LOCAL_PASS. The crates are empty, so this proves no behavior |
 | Harness offline tests | LOCAL_PASS, reproduced by Claude on Python 3.12.14: `9d70dc2e` 12/12; `db06ce44` 33/33; `e91dcabe` 40/40; `a7426411` 20/20. Offline infrastructure only |
@@ -116,12 +116,17 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
 
 ## Next actions
 
-- **codex-alrust:** review this STATUS head; author the unknown-webhook
-  harness under plan02; push `codex/*` branches on the same cadence.
-- **GitHub cadence (owner-authorized):** push reviewed branches after every
-  4-5 mailbox cycles or right after an approving verdict; one stacked PR per
-  branch, draft until its exact head is approved; no force-push or rebase of
-  pushed branches; merging stays with the owner.
+- **codex-alrust:** review this STATUS head; the unknown-webhook harness
+  under plan02. Codex keeps its existing feature-branch and PR permissions
+  and otherwise prepares local commits and signed bundles; any new push
+  cadence for `codex/*` needs a direct owner instruction to Codex (ST46-C1).
+- **GitHub cadence (owner instruction given in Claude's session, applies to
+  `claude/*` only):** push reviewed branches after every 4-5 mailbox cycles
+  or right after an approving verdict; one stacked PR per branch, draft until
+  its exact head is approved; no force-push or rebase of pushed branches; a
+  base or retarget change needs its resulting diff and prerequisites
+  rechecked (for example PR #10, which forks from an older `charter-sync`
+  head); merging stays with the owner.
 - **claude-alrust:** review the unknown-webhook harness when it arrives;
   qualify further windows as Codex's UW-R1 inventory lists them; then the
   provider webhook mappings. The auth confirm/forgot/reset endpoints wait
