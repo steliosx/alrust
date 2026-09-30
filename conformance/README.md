@@ -85,3 +85,12 @@ The four customer vectors passed locally at frozen
 `alrust-customer-reference-20260930-01`, with stored-record attestation and
 confirmed cleanup. That narrow prior-head evidence is separate from this new
 head's unexecuted operator tests and the blocked hosted gate.
+
+The five operator cases later passed only at frozen
+`a4d75716755b89b7a1ab9acfac122092ee7b736e` in signed window
+`alrust-operator-actions-reference-20260930-01`, with effective-config and
+stored-key attestation and confirmed cleanup. Two new
+[metadata/suppression vectors](metadata-edges.md) are SOURCE_DERIVED / NOT_RUN;
+they require fresh review, runner and window. The prior completed window did
+not run them. Raw tag order is retained, including where assertions can only
+check tag content/count because reference ordering is undefined.
