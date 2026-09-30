@@ -22,7 +22,22 @@ info:
       (customer-mapping C1-C4).
     - Every route also accepts `OPTIONS` (CORS). `?callback=` wraps the
       response body as JSONP (`utils/response.py:7-19`).
-    - Errors use the ApiError body (`exceptions.py:98-107`).
+    - Errors use the ApiError body (`exceptions.py:98-107`). Unhandled
+      exceptions (for example SQL errors) return 500 with message `An
+      internal error has occurred!` (`exceptions.py:120-136`).
+
+    Credential precedence, applied by `permission()` to every operation:
+    1. A supplied API key is checked first. An invalid or expired key gives
+       **401**, even when `AUTH_REQUIRED` is false (C1).
+    2. Then Hawk, Bearer, proxy and Basic, in that order.
+    3. With no credentials and `AUTH_REQUIRED` false, access is anonymous,
+       with scopes `[]` and no scope check (`:156-161`).
+    4. With `AUTH_REQUIRED` and `ALLOW_READONLY`, anonymous callers get
+       `READONLY_SCOPES` (`:164-169`).
+    5. Otherwise the request gets 401.
+
+    A missing scope gives 403. The `{}` security alternative below
+    therefore means anonymous access **only** under branches 3 and 4.
 servers:
   - url: /
     description: Relative to the server's base URL
@@ -44,6 +59,10 @@ components:
     bearer:
       type: http
       scheme: bearer
+  responses:
+    Unauthorized: {description: "invalid or expired API key, bad token, or no credentials while AUTH_REQUIRED (auth/decorators.py:42-45, :174-175)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    Forbidden: {description: "missing required scope (auth/decorators.py:51-52 and peers)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    ServerError: {description: "ApiError 500, or an unhandled exception with message 'An internal error has occurred!' (exceptions.py:120-136)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
   schemas:
     Error:
       type: object
@@ -76,20 +95,59 @@ components:
         customer: {type: [string, "null"]}
         latency: {type: integer, description: "int((receiveTime - createTime) in ms); negative when the client clock is ahead"}
         since: {type: integer, description: "int seconds since receiveTime (format.py:41-42)"}
-        status: {enum: [ok, slow, expired], description: "expired if since > timeout; otherwise slow if latency > maxLatency; otherwise ok"}
+        status:
+          enum: [ok, slow, expired]
+          description: |
+            Computed from **untruncated** values (`heartbeat.py:61`,
+            `:65-69`): `expired` if the elapsed
+            `timedelta.total_seconds()` > timeout; otherwise `slow` if the
+            integer latency > maxLatency; otherwise `ok`.
+            - The serialized `since` is truncated to an integer
+              (`format.py:41-42`). With timeout 2 and 2.5 s elapsed, the
+              response shows `since: 2` together with `status: expired`.
+            - Do not derive `status` from the response integers.
+            - The SQL list filter (HB4.1) uses its own untruncated latency
+              threshold and query-time clock.
     HeartbeatInput:
       type: object
-      x-source: alerta/models/heartbeat.py:72-92
+      x-source: alerta/models/heartbeat.py:28-62, :72-91; alerta/utils/format.py:53-61
       additionalProperties: true
-      description: Unknown fields are ignored. Only the properties below are read.
+      description: |
+        This schema describes what the **parser accepts**; it adds no
+        validation of its own. Unknown fields are ignored.
+        - `request.json` behavior is inferred from Flask, NOT verified: a
+          non-JSON content type gives 415 and malformed JSON gives 400
+          (werkzeug handlers, `exceptions.py:83-94`). A JSON body that is
+          not an object makes `json.get` raise AttributeError, which is not
+          a ValueError, so it gives 500.
       properties:
-        id: {type: string}
-        origin: {type: string, description: "default `<argv0>/<hostname>` of the server"}
-        tags: {type: array, items: {type: string}, description: "must be a list, else 400"}
-        attributes: {type: object, description: "must be an object, else 400; keys must not contain `.` or `$`, else 400"}
-        createTime: {type: string, description: "must match %Y-%m-%dT%H:%M:%S.%fZ, else 400"}
-        timeout: {type: integer, description: "must be int (bool accepted, R0.4 analogue) and >= 0, else 400; default HEARTBEAT_TIMEOUT"}
-        customer: {type: string, description: "empty string gives 400; otherwise assign_customer with admin:heartbeats (C11)"}
+        id: {type: [string, "null"], description: "falsy gives a server uuid4"}
+        origin: {description: "falsy gives `<argv0>/<hostname>` of the server"}
+        tags:
+          type: [array, "null"]
+          description: |
+            Must be a list when present (400 otherwise). Element types are
+            **not** checked by the parser. Persisting non-string elements is
+            not established.
+        attributes: {type: [object, "null"], description: "must be an object when present (400); keys containing `.` or `$` give 400 (:30-32)"}
+        createTime:
+          description: |
+            A string must match `%Y-%m-%dT%H:%M:%S.%fZ` (400 otherwise). A
+            non-string value, including null and numbers, is **silently
+            ignored**: `DateTime.parse` returns None, so the server uses now
+            (`format.py:55-57`).
+        timeout:
+          type: [integer, boolean, "null"]
+          description: |
+            - null or absent gives `HEARTBEAT_TIMEOUT` (`:34`).
+            - Booleans pass the int check (true gives 1, false gives 0).
+            - Floats and strings give 400. A negative value gives 400.
+        customer:
+          type: [string, "null"]
+          description: |
+            `""` gives 400. A null value is accepted and then assigned by
+            `assign_customer` (C11). A non-empty value goes through the same
+            assignment rules.
 paths:
   /heartbeat:
     post:
@@ -121,9 +179,9 @@ paths:
                   id: {type: string}
                   heartbeat: {$ref: '#/components/schemas/Heartbeat'}
         "400": {description: "parse error, or customer not allowed (C7, C10)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
-        "401": {description: "invalid or expired API key (C1)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
-        "403": {description: "missing write:heartbeats", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
-        "500": {description: "storage error (views/heartbeats.py:31-32)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
       x-runtime: "NOT_RUN; Codex heartbeat vectors 9548f878 are approved as source and cover this 201 shape, upsert identity and slow status once executed"
   /heartbeat/{heartbeat_id}:
     parameters:
@@ -156,14 +214,26 @@ paths:
                   total: {const: 1}
                   heartbeat: {$ref: '#/components/schemas/Heartbeat'}
         "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
     delete:
       operationId: deleteHeartbeat
       x-source: alerta/views/heartbeats.py:91-108
       x-scope: write:heartbeats
       description: |
-        No customer filter, as for GET (C19). The lookup matches by prefix,
-        and the delete then targets that row's full id
-        (`heartbeat.py:178-179`).
+        No customer filter, as for GET (C19).
+        1. The lookup matches `id = v OR id LIKE 'v%'`. If several rows
+           match, which one is chosen is undefined.
+        2. `delete()` passes that row's full id to `delete_heartbeat`,
+           which **again** uses `id = <id> OR id LIKE '<id>%'`
+           (`heartbeat.py:178-179`, `pg.py:929-935`).
+
+        So the deletion is not guaranteed to be exact-row. With a short
+        caller id, a row `SYNTHETIC-a` also matches `SYNTHETIC-ab`. Generated
+        full-uuid ids make this practically exact. This is source-derived,
+        and the multi-row outcome is NOT verified. alrust keeps it unless
+        the owner approves a divergence.
       responses:
         "200":
           description: Deleted
@@ -171,7 +241,9 @@ paths:
             application/json:
               schema: {type: object, required: [status], properties: {status: {const: ok}}}
         "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
-        "500": {description: "delete failed", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
   /heartbeats:
     get:
       operationId: listHeartbeats
@@ -194,7 +266,7 @@ paths:
         **Order:** unordered unless `sort-by` is given (`(select 1)`,
         `pg/utils.py:50-51`).
       parameters:
-        - {name: status, in: query, schema: {type: array, items: {enum: [ok, slow, expired]}}, style: form, explode: true, description: "repeatable; applied in SQL (pg.py:886-918)"}
+        - {name: status, in: query, schema: {type: array, items: {type: string}}, style: form, explode: true, description: "repeatable and arbitrary. `ok`, `slow` and `expired` each add an OR branch in SQL; any other value is ignored, so `status=foo` alone applies no status predicate (pg.py:886-908)"}
         - {name: page, in: query, schema: {type: integer, default: 1}, description: "out of range gives 416 (paging.py:15-16)"}
         - {name: page-size, in: query, schema: {type: integer}, description: "default DEFAULT_PAGE_SIZE (50); `limit` is the deprecated alias (paging.py:19-25)"}
         - {name: sort-by, in: query, schema: {type: array, items: {type: string}}, style: form, explode: true, description: "one of origin, tags, attributes, attributes.<k>, type, createTime, timeout, receiveTime, customer, latency, since; a `-` prefix reverses it. Anything else gives 400 (pg/utils.py:28-49, :273-288)"}
@@ -204,20 +276,32 @@ paths:
           explode: true
           schema: {type: object, additionalProperties: {type: string}}
           description: |
-            `origin`, `tag`, `attributes.<k>`, `type`, `createTime`,
-            `timeout`, `receiveTime`, `customer`, `latency` and `since`
-            are accepted as filters (`pg/utils.py:55-104`, `:273-288`).
-            - A single value means equality; `~v` means ILIKE `%v%`; a
-              `!` suffix negates.
-            - Several values mean `= ANY(...)`, or a regex when any value
+            The accepted filter names are `origin`, `tag`, `attributes`,
+            `attributes.<k>`, `type`, `createTime`, `timeout`, `receiveTime`,
+            `customer`, `latency` and `since` (`pg/utils.py:55-104`,
+            `:273-288`). Excluded names are **silently ignored**: `id` and
+            the paging, sort and credential parameters (`EXCLUDE_FROM_QUERY`,
+            `:19-22`). Any other name gives 400 `Invalid filter parameter`.
+
+            **Generic path** (every name except `attributes.<k>`):
+            - a single value means equality; `~v` means ILIKE `%v%`; a `!`
+              suffix negates;
+            - several values mean `= ANY(...)`, or a regex when any value
               starts with `~`.
-            - `id` and the paging, sort and credential parameters are
-              excluded from filtering (`EXCLUDE_FROM_QUERY`, `:19-22`).
-              Any other name gives 400 `Invalid filter parameter`.
-            - Inferred, NOT verified: `tag=` compares the `tags` text[]
-              column for equality with a string. `latency`/`since` refer
-              to SELECT aliases, not columns. Such filters are expected to
-              fail in SQL and return 500.
+
+            **`attributes.<k>=v`** (`:69-72`) always becomes
+            `attributes @> {k: <first value>}`:
+            - extra values are ignored, and `~` is taken literally;
+            - a trailing `!` becomes **part of the key name**; it does not
+              negate.
+
+            **Inferred SQL failures, giving 500, NOT verified:**
+            - `tag` compares the `tags` text[] column with a string;
+            - plain `attributes` compares the jsonb column with a string;
+            - `type` maps to column `event_type`, but the table's column is
+              `type` (`sql/schema.sql:109-118`, `pg/utils.py:280`). This
+              also breaks `sort-by=type`;
+            - `latency` and `since` are SELECT aliases, not columns.
       responses:
         "200":
           description: A page, possibly empty
@@ -237,6 +321,9 @@ paths:
                   message: {const: not found, description: "present only when the page is empty"}
         "400": {description: "invalid filter or sort parameter", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         "416": {description: "page out of range", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
 security:
   - apiKeyHeader: []
   - apiKeyAuthorization: []
