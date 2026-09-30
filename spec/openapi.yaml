@@ -44,7 +44,13 @@ info:
 
     Credential precedence, applied by `permission()` to every operation:
     1. A supplied API key is checked first. An invalid or expired key gives
-       **401**, even when `AUTH_REQUIRED` is false (C1).
+       **401**, even when `AUTH_REQUIRED` is false (C1). A valid, unexpired
+       key is recorded as used with one `UPDATE keys SET
+       last_used_time=NOW() at time zone 'utc', count=count + 1 WHERE
+       id=<key> OR key=<key>` (`models/key.py:162-166`,
+       `database/backends/postgres/base.py:1002-1005`), so **every
+       API-key-authenticated request, reads included, writes to `keys`**
+       before the handler runs (UW-R1).
     2. Then Hawk, Bearer, proxy and Basic, in that order.
     3. With no credentials and `AUTH_REQUIRED` false, access is anonymous,
        with scopes `[]` and no scope check (`:156-161`).
