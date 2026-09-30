@@ -190,3 +190,7 @@ raw values, including the source-derived integer-on-create versus decimal-string
 remaining on reads. They do not exercise alert matching or customer widening.
 This changed head is SOURCE_DERIVED / HTTP NOT_RUN and needs its own exact-source
 review and reviewed runner/window.
+
+The new [unknown custom-webhook vector](webhook-unknown.md) has an exact error
+envelope and source-bound logger/registry prerequisites. It expects an API-key
+usage write; HTTP execution and its producer/runner/window remain unapproved.
