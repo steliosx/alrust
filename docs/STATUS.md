@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-09-30T19:08Z by claude-alrust, the sole writer of this
+_Last updated: 2026-09-30T19:22Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -36,8 +36,8 @@ review.
 | `claude/spec-lifecycle-actions` (on receive) | claude | `cedfcdff5afb8198bfb3588836156ca8510d076c` | Codex: **APPROVE** for its source-derived scope (A0–A6) |
 | `claude/spec-lifecycle-housekeeping` (on actions) | claude | `c6aecf66d55d476c2ff936588e2f68d9a9ed9648` | Codex: **APPROVE** for its source-derived scope (K0–K5). Deletion semantics preserved |
 | `claude/spec-lifecycle-heartbeats` (on housekeeping) | claude | `84b2ed5de5b15d0baac5b24a423f8f1c23cb4ad1` | Codex: **APPROVE** for the source-derived cumulative lifecycle (OA-1 through OA-6 closed). R1.3 and OA-5/A5.2 are corroborated at runtime by the metadata run (`678f1996`, window released `0f72c944`). The other exception, custom-plugin and receive-status-change edges are runtime NOT_RUN |
-| `claude/charter-sync` | claude | this head | Latest Codex review: **APPROVE_EXACT_SOURCE** at `5b398dee` (`79eedab2`; no open comment). Earlier: `a83ae89d` (`73678f6a`), `6660315b` (`e325e836`), `812a3b8a` (`fd8f459b`), `0e74a247` (`2f2ae4cc`), `f70c9640` (`854f909c`), `38084c4a` (`14836275`), `999c1a5a` (`7adbbc6c`), `090233cf` (`a8e348a1`), `0313d437` (`20a101a0`), `48b11e3c` (`136ef825`), `10bed7e8` (`c7c629aa`; ST29-C1: checking production exposure is the owner's, under the production-access gate, not an agent task). This head needs its own review |
-| `claude/spec-openapi` (on `e839ceaf`) | claude | `55057e9ba3f378133039fd4962df34251b9d2836` | All slices through the **generic webhook dispatcher** approved: Codex **APPROVE_EXACT_SOURCE** at `55057e9b` (`3e18a5b6`; UW-R1: every API-key-authenticated request, reads included, runs one `keys` usage UPDATE before the scope check), on `469fda22` (`84551f7c`; W-N2 closed; `x-runtime` for `/` and `/_` cite their reference runs), on `c5dcd979` (`1eaa191c`; W-C1 and W-N1 closed), after REQUEST_CHANGES at `c6bb61e9` (`74bfab71`, W-C1: the legacy retry reaches the registered error handlers). The dispatcher records W-SEC-1 and W-DL-1 (see Owner); the twelve provider payload mappings are not specified yet. Root wording: `21a8c70d` (`1ad97bdf`; ROOT-C1..C3, then ROOT-C4 on `c6bb61e9`: links are absolute only with an empty or absolute `BASE_URL`, and the `/` rule's own href doubles its slash when the base already ends in `/`). Earlier: root routes `84c9cf96` (`721cd72a`), on `6066d413` (`6ade954c`), after REQUEST_CHANGES at `24aab639` (`c640040e`, MG-R1..R3). `/` returns the full route map without credentials (source-derived). Earlier: `/config` `773d5c27` (`efcd64f7`, CF-R1) and `f667fd4f` (`10e0fac5`, CF-R2); customers `d1fdb7a8` (`702587fc`, CU-R1..R3); groups and permissions `08d751a9`, `12631144`, `593f511e`. 65 paths, 87 operations. `/config` cites the config window and management health the health window, each for exactly what it checked. Records G-SEC-1, P-SEC-1, C-SEC-1, M-SEC-1, G-DEF-1 and GR-R1 (see Owner). SQL, other HTTP, auth and validator NOT_RUN |
+| `claude/charter-sync` | claude | this head | Latest Codex review: **APPROVE_EXACT_SOURCE** at `e4d93a84` (`e7f28f1e`; ST46-C1 closed; pushed to PR #9). Earlier: `4606baa0` REQUEST_CHANGES (`83fc788d`), `5b398dee` (`79eedab2`), `a83ae89d` (`73678f6a`), `6660315b` (`e325e836`), `812a3b8a` (`fd8f459b`), `0e74a247` (`2f2ae4cc`), `f70c9640` (`854f909c`), `38084c4a` (`14836275`), `999c1a5a` (`7adbbc6c`), `090233cf` (`a8e348a1`), `0313d437` (`20a101a0`), `48b11e3c` (`136ef825`), `10bed7e8` (`c7c629aa`; ST29-C1: checking production exposure is the owner's, under the production-access gate, not an agent task). This head needs its own review |
+| `claude/spec-openapi` (on `e839ceaf`) | claude | `55057e9ba3f378133039fd4962df34251b9d2836` (published, PR #8) | All slices through the **generic webhook dispatcher** approved (the prometheus provider slice is under review: `efa54a7c` got REQUEST_CHANGES `79e4e4fb`, WP-R1..R3; corrected `b01ba677` sent): Codex **APPROVE_EXACT_SOURCE** at `55057e9b` (`3e18a5b6`; UW-R1: every API-key-authenticated request, reads included, runs one `keys` usage UPDATE before the scope check), on `469fda22` (`84551f7c`; W-N2 closed; `x-runtime` for `/` and `/_` cite their reference runs), on `c5dcd979` (`1eaa191c`; W-C1 and W-N1 closed), after REQUEST_CHANGES at `c6bb61e9` (`74bfab71`, W-C1: the legacy retry reaches the registered error handlers). The dispatcher records W-SEC-1 and W-DL-1 (see Owner); the twelve provider payload mappings are not specified yet. Root wording: `21a8c70d` (`1ad97bdf`; ROOT-C1..C3, then ROOT-C4 on `c6bb61e9`: links are absolute only with an empty or absolute `BASE_URL`, and the `/` rule's own href doubles its slash when the base already ends in `/`). Earlier: root routes `84c9cf96` (`721cd72a`), on `6066d413` (`6ade954c`), after REQUEST_CHANGES at `24aab639` (`c640040e`, MG-R1..R3). `/` returns the full route map without credentials (source-derived). Earlier: `/config` `773d5c27` (`efcd64f7`, CF-R1) and `f667fd4f` (`10e0fac5`, CF-R2); customers `d1fdb7a8` (`702587fc`, CU-R1..R3); groups and permissions `08d751a9`, `12631144`, `593f511e`. 65 paths, 87 operations. `/config` cites the config window and management health the health window, each for exactly what it checked. Records G-SEC-1, P-SEC-1, C-SEC-1, M-SEC-1, G-DEF-1 and GR-R1 (see Owner). SQL, other HTTP, auth and validator NOT_RUN |
 | `codex/harness-integration` (on `e839ceaf`) | codex | `061d2a969d8fc4bd876f54885758727c5643c896` | Claude **APPROVE** for the source/offline scope: provenance verified, guard PASS, 50 offline tests, 16 collected. HTTP NOT_RUN at this head |
 | `codex/heartbeat-input-query` (on `061d2a96`) | codex | `60d2e021eeb9c1040cfa3bdb373cfe949e9b5db0` | Claude **APPROVE** for the source/offline scope (`ab47f0a4`): 4 vectors (present-null containers, unknown-only status, pre-filter total and paging). Runner `48e3f654` approved (`99738ba0`). Window `alrust-heartbeat-input-query-reference-20260930-01`: REQUEST `586679fb`, ACK `d8afb6df`, START `ff2b9fac`, **RELEASED** `ef919f45`. Runtime: **LOCAL_PASS**, 4 HTTP tests in 0.42 s plus config and stored-key attestations, frozen `60d2e021`. Cleanup and key-free capture verified by both agents (`312fdb6f`). Reference only |
 | `codex/metadata-mutations` (on `60d2e021`) | codex | `70a40be307aceeb6719e80f1bdc162a24c9c1017` | Claude **APPROVE** source/offline (`f3d8fe45`); runner `94b53328` (`9deac923`). Window `…-metadata-mutations-reference-20260930-01`: ACK `317124e0`, START `d9737019`, RELEASED `b317ee1c`: **FAIL**, 2 passed and 1 failed at a harness precondition (HF9: the default `remote_ip` plugin adds `attributes.ip`). Cleanup verified by both (`fa615dfa`). Claude's review had wrongly called the precondition runtime-corroborated; corrected on record. Preserved, not rerun |
@@ -91,7 +91,25 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
 
 ## Owner items
 
-- **GitHub Actions billing:** every job is refused before start.
+- **GitHub Actions billing:** every GitHub-hosted job is refused before start.
+- **Linux x64 beta (owner direction, 2026-09-30, given in Claude's session):**
+  the Omarchy Ubuntu x64 runner VM (libvirt domain `zabalack-omarchy-x64`) is
+  shared CI infrastructure; ARM64 is deferred until after x64 beta. Read-only
+  audit: `steliosx/alrust` has **no** self-hosted runner; `zab-al-ack`'s
+  runners (22 x64 online, 21 arm64 offline) are repository-level on a
+  personal account and cannot be shared. Self-hosted jobs do run despite the
+  billing block (zab-al-ack run 36570231552). Claude has no VM access; the
+  Zabalack Claude session is auditing the guest. The guest lock
+  `/home/codex/zabalack-task-runs/shared-linux-lab.lock` cannot see Alrust's
+  host-side heavy windows. A draft x64 routing for Alrust CI
+  (`claude/ci-x64-runner` `a50af152`, local, under Codex review) is held
+  until a runner exists. **Owner decisions:** (1) register a runner for
+  `steliosx/alrust` (labels `self-hosted,Linux,X64,alrust`); (2) the shared
+  cross-project lock design and `ALRUST_LAB_LOCK`; (3) read-only VM access
+  for Alrust, or a relay of the guest audit; (4) whether self-hosted runs
+  satisfy the Phase 0 hosted gate; (5) the Alrust beta definition (KICKOFF
+  has no "beta"; draft: Linux x64 server after Phase 5); (6) any `codex/*`
+  push cadence, as a direct instruction to Codex.
 - **Repository protection:** none. `branches/main` reports `protected: false`, and
   the protection and ruleset APIs return HTTP 403 (plan). The guard is
   **not enforced**. See `docs/repo-protection-recommendation.md`.
@@ -246,6 +264,25 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
     production sets a real `SECRET_KEY` and does not enable
     `ALLOW_READONLY`. This is a source trace, not an executed exploit or a
     statement about deployed settings;
+  - **new, SECURITY (web UI and prometheus; source-level, Codex-confirmed
+    with qualifiers; no browser, HTTP, stress or exploit run):**
+    - WUI-SEC-1: the pinned web UI (`2687e4af`) renders fields as raw HTML
+      with `v-html` in nine places: alert `value`, `text` and custom
+      attribute columns (`AlertList.vue:153,162,180`), history text and
+      string attributes containing `http://` or `https://`
+      (`AlertDetail.vue:582,730`), and group member name, email and login
+      (`GroupList.vue:53-54,84-85`). No sanitizer was found in its `src`.
+      Anyone who can write those fields (alert and webhook writers,
+      anonymous callers under `AUTH_REQUIRED` false or AN1, user admins)
+      controls stored HTML shown to operators: a potential
+      script-execution risk. The prometheus mapping itself builds
+      `moreInfo` as an unescaped HTML anchor. Decide the mitigation before
+      any deployment of this UI (it bears on ADR-0004);
+    - WP-SEC-1: the prometheus webhook runs each label and annotation
+      through `str.format` with payload-controlled format specifications,
+      so a large field width makes the server allocate a large string; the
+      pinned settings set no `MAX_CONTENT_LENGTH`, and deployment limits are
+      not verified. Decide whether alrust keeps format expansion;
   - **new, SECURITY and DATA LOSS (webhooks; source-level, source-confirmed
     by Codex; no webhook HTTP, SQL, auth or exploit run. Codex ran selected
     original-handler AST/mock scenarios, WB-S1..S6, for control flow
