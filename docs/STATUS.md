@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-09-30T01:10Z by claude-alrust, the sole writer of this
+_Last updated: 2026-09-30T01:22Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -35,11 +35,11 @@ review.
 | `claude/spec-lifecycle-receive` | claude | `a1de491c6677a3134c65d0e0b086cae08b925087` | Codex: **APPROVE** for its source-derived scope (receive slice only). HTTP beyond the 2 smoke cases is NOT_RUN |
 | `claude/spec-lifecycle-actions` (on receive) | claude | `cedfcdff5afb8198bfb3588836156ca8510d076c` | Codex: **APPROVE** for its source-derived scope (A0–A6) |
 | `claude/spec-lifecycle-housekeeping` (on actions) | claude | `c6aecf66d55d476c2ff936588e2f68d9a9ed9648` | Codex: **APPROVE** for its source-derived scope (K0–K5). Deletion semantics preserved |
-| `claude/spec-lifecycle-heartbeats` (on housekeeping) | claude | `d3383b8a882b6b708b4b3c41d9405fca568d25e0` | Codex: **APPROVE** for its source-derived scope (HB0–HB6). The HEARTBEAT-02 dispute was resolved after one exchange, with Codex's extracted-view probe |
-| `claude/charter-sync` | claude | this head | Codex **APPROVE** at `ac667cf8`. This STATUS refresh needs its own review |
+| `claude/spec-lifecycle-heartbeats` (on housekeeping) | claude | `1fc071235b9a467e5b3aa9b909d2e70f14ff70e1` | Codex APPROVE at `d3383b8a` (HB0–HB6; HEARTBEAT-02 resolved). The new commit `1fc07123` corrects A2.2 (forwarder `take_action` returns the alert, raised as OA-1) and adds R7.3b (the API sorts history ascending); pending review |
+| `claude/charter-sync` | claude | this head | Codex APPROVE_WITH_COMMENTS at `13ab765d` (latest reviewed); comments applied here. Every new head needs its own review |
 | ALRUST-P0-CLOCK-01 policy | codex | design02 `67bb59f5…` | Claude: concurred, and approved as implemented in `db06ce44` |
 | `claude/adr-0004-webui` (on `c9bbfaf5`) | claude | `e5a23c46c4a735a2437657df20125617b423e37f` | Codex: **APPROVE** as a proposed assessment. No webui source is selected; E1–E3 are NOT_RUN; a re-pin would be the owner's call |
-| `claude/docs-landing` → draft [PR #2](https://github.com/steliosx/alrust/pull/2) (on `main`) | claude | `fcc06d7301a2048ab6fc4c73a80f5874dd3d08f4` | README only (ALRUST-DOCS-LANDING-01). Codex: **APPROVE** at `fcc06d73` (LD1–LD4 closed; `9409fde5` REQUEST_CHANGES is historical). **Marked ready for owner review**, not merged. Hosted checks for PR #2: NOT_RUN (no workflow on `main`). **The merge is the owner's** |
+| `claude/docs-landing` → [PR #2](https://github.com/steliosx/alrust/pull/2) (on `main`) | claude | `fcc06d7301a2048ab6fc4c73a80f5874dd3d08f4` | README only (ALRUST-DOCS-LANDING-01). Codex: **APPROVE** at `fcc06d73` (LD1–LD4 closed; `9409fde5` REQUEST_CHANGES is historical). **Marked ready for owner review**, not merged. Hosted checks for PR #2: NOT_RUN (no workflow on `main`). **The merge is the owner's** |
 
 ## Checks
 
@@ -56,7 +56,9 @@ not Rust behavioral parity.
 | Harness findings | Closed: HF-1, HF-2 (controlled receive fixture only), HF-3, HF-4 (`130145ea`), HF-5 (differential CLI), HF-6, HF-8 (`130145ea`), CO-1. Open: HF-7 (low) |
 | Reference HTTP smoke (Python 3.12 / Postgres 16, one reference) | **LOCAL_PASS**: 2 cases (health; create/dedup/detail/delete), window `alrust-ref-smoke-20260929-03`, harness `9d70dc2e`, reference `f4312727`. Cleanup confirmed by Codex and independently verified by Claude. This is **reference behavior only**: not conformance of alrust, not Rust parity. Windows 01 and 02 were released NOT_RUN before start |
 | Two-server differential | **NOT_RUN**, and not yet approved |
-| Customer/auth HTTP vectors (`a7426411`), lifecycle-transition, housekeeping and heartbeat HTTP vectors | **NOT_RUN**. The customer vectors are approved as source; the others are planned |
+| Reference customer vectors (window `alrust-customer-reference-20260930-01`) | **LOCAL_PASS**: 4 HTTP tests plus the stored-key attestation, at suite `a7426411`, reference `f4312727`, runner `4ba51ed9`. Synthetic config (AUTH_REQUIRED False, CUSTOMER_VIEWS False). It corroborates C7–C10, C14 and C16–C17 at runtime; it does not cover C1–C19 in full or other auth modes. Cleanup was verified by both agents. Reference behavior only |
+| Operator status/action vectors (`codex/action-conformance` `a4d75716`) | Claude **APPROVE** as source-derived expectations (5 tests). Runtime **NOT_RUN**; it needs a reviewed runner and a window |
+| Lifecycle-transition, housekeeping and heartbeat HTTP vectors | **NOT_RUN** (planned) |
 | Reference smoke at `db06ce44` (window `alrust-ref-smoke-20260929-04`) | **LOCAL_PASS**: 2 cases in 0.22 s (Python 3.12.14 / PostgreSQL 16.15), reference `f4312727`, runner `e0f30439`. Ack `bf39d294`, start `599ca26f`, release `32fdc13e`. Cleanup confirmed by Codex and independently verified by Claude. Reference behavior only |
 | FAIL results on record | No **unexpected behavioral** failure in any executed run. Retained: the guard bypasses reproduced at `a674546` (a review FAIL, fixed at `e839ceaf`); corrected setup attempts (for example the first wheel-acquisition assumption in HF-4); expected negative probes (the tampered-wheel rejection), which are passes by design. Failed attempts are kept, not erased |
 
