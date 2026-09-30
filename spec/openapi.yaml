@@ -16,7 +16,7 @@ info:
       `/environments`, `/services`, `/alerts/groups`, `/alerts/tags`) with
       their query parameters, including the `q=` grammar; **alert notes**;
       **blackouts**; **API keys**; **users**; **groups**; **permissions**
-      (with `/scopes`); **customers**. Not yet written: `/config` and
+      (with `/scopes`); **customers**; **`/config`**. Not yet written:
       management.
     - **Reference security defects** are recorded where found (marked
       SECURITY). They describe the class of problem at source level only;
@@ -3249,12 +3249,12 @@ paths:
         "500": {$ref: '#/components/responses/ServerError'}
   /customer:
     description: |
-      **Customer mappings control customer visibility.** Only with
-      `CUSTOMER_VIEWS` on (`auth/utils.py:42-49`), and after
-      `get_customers_by_match` returns `*` for any login in `ADMIN_USERS`
-      (`postgres/base.py:1351-1353`), a mapping's `match` is compared with
-      different names depending on how the user authenticated. An API key,
-      Hawk or Bearer credential is checked earlier and takes precedence:
+      **Customer mappings control customer visibility.** Lookups happen only
+      with `CUSTOMER_VIEWS` on (`auth/utils.py:42-49`). `ADMIN_USERS` logins
+      immediately return `*` without matching stored mappings
+      (`postgres/base.py:1351-1353`); other logins look up the following
+      names, depending on how the user authenticated. An API key, Hawk or
+      Bearer credential is checked earlier and takes precedence:
       - password login (`POST /auth/login`): the login, the user's group
         names and the email domain if any (`auth/basic.py:93-95`), after the
         usual password, account, domain and email-verification checks. The
@@ -3424,6 +3424,140 @@ paths:
         "416": {description: "page out of range (computed from the pre-visibility query count)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         "401": {$ref: '#/components/responses/Unauthorized'}
         "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /config:
+    get:
+      operationId: getConfig
+      x-source: alerta/views/config.py:9-74; alerta/utils/response.py:22-27; alerta/models/alarms/alerta.py:81-82; alerta/management/views.py:19; alerta/version.py:1
+      x-scope: none
+      x-runtime: "LOCAL_PASS (reference only, instrumented pinned reference with a read-only first-request hook) for the 36 root keys, the nested keysets, the model name, the severity/colors aliases, the controlled false flags, alert 86400 and ack 0, and the exact endpoint: Codex harness 0c83a5a3, runner f8811c59, window alrust-config-reference-20260930-01, release bb031d5b, cleanup verified 5198b8d8. Other values are configuration-dependent and NOT_RUN"
+      description: |
+        **No permission decorator** (`config.py:9-11`): the route is served
+        to any caller, credentialed or not, whatever `AUTH_REQUIRED` says.
+        The credential-precedence rules in the info description therefore do
+        not apply here: credentials are ignored, and an invalid or expired
+        API key is not rejected (no C1 401). The only `api` blueprint
+        request hook is the POST/PUT content-type check
+        (`views/__init__.py:17-20`).
+        It returns a bare object (no `{status, data}` wrapper) with exactly
+        36 top-level keys, most read straight from the configuration. It
+        includes the auth provider and OAuth client identifiers and URLs
+        (`client_id`, `azure_tenant`, `github_url`, ...), but not the OAuth
+        client secret. The pinned web UI fetches it at bootstrap
+        (`src/main.ts:32` to `src/services/config.ts:28`, `:67`).
+        - `endpoint` is `absolute_url().rstrip('/')`: `BASE_URL`, or when it
+          is empty the request's `url_root`, without the trailing slash
+          (`config.py:13`; with `USE_PROXYFIX` on, forwarded headers can
+          change `url_root`, `app.py:57-58`).
+        - `debug` is `current_app.debug`, the served value after the CLI's
+          debug handling, not only `config['DEBUG']`.
+        - `alarm_model.name` is the display name the model sets at
+          registration: for `ALARM_MODEL=ALERTA` it is `Alerta 9.1.0` at this
+          pin (`alarms/alerta.py:81-82`), not the selector string.
+          `alarm_model.severity` and `colors` come from `SEVERITY_MAP` and
+          `COLOR_MAP`, or the model defaults when those are empty;
+          `defaults.status` is `open`.
+        - The top-level `severity` and `colors` are the same objects as
+          `alarm_model.severity` and `alarm_model.colors` (`:42-43`, kept for
+          compatibility).
+        - `signup_enabled` is `SIGNUP_ENABLED` only when `AUTH_PROVIDER` is
+          `basic`, else false (`:30`).
+        - All other values are the configured settings as is; their types
+          follow the configuration and are not constrained here.
+      security: [{}]
+      responses:
+        "200":
+          description: Client configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [debug, endpoint, alarm_model, auth_required, allow_readonly, readonly_scopes, provider, customer_views, signup_enabled, email_verification, client_id, azure_tenant, aws_region, cognito_domain, github_url, gitlab_url, keycloak_url, keycloak_realm, oidc_auth_url, site_logo_url, severity, colors, timeouts, blackouts, dates, font, audio, columns, sort_by, filter, indicators, actions, tracking_id, refresh_interval, environments, clipboard_template]
+                properties:
+                  debug: {type: boolean}
+                  endpoint: {type: string}
+                  alarm_model:
+                    type: object
+                    additionalProperties: false
+                    required: [name, severity, colors, status, defaults]
+                    properties:
+                      name: {type: string}
+                      severity: {type: object, description: "severity name to level"}
+                      colors: {type: object}
+                      status: {type: object, description: "status name to rank"}
+                      defaults:
+                        type: object
+                        additionalProperties: false
+                        required: [status, normal_severity, previous_severity]
+                        properties:
+                          status: {type: string}
+                          normal_severity: {type: string}
+                          previous_severity: {type: string}
+                  auth_required: {type: boolean}
+                  allow_readonly: {description: "ALLOW_READONLY"}
+                  readonly_scopes: {description: "READONLY_SCOPES"}
+                  provider: {description: "AUTH_PROVIDER"}
+                  customer_views: {type: boolean}
+                  signup_enabled: {description: "SIGNUP_ENABLED when AUTH_PROVIDER is basic, else false"}
+                  email_verification: {description: "EMAIL_VERIFICATION"}
+                  client_id: {description: "OAUTH2_CLIENT_ID"}
+                  azure_tenant: {description: "AZURE_TENANT"}
+                  aws_region: {description: "AWS_REGION"}
+                  cognito_domain: {description: "COGNITO_DOMAIN"}
+                  github_url: {description: "GITHUB_URL"}
+                  gitlab_url: {description: "GITLAB_URL"}
+                  keycloak_url: {description: "KEYCLOAK_URL"}
+                  keycloak_realm: {description: "KEYCLOAK_REALM"}
+                  oidc_auth_url: {description: "OIDC_AUTH_URL"}
+                  site_logo_url: {description: "SITE_LOGO_URL"}
+                  severity: {type: object, description: "same as alarm_model.severity"}
+                  colors: {type: object, description: "same as alarm_model.colors"}
+                  timeouts:
+                    type: object
+                    additionalProperties: false
+                    required: [alert, heartbeat, ack, shelve]
+                    properties:
+                      alert: {description: "ALERT_TIMEOUT"}
+                      heartbeat: {description: "HEARTBEAT_TIMEOUT"}
+                      ack: {description: "ACK_TIMEOUT"}
+                      shelve: {description: "SHELVE_TIMEOUT"}
+                  blackouts:
+                    type: object
+                    additionalProperties: false
+                    required: [duration]
+                    properties:
+                      duration: {description: "BLACKOUT_DURATION"}
+                  dates:
+                    type: object
+                    additionalProperties: false
+                    required: [shortTime, mediumDate, longDate]
+                    properties:
+                      shortTime: {description: "DATE_FORMAT_SHORT_TIME"}
+                      mediumDate: {description: "DATE_FORMAT_MEDIUM_DATE"}
+                      longDate: {description: "DATE_FORMAT_LONG_DATE"}
+                  font: {description: "DEFAULT_FONT"}
+                  audio:
+                    type: object
+                    additionalProperties: false
+                    required: [new]
+                    properties:
+                      new: {description: "DEFAULT_AUDIO_FILE"}
+                  columns: {description: "COLUMNS"}
+                  sort_by: {description: "SORT_LIST_BY"}
+                  filter: {description: "DEFAULT_FILTER"}
+                  indicators:
+                    type: object
+                    additionalProperties: false
+                    required: [severity, queries]
+                    properties:
+                      severity: {description: "ASI_SEVERITY"}
+                      queries: {description: "ASI_QUERIES"}
+                  actions: {description: "ACTIONS"}
+                  tracking_id: {description: "GOOGLE_TRACKING_ID"}
+                  refresh_interval: {description: "AUTO_REFRESH_INTERVAL"}
+                  environments: {description: "ALLOWED_ENVIRONMENTS"}
+                  clipboard_template: {description: "CLIPBOARD_TEMPLATE"}
         "500": {$ref: '#/components/responses/ServerError'}
 
 security:
