@@ -14,8 +14,8 @@ info:
       and the per-id alert operations); **alert queries** (`/alerts`,
       `/alerts/count`, `/alerts/history`, the top-N endpoints,
       `/environments`, `/services`, `/alerts/groups`, `/alerts/tags`) with
-      their query parameters, including the `q=` grammar. Not yet written:
-      notes, blackouts, keys, users, customers and management.
+      their query parameters, including the `q=` grammar; **alert notes**.
+      Not yet written: blackouts, keys, users, customers and management.
     - **Reference security defects** are recorded where found (marked
       SECURITY). They describe the class of problem at source level only;
       no exploit was built or run. They are recorded for the owner's
@@ -486,6 +486,21 @@ components:
             Null or absent is assigned by `assign_customer` (C11). Any other
             value goes through the same assignment rules; success for
             non-string values is NOT established.
+    Note:
+      type: object
+      x-source: alerta/models/note.py:16-67; alerta/sql/schema.sql:65-75
+      properties:
+        id: {type: string, description: "server uuid4"}
+        href: {type: string, description: "absolute URL /note/<id>. **No /note route exists**, so this link does not resolve"}
+        text: {type: [string, "null"]}
+        user: {type: [string, "null"], description: "login of the creator, then of the last updater (null when anonymous)"}
+        attributes: {type: object, description: "on creation, a snapshot of the alert: resource, event, environment, severity, status"}
+        type: {type: string, description: "`alert` for alert notes"}
+        createTime: {type: string, description: "server now at creation"}
+        updateTime: {type: [string, "null"]}
+        _links: {type: object, description: "{alert: absolute URL of the alert} when related, else {}"}
+        related: {type: object, description: "{alert: <alert id>}, present only when related"}
+        customer: {type: [string, "null"], description: "copied from the alert at creation"}
     HistoryEntry:
       type: object
       x-source: alerta/models/history.py:8-34; alerta/models/alert.py:305-330, :365-379, :571-607
@@ -1677,6 +1692,169 @@ paths:
                   total: {type: integer}
                   message: {const: not found}
         "400": {description: "invalid filter or sort name, or q parse failure", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /alert/{alert_id}/note:
+    parameters: [{$ref: '#/components/parameters/AlertPathId'}]
+    put:
+      operationId: addAlertNote
+      x-source: alerta/views/alerts.py:596-633; alerta/models/alert.py:572-586; alerta/models/note.py:110-126; alerta/utils/api.py:136-166
+      x-scope: write:alerts
+      description: |
+        Creates a note and prepends a `note` history entry to the alert.
+        - Text is `request.json.get('text') or request.json.get('note')`;
+          both falsy gives 400 `must supply 'note' text`.
+        - `process_note` runs each plugin's `take_note`. No default plugin
+          implements it, so by default it changes nothing. A plugin that
+          returns an alert triggers the tag and attribute rewrite (R1.3).
+        - The note stores the alert id and customer and a snapshot of
+          resource, event, environment, severity and status as attributes.
+        - The history entry has `id` = the **note** id and `type: note`
+          (see HistoryEntry). The write uses the re-applied id prefix
+          (`postgres/base.py:401-408`), as for other per-id writes.
+        - **A plugin RejectException gives 500, not 400.** The rejection
+          handler reads `note.id` before `note` is assigned
+          (`views/alerts.py:615-619`), so it raises UnboundLocalError,
+          which the generic handler maps to 500. This is reachable only with
+          a rejecting note plugin (none by default). Source-derived, NOT
+          verified.
+        - A ForwardingLoop from a plugin gives 202.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text: {type: string}
+                note: {type: string, description: "used when text is falsy"}
+      responses:
+        "201":
+          description: "Created. Header `Location: /alert/<alert id>/note/<note id>` (absolute)"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, id, note]
+                properties:
+                  status: {const: ok}
+                  id: {type: string}
+                  note: {$ref: '#/components/schemas/Note'}
+        "202": {description: "forwarding loop from a note plugin", content: {application/json: {schema: {$ref: '#/components/schemas/AlertIdOnly'}}}}
+        "400": {description: "no note text", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "404": {description: "alert not found or not visible", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /alert/{alert_id}/notes:
+    parameters: [{$ref: '#/components/parameters/AlertPathId'}]
+    get:
+      operationId: listAlertNotes
+      x-source: alerta/views/alerts.py:637-662; alerta/models/alert.py:589-591; alerta/database/backends/postgres/base.py:1397-1402
+      x-scope: read:alerts
+      description: |
+        - Notes are selected with `WHERE alert ~* <alert id>`: the stored
+          alert id is used as a case-insensitive, **unanchored regex**
+          against each note's `alert` column. Generated uuid4 ids make this
+          effectively exact. A short client-supplied alert id (for example
+          `1`) also matches notes of **other** alerts whose ids contain it,
+          regardless of customer (planned C21). Source-derived, NOT
+          verified.
+        - At most 100 notes (`page_size=100`, no paging parameters), with
+          **no ORDER BY**, so the order is undefined.
+        - `total` is the number returned; none gives `message: not found`.
+      responses:
+        "200":
+          description: "Notes, possibly none"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, notes, total]
+                properties:
+                  status: {const: ok}
+                  notes: {type: array, items: {$ref: '#/components/schemas/Note'}}
+                  total: {type: integer}
+                  message: {const: not found}
+        "404": {description: "alert not found or not visible", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /alert/{alert_id}/note/{note_id}:
+    parameters:
+      - {$ref: '#/components/parameters/AlertPathId'}
+      - {name: note_id, in: path, required: true, schema: {type: string}, description: "exact match on notes.id"}
+    put:
+      operationId: updateAlertNote
+      x-source: alerta/views/alerts.py:666-698; alerta/database/backends/postgres/base.py:1411-1428
+      x-scope: write:alerts
+      description: |
+        **Note lookups are not scoped to the path alert or the caller's
+        customers** (planned customer-mapping C21). The path alert is looked
+        up with the usual customer filter (404 when not visible), but the
+        note is then found by `Note.find_by_id(note_id)`, which is
+        `WHERE id = <note_id>` with no alert or customer predicate
+        (`postgres/base.py:1381-1386`). A caller who can see any alert can
+        therefore act on any note by id, including another customer's.
+        Source-derived, NOT verified. alrust behavior here is an owner
+        decision.
+        - An empty or missing body gives 400 `nothing to change`.
+        - The whole request object is passed as SQL parameters, with
+          `user` forced to the caller's login and `text` replaced by
+          `process_note`'s result. Only `text` (when not null),
+          `attributes` (when not null; shallow jsonb merge,
+          `attributes || new`) and `user` (`COALESCE(login, user)`) are
+          written, and `update_time` becomes the database's UTC now. Other
+          keys are ignored. A non-object `attributes` is an inferred SQL
+          error (500, NOT verified).
+        - No history entry is written.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text: {type: [string, "null"]}
+                attributes: {type: [object, "null"]}
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, note]
+                properties:
+                  status: {const: ok}
+                  note: {$ref: '#/components/schemas/Note'}
+        "400": {description: "nothing to change", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "404": {description: "alert or note not found (both messages are `not found`)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+    delete:
+      operationId: deleteAlertNote
+      x-source: alerta/views/alerts.py:701-722; alerta/models/alert.py:593-607
+      x-scope: write:alerts
+      description: |
+        **Note lookups are not scoped to the path alert or the caller's
+        customers** (planned customer-mapping C21). The path alert is looked
+        up with the usual customer filter (404 when not visible), but the
+        note is then found by `Note.find_by_id(note_id)`, which is
+        `WHERE id = <note_id>` with no alert or customer predicate
+        (`postgres/base.py:1381-1386`). A caller who can see any alert can
+        therefore act on any note by id, including another customer's.
+        Source-derived, NOT verified. alrust behavior here is an owner
+        decision.
+        - 404 messages differ: `alert not found` and `note not found`.
+        - A `dismiss` history entry (`text: note dismissed`, id = the note
+          id) is prepended to the **path** alert, which need not be the
+          note's own alert, before the note row is deleted.
+      responses:
+        "200": {description: Deleted, content: {application/json: {schema: {type: object, required: [status], properties: {status: {const: ok}}}}}}
+        "404": {description: "alert not found / note not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         "401": {$ref: '#/components/responses/Unauthorized'}
         "403": {$ref: '#/components/responses/Forbidden'}
         "500": {$ref: '#/components/responses/ServerError'}
