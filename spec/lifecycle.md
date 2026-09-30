@@ -125,8 +125,10 @@ Statuses: `open`, `assign`, `ack`, `shelved`, `blackout`, `closed`,
      and `x` is then removed by this rewrite. The same happens on any
      unsuppressed action.
    - Neither helper writes `update_time`.
-   - With ordinary vectors (unique tags, no null attributes), nothing
-     observable changes.
+   - With the current vector setup (a single tag, no null attributes),
+     nothing observable changes. With several unique tags, their stored
+     order may still change. Conformance evidence keeps raw tag order and
+     does not normalize it.
 
 **Vector preconditions.** These are the default setup for an ordinary
 stored-alert vector in R1.1 and R2–R7:
