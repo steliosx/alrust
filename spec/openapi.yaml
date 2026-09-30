@@ -122,6 +122,13 @@ components:
           joining all values with `|` after stripping `~`, so plain values
           become regex fragments too (`status=open&status=~ack` is
           `status ~* 'open|ack'`). Regex metacharacters are live.
+        - **Several values with one empty** (for example `resource=` plus
+          `resource=x`) raise IndexError in `[v[0] for v in value]`
+          (`utils.py:91`, `:98`) before any SQL. That is an unhandled
+          exception, mapped to the generic 500 `An internal error has
+          occurred!` (`exceptions.py:120-136`). HTTP outcome NOT_RUN. A single
+          empty value does not raise (`= ''`), and the `service` and
+          `attributes.<k>` paths do not index values.
 
         **`service`**: array overlap, `service && ARRAY[values]`. The
         `service!` form falls to the generic path: one value compares the
@@ -132,17 +139,28 @@ components:
         values are ignored, `~` is literal, and a trailing `!` becomes
         part of the key.
 
-        **`duplicateCount` and `repeat` are applied twice**
-        (`utils.py:176-183` and again by the generic path):
-        - `duplicateCount`: `params.get('duplicateCount', int)` passes `int`
-          as the *default*, not the type, so both predicates compare with
-          the raw string;
-        - `repeat`: the special predicate computes a boolean from `true`,
-          `t`, `1`, `yes`, `y` or `on`, but the generic path then overwrites
-          the same query variable with the raw string.
+        **`duplicateCount` and `repeat` get two predicates that share one
+        query variable** (`duplicate_count` or `repeat`): a special equality
+        (`utils.py:176-183`) and then the generic path, which **overwrites**
+        that variable. Both predicates therefore bind whatever the generic
+        path wrote:
+        - one plain value: the raw string (for `duplicateCount`, the
+          special code's `params.get('duplicateCount', int)` passes `int` as
+          the *default*, not the type; for `repeat`, the boolean it computes
+          is replaced);
+        - several plain values: the **list** of strings, bound by both the
+          special `=` and the generic `= ANY(...)`;
+        - one `~v` value: the wildcard string `%v%`, bound by both the
+          special `=` and the generic `ILIKE`;
+        - several values with a `~`: the generic path writes a separate
+          `regex_*` variable, so the special predicate keeps the raw string.
 
-          PostgreSQL then parses the raw strings as integer or boolean
-          input; values it rejects are potential 500s (NOT verified).
+        The `!` forms (`duplicateCount!`, `repeat!`) do not trigger the
+        special predicate. How PostgreSQL treats each binding (integer or
+        boolean parsing, list or wildcard against a scalar column) is
+        inferred: potential 500s, NOT verified. The bindings themselves
+        were confirmed by Codex's pure body probe with the pinned werkzeug
+        (no app, SQL or HTTP).
 
         **Potential SQL failures** (inferred, NOT verified; no universal
         500 is claimed):
@@ -200,10 +218,11 @@ components:
         - `severity` sorts by the alarm model's severity code, and
           `status` by its status state. Both use an **inner** JOIN against
           the model's VALUES list (`base.py:425-432`), so an alert whose
-          severity or status is not in the model **drops out of the page**
-          while `total` and the counts still include it. PUT status stores
-          any string (lifecycle A1.2), so this is reachable. Source-derived,
-          NOT verified.
+          severity or status is not in the model **drops out of the page**,
+          while the severity and status counts still include it. If that
+          empties the page, `GET /alerts` takes its empty-page branch (see
+          there). PUT status stores any string (lifecycle A1.2), so this is
+          reachable. Source-derived, NOT verified.
         - **No `sort-by` means no ordering**: the ORDER BY is
           `(select 1)`, which is truthy, so the `last_receive_time`
           fallback in `get_alerts` never applies. Page contents are then
@@ -277,7 +296,7 @@ components:
         status: {const: error}
         message: {type: string}
         code: {type: integer}
-        errors: {description: "null or a list of strings"}
+        errors: {description: "null, or the list passed to ApiError, serialized by CustomJSONEncoder. A list element that is an exception (for example the q ParseException) is encoded as a list of traceback strings (format.py:47-48), so nested lists can occur. Generic 500s carry [str(error)]"}
         requestId: {type: [string, "null"]}
     Heartbeat:
       type: object
@@ -433,7 +452,22 @@ components:
       required: [resource, event]
       description: |
         What the **parser accepts** (lifecycle R0). Unknown fields are
-        ignored. Parse errors give 400. Policy (R1.2) is applied afterwards.
+        ignored. Parse errors give 400. The policy rules noted on
+        `environment` and `service` below are **not parser validation**:
+        they come from the reject plugin, which runs only when the
+        pre-receive plugin chain runs. With the default ALERTA model, an
+        incoming `status` of `blackout` is suppressed
+        (`alarms/alerta.py:255-257`), and `process_alert` then skips the
+        whole pre-receive chain (`utils/api.py:35-40`; lifecycle R1 step
+        1): no reject policy, no `remote_ip`, no heartbeat or blackout
+        plugin, and no post-receive rewrite.
+        - With the default plugins and a non-blackout status, `remote_ip`
+          sets `attributes.ip` to `next(iter(request.access_route),
+          request.remote_addr)` (`plugins/remote_ip.py:16-19`), overwriting
+          any client-sent `ip`. `access_route` comes from `X-Forwarded-For`
+          when present, so the value can be influenced by the client or a
+          proxy. This `ip` attribute was observed at runtime (metadata
+          mutations window 01, loopback `127.0.0.1`).
         Where no `type` is given, the parser does not check the type, and
         success for other value types is NOT established.
         - **Absent and present-null differ** for the four containers:
@@ -445,16 +479,16 @@ components:
         id: {description: "not type-checked; falsy gives a server uuid4. A supplied id is used for a new alert; on duplicate or correlate the stored id is kept and the new id becomes lastReceiveId (R5, R6)"}
         resource: {description: "required: absent or falsy gives 400 (:28-29); type not checked"}
         event: {description: "required: absent or falsy gives 400 (:30-31); type not checked. `Heartbeat` is diverted (HB3)"}
-        environment: {description: "must match ALLOWED_ENVIRONMENTS or the request gets 403 (R1.2)"}
+        environment: {description: "when the reject plugin runs (see above), must fully match ALLOWED_ENVIRONMENTS or the request gets 403 (R1.2); not checked for an incoming blackout status"}
         severity: {description: "not checked at parse time. An unknown severity gives 500, not 400 (R1.1)"}
         correlate: {type: array, description: "absent gives []; present must be a list (null gives 400). Non-empty gets the event appended (R0.6)"}
         status: {description: "`blackout` bypasses the pre-receive plugins (R1 step 1)"}
-        service: {type: array, description: "absent gives []; present must be a list (null gives 400); empty gives 403 (R1.2)"}
+        service: {type: array, description: "absent gives []; present must be a list (null gives 400); empty gives 403 when the reject plugin runs (R1.2), not for an incoming blackout status"}
         group: {}
         value: {}
         text: {}
         tags: {type: array, description: "absent gives []; present must be a list (null gives 400); element types not checked"}
-        attributes: {type: object, description: "absent gives {}; present must be an object (null gives 400); keys with `.` or `$` give 400 (R0.2); null values are dropped by the post-receive rewrite (R1.3)"}
+        attributes: {type: object, description: "absent gives {}; present must be an object (null gives 400); keys with `.` or `$` give 400 (R0.2); null values are dropped by the post-receive rewrite (R1.3), which does not run for an incoming blackout status; remote_ip adds `ip` (see above)"}
         origin: {}
         type: {}
         createTime:
@@ -990,9 +1024,10 @@ paths:
       x-scope: read:alerts
       summary: List alerts (the web UI's main query)
       description: |
-        - `total`, `severityCounts` and `statusCounts` come from GROUP BY
-          counts over the whole filtered set; `total` is the sum of the
-          severity counts. Paging uses that total.
+        - `severityCounts` and `statusCounts` come from GROUP BY counts over
+          the whole filtered set. Paging (`pages`, `more`, 416) uses their
+          severity sum. `total` equals that sum **only when the returned page
+          is non-empty** (`views/alerts.py:318-361`).
         - Each listed alert has `rawData: null` and `history: []` unless
           `show-raw-data` or `show-history` is truthy (`true`, `t`, `1`,
           `yes`, `y`, `on`, case-insensitive) (`base.py:410-423`).
@@ -1001,9 +1036,12 @@ paths:
         - `to-date` defaults to the query time here only (see
           from-date).
         - With no `sort-by` the page is **unordered** (see sort-by).
-        - An empty result gives `pages: 0`, `more: false`, `total: 0` and
-          `message: not found`. Unlike heartbeats, `pages` is 0, not the
-          computed page count.
+        - An **empty page** gives `pages: 0`, `more: false`, `total: 0` and
+          `message: not found`, while `severityCounts` and `statusCounts`
+          are returned unchanged and can be non-zero. A page can be empty
+          even when the counts are not, for example when a severity or
+          status sort's inner JOIN drops every row (`base.py:425-440`).
+          Unlike heartbeats, `pages` is 0, not the computed page count.
         - `autoRefresh` is the management switch `auto-refresh-allow`.
       parameters:
         - {$ref: '#/components/parameters/Q'}
@@ -1126,7 +1164,50 @@ paths:
       x-scope: read:alerts
       summary: Top N groups by row count
       description: |
-        Aliases `/alerts/top10/...` and `/alerts/topn/...` are identical.
+        `/alerts/top10/...` and `/alerts/topn/...` are both routed to the same
+        view (`views/alerts.py:405-406`, `:432-433`, `:459-460`) and are
+        modelled as separate paths.
+        N is `page-size` (default `DEFAULT_PAGE_SIZE`); `Page(..., items=1)`
+        means any `page` other than 1 gives 416. Grouping column: see
+        `group-by` (SECURITY).
+        - **`count` is not a number of alerts.** The query joins
+          `UNNEST(service)`, so an alert is counted once per service, and
+          alerts with an empty `service` array are excluded.
+          `duplicateCount` is summed over the same rows.
+      parameters:
+        - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/AlertFilters'}
+        - {$ref: '#/components/parameters/AlertGroupBy'}
+        - {name: page-size, in: query, schema: {type: integer}}
+      responses:
+        "200":
+          description: "`total` is the number of groups returned. An empty result adds `message: not found`"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, top10, total]
+                properties:
+                  status: {const: ok}
+                  top10: {type: array, items: {type: object, description: "keys count, duplicateCount, environments, services, resources [{id, resource, href}], plus one key named after the group-by column", additionalProperties: true}}
+                  total: {type: integer}
+                  message: {const: not found}
+        "416": {description: "page other than 1", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "400": {description: "invalid filter or sort name, or q parse failure", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /alerts/top10/count:
+    get:
+      operationId: top10Count
+      x-source: alerta/views/alerts.py:404-428; alerta/database/backends/postgres/base.py:556-580
+      x-scope: read:alerts
+      summary: Top N groups by row count
+      description: |
+        **Consumed by the web UI** (`reference/alerta-webui/src/services/api/alert.service.ts:67`, `:73`, `:79`). Identical to `/alerts/topn/count` (same view function).
+        `/alerts/top10/...` and `/alerts/topn/...` are both routed to the same
+        view (`views/alerts.py:405-406`, `:432-433`, `:459-460`) and are
+        modelled as separate paths.
         N is `page-size` (default `DEFAULT_PAGE_SIZE`); `Page(..., items=1)`
         means any `page` other than 1 gives 416. Grouping column: see
         `group-by` (SECURITY).
@@ -1164,7 +1245,52 @@ paths:
       x-scope: read:alerts
       summary: Top N flapping groups
       description: |
-        Aliases `/alerts/top10/...` and `/alerts/topn/...` are identical.
+        `/alerts/top10/...` and `/alerts/topn/...` are both routed to the same
+        view (`views/alerts.py:405-406`, `:432-433`, `:459-460`) and are
+        modelled as separate paths.
+        N is `page-size` (default `DEFAULT_PAGE_SIZE`); `Page(..., items=1)`
+        means any `page` other than 1 gives 416. Grouping column: see
+        `group-by` (SECURITY).
+        - **`count` is not a number of alerts.** The query joins
+          `UNNEST(service)`, so an alert is counted once per service, and
+          alerts with an empty `service` array are excluded.
+          `duplicateCount` is summed over the same rows.
+        - Only alerts with at least one `severity` history entry count,
+          and each such entry multiplies the rows (`UNNEST(history)`).
+      parameters:
+        - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/AlertFilters'}
+        - {$ref: '#/components/parameters/AlertGroupBy'}
+        - {name: page-size, in: query, schema: {type: integer}}
+      responses:
+        "200":
+          description: "`total` is the number of groups returned. An empty result adds `message: not found`"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, top10, total]
+                properties:
+                  status: {const: ok}
+                  top10: {type: array, items: {type: object, description: "keys count, duplicateCount, environments, services, resources [{id, resource, href}], plus one key named after the group-by column", additionalProperties: true}}
+                  total: {type: integer}
+                  message: {const: not found}
+        "416": {description: "page other than 1", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "400": {description: "invalid filter or sort name, or q parse failure", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /alerts/top10/flapping:
+    get:
+      operationId: top10Flapping
+      x-source: alerta/views/alerts.py:431-455; alerta/database/backends/postgres/base.py:582-606
+      x-scope: read:alerts
+      summary: Top N flapping groups
+      description: |
+        **Consumed by the web UI** (`reference/alerta-webui/src/services/api/alert.service.ts:67`, `:73`, `:79`). Identical to `/alerts/topn/flapping` (same view function).
+        `/alerts/top10/...` and `/alerts/topn/...` are both routed to the same
+        view (`views/alerts.py:405-406`, `:432-433`, `:459-460`) and are
+        modelled as separate paths.
         N is `page-size` (default `DEFAULT_PAGE_SIZE`); `Page(..., items=1)`
         means any `page` other than 1 gives 416. Grouping column: see
         `group-by` (SECURITY).
@@ -1204,7 +1330,53 @@ paths:
       x-scope: read:alerts
       summary: Top N standing groups
       description: |
-        Aliases `/alerts/top10/...` and `/alerts/topn/...` are identical.
+        `/alerts/top10/...` and `/alerts/topn/...` are both routed to the same
+        view (`views/alerts.py:405-406`, `:432-433`, `:459-460`) and are
+        modelled as separate paths.
+        N is `page-size` (default `DEFAULT_PAGE_SIZE`); `Page(..., items=1)`
+        means any `page` other than 1 gives 416. Grouping column: see
+        `group-by` (SECURITY).
+        - **`count` is not a number of alerts.** The query joins
+          `UNNEST(service)`, so an alert is counted once per service, and
+          alerts with an empty `service` array are excluded.
+          `duplicateCount` is summed over the same rows.
+        - Ordered by the summed `last_receive_time - create_time` over the
+          same multiplied rows; that sum is not returned. Only alerts with a
+          `severity` history entry count.
+      parameters:
+        - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/AlertFilters'}
+        - {$ref: '#/components/parameters/AlertGroupBy'}
+        - {name: page-size, in: query, schema: {type: integer}}
+      responses:
+        "200":
+          description: "`total` is the number of groups returned. An empty result adds `message: not found`"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, top10, total]
+                properties:
+                  status: {const: ok}
+                  top10: {type: array, items: {type: object, description: "keys count, duplicateCount, environments, services, resources [{id, resource, href}], plus one key named after the group-by column", additionalProperties: true}}
+                  total: {type: integer}
+                  message: {const: not found}
+        "416": {description: "page other than 1", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "400": {description: "invalid filter or sort name, or q parse failure", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /alerts/top10/standing:
+    get:
+      operationId: top10Standing
+      x-source: alerta/views/alerts.py:458-482; alerta/database/backends/postgres/base.py:608-633
+      x-scope: read:alerts
+      summary: Top N standing groups
+      description: |
+        **Consumed by the web UI** (`reference/alerta-webui/src/services/api/alert.service.ts:67`, `:73`, `:79`). Identical to `/alerts/topn/standing` (same view function).
+        `/alerts/top10/...` and `/alerts/topn/...` are both routed to the same
+        view (`views/alerts.py:405-406`, `:432-433`, `:459-460`) and are
+        modelled as separate paths.
         N is `page-size` (default `DEFAULT_PAGE_SIZE`); `Page(..., items=1)`
         means any `page` other than 1 gives 416. Grouping column: see
         `group-by` (SECURITY).
@@ -1248,8 +1420,10 @@ paths:
         page of names comes from `SELECT DISTINCT environment FROM alerts`
         over **all** alerts, ignoring the filters and the customer scope.
         Only the per-environment counts use the filtered query, so a
-        customer-scoped caller sees other customers' environment names with
-        zero counts. This is to be recorded as C20 in spec/customer-mapping.md in a separate head.
+        customer-scoped caller also sees environment names that occur only
+        in other customers' alerts (customer-mapping C20). Counts cover the
+        caller's matching rows: a name with none shows zero, while a shared
+        name can show a non-zero count, so no zero count is guaranteed.
         - `total` is the **filtered** `COUNT(DISTINCT environment)`, so it
           can disagree with the listed page.
         - **SECURITY (reference defect):** the listed names are then
@@ -1300,8 +1474,9 @@ paths:
         **The service list is not filtered** (`base.py:705-706`): the
         (environment, service) pairs come from `SELECT DISTINCT` over all
         alerts, ignoring the filters and the customer scope, so a
-        customer-scoped caller sees other customers' service names with
-        zero counts (the planned C20). The counts use the filtered query with
+        customer-scoped caller also sees service names that occur only in
+        other customers' alerts (C20). Counts cover the caller's matching
+        rows; shared names can show non-zero counts. The counts use the filtered query with
         `CUBE(severity, status)` and a 1000-row limit, so counts can be
         truncated on large data. `total` is the number of listed pairs.
       parameters:
