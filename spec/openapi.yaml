@@ -34,8 +34,10 @@ info:
       (`Authorization: Key`, `X-API-Key`, or `?api-key=`), Hawk, Bearer,
       proxy, Basic, or none when `AUTH_REQUIRED` is false
       (customer-mapping C1-C4).
-    - Every route also accepts `OPTIONS` (CORS). `?callback=` wraps the
-      response body as JSONP (`utils/response.py:7-19`).
+    - Unless an operation says otherwise (for example `/_` and the
+      webhook dispatcher), every route also accepts `OPTIONS` (CORS), and
+      `?callback=` wraps the response body as JSONP
+      (`utils/response.py:7-19`).
     - Errors use the ApiError body (`exceptions.py:98-107`). Unhandled
       exceptions (for example SQL errors) return 500 with message `An
       internal error has occurred!` (`exceptions.py:120-136`).
@@ -3840,10 +3842,12 @@ paths:
            (W-SEC-1). The string is built whatever the log level, so a
            non-UTF-8 body raises before the view and gives 500 (unhandled
            exception). The body is cached, so the view still sees it.
-        2. `OPTIONS` is answered by flask-cors 6.0.2's `cross_origin`
-           (automatic options, the default) with the default options
-           response and CORS headers, **without** calling the permission
-           check or the handler.
+        2. `OPTIONS`: with flask-cors 6.0.2's effective
+           `automatic_options` true (the default; Alerta does not set
+           `CORS_AUTOMATIC_OPTIONS`), `cross_origin` answers with the
+           default options response and CORS headers, **without** calling
+           the permission check or the handler. If the configuration sets
+           it false, the permission check and handler run instead (W-N1).
         3. The permission check for `write:webhooks` (credential precedence
            above). When it rejects, the caller gets 401 or 403 before any
            404. Under precedence branches 3 and 4 (no credentials with
@@ -3870,9 +3874,14 @@ paths:
              exception other than AlertaException gives 400 with `message` =
              the exception text (compare the 500 on `/alert`).
            - A `TypeError` calls `incoming()` **again without `path`** (a
-             legacy signature). That second call is outside the try, so
-             an ApiError keeps its code and anything else (AlertaException
-             included) is an unhandled 500. A TypeError raised inside a provider body, rather than
+             legacy signature). That second call is outside the try, so its
+             exceptions reach the app's registered handlers
+             (`exceptions.py:74-80`, `app.py:67`): an `ApiError` keeps its
+             code; a `BasicAuthError` keeps its code (401) with
+             `WWW-Authenticate`; a Werkzeug `HTTPException` keeps its code;
+             anything else (AlertaException included) is the generic
+             unhandled 500 (W-C1). On the **first** call, all of these
+             except AlertaException are caught and become 400. A TypeError raised inside a provider body, rather than
              from the signature, means the first call already partly ran.
         7. Result:
            - an `Alert` is treated as a one-item list;
@@ -3910,7 +3919,7 @@ paths:
           application/x-www-form-urlencoded: {schema: {type: object, additionalProperties: true}}
           text/plain: {schema: {type: string}}
       responses: &webhookResponses
-        "200": {description: "provider-defined non-alert response, returned as-is", content: {application/json: {schema: {}}}}
+        "200": {description: "example only: a provider-defined non-alert response is returned as-is, with the provider's own status and content type; not an exhaustive provider contract", content: {application/json: {schema: {}}}}
         "201":
           description: "All list items stored. One item: `{status, id, alert}`; zero or several: `{status, ids}`"
           content:
