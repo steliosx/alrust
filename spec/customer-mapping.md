@@ -183,6 +183,25 @@ Rules:
   Source-derived, NOT verified. It is recorded as the reference contract
   without deciding alrust's behavior; any change is an owner decision
   (see `spec/openapi.yaml` `/environments` and `/services`).
+- **C21** **Alert-note endpoints do not scope notes to the path alert or
+  the caller's customers.** The path alert is found with the usual customer
+  filter (C16; 404 when not visible), but:
+  - `PUT` and `DELETE /alert/<id>/note/<note_id>` then find the note with
+    `WHERE id = <note_id>` only (`postgres/base.py:1381-1386`). A caller who
+    can see any alert can update or delete **any** note by id, including a
+    note of another customer's alert. A delete also prepends its
+    `note dismissed` history entry to the **path** alert, not the note's
+    own alert.
+  - `GET /alert/<id>/notes` selects `WHERE alert ~* <alert id>`
+    (`postgres/base.py:1397-1402`), an unanchored case-insensitive regex. A
+    short client-supplied alert id (alert ids are client-settable on
+    `POST /alert`) therefore also lists notes of other alerts whose ids
+    contain it, regardless of customer. uuid4 ids make this effectively
+    exact.
+
+  Source-derived, NOT verified. It is recorded as the reference contract
+  without deciding alrust's behavior; any change is an owner decision (see
+  `spec/openapi.yaml` note paths).
 
 ## Positions and open questions
 
