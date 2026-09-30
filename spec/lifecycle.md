@@ -96,7 +96,10 @@ Statuses: `open`, `assign`, `ack`, `shelved`, `blackout`, `closed`,
    (`NOTIFICATION_BLACKOUT=False`), an alert that matches a blackout is
    dropped with **202** and never stored (`plugins/blackout.py`).
 4. `is_duplicate` is checked first, then `is_correlated`, else `create`
-   (`:55-63`).
+   (`:55-63`). Afterwards the post-receive plugins run, unless the alert
+   is suppressed. `forwarder.post_receive` **returns the alert**
+   (`plugins/forwarder.py:43-67`), so `process_alert` rewrites tags and
+   attributes once more (`utils/api.py:66-89`). No values change.
 5. **R1.1 [V]** Any exception raised during step 4 is re-raised as
    `ApiError(str(e))` with the **default code 500** (`:64-65`,
    `exceptions.py:10`). This includes the 400 that `transition()` raises for
@@ -269,6 +272,11 @@ Rules in evaluation order (no action):
   Ordinary lifecycle vectors use strictly increasing `createTime`. Tie probes
   and older-time probes (R7.4) deliberately do not, and they assert only what
   stays defined.
+- **R7.3b [V]** **API order differs from storage order.** Storage
+  prepends, so newest is first in the DB array. `Alert.serialize` returns
+  `history` **sorted ascending** by `update_time` (`alert.py:149`), so the
+  newest entry is last. `sorted()` is stable, so entries with equal
+  timestamps keep their storage order (newest first) among themselves.
 - **R7.4 [V]** Because of R7.2, an alert sent with an older `createTime` than
   earlier entries does not become the "current" entry for later transitions.
   Clock skew between monitoring sources can therefore change the transitions
@@ -354,12 +362,24 @@ receive-path vector preconditions (R1) apply to the alert being acted on.
   2. `from_action`;
   3. post-action plugins (`post_action`) (`views.py:166-170`).
 
-  With the default plugins, `take_action` and `post_action` raise
-  NotImplementedError, which is ignored (`utils/api.py:108-110`,
-  `plugins/__init__.py:44-48`). The exception is `forwarder.take_action`,
-  which raises ForwardingLoop when the request carries this server in its
-  loop header, answered with **202** `{"status": "ok", "message": ...}`
-  (`views.py:178-179`).
+  With the default plugins:
+  - `remote_ip`, `reject`, `heartbeat` and `blackout` raise
+    NotImplementedError for `take_action`, which is ignored
+    (`utils/api.py:108-110`).
+  - **`forwarder.take_action` returns the alert** (`plugins/forwarder.py:72-100`).
+    `FWD_DESTINATIONS` is empty by default, so nothing is forwarded. Because
+    the return value is truthy, `process_action` treats the alert as
+    updated and **rewrites tags and attributes** (`update_tags`,
+    `update_attributes`) on every action. That changes no values, and it
+    does not touch `update_time`.
+  - `forwarder.take_action` raises ForwardingLoop when the request carries
+    this server in its loop header. That is answered with **202**
+    `{"status": "ok", "message": ...}` (`views.py:178-179`).
+  - No default plugin implements `post_action`. The PluginBase
+    NotImplementedError is ignored (`plugins/__init__.py:44-48`).
+
+  (Corrected: an earlier head said every default `take_action` is ignored.
+  Codex raised this as OA-1.)
 - **A2.3 [V]** An invalid or redundant action raises `InvalidAction`, which
   gives **409** (`views.py:176-177`). An unknown severity on the stored
   alert gives 500.
