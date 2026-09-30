@@ -16,9 +16,9 @@ info:
       `/environments`, `/services`, `/alerts/groups`, `/alerts/tags`) with
       their query parameters, including the `q=` grammar; **alert notes**;
       **blackouts**; **API keys**; **users**; **groups**; **permissions**
-      (with `/scopes`); **customers**; **`/config`**; **management**.
-      Not yet written: the remaining routes the static inventory lists
-      (for example `/`, `/_`, auth and webhooks).
+      (with `/scopes`); **customers**; **`/config`**; **management**;
+      the root index `/` and `/_`. Not yet written: the auth and webhook
+      routes and other routes the static inventory lists.
     - **Reference security defects** are recorded where found (marked
       SECURITY). They describe the class of problem at source level only;
       no exploit was built or run. They are recorded for the owner's
@@ -3701,7 +3701,7 @@ paths:
       operationId: managementGoodToGo
       x-source: alerta/management/views.py:127-134
       x-scope: none
-      x-source-backend: alerta/database/backends/postgres/base.py:140-144
+      x-source-backend: alerta/database/backends/postgres/base.py:141-145
       description: |
         No permission decorator. The PostgreSQL `is_alive` property runs
         `SELECT true` on the request connection and returns the whole
@@ -3732,6 +3732,10 @@ paths:
         `HEARTBEAT_STALE: <origin>`; any exception is logged and gives 503
         `HEALTH_CHECK_FAILED: Internal Error!`; otherwise 200 `OK`. Plain
         text, not JSON.
+        Consumer context (pinned web UI `2687e4af`, source only): the UI
+        declares a `getHealthcheck` store action but no component dispatches
+        it; it dispatches only manifest and status, and nothing calls `gtg`
+        (Codex MC-S1..S4). Absence of a caller is not evidence of non-use.
       security: [{}]
       responses:
         "200": {description: "OK", content: {text/html: {schema: {const: OK}}}}
@@ -3802,6 +3806,57 @@ paths:
         "401": {$ref: '#/components/responses/Unauthorized'}
         "403": {$ref: '#/components/responses/Forbidden'}
         "500": {$ref: '#/components/responses/ServerError'}
+  /:
+    get:
+      operationId: apiIndex
+      x-source: alerta/views/__init__.py:23-41; alerta/utils/webhook.py:40-46
+      x-scope: none
+      description: |
+        **No permission decorator**: any caller gets the API's route map.
+        The body is `{status: ok, uri, data: {description: "Alerta API"},
+        links}`. `uri` is `absolute_url()`, that is `BASE_URL`, or the
+        request's `url_root` (with its trailing slash) when that is empty.
+        `links` has one entry per registered Flask URL rule (every blueprint:
+        API, auth, management, webhooks), plus one per custom webhook
+        (`/webhooks/<name>`, methods `POST,GET`).
+        - Each entry is `{rel: endpoint name, href: absolute_url(rule), method}`.
+          `href` keeps the rule's `<param>` placeholders.
+        - For Flask rules, `method` joins the rule's methods minus `HEAD` and
+          `OPTIONS` in set order, which is not defined.
+        - The list is sorted by `href`.
+        This exposes the route map, including management and custom webhook
+        names, without credentials (source-derived, NOT_RUN).
+      security: [{}]
+      responses:
+        "200":
+          description: Route index
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, uri, data, links]
+                properties:
+                  status: {const: ok}
+                  uri: {type: string}
+                  data: {type: object, required: [description], properties: {description: {const: Alerta API}}}
+                  links:
+                    type: array
+                    items:
+                      type: object
+                      required: [rel, href, method]
+                      properties:
+                        rel: {type: string}
+                        href: {type: string}
+                        method: {type: string}
+  /_:
+    get:
+      operationId: apiDebugOk
+      x-source: alerta/views/__init__.py:44-46
+      x-scope: none
+      description: "No permission decorator. Declared with methods [GET] only, without cross_origin; Flask still adds HEAD and its automatic OPTIONS response. Returns the plain text `OK`; it touches neither the database nor the configuration."
+      security: [{}]
+      responses:
+        "200": {description: "OK", content: {text/html: {schema: {const: OK}}}}
 
 security:
   - apiKeyHeader: []
