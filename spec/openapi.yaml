@@ -15,8 +15,8 @@ info:
       `/alerts/count`, `/alerts/history`, the top-N endpoints,
       `/environments`, `/services`, `/alerts/groups`, `/alerts/tags`) with
       their query parameters, including the `q=` grammar; **alert notes**;
-      **blackouts**; **API keys**. Not yet written: users, customers and
-      management.
+      **blackouts**; **API keys**; **users**. Not yet written: groups,
+      permissions, customers and management.
     - **Reference security defects** are recorded where found (marked
       SECURITY). They describe the class of problem at source level only;
       no exploit was built or run. They are recorded for the owner's
@@ -582,6 +582,25 @@ components:
         user: {description: "kept only for admin or admin:blackouts callers; otherwise replaced by the caller's login"}
         text: {}
         id: {description: "falsy gives uuid4"}
+    User:
+      type: object
+      x-source: alerta/models/user.py:29-97
+      description: "The password hash is not serialized. `email_verified` is serialized as false when null."
+      properties:
+        id: {type: string}
+        href: {type: string, description: "absolute URL /user/<id>"}
+        name: {type: string}
+        login: {type: string}
+        email: {type: [string, "null"]}
+        domain: {type: [string, "null"]}
+        status: {type: [string, "null"]}
+        roles: {type: array, items: {type: string}}
+        attributes: {type: object}
+        createTime: {type: string}
+        lastLogin: {type: [string, "null"]}
+        text: {type: [string, "null"]}
+        updateTime: {type: [string, "null"]}
+        email_verified: {type: boolean}
     ApiKey:
       type: object
       x-source: alerta/models/key.py:24-78, :100-111; alerta/sql/schema.sql:123-133
@@ -2429,6 +2448,250 @@ paths:
         "401": {$ref: '#/components/responses/Unauthorized'}
         "403": {$ref: '#/components/responses/Forbidden'}
         "500": {$ref: '#/components/responses/ServerError'}
+  /user:
+    post:
+      operationId: createUser
+      x-source: alerta/views/users.py:18-60; alerta/models/user.py:62-74
+      x-scope: admin:users
+      description: |
+        - Only with `AUTH_PROVIDER` basic (the default); otherwise 400
+          `must use <provider> login flow to create new user`.
+        - Parsing: any exception gives 400; a missing `name` raises
+          KeyError, so the message is `'name'`. `login` defaults to `email`.
+          **A missing password is hashed as the empty string**
+          (`models/user.py:67`); whether the login flow then accepts an
+          empty password is not established here.
+        - `ALLOWED_EMAIL_DOMAINS` (default `*`) gives 403; an existing user
+          with the same email gives 409. The scopes implied by `roles` must
+          be within the caller's, else 403.
+        - **A failed insert still returns 201.** The view catches the
+          `create()` exception but never raises the ApiError it builds
+          (`views/users.py:45-48`), so execution continues with the unsaved
+          object and returns `201` with data that was not stored (reference
+          defect; source-derived, NOT verified).
+      responses:
+        "201":
+          description: "Created (or, per the defect above, possibly not stored)"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, id, user]
+                properties:
+                  status: {const: ok}
+                  id: {type: string}
+                  user: {$ref: '#/components/schemas/User'}
+        "400": {description: "wrong auth provider or parse error", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "409": {description: "email already exists", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {description: "missing admin:users, unauthorized domain, or a role scope beyond the caller's", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /user/{user_id}:
+    parameters:
+      - {name: user_id, in: path, required: true, schema: {type: string}, description: "exact id match; the static /user/me routes take precedence"}
+    get:
+      operationId: getUser
+      x-source: alerta/views/users.py:63-73
+      x-scope: admin:users
+      responses:
+        "200":
+          description: Found
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, user]
+                properties:
+                  status: {const: ok}
+                  total: {const: 1}
+                  user: {$ref: '#/components/schemas/User'}
+        "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+    put:
+      operationId: updateUser
+      x-source: alerta/views/users.py:163-196; alerta/models/user.py:173-183; alerta/database/backends/postgres/base.py:1071-1100
+      x-scope: admin:users
+      description: |
+        Writes any of `name`, `login`, `password` (hashed), `email`,
+        `status`, `roles`, `attributes` (jsonb `||`), `text` and
+        `email_verified` when not null. An email change without
+        `email_verified` resets it to false; an email without `@` raises
+        ValueError outside a try block (generic 500). An email used by
+        another user gives 409. An empty body gives 400.
+        - **SECURITY (reference defect): role ceiling bypass.** The view
+          checks the scopes implied by `roles` only when the body has a
+          truthy `roles` (`views/users.py:181-186`). `User.update` also
+          accepts a legacy singular **`role`** and turns it into `roles =
+          [role]` (`models/user.py:180-181`). So `{"role": "admin"}` grants
+          any role without the ceiling check: a holder of `admin:users` can
+          make any user a full admin. Source-derived, NOT verified.
+        - Combined with AN1 (credential precedence branch 4): under
+          `ALLOW_READONLY`, a caller without credentials reaches this
+          handler without a scope check, and could set any user's `role`
+          and `password`, an inferred account-takeover chain. Static only;
+          nothing executed.
+        - A body key `id` (or `self`) collides with `update_user(self, id,
+          **kwargs)`, an inferred TypeError and 500 before the UPDATE.
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, user]
+                properties:
+                  status: {const: ok}
+                  total: {const: 1}
+                  user: {$ref: '#/components/schemas/User'}
+        "400": {description: "nothing to change", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "403": {description: "missing admin:users, or a `roles` scope beyond the caller's", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "409": {description: "email already exists", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "500": {$ref: '#/components/responses/ServerError'}
+    delete:
+      operationId: deleteUser
+      x-source: alerta/views/users.py:279-295
+      x-scope: admin:users
+      responses:
+        "200": {description: Deleted, content: {application/json: {schema: {type: object, required: [status], properties: {status: {const: ok}}}}}}
+        "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /user/{user_id}/groups:
+    parameters:
+      - {name: user_id, in: path, required: true, schema: {type: string}}
+    get:
+      operationId: getUserGroups
+      x-source: alerta/views/users.py:76-99
+      x-scope: admin:users
+      responses:
+        "200": {description: "`{status, groups, total}`; none gives `message: not found`", content: {application/json: {schema: {type: object, additionalProperties: true}}}}
+        "404": {description: "user not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /user/{user_id}/attributes:
+    parameters:
+      - {name: user_id, in: path, required: true, schema: {type: string}}
+    put:
+      operationId: updateUserAttributes
+      x-source: alerta/views/users.py:233-252
+      x-scope: admin:users
+      description: "Missing or empty `attributes` gives 400. Merges into the stored attributes. Returns `{status: ok}` only."
+      responses:
+        "200": {description: Updated, content: {application/json: {schema: {type: object, required: [status], properties: {status: {const: ok}}}}}}
+        "400": {description: "missing attributes", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /user/me:
+    get:
+      operationId: getMe
+      x-source: alerta/views/users.py:102-112
+      x-scope: none
+      description: |
+        `@permission()` with no scope: `is_in_scope(None)` is true, so any
+        caller that reaches the decorator passes
+        (`models/permission.py:96-97`). The user is `find_by_id(g.user_id)`.
+        API-key, Hawk and no-credential callers have no `user_id`, so they
+        get 404; only user logins (Bearer, proxy, Basic) resolve.
+      responses:
+        "200":
+          description: The caller's user
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, user]
+                properties:
+                  status: {const: ok}
+                  total: {const: 1}
+                  user: {$ref: '#/components/schemas/User'}
+        "404": {description: "no user for this caller", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+    put:
+      operationId: updateMe
+      x-source: alerta/views/users.py:199-230
+      x-scope: none
+      description: |
+        Only `name`, `email`, `password` and `text` are allowed; any other
+        key gives 400 `not allowed to update: ...`, which blocks
+        `role`/`roles` self-escalation. The same email rules as the admin
+        update apply (409 duplicate; the change resets `email_verified`).
+        No `user_id` gives 404.
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, user]
+                properties:
+                  status: {const: ok}
+                  total: {const: 1}
+                  user: {$ref: '#/components/schemas/User'}
+        "400": {description: "nothing to change, or a disallowed field", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "404": {description: "no user for this caller", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "409": {description: "email already exists", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /user/me/attributes:
+    get:
+      operationId: getMeAttributes
+      x-source: alerta/views/users.py:115-125
+      x-scope: none
+      responses:
+        "200": {description: "`{status, total: 1, attributes}`", content: {application/json: {schema: {type: object, additionalProperties: true}}}}
+        "404": {description: "no user for this caller", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+    put:
+      operationId: updateMeAttributes
+      x-source: alerta/views/users.py:255-276
+      x-scope: none
+      responses:
+        "200": {description: Updated, content: {application/json: {schema: {type: object, required: [status], properties: {status: {const: ok}}}}}}
+        "400": {description: "missing attributes", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "404": {description: "no user for this caller", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /users:
+    get:
+      operationId: listUsers
+      x-source: alerta/views/users.py:128-160; alerta/database/backends/postgres/utils.py:360-392
+      x-scope: admin:users
+      description: |
+        Paged list of all users plus `domains` (`ALLOWED_EMAIL_DOMAINS`).
+        Filters and sorts follow the generic rules with names `name`,
+        `login`, `email`, `domain`, `status`, `role`, `attributes`,
+        `createTime`, `lastLogin`, `text`, `updateTime` and
+        `email_verified`; `id` is ignored. `role` takes the generic path
+        (`"roles" = '<v>'`, an array compared with text), not an overlap.
+        No `sort-by` means no ordering. Empty gives `message: not found`
+        and total 0.
+      parameters:
+        - {$ref: '#/components/parameters/Page'}
+        - {name: page-size, in: query, schema: {type: integer}}
+      responses:
+        "200": {description: "`{status, page, pageSize, pages, more, users, domains, total}`", content: {application/json: {schema: {type: object, additionalProperties: true}}}}
+        "400": {description: "invalid filter or sort name", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "416": {description: "page out of range", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+
 security:
   - apiKeyHeader: []
   - apiKeyAuthorization: []
