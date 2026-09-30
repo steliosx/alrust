@@ -3733,9 +3733,11 @@ paths:
         `HEALTH_CHECK_FAILED: Internal Error!`; otherwise 200 `OK`. Plain
         text, not JSON.
         Consumer context (pinned web UI `2687e4af`, source only): the UI
-        declares a `getHealthcheck` store action but no component dispatches
-        it; it dispatches only manifest and status, and nothing calls `gtg`
-        (Codex MC-S1..S4). Absence of a caller is not evidence of non-use.
+        declares a `getHealthcheck` store action. No literal dispatch of it,
+        and no literal `gtg` reference, was found in the inspected pinned UI
+        source; it dispatches manifest and status (Codex MC-S1..S4; ROOT-C1).
+        This does not prove there is no caller, and absence of a caller is
+        not evidence of non-use.
       security: [{}]
       responses:
         "200": {description: "OK", content: {text/html: {schema: {const: OK}}}}
@@ -3809,7 +3811,7 @@ paths:
   /:
     get:
       operationId: apiIndex
-      x-source: alerta/views/__init__.py:23-41; alerta/utils/webhook.py:40-46
+      x-source: alerta/views/__init__.py:23-41; alerta/utils/webhook.py:40-46; alerta/utils/response.py:22-27
       x-scope: none
       description: |
         **No permission decorator**: any caller gets the API's route map.
@@ -3821,6 +3823,19 @@ paths:
         (`/webhooks/<name>`, methods `POST,GET`).
         - Each entry is `{rel: endpoint name, href: absolute_url(rule), method}`.
           `href` keeps the rule's `<param>` placeholders.
+        - `absolute_url(path)` is `urljoin(base + '/', path.lstrip('/'))`.
+          For the literal `/` rule the joined path is empty, so its own
+          `href` is `base + '/'`. With `BASE_URL` empty, `base` is `url_root`,
+          which already ends in `/`, so that one `href` ends in **two**
+          slashes (for example `http://127.0.0.1:18081//`) while `uri` and
+          every other `href` have one (RI-HF1; ROOT-C3; source-derived, no
+          HTTP run).
+        - If reading `BASE_URL` or `url_root` raises (no app or request
+          context), `absolute_url` falls back to base `/`. Then `uri` is `/`,
+          the `/` rule's `href` is `//`, and every other `href` is
+          `urljoin('//', path)`, for example `///alerts` (Python stdlib
+          behavior, checked offline). Absolute links are therefore not
+          unconditional (ROOT-C2); inside a normal request they are absolute.
         - For Flask rules, `method` joins the rule's methods minus `HEAD` and
           `OPTIONS` in set order, which is not defined.
         - The list is sorted by `href`.
