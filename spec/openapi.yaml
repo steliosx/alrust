@@ -587,11 +587,16 @@ components:
         (the API key secret itself) and `href` = `/key/<secret>`, so any
         response carrying an ApiKey discloses the secret (SECURITY-relevant
         reference behavior; see the endpoints for who can read keys).
-        Reads rebuild the object through `ApiKey.__init__`, which replaces:
-        - a NULL `expire_time` with **now + `API_KEY_EXPIRE_DAYS`** (365),
-          recomputed at every read (`:31`);
-        - an empty or NULL scope list with `USER_DEFAULT_SCOPES`
-          (`['read', 'write']`) (`:29`).
+        Reads rebuild the object through `from_record` then
+        `ApiKey.__init__`:
+        - a NULL `expire_time` becomes **now + `API_KEY_EXPIRE_DAYS`**
+          (default 365; the "never expires" consequence below assumes a
+          positive setting), recomputed at every read (`:31`);
+        - a stored **empty** scope array becomes `USER_DEFAULT_SCOPES`
+          (default `['read', 'write']`) (`:29`). A stored **NULL** scope
+          array never reaches that fallback: `from_record` first iterates
+          `rec.scopes` (`:105`), so NULL is an inferred TypeError and 500
+          on read (NOT verified).
       properties:
         id: {type: string}
         key: {type: string, description: "the secret"}
@@ -600,7 +605,7 @@ components:
         user: {type: string}
         scopes: {type: array, items: {type: string}}
         type: {type: string, description: "derived from scopes"}
-        text: {type: string}
+        text: {type: [string, "null"], description: "null when created without text (models/key.py:53; nullable column)"}
         expireTime: {type: string}
         count: {type: integer}
         lastUsedTime: {type: [string, "null"]}
@@ -2223,10 +2228,23 @@ paths:
           own login); others get their own login. No user at all (for
           example a caller without credentials) gives 400.
         - `customer` via `assign_customer` with `admin:keys` (C11).
-        - **Scope ceiling:** every resulting scope (after an empty list
-          becomes `USER_DEFAULT_SCOPES`) must be within the caller's
-          scopes, else 403. `type` instead of `scopes` maps through the
-          helper.
+        - **Scope ceiling:** every scope in the parsed list must be within
+          the caller's scopes, else 403 (`views/keys.py:38-41`). The parsed
+          list is built in this order (`models/key.py:45-62`):
+          1. the constructor turns an empty `scopes` into
+             `USER_DEFAULT_SCOPES`, so plain `scopes: []` is checked as the
+             defaults;
+          2. **then**, if the body has `type`, the list is replaced by
+             `type_to_scopes(<body user>, type)` (`utils/key.py:38-45`):
+             `ADMIN_SCOPES` when that user is in `ADMIN_USERS`, `read` and
+             `write` for `read-write`, `read` for `read-only`, and **`[]`
+             for any other value**.
+
+          With an unrecognised `type`, the checked list is empty, so the
+          check passes. The key is stored with no scopes, and reads rebuild
+          it as `USER_DEFAULT_SCOPES`, which can exceed the caller's scopes.
+          This is the create counterpart of the PUT `scopes: []` bypass
+          (source-derived, NOT verified; owner decision).
         - `expireTime` defaults to now + 365 days.
         - The client may choose the key `id` and **the secret itself**
           (`key`, `models/key.py:50-56`); a falsy value generates one.
@@ -2289,13 +2307,16 @@ paths:
           `customer` from `assign_customer(<body customer>)`, and the SQL
           writes it whenever present. An unscoped caller (for example an
           admin) omitting `customer` sets it to **NULL**, so a formerly
-          customer-scoped key becomes unscoped and then reads **all**
-          customers' alerts (C17 no longer applies).
+          customer-scoped key becomes unscoped: customer filtering is
+          removed from any alert reads its scopes otherwise permit (C17 no
+          longer applies). Clearing the customer does not itself grant
+          `read:alerts`; the credentialed scope check still applies.
         - **`expireTime` is always rewritten.** `ApiKey.update` sets
           `kwargs['expireTime']` to the parsed value, or **None when the
           body omits it** (`models/key.py:152`), and the SQL writes it. The
-          column is nullable, and reads replace NULL with now + 365 days,
-          so after any update without `expireTime` the key **never
+          column is nullable, and reads replace NULL with now +
+          `API_KEY_EXPIRE_DAYS` (default 365), so with a positive setting,
+          after any update without `expireTime`, the key **never
           expires**. `verify_key` uses the same rebuilt value.
         - **Scope ceiling bypass:** the view checks only the scopes named in
           the body. `scopes: []` passes, is stored empty, and reads back as
@@ -2357,13 +2378,24 @@ paths:
           all of that user's keys and **ignores the filters and paging**,
           while `total`, `pages` and `more` still come from the filtered
           count. No login gives 400 `Must define 'user' to list user keys`.
-        - Filters: `key` (the secret), `user`, `scope`, `text`,
+        - Filters: `key` (the secret), `user`, `scope`, `type`, `text`,
           `expireTime`, `count`, `lastUsedTime`, `customer`; `id` is
-          ignored (EXCLUDE_FROM_QUERY). `type` and `status` are not columns:
-          as filters or sorts they are inferred SQL errors. `status` as a
-          filter is handled separately: `active` means `expire_time >= now`
-          and `expired` means `< now`, so keys with a **NULL expire_time**
-          (see PUT) match neither, although they serialize as active.
+          ignored (EXCLUDE_FROM_QUERY).
+          - `status` is removed before the generic filters
+            (`utils.py:343-351`): `active` adds `expire_time >= now`,
+            `expired` adds `expire_time < now`, and other values add
+            nothing. Keys with a **NULL expire_time** (see PUT) match
+            neither, although they serialize as active.
+          - `scope` maps to the `scopes` column but is not in
+            `filter_query`'s array-overlap list (`:66-68`), so it takes the
+            generic path: `"scopes" = '<value>'`, an array compared with
+            text (array-literal caveat as for `tag=`), **not** a
+            contains-scope test.
+          - `type` is not a column: as a filter or sort it is an inferred
+            SQL error. `status` as a **sort** is also an inferred SQL error
+            (no column).
+          Codex's six builder-body cases confirm the generated fragments;
+          SQL is NOT_RUN.
         - No `sort-by` means no ordering.
       parameters:
         - {name: status, in: query, schema: {type: array, items: {type: string}}, style: form, explode: true}
