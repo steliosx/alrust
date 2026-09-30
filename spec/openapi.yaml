@@ -2122,12 +2122,18 @@ paths:
         - Other filters and `sort-by` follow the generic rules of
           AlertFilters and AlertSortBy, but with this endpoint's own
           allow-list (`utils.py:203-222`):
-          - **filter names**: `id`, `priority`, `environment`, `service`,
+          - **filter names**: `priority`, `environment`, `service`,
             `resource`, `event`, `group`, `tag`, `customer`, `startTime`,
             `endTime`, `duration`, `remaining`, `user`, `createTime`,
-            `text` (`status` is handled above, `tags` is not a filter);
-          - **sort names**: the same except `id` and `tag`, plus `tags`
-            and `status`. The table has no `status` column, so
+            `text` (`status` is handled above, `tags` is not a filter).
+            **`id` is silently ignored**: it is in `EXCLUDE_FROM_QUERY`
+            (`utils.py:19-22`), which `filter_query` checks first
+            (`:58-59`), and `Blackouts.from_params` never handles it
+            separately, so `?id=...` adds no predicate (confirmed by
+            Codex's builder probe; unlike `/alerts`, which handles `id`
+            itself);
+          - **sort names**: the filter names except `tag`, plus `tags`
+            and `status` (`sort-by=id` gives 400). The table has no `status` column, so
             `sort-by=status` is an inferred SQL error (500); `remaining`
             sorts on the SELECT alias.
           - The blackout allow-list has no `attributes` entry, so
