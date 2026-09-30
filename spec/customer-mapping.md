@@ -204,6 +204,26 @@ Rules:
   Source-derived, NOT verified. It is recorded as the reference contract
   without deciding alrust's behavior; any change is an owner decision (see
   `spec/openapi.yaml` note paths).
+- **C22** **Every blackout update rewrites the blackout's customer.**
+  `PUT /blackout/<id>` sets `update['customer'] =
+  assign_customer(wanted=<body customer>, permission=admin:blackouts)`
+  (`views/blackouts.py:111-113`), and `update_blackout` writes `customer`
+  whenever the key is present (`postgres/base.py:822-823`). A body that
+  omits `customer` therefore:
+  - from an unscoped caller (no customers, for example admin or
+    `AUTH_REQUIRED=False`), sets the customer to **NULL**, clearing an
+    existing customer;
+  - from a caller with one customer, sets it to that customer;
+  - from a caller with several customers, gives 400 (`must define customer
+    as more than one possibility`).
+
+  The lookup itself is unfiltered for `AUTH_REQUIRED=False` and admin
+  callers, and customer-filtered otherwise. Blackout matching compares the
+  customer only with `CUSTOMER_VIEWS` (C15), so a cleared customer widens a
+  blackout's reach in that mode. Source-derived, NOT verified. It is
+  recorded as the reference contract without deciding alrust's behavior; any
+  change is an owner decision (see `spec/openapi.yaml` `PUT
+  /blackout/{blackout_id}`).
 
 ## Positions and open questions
 
