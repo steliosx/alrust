@@ -96,15 +96,37 @@ Statuses: `open`, `assign`, `ack`, `shelved`, `blackout`, `closed`,
    (`NOTIFICATION_BLACKOUT=False`), an alert that matches a blackout is
    dropped with **202** and never stored (`plugins/blackout.py`).
 4. `is_duplicate` is checked first, then `is_correlated`, else `create`
-   (`:55-63`). Afterwards the post-receive plugins run, unless the alert
-   is suppressed. `forwarder.post_receive` **returns the alert**
-   (`plugins/forwarder.py:43-67`), so `process_alert` rewrites tags and
-   attributes once more (`utils/api.py:66-89`). No values change.
-5. **R1.1 [V]** Any exception raised during step 4 is re-raised as
-   `ApiError(str(e))` with the **default code 500** (`:64-65`,
+   (`:55-63`).
+5. **R1.1 [V]** Any exception raised during step 4 (duplicate, correlate
+   or create only, `:54-63`) is re-raised as `ApiError(str(e))` with the
+   **default code 500** (`:64-65`,
    `exceptions.py:10`). This includes the 400 that `transition()` raises for
    an unknown severity (`sm.py:121-122`). **An alert with an unknown severity
    that gets past steps 1–3 therefore returns 500, not 400.**
+6. **Post-receive** (`utils/api.py:67-90`) is outside the step-4 wrap. It is
+   skipped entirely when `skip_plugins` was set during pre-receive (an
+   alert that was already `blackout` when the pre-receive loop started,
+   `:35-39`, `:70-72`). The final `is_suppressed` is **not** re-checked.
+   Otherwise:
+   - `forwarder.post_receive` **returns the alert** (`plugins/forwarder.py:43-67`).
+     That marks the alert as updated, so the stored row is rewritten through
+     two helpers (**R1.3**).
+   - An `AlertaException` from a post-receive plugin propagates as itself,
+     with its own code (`:75-76`); it is not wrapped as a 500. Other
+     exceptions become `ApiError` 500 when `PLUGINS_RAISE_ON_ERROR`, which is
+     the default.
+   - With the default empty `FWD_DESTINATIONS`, the forwarder raises no error.
+7. **R1.3 [V] The tag and attribute rewrite** (receive R1 step 6; actions A2.2):
+   - `Alert.update_tags` stores `list(set(tags))` (`alert.py:460-461`): tags
+     are de-duplicated, and their **order may change**.
+   - `update_attributes` merges the model's attributes into the stored ones
+     and then **drops every key whose value is `null`** (`pg.py:339-349`).
+     So an alert received with `attributes: {"x": null}` is stored with `x`,
+     and `x` is then removed by this rewrite. The same happens on any
+     unsuppressed action.
+   - Neither helper writes `update_time`.
+   - With ordinary vectors (unique tags, no null attributes), nothing
+     observable changes.
 
 **Vector preconditions.** These are the default setup for an ordinary
 stored-alert vector in R1.1 and R2–R7:
@@ -369,9 +391,14 @@ receive-path vector preconditions (R1) apply to the alert being acted on.
   - **`forwarder.take_action` returns the alert** (`plugins/forwarder.py:72-100`).
     `FWD_DESTINATIONS` is empty by default, so nothing is forwarded. Because
     the return value is truthy, `process_action` treats the alert as
-    updated and **rewrites tags and attributes** (`update_tags`,
-    `update_attributes`) on every action. That changes no values, and it
-    does not touch `update_time`.
+    updated and **rewrites tags and attributes** (R1.3: tags are
+    de-duplicated and may be reordered, null-valued attributes are dropped,
+    `update_time` is not touched).
+  - This applies **only when the alert is not suppressed**: `process_action`
+    stops the plugin loop when `alert.is_suppressed`, meaning the status is
+    `blackout` (`utils/api.py:102-103`). For a `blackout` alert, no plugin
+    hook runs, so there is no rewrite and no ForwardingLoop 202 from this
+    path.
   - `forwarder.take_action` raises ForwardingLoop when the request carries
     this server in its loop header. That is answered with **202**
     `{"status": "ok", "message": ...}` (`views.py:178-179`).
