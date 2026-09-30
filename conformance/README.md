@@ -149,7 +149,11 @@ passed only at frozen `60d2e021eeb9c1040cfa3bdb373cfe949e9b5db0` in window
 That scope does not execute or approve this new head. Three new
 [metadata mutation cases](metadata-mutations.md) remain HTTP NOT_RUN, needing
 a fresh source verdict and reviewed runner/window. No released window authorizes them.
-This changed head has no runtime pass or inherited review approval.
+This changed head has no runtime pass or inherited review approval. The first
+attempt at frozen `70a40be3` finished **FAIL: 1 failed, 2 passed in 0.46s**;
+the default `remote_ip` attribute invalidated the last-attribute precondition
+before mutation. [HF9 details](metadata-mutations.md) preserve that result
+and describe this corrected exact-state prerequisite and removal payload.
 
 The reviewed base integration `061d2a969d8fc4bd876f54885758727c5643c896`
 (Claude source/offline APPROVE `3d0e68fd`, 50 tests and 16 collected) combines guard `e839ceaf`, hash/clock/key

@@ -10,7 +10,7 @@ They describe the current reference without choosing an intentional divergence.
 |---|---|---|
 | Missing and empty tag input | Both per-ID tag and untag answer 500 with `must supply 'tags' as json list`; the owned alert remains exactly unchanged after each request | Views `alerts.py:200-245`, `ApiError` default code in `exceptions.py:10-19,64-65`; no HTTP executed at this head |
 | Remove every tag | Untag answers 200; GET serializes tags as `[]`, with all other fields unchanged | SQL `array_agg` in `postgres/base.py:321-328` and model hydration `alert.py:62,216`; API observation cannot prove direct database NULL storage |
-| Remove sole attribute | A nonempty request maps the sole attribute to null; the update is observable via GET despite a 500 `failed to update attributes` response; all other fields remain unchanged | `views/alerts.py:254-273`, backend `base.py:339-349,1568-1576` commits before returning the empty map; planned HTTP observes state, not direct transaction tracing |
+| Remove all attributes | A nonempty request maps both exactly attested stored attributes to null; the empty map is observable via GET despite a 500 `failed to update attributes` response; all other fields remain unchanged | `views/alerts.py:254-273`, backend `base.py:339-349,1568-1576` commits before returning the empty map; planned HTTP observes state, not direct transaction tracing |
 
 Prerequisites match the previously reviewed isolated metadata fixture:
 Python 3.12; a disposable PostgreSQL/reference server; `AUTH_REQUIRED=False`,
@@ -18,7 +18,11 @@ Python 3.12; a disposable PostgreSQL/reference server; `AUTH_REQUIRED=False`,
 no forwarding destinations, no concurrent cron or housekeeping, explicit
 synthetic admin/key metadata and the private fixture loader. The fixture's
 normal receive path removes its synthetic null attribute and deduplicates
-the stored tags, leaving one attribute and two tags as asserted before use.
+the stored tags. The default `remote_ip` pre-receive plugin also adds
+`ip: "127.0.0.1"` on the reviewed loopback target
+(`alerta/plugins/remote_ip.py:16-19`). The removal case requires exactly
+`{"SYNTHETIC-keep": "retained", "ip": "127.0.0.1"}` and removes both keys;
+it fails before mutation if that prerequisite differs. No plugin is disabled.
 No production inputs or credentials are needed.
 
 Only the existing `metadata_session` fixture is imported from
@@ -39,3 +43,15 @@ does not run or approve these new metadata cases. The source head, runner and
 fresh signed window each need independent review before their first HTTP run.
 Hosted CI remains **CI_BLOCKED_BILLING**; no local result satisfies the full
 Phase 0 hosted gate or establishes Rust/two-server parity.
+
+HF9 correction: the preserved first attempt at frozen
+`70a40be307aceeb6719e80f1bdc162a24c9c1017`, window
+`alrust-metadata-mutations-reference-20260930-01`, START `d9737019`,
+RELEASE `b317ee1c`, finished **FAIL: 1 failed, 2 passed in 0.46s**.
+Tag/untag empty-input and untag-all cases passed. The removal case's
+incorrect sole-attribute precondition failed before its PUT: it omitted
+the default plugin's `ip`. The removal 500 and persisted empty map were
+therefore **NOT_RUN**, with no inferred runtime success. Private evidence
+and the original failed report are retained. This head corrects that
+precondition and payload; it requires fresh independent review and a new
+signed window before any retry. No prior ACK or approval carries forward.

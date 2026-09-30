@@ -31,13 +31,16 @@ def test_untag_all_returns_empty_api_tags_and_preserves_other_fields(metadata_se
 
 def test_removing_last_attribute_returns_500_but_change_is_observable(metadata_session):
     # views/alerts.py:254-273; postgres/base.py:339-349,:1568-1576.
-    # Nonempty input removes the sole stored attribute; the returned map is
+    # Nonempty input removes every attested stored attribute; the returned map is
     # falsy after the write commits. An HTTP error is not a rollback guarantee.
     path, _ = metadata_session.create()
     before = metadata_session.read(path)
-    assert before['attributes'] == {'SYNTHETIC-keep': 'retained'}
+    # The default remote_ip pre-receive plugin adds ip on this loopback target.
+    # Attest the exact fixture state before removing both known attributes.
+    assert before['attributes'] == {
+        'SYNTHETIC-keep': 'retained', 'ip': '127.0.0.1'}
     error = metadata_session.request('PUT', path + '/attributes', {
-        'attributes': {'SYNTHETIC-keep': None}}, 500)
+        'attributes': {'SYNTHETIC-keep': None, 'ip': None}}, 500)
     assert error['status'] == 'error'
     assert error['code'] == 500
     assert error['message'] == 'failed to update attributes'
