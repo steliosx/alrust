@@ -14,8 +14,12 @@ Phase 0 gate: the suite is green against the reference server in CI.
 This initial foundation is **not the full Phase 0 suite**. It includes target
 selection, synthetic create/dedup/detail/cleanup cases, strict JSON comparison
 and a seeded differential replay runner. It imports neither implementation.
-Lifecycle, customer/auth, query, heartbeat, timeout and stateful shrinking
-coverage await the source-cited spec. Empty Rust crates and offline harness
+Four customer-mapping cases were authored from the reviewed source spec; their
+prior-head local runtime result is recorded below. Operator cases also have a
+separate prior-head reference result; metadata cases also have a scoped frozen-head
+reference result. Three new heartbeat cases remain SOURCE_DERIVED / NOT_RUN.
+Lifecycle, broader auth, query, heartbeat, timeout
+and stateful shrinking coverage remain incomplete. Empty Rust crates and offline harness
 tests are not evidence of Alerta compatibility.
 
 The harness lock records SHA-256 hashes of exact supported wheels while
@@ -30,7 +34,8 @@ or lock the reference server's separate dependencies.
 
 Use an isolated disposable server/database for every HTTP run. All generated
 alerts carry an `alrust-synthetic-` resource and `SYNTHETIC` tag. Credentials
-are optional environment inputs; they never enter reports or fixtures. Real
+are synthetic environment inputs or private fixture files outside Git; they
+never enter shared reports or repository fixtures. Real
 payloads, alertad.conf and signing certificates are unnecessary for these cases.
 
 ```sh
@@ -38,8 +43,8 @@ python3.12 -m venv /tmp/alrust-harness-env
 /tmp/alrust-harness-env/bin/python -m pip install --require-hashes --only-binary=:all: -r conformance/requirements.lock
 # Offline infrastructure verification, without a service or compatibility claim:
 /tmp/alrust-harness-env/bin/python -m pytest -c conformance/pytest.ini conformance/tests/unit
-# Black-box HTTP cases; absent ALRUST_TARGET fails rather than silently skipping:
-ALRUST_TARGET=http://127.0.0.1:8080 /tmp/alrust-harness-env/bin/python -m pytest -c conformance/pytest.ini conformance/tests/http
+# Initial smoke only; absent ALRUST_TARGET fails rather than silently skipping:
+ALRUST_TARGET=http://127.0.0.1:8080 /tmp/alrust-harness-env/bin/python -m pytest -c conformance/pytest.ini conformance/tests/http/test_scaffold.py
 # Distinct disposable instances; use a fresh private report path each attempt:
 PYTHONPATH=conformance /tmp/alrust-harness-env/bin/python -m alrust_conformance.differential \
   --reference http://127.0.0.1:8080 --candidate http://127.0.0.1:8081 \
@@ -55,7 +60,7 @@ For differential CLI reports, each key input must be absent or match
 or differently formatted input produces a private `NOT_RUN` report before any
 client is created. Only the rejected environment field names are recorded;
 their values never enter the report. This is the runner's synthetic-fixture
-contract, independently awaiting Claude review; server authentication behavior
+contract, reviewed at frozen `e91dcabe`; this integration needs its own review. Server authentication behavior
 and the general Client's negative-auth test inputs are unchanged.
 
 The runner captures validated inputs once and uses those same values for
@@ -71,7 +76,7 @@ createTime, history timestamps/order, customer, unknown fields and all other
 semantic data stay strict. The controlled fixture uses ordered client times
 and 50 ms request spacing. [The exact clock policy](receive-clock-policy.md)
 documents scope, source citations and failure behavior. Its implementation
-requires a fresh independent verdict before execution. `--comparison
+was reviewed at frozen `db06ce44`; this integration needs a fresh verdict before execution. `--comparison
 strict-json-v1` preserves every timestamp for unsupported vectors/diagnostics.
 Reports retain the full synthetic sequence,
 responses (known credential echoes redacted after comparison), cleanup results,
@@ -91,9 +96,54 @@ request/response/cleanup boundaries. Late metadata failure retains the HTTP
 outcome, partial responses and cleanup, but makes overall verification FAIL.
 An interruption after effects is FAIL rather than NOT_RUN.
 
-Current validation labels: offline tests LOCAL_PASS. Released window03 passed
-the two initial reference smoke cases locally at frozen9d70dc2/f431272 on
-Python3.12.14/PostgreSQL16. This new correction has HTTP NOT_RUN pending fresh
-exact-head review and a new signed window; withdrawn acknowledgments are not
-reused. Two-server execution NOT_RUN; hosted Phase0 CI_BLOCKED_BILLING.
-Never substitute a local result for CI or claim Rust parity from reference smoke.
+Current validation labels: offline tests LOCAL_PASS. The two initial smoke
+cases at frozen `9d70dc2e4e09c95901d1f8be2096e6ec2effa2bc` passed locally on
+Python 3.12.14/PostgreSQL 16 against reference
+`f4312727783dad64198b62ed778bbca98a5144a3` in signed window
+`alrust-ref-smoke-20260929-03`; cleanup was confirmed. Customer cases passed at
+frozen `a7426411` in the separately recorded customer window below. Operator
+cases passed at frozen `a4d75716`; metadata cases passed at frozen `678f1996`.
+The three heartbeat cases were reviewed at frozen `9548f878`; runner `6bc8742d`
+was separately reviewed. Their fresh window is awaiting a substantive ACK,
+so heartbeat HTTP remains NOT_RUN. Neither that source approval nor its window
+applies to this new integration head. Historical runs do not approve this changed head.
+Hosted Phase 0 gate remains CI_BLOCKED_BILLING. Never substitute local results
+for CI or claim Rust parity from a reference-only smoke.
+
+See [customer fixtures](customer-fixtures.md) for prerequisites and the private
+synthetic credential schema. Running the whole HTTP directory now requires
+that fixture; missing prerequisites fail before customer HTTP requests.
+
+Five [operator status/action vectors](operator-actions.md) have a separate
+frozen-head runtime result recorded below. The customer-only window did not
+run them; their execution used its own reviewed runner and signed window.
+The four customer vectors passed locally at frozen
+`a7426411181f4dd3cc859581cc203ee4067c07b4` against reference
+`f4312727783dad64198b62ed778bbca98a5144a3` in signed window
+`alrust-customer-reference-20260930-01`, with stored-record attestation and
+confirmed cleanup. That narrow prior-head evidence is separate from this new
+operator result and the blocked hosted gate.
+
+The five operator cases later passed only at frozen
+`a4d75716755b89b7a1ab9acfac122092ee7b736e` in signed window
+`alrust-operator-actions-reference-20260930-01`, with effective-config and
+stored-key attestation and confirmed cleanup. The two
+[metadata/suppression vectors](metadata-edges.md) separately passed at frozen
+`678f19961565dbbebffb4a14f4f38315c789fdd6` against the same immutable reference,
+in signed window `alrust-metadata-edges-reference-20260930-01`, with runner
+`1b0cf1a1`, effective-config and stored-key attestations. Owned cleanup was
+independently confirmed by both agents (`0f72c944` / `8e0db6f8`). The prior
+operator window did not run them. Raw tag order is retained, including where
+assertions can only check tag content/count because reference ordering is undefined.
+
+Three [heartbeat vectors](heartbeats.md) remain heartbeat HTTP NOT_RUN.
+Their frozen-head source and runner approvals and pending window are separate
+from this integration, which needs fresh exact-source and execution review;
+no released metadata window authorizes them. Neither the heartbeat suite nor
+this changed head has a runtime pass or inherited review approval.
+
+This isolated integration combines reviewed guard `e839ceaf`, hash/clock/key
+harness `130145ea` and HTTP vectors `9548f878` without changing the Python
+code, tests, locks, guard or pinned reference files. Only this README resolves
+the branch overlap. The integrated code has no inherited review approval or
+HTTP runtime pass. Hosted billing and the full Phase0 gate remain separate.
