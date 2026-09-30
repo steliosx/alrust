@@ -16,7 +16,8 @@ selection, synthetic create/dedup/detail/cleanup cases, strict JSON comparison
 and a seeded differential replay runner. It imports neither implementation.
 Four customer-mapping cases were authored from the reviewed source spec; their
 prior-head local runtime result is recorded below. Operator cases also have a
-separate prior-head reference result; new metadata cases remain NOT_RUN.
+separate prior-head reference result; metadata cases also have a scoped frozen-head
+reference result. Three new heartbeat cases remain SOURCE_DERIVED / NOT_RUN.
 Lifecycle, broader auth, query, heartbeat, timeout
 and stateful shrinking coverage remain incomplete. Empty Rust crates and offline harness
 tests are not evidence of Alerta compatibility.
@@ -69,8 +70,9 @@ Python 3.12.14/PostgreSQL 16 against reference
 `f4312727783dad64198b62ed778bbca98a5144a3` in signed window
 `alrust-ref-smoke-20260929-03`; cleanup was confirmed. Customer cases passed at
 frozen `a7426411` in the separately recorded customer window below. Operator
-cases passed at frozen `a4d75716`; new metadata cases remain NOT_RUN and await
-independent review and a separate signed window.
+cases passed at frozen `a4d75716`; metadata cases passed at frozen `678f1996`.
+Three new heartbeat cases await independent review, a new reviewed runner and
+their own signed window. Historical runs do not approve this changed head.
 Hosted Phase 0 gate remains CI_BLOCKED_BILLING. Never substitute local results
 for CI or claim Rust parity from a reference-only smoke.
 
@@ -91,8 +93,16 @@ operator result and the blocked hosted gate.
 The five operator cases later passed only at frozen
 `a4d75716755b89b7a1ab9acfac122092ee7b736e` in signed window
 `alrust-operator-actions-reference-20260930-01`, with effective-config and
-stored-key attestation and confirmed cleanup. Two new
-[metadata/suppression vectors](metadata-edges.md) are SOURCE_DERIVED / NOT_RUN;
-they require fresh review, runner and window. The prior completed window did
-not run them. Raw tag order is retained, including where assertions can only
-check tag content/count because reference ordering is undefined.
+stored-key attestation and confirmed cleanup. The two
+[metadata/suppression vectors](metadata-edges.md) separately passed at frozen
+`678f19961565dbbebffb4a14f4f38315c789fdd6` against the same immutable reference,
+in signed window `alrust-metadata-edges-reference-20260930-01`, with runner
+`1b0cf1a1`, effective-config and stored-key attestations. Owned cleanup was
+independently confirmed by Codex; peer verification is pending. The prior
+operator window did not run them. Raw tag order is retained, including where
+assertions can only check tag content/count because reference ordering is undefined.
+
+Three [heartbeat vectors](heartbeats.md) are SOURCE_DERIVED / NOT_RUN. They
+require fresh exact-source review, runner/config attestation and signed window;
+no released metadata window authorizes them. Neither the heartbeat suite nor
+this changed head has a runtime pass or inherited review approval.
