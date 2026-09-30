@@ -188,10 +188,17 @@ Rules:
   filter (C16; 404 when not visible), but:
   - `PUT` and `DELETE /alert/<id>/note/<note_id>` then find the note with
     `WHERE id = <note_id>` only (`postgres/base.py:1381-1386`). A caller who
-    passes the endpoint's `write:alerts` check (or the no-auth policy), can
-    see some alert, and knows a note id can update or delete that note,
-    including a note of another customer's alert. Read-only access alone is
-    not enough. A delete also prepends its
+    can see some alert, knows a note id and reaches the handler can update
+    or delete that note, including a note of another customer's alert.
+    Credentialed keys or users with only read scopes fail the requested
+    `write:alerts` check. Callers without credentials reach the handler
+    under the policy branches that skip the scope check: `AUTH_REQUIRED=False`,
+    and `AUTH_REQUIRED` with `ALLOW_READONLY`, which assigns
+    `READONLY_SCOPES` but dispatches without checking the requested scope
+    (`auth/decorators.py:164-169`; AN1). The App Engine cron branch also
+    skips it, with unestablished handler outcome. An earlier wording here
+    (and Codex's C21-C1 request) missed the `ALLOW_READONLY` branch; this is
+    the corrected reading. A delete also prepends its
     `note dismissed` history entry to the **path** alert, not the note's
     own alert.
   - `GET /alert/<id>/notes` selects `WHERE alert ~* <alert id>`
