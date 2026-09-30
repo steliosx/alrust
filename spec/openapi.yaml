@@ -16,8 +16,9 @@ info:
       `/environments`, `/services`, `/alerts/groups`, `/alerts/tags`) with
       their query parameters, including the `q=` grammar; **alert notes**;
       **blackouts**; **API keys**; **users**; **groups**; **permissions**
-      (with `/scopes`); **customers**; **`/config`**. Not yet written:
-      management.
+      (with `/scopes`); **customers**; **`/config`**; **management**.
+      Not yet written: the remaining routes the static inventory lists
+      (for example `/`, `/_`, auth and webhooks).
     - **Reference security defects** are recorded where found (marked
       SECURITY). They describe the class of problem at source level only;
       no exploit was built or run. They are recorded for the owner's
@@ -3582,6 +3583,194 @@ paths:
                   refresh_interval: {description: "AUTO_REFRESH_INTERVAL"}
                   environments: {description: "ALLOWED_ENVIRONMENTS"}
                   clipboard_template: {description: "CLIPBOARD_TEMPLATE"}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /management:
+    get:
+      operationId: managementIndex
+      x-source: alerta/management/views.py:50-64; alerta/management/__init__.py:1-5; alerta/app.py:90-91
+      x-scope: none
+      description: |
+        The management routes live on a separate `mgmt` blueprint, so the
+        `api` blueprint's POST/PUT content-type hook does not apply to them.
+        This index has no permission decorator: it renders the HTML template
+        `management/index.html` listing the management endpoint URLs.
+      security: [{}]
+      responses:
+        "200": {description: "HTML page", content: {text/html: {schema: {type: string}}}}
+  /management/manifest:
+    get:
+      operationId: managementManifest
+      x-source: alerta/management/views.py:39-47, :67-79
+      x-scope: read:management
+      description: |
+        `{release, build, date, revision}`. `release` follows
+        `SERVER_VERSION`: `full` (and any unrecognised value) gives the full
+        version, `major` the major number, `off` null. The build fields come
+        from `alerta.build`, or `alerta.dev` when that module is absent
+        (`:23-26`).
+      responses:
+        "200": {description: "Build manifest", content: {application/json: {schema: {type: object, required: [release, build, date, revision], additionalProperties: false, properties: {release: {}, build: {}, date: {}, revision: {}}}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /management/properties:
+    get:
+      operationId: managementProperties
+      x-source: alerta/management/views.py:82-101
+      x-scope: admin:management
+      description: |
+        A `text/plain` dump, one `key: value` line each, of the request's
+        WSGI environ, the **process environment** (`os.environ`), the app
+        object's attributes and **the whole `app.config`**.
+        - **SECURITY (reference behavior, source-derived, NOT executed;
+          M-SEC-1).** The dump includes `SECRET_KEY`, `DATABASE_URL` (with
+          any password), `OAUTH2_CLIENT_SECRET`, `LDAP_BIND_PASSWORD`,
+          `SMTP_PASSWORD` and any secret passed through the environment.
+          Bearer tokens are HS256 JWTs signed with `SECRET_KEY`, and their
+          `scope` claim becomes `g.scopes` (`models/token.py:43-76`,
+          `auth/decorators.py:69-91`; the audience it checks is
+          `OAUTH2_CLIENT_ID`, `SAML2_ENTITY_ID` or the base URL, which
+          `/config` publishes). A reader of this endpoint can therefore mint
+          a token with any scopes and customers: **`admin:management`
+          confers full admin.**
+        - Who can read it follows the credential-precedence rules: with
+          `AUTH_REQUIRED` false, any caller (branch 3); with `AUTH_REQUIRED`
+          and `ALLOW_READONLY`, **any caller without credentials** (branch 4,
+          AN1: no scope check). The AN1 chain (anonymous → `SECRET_KEY` →
+          admin token) is inferred from source; nothing was executed.
+        - `SECRET_KEY` defaults to `changeme` (`settings.py:15`) and nothing
+          at startup requires it to change (`utils/config.py:29`, `:116-124`);
+          with the default key anyone can mint such a token without this
+          endpoint.
+        Whether alrust exposes such a dump at all is an owner decision.
+      responses:
+        "200": {description: "Plain-text dump (contains secrets)", content: {text/plain: {schema: {type: string}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /management/switchboard:
+    get:
+      operationId: managementSwitchboard
+      x-source: alerta/management/views.py:29-33, :104-124
+      x-scope: admin:management
+      description: |
+        HTML page of the switches `auto-refresh-allow` and
+        `sender-api-allow` (both ON by default); `?switch=<name>` shows one
+        (an unknown name passes `None` to the template, whose outcome is not
+        established here). Switch state is **in process memory only**
+        (`models/switch.py:17-62`): not persisted, reset on restart, and
+        separate per worker process.
+      responses:
+        "200": {description: "HTML page", content: {text/html: {schema: {type: string}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+    post:
+      operationId: managementSwitchboardSet
+      x-source: alerta/management/views.py:104-117
+      x-scope: admin:management
+      description: |
+        Form-encoded (not JSON): for each known switch present in the form,
+        `set_state(value)`, where exactly `ON` means on and **any other value
+        means off**; absent switches are left unchanged. Returns the HTML
+        page. `auto-refresh-allow` only sets the `autoRefresh` field of the
+        alert list responses (`views/alerts.py:339`, `:354`, `:400`).
+        **`sender-api-allow` is not read anywhere in the pinned source**, so
+        turning it off has no effect on alert submission.
+      responses:
+        "200": {description: "HTML page", content: {text/html: {schema: {type: string}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /management/gtg:
+    get:
+      operationId: managementGoodToGo
+      x-source: alerta/management/views.py:127-134
+      x-scope: none
+      description: "No permission decorator. `OK` (200) when `db.is_alive`, else `FAILED` (503). Plain text."
+      security: [{}]
+      responses:
+        "200": {description: "OK", content: {text/html: {schema: {const: OK}}}}
+        "503": {description: "FAILED", content: {text/html: {schema: {const: FAILED}}}}
+  /management/healthcheck:
+    get:
+      operationId: managementHealthcheck
+      x-source: alerta/management/views.py:137-153; alerta/models/heartbeat.py:166-167; alerta/database/backends/postgres/base.py:874-884; alerta/database/backends/postgres/utils.py:15-16
+      x-scope: none
+      description: |
+        No permission decorator. Reads `Heartbeat.find_all()`: **at most the
+        first 1000 heartbeats, in no defined order** (default page size and
+        `ORDER BY (select 1)`; MGH-N1). For each, `delta = utcnow() -
+        receive_time`; stale when `delta.seconds > int(timeout) * 4`.
+        `timedelta.seconds` is the within-day remainder, so whole days are
+        ignored, and a negative age can appear stale depending on the timeout
+        (MGH-N2). The first stale heartbeat gives 503
+        `HEARTBEAT_STALE: <origin>`; any exception is logged and gives 503
+        `HEALTH_CHECK_FAILED: Internal Error!`; otherwise 200 `OK`. Plain
+        text, not JSON.
+      security: [{}]
+      responses:
+        "200": {description: "OK", content: {text/html: {schema: {const: OK}}}}
+        "503": {description: "stale heartbeat or internal error", content: {text/html: {schema: {type: string}}}}
+  /management/housekeeping:
+    get:
+      operationId: managementHousekeeping
+      x-source: alerta/management/views.py:156-225
+      x-scope: admin:management
+      description: |
+        **State-changing on GET as well as POST** (same handler). Runs
+        `Alert.housekeeping(expired, info)` (see `spec/lifecycle.md` K0-K5),
+        then for each returned alert applies the `expired` or `timeout`
+        action through the plugin chain.
+        - `?expired=<hours>` and `?info=<hours>` override
+          `DELETE_EXPIRED_AFTER` and `DELETE_INFO_AFTER`; a missing,
+          non-integer or zero value uses the configured default (so 0 cannot
+          be requested), and negative values are accepted.
+        - A plugin `RejectException` is collected and processing continues;
+          at the end any collected rejection gives 500 `housekeeping failed`
+          with `errors`. Any other exception gives 500 immediately; alerts
+          already processed stay changed (no rollback).
+        - Success: `{status, expired, unshelve, unack, count}` (alert ids).
+      responses:
+        "200": {description: "Housekeeping done", content: {application/json: {schema: {type: object, required: [status, expired, unshelve, unack, count], properties: {status: {const: ok}, expired: {type: array, items: {type: string}}, unshelve: {type: array, items: {type: string}}, unack: {type: array, items: {type: string}}, count: {type: integer}}}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+    post:
+      operationId: managementHousekeepingPost
+      x-source: alerta/management/views.py:156-225
+      x-scope: admin:management
+      description: "The same handler and behavior as GET."
+      responses:
+        "200": {description: "Housekeeping done", content: {application/json: {schema: {type: object, additionalProperties: true}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /management/status:
+    get:
+      operationId: managementStatus
+      x-source: alerta/management/views.py:228-242
+      x-scope: read:management
+      description: |
+        `{application: alerta, version, time, uptime, metrics}`: `version`
+        per `SERVER_VERSION` (as manifest), `time` now in epoch ms, `uptime`
+        ms since module import, and the serialized gauges, counters, timers
+        and switches. Refreshes the total-alerts gauge first.
+      responses:
+        "200": {description: "Status", content: {application/json: {schema: {type: object, required: [application, version, time, uptime, metrics], properties: {application: {const: alerta}, version: {}, time: {type: integer}, uptime: {type: integer}, metrics: {type: array}}}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /management/metrics:
+    get:
+      operationId: managementMetrics
+      x-source: alerta/management/views.py:245-268
+      x-scope: read:management
+      description: "Prometheus text exposition (`text/plain; version=0.0.4`): gauges, counters and timers, then `alerta_uptime_msecs`."
+      responses:
+        "200": {description: "Metrics", content: {text/plain: {schema: {type: string}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
         "500": {$ref: '#/components/responses/ServerError'}
 
 security:
