@@ -209,6 +209,16 @@ components:
         - `to-date` defaults to the query time (the app clock) on
           `GET /alerts` only; the other endpoints have no upper bound unless
           it is given.
+        - **Binding:** the pinned backend registers a datetime adapter
+          (`postgres/base.py:86`, `:126-127`) that sends every datetime as
+          an untyped quoted ISO literal, `'YYYY-MM-DDThh:mm:ss.sssZ'`,
+          truncated to **milliseconds**, not as a timestamptz parameter. The
+          `last_receive_time` column is a timestamp without time zone, so
+          the literal is read as a plain timestamp. The session TimeZone is
+          therefore not expected to shift these comparisons (inferred; SQL
+          NOT_RUN). Stored times pass through the same adapter. The
+          observed session zone in the query reference run was `Etc/UTC`
+          (metadata only).
     AlertSortBy:
       name: sort-by
       in: query
@@ -340,9 +350,12 @@ components:
           `a b c` or `a b c d` translate to `a OR b` (**narrower** results).
           This also holds inside a subquery: `resource:(web OR db OR app)`
           keeps only `web` and `db`. The dropped operands are silently
-          ignored, with no error. Mixed-precedence chains (`a AND b OR c`)
-          and explicit parentheses (`a AND (b AND c)`) keep every operand,
-          because each level then has exactly two. Confirmed by both
+          ignored, with no error. The examples `a AND b OR c` and
+          `a AND (b AND c)` keep every operand **only because each binary
+          group in them has exactly two operands**. Parentheses or mixing
+          do not repair a longer flat group: `a AND b AND c OR d` drops `c`,
+          `(a AND b AND c)` drops `c`, and `a AND (b AND c) AND d` drops `d`
+          (Codex probe 591429de). Confirmed by both
           agents' pure-parser probes; SQL/HTTP NOT_RUN. How alrust treats
           this is not decided here.
         - **`+` and `-` are emitted verbatim as SQL unary operators**
