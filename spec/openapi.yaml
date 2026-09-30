@@ -3449,21 +3449,39 @@ paths:
           is empty the request's `url_root`, without the trailing slash
           (`config.py:13`; with `USE_PROXYFIX` on, forwarded headers can
           change `url_root`, `app.py:57-58`).
-        - `debug` is `current_app.debug`, the served value after the CLI's
-          debug handling, not only `config['DEBUG']`.
+        - **Types follow the configuration source (CF-R1).** `get_config`
+          converts only environment values (for example `type=bool`); a value
+          from the config file, `settings.py` or `create_app(config_override)`
+          is returned unchanged (`utils/config.py:129-148`, `app.py:52`). So
+          `auth_required` and `customer_views` are booleans under the
+          defaults and when set from the environment, but a config-file value
+          such as `'False'` is emitted as that string. `debug` is
+          `current_app.debug`, that is `config['DEBUG']`. Under `alertad run`
+          (the Flask CLI), `ScriptInfo.load_app` assigns the boolean
+          `get_debug_flag()` after the factory (`flask/cli.py:366-369`,
+          Flask 3.1.3); under another WSGI server the configured value is
+          emitted unchanged. The runtime check covered only booleans
+          `false` under controlled settings.
         - `alarm_model.name` is the display name the model sets at
           registration: for `ALARM_MODEL=ALERTA` it is `Alerta 9.1.0` at this
           pin (`alarms/alerta.py:81-82`), not the selector string.
-          `alarm_model.severity` and `colors` come from `SEVERITY_MAP` and
-          `COLOR_MAP`, or the model defaults when those are empty;
-          `defaults.status` is `open`.
+          `alarm_model.severity` and `colors` are `SEVERITY_MAP` and
+          `COLOR_MAP` as configured when truthy (unchanged, whatever their
+          type), else the model's default objects; `normal_severity` and
+          `previous_severity` likewise come from the configured value when
+          truthy, else the model default (`alarms/alerta.py:84-91`).
+          `status` is the model's constant status map, and `defaults.status`
+          is the constant `open`.
         - The top-level `severity` and `colors` are the same objects as
           `alarm_model.severity` and `alarm_model.colors` (`:42-43`, kept for
           compatibility).
         - `signup_enabled` is `SIGNUP_ENABLED` only when `AUTH_PROVIDER` is
           `basic`, else false (`:30`).
         - All other values are the configured settings as is; their types
-          follow the configuration and are not constrained here.
+          follow the configuration and are not constrained here. Only the
+          keysets, `endpoint` (a string whenever the response succeeds),
+          `alarm_model.name`, `alarm_model.status` and `defaults.status` are
+          source-guaranteed.
       security: [{}]
       responses:
         "200":
@@ -3475,7 +3493,7 @@ paths:
                 additionalProperties: false
                 required: [debug, endpoint, alarm_model, auth_required, allow_readonly, readonly_scopes, provider, customer_views, signup_enabled, email_verification, client_id, azure_tenant, aws_region, cognito_domain, github_url, gitlab_url, keycloak_url, keycloak_realm, oidc_auth_url, site_logo_url, severity, colors, timeouts, blackouts, dates, font, audio, columns, sort_by, filter, indicators, actions, tracking_id, refresh_interval, environments, clipboard_template]
                 properties:
-                  debug: {type: boolean}
+                  debug: {description: "current_app.debug (config['DEBUG']); boolean under the Flask CLI or from the environment, else as configured"}
                   endpoint: {type: string}
                   alarm_model:
                     type: object
@@ -3483,22 +3501,22 @@ paths:
                     required: [name, severity, colors, status, defaults]
                     properties:
                       name: {type: string}
-                      severity: {type: object, description: "severity name to level"}
-                      colors: {type: object}
-                      status: {type: object, description: "status name to rank"}
+                      severity: {description: "SEVERITY_MAP as configured when truthy, else the model default object (severity name to level)"}
+                      colors: {description: "COLOR_MAP as configured when truthy, else the model default object"}
+                      status: {type: object, description: "the model's constant status map (status name to rank)"}
                       defaults:
                         type: object
                         additionalProperties: false
                         required: [status, normal_severity, previous_severity]
                         properties:
-                          status: {type: string}
-                          normal_severity: {type: string}
-                          previous_severity: {type: string}
-                  auth_required: {type: boolean}
+                          status: {const: open}
+                          normal_severity: {description: "DEFAULT_NORMAL_SEVERITY as configured when truthy, else the model default"}
+                          previous_severity: {description: "DEFAULT_PREVIOUS_SEVERITY as configured when truthy, else the model default"}
+                  auth_required: {description: "AUTH_REQUIRED; boolean by default or from the environment, else as configured"}
                   allow_readonly: {description: "ALLOW_READONLY"}
                   readonly_scopes: {description: "READONLY_SCOPES"}
                   provider: {description: "AUTH_PROVIDER"}
-                  customer_views: {type: boolean}
+                  customer_views: {description: "CUSTOMER_VIEWS; boolean by default or from the environment, else as configured"}
                   signup_enabled: {description: "SIGNUP_ENABLED when AUTH_PROVIDER is basic, else false"}
                   email_verification: {description: "EMAIL_VERIFICATION"}
                   client_id: {description: "OAUTH2_CLIENT_ID"}
@@ -3511,8 +3529,8 @@ paths:
                   keycloak_realm: {description: "KEYCLOAK_REALM"}
                   oidc_auth_url: {description: "OIDC_AUTH_URL"}
                   site_logo_url: {description: "SITE_LOGO_URL"}
-                  severity: {type: object, description: "same as alarm_model.severity"}
-                  colors: {type: object, description: "same as alarm_model.colors"}
+                  severity: {description: "the same value as alarm_model.severity"}
+                  colors: {description: "the same value as alarm_model.colors"}
                   timeouts:
                     type: object
                     additionalProperties: false
