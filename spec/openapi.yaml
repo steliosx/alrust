@@ -17,8 +17,10 @@ info:
       their query parameters, including the `q=` grammar; **alert notes**;
       **blackouts**; **API keys**; **users**; **groups**; **permissions**
       (with `/scopes`); **customers**; **`/config`**; **management**;
-      the root index `/` and `/_`. Not yet written: the auth and webhook
-      routes and other routes the static inventory lists.
+      the root index `/` and `/_`; the **webhook dispatcher**
+      (`/webhooks/{webhook}`, generic only). Not yet written: the twelve
+      provider webhook payload mappings, the auth routes and other routes
+      the static inventory lists.
     - **Reference security defects** are recorded where found (marked
       SECURITY). They describe the class of problem at source level only;
       no exploit was built or run. They are recorded for the owner's
@@ -95,6 +97,12 @@ components:
     Forbidden: {description: "missing required scope (auth/decorators.py:51-52 and peers)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     ServerError: {description: "ApiError 500, or an unhandled exception with message 'An internal error has occurred!' (exceptions.py:120-136)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
   parameters:
+    WebhookName:
+      name: webhook
+      in: path
+      required: true
+      description: "A successfully loaded custom webhook name (the loaded registry, not the setup.py entry-point list)"
+      schema: {type: string}
     AlertFilters:
       name: filters
       in: query
@@ -3808,6 +3816,158 @@ paths:
         "401": {$ref: '#/components/responses/Unauthorized'}
         "403": {$ref: '#/components/responses/Forbidden'}
         "500": {$ref: '#/components/responses/ServerError'}
+  /webhooks/{webhook}:
+    parameters:
+      - {$ref: '#/components/parameters/WebhookName'}
+    post:
+      operationId: receiveWebhook
+      x-source: alerta/webhooks/__init__.py:10-26; alerta/webhooks/custom.py:17-91; alerta/utils/api.py (assign_customer, process_alert)
+      x-scope: write:webhooks
+      summary: Custom webhook dispatcher (generic; provider mappings are separate)
+      description: &webhookDispatch |
+        Dispatcher only. The twelve provider `incoming()` mappings
+        (`alerta/webhooks/*.py`) are separate slices and are not specified
+        here. GET and POST run the same handler (`custom.py:17-21`); with
+        no sub-path, `path` is `''` and the provider receives the full
+        request path (`path or request.path`, for example `/webhooks/slack`).
+
+        Order:
+        1. The blueprint's `before_request` (`__init__.py:17-24`) runs for
+           every method, **before authentication**. It builds a log string
+           from `request.method`, `request.url` (including any `?api-key=`),
+           all request headers (including `Authorization` and `X-API-Key`)
+           and the whole body decoded as UTF-8, and logs it at INFO
+           (W-SEC-1). The string is built whatever the log level, so a
+           non-UTF-8 body raises before the view and gives 500 (unhandled
+           exception). The body is cached, so the view still sees it.
+        2. `OPTIONS` is answered by flask-cors 6.0.2's `cross_origin`
+           (automatic options, the default) with the default options
+           response and CORS headers, **without** calling the permission
+           check or the handler.
+        3. The permission check for `write:webhooks` (credential precedence
+           above). When it rejects, the caller gets 401 or 403 before any
+           404. Under precedence branches 3 and 4 (no credentials with
+           `AUTH_REQUIRED` false, or with `ALLOW_READONLY`) there is **no
+           scope check**, so an anonymous caller reaches the handler and
+           can submit alerts through any loaded webhook. Under branch 5 the
+           view's behavior is NOT established (`g.login` is unset).
+        4. An unknown name gives 404 `Custom webhook '<name>' not found.`
+           Valid names are exactly the **successfully loaded** custom
+           registry (`utils/webhook.py:25-38`), not the setup.py entry-point
+           list: a provider that fails to load is absent.
+        5. Payload: `get_json(silent=True) or request.form or
+           get_data(as_text=True)`. This is an `or` chain, so a falsy JSON
+           body (`{}`, `[]`, `null`, `false`, `0`, `""`) or a non-JSON
+           content type falls through to the form, then to the raw text:
+           POST `{}` delivers the string `'{}'`. No 415 is raised: the `api`
+           blueprint's JSON content-type check does not apply to this
+           blueprint. No `?callback=` JSONP wrapping (no `jsonp` decorator).
+        6. `incoming(path=..., query_string=request.args, payload=...)`.
+           - An `AlertaException` gives its own code. `ApiError`,
+             `RejectException` and the other `BaseError` classes are **not**
+             AlertaException subclasses (`exceptions.py:9-66`), so a
+             provider's `ApiError(..., 404)` still becomes **400**. Any
+             exception other than AlertaException gives 400 with `message` =
+             the exception text (compare the 500 on `/alert`).
+           - A `TypeError` calls `incoming()` **again without `path`** (a
+             legacy signature). That second call is outside the try, so
+             an ApiError keeps its code and anything else (AlertaException
+             included) is an unhandled 500. A TypeError raised inside a provider body, rather than
+             from the signature, means the first call already partly ran.
+        7. Result:
+           - an `Alert` is treated as a one-item list;
+           - a list is processed **item by item** (below);
+           - anything else is returned as-is (provider-defined response;
+             audit type `user-defined`).
+
+        List processing, per item in order: `assign_customer` (400
+        `not allowed to set customer to ...` or `must define customer ...`,
+        outside the inner try), then `process_alert` with the same error
+        mapping as `/alert`: RejectException 403, RateLimit 429 `{status:
+        error, message, id}`, HeartbeatReceived / BlackoutPeriod 202,
+        ForwardingLoop 202 without `id`, another AlertaException its own
+        code, anything else **500 with the exception text**.
+        **Partial batches (W-DL-1):** the first item that returns 202 or
+        429 or raises ends the request. Items before it are already
+        stored; items after it are **never processed**, and the response
+        describes only the stopping item. Success: exactly one item gives
+        201 `{status: ok, id, alert}`; zero or two or more give 201
+        `{status: ok, ids}` without alert objects (an empty list gives
+        `ids: []`).
+
+        Audit: events go to the `write` audit signal (`alert-rejected`,
+        `alert-rate-limited`, `alert-heartbeat`, `alert-blackout`,
+        `webhook-received`), which is connected only when `AUDIT_TRAIL`
+        includes `write` (default `['admin']`) and `AUDIT_LOG` or
+        `AUDIT_URL` is set (`utils/audit.py:27-46`).
+
+        Source-derived; runtime NOT_RUN.
+      requestBody:
+        required: false
+        description: Provider-specific JSON, form or raw text (see step 5).
+        content:
+          application/json: {schema: {}}
+          application/x-www-form-urlencoded: {schema: {type: object, additionalProperties: true}}
+          text/plain: {schema: {type: string}}
+      responses: &webhookResponses
+        "200": {description: "provider-defined non-alert response, returned as-is", content: {application/json: {schema: {}}}}
+        "201":
+          description: "All list items stored. One item: `{status, id, alert}`; zero or several: `{status, ids}`"
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    required: [status, id, alert]
+                    properties:
+                      status: {const: ok}
+                      id: {type: string}
+                      alert: {$ref: '#/components/schemas/Alert'}
+                  - type: object
+                    required: [status, ids]
+                    properties:
+                      status: {const: ok}
+                      ids: {type: array, items: {type: string}}
+        "202": {description: "the stopping item was a heartbeat, blackout or forwarding loop; earlier items stored, later items not processed (W-DL-1)", content: {application/json: {schema: {$ref: '#/components/schemas/AlertIdOnly'}}}}
+        "400": {description: "provider exception text, or customer assignment", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {description: "missing write:webhooks, or an item rejected by policy", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "404": {description: "no successfully loaded custom webhook with this name", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "429": {description: "RateLimit from a non-bundled plugin on the stopping item", content: {application/json: {schema: {type: object, required: [status, message, id], properties: {status: {const: error}, message: {type: string}, id: {type: string}}}}}}
+        "500": {description: "item processing exception with its text, a failed legacy retry, or a non-UTF-8 body in before_request", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+      x-runtime: "NOT_RUN. No webhook vector has run."
+    get:
+      operationId: receiveWebhookGet
+      x-source: alerta/webhooks/custom.py:17-21
+      x-scope: write:webhooks
+      summary: Same handler as POST
+      description: *webhookDispatch
+      responses: *webhookResponses
+      x-runtime: "NOT_RUN"
+  /webhooks/{webhook}/{path}:
+    parameters:
+      - {$ref: '#/components/parameters/WebhookName'}
+      - name: path
+        in: path
+        required: true
+        description: "Flask `<path:path>`: may contain `/`, which OpenAPI path parameters cannot express. Passed to the provider as `path`."
+        schema: {type: string}
+    post:
+      operationId: receiveWebhookPath
+      x-source: alerta/webhooks/custom.py:18-21
+      x-scope: write:webhooks
+      summary: Same handler as /webhooks/{webhook}, with a sub-path
+      description: *webhookDispatch
+      responses: *webhookResponses
+      x-runtime: "NOT_RUN"
+    get:
+      operationId: receiveWebhookPathGet
+      x-source: alerta/webhooks/custom.py:18-21
+      x-scope: write:webhooks
+      summary: Same handler as POST
+      description: *webhookDispatch
+      responses: *webhookResponses
+      x-runtime: "NOT_RUN"
   /:
     get:
       operationId: apiIndex
@@ -3835,7 +3995,14 @@ paths:
           the `/` rule's `href` is `//`, and every other `href` is
           `urljoin('//', path)`, for example `///alerts` (Python stdlib
           behavior, checked offline). Absolute links are therefore not
-          unconditional (ROOT-C2); inside a normal request they are absolute.
+          unconditional (ROOT-C2).
+        - Links are absolute inside a request only when `BASE_URL` is empty
+          (so `url_root` is used) or is itself absolute. `BASE_URL` is any
+          string and is not validated (`utils/config.py:27`): a relative value
+          such as `/api` gives `uri` `/api`, the `/` rule's `href` `/api/`
+          and `/api/alerts`, with no exception (ROOT-C4). A `BASE_URL`
+          ending in `/` also doubles the slash on the `/` rule's own
+          `href`.
         - For Flask rules, `method` joins the rule's methods minus `HEAD` and
           `OPTIONS` in set order, which is not defined.
         - The list is sorted by `href`.
