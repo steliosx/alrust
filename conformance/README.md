@@ -17,7 +17,9 @@ and a seeded differential replay runner. It imports neither implementation.
 Four customer-mapping cases were authored from the reviewed source spec; their
 prior-head local runtime result is recorded below. Operator cases also have a
 separate prior-head reference result; metadata cases also have a scoped frozen-head
-reference result. Three new heartbeat cases remain SOURCE_DERIVED / NOT_RUN.
+reference result. Three frozen-head heartbeat cases also have a separate reference result. Four
+new [heartbeat input/query cases](heartbeat-input-query.md) are SOURCE_DERIVED /
+HTTP NOT_RUN.
 Lifecycle, broader auth, query, heartbeat, timeout
 and stateful shrinking coverage remain incomplete. Empty Rust crates and offline harness
 tests are not evidence of Alerta compatibility.
@@ -104,9 +106,11 @@ Python 3.12.14/PostgreSQL 16 against reference
 frozen `a7426411` in the separately recorded customer window below. Operator
 cases passed at frozen `a4d75716`; metadata cases passed at frozen `678f1996`.
 The three heartbeat cases were reviewed at frozen `9548f878`; runner `6bc8742d`
-was separately reviewed. Their fresh window is awaiting a substantive ACK,
-so heartbeat HTTP remains NOT_RUN. Neither that source approval nor its window
-applies to this new integration head. Historical runs do not approve this changed head.
+was separately reviewed. Those three cases passed at frozen `9548f878` in
+`alrust-heartbeat-vectors-reference-20260930-01`, released `1ba053be` and
+independently confirmed `4dbd2043`, in 0.56 seconds. Neither source approval
+nor that window applies to this new follow-up head. Historical runs do not
+approve this changed head.
 Hosted Phase 0 gate remains CI_BLOCKED_BILLING. Never substitute local results
 for CI or claim Rust parity from a reference-only smoke.
 
@@ -136,14 +140,17 @@ independently confirmed by both agents (`0f72c944` / `8e0db6f8`). The prior
 operator window did not run them. Raw tag order is retained, including where
 assertions can only check tag content/count because reference ordering is undefined.
 
-Three [heartbeat vectors](heartbeats.md) remain heartbeat HTTP NOT_RUN.
-Their frozen-head source and runner approvals and pending window are separate
-from this integration, which needs fresh exact-source and execution review;
-no released metadata window authorizes them. Neither the heartbeat suite nor
-this changed head has a runtime pass or inherited review approval.
+Three [heartbeat vectors](heartbeats.md) passed only at the frozen head and
+window above. Four [input/query follow-up cases](heartbeat-input-query.md)
+remain HTTP NOT_RUN. They require a fresh exact-source verdict and reviewed
+runner/window. No released heartbeat or metadata window authorizes them.
+This changed head has no runtime pass or inherited review approval.
 
-This isolated integration combines reviewed guard `e839ceaf`, hash/clock/key
+The reviewed base integration `061d2a969d8fc4bd876f54885758727c5643c896`
+(Claude source/offline APPROVE `3d0e68fd`, 50 tests and 16 collected) combines guard `e839ceaf`, hash/clock/key
 harness `130145ea` and HTTP vectors `9548f878` without changing the Python
-code, tests, locks, guard or pinned reference files. Only this README resolves
-the branch overlap. The integrated code has no inherited review approval or
-HTTP runtime pass. Hosted billing and the full Phase0 gate remain separate.
+code, locks, guard or pinned reference files. Its README resolved the branch
+overlap. This follow-up adds four HTTP cases without changing the existing
+fixture/tests/library/lock/guard/reference. It needs a fresh review; integration
+HTTP and follow-up HTTP are NOT_RUN. Hosted billing and the full Phase0 gate
+remain separate.
