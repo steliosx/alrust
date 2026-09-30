@@ -183,3 +183,10 @@ pass or review approval at this new note head. These two cases are
 SOURCE_DERIVED / HTTP NOT_RUN and need fresh source and execution review
 plus their own signed window. No library, lock, reference pin, repository
 STATUS or DECISIONS file changes here.
+
+Two [ordinary owned blackout cases](blackouts.md) add fixed expired-period
+create/detail/list/update/delete and recomputed priority checks. They retain
+raw values, including the source-derived integer-on-create versus decimal-string
+remaining on reads. They do not exercise alert matching or customer widening.
+This changed head is SOURCE_DERIVED / HTTP NOT_RUN and needs its own exact-source
+review and reviewed runner/window.
