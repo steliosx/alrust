@@ -15,8 +15,9 @@ This initial foundation is **not the full Phase 0 suite**. It includes target
 selection, synthetic create/dedup/detail/cleanup cases, strict JSON comparison
 and a seeded differential replay runner. It imports neither implementation.
 Four customer-mapping cases were authored from the reviewed source spec; their
-prior-head local runtime result is recorded below. New operator action cases
-remain NOT_RUN. Lifecycle, broader auth, query, heartbeat, timeout
+prior-head local runtime result is recorded below. Operator cases also have a
+separate prior-head reference result; new metadata cases remain NOT_RUN.
+Lifecycle, broader auth, query, heartbeat, timeout
 and stateful shrinking coverage remain incomplete. Empty Rust crates and offline harness
 tests are not evidence of Alerta compatibility.
 
@@ -67,8 +68,9 @@ cases at frozen `9d70dc2e4e09c95901d1f8be2096e6ec2effa2bc` passed locally on
 Python 3.12.14/PostgreSQL 16 against reference
 `f4312727783dad64198b62ed778bbca98a5144a3` in signed window
 `alrust-ref-smoke-20260929-03`; cleanup was confirmed. Customer cases passed at
-frozen `a7426411` in the separately recorded customer window below; new operator
-cases remain NOT_RUN and await independent review and a separate signed window.
+frozen `a7426411` in the separately recorded customer window below. Operator
+cases passed at frozen `a4d75716`; new metadata cases remain NOT_RUN and await
+independent review and a separate signed window.
 Hosted Phase 0 gate remains CI_BLOCKED_BILLING. Never substitute local results
 for CI or claim Rust parity from a reference-only smoke.
 
@@ -76,15 +78,15 @@ See [customer fixtures](customer-fixtures.md) for prerequisites and the private
 synthetic credential schema. Running the whole HTTP directory now requires
 that fixture; missing prerequisites fail before customer HTTP requests.
 
-Five new [operator status/action vectors](operator-actions.md) are
-SOURCE_DERIVED / NOT_RUN and require fresh exact-head peer review and a new
-signed execution window. The released customer-only window did not run them.
+Five [operator status/action vectors](operator-actions.md) have a separate
+frozen-head runtime result recorded below. The customer-only window did not
+run them; their execution used its own reviewed runner and signed window.
 The four customer vectors passed locally at frozen
 `a7426411181f4dd3cc859581cc203ee4067c07b4` against reference
 `f4312727783dad64198b62ed778bbca98a5144a3` in signed window
 `alrust-customer-reference-20260930-01`, with stored-record attestation and
 confirmed cleanup. That narrow prior-head evidence is separate from this new
-head's unexecuted operator tests and the blocked hosted gate.
+operator result and the blocked hosted gate.
 
 The five operator cases later passed only at frozen
 `a4d75716755b89b7a1ab9acfac122092ee7b736e` in signed window
