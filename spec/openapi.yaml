@@ -16,7 +16,8 @@ info:
       `/environments`, `/services`, `/alerts/groups`, `/alerts/tags`) with
       their query parameters, including the `q=` grammar; **alert notes**;
       **blackouts**; **API keys**; **users**; **groups**; **permissions**
-      (with `/scopes`). Not yet written: customers, `/config` and management.
+      (with `/scopes`); **customers**. Not yet written: `/config` and
+      management.
     - **Reference security defects** are recorded where found (marked
       SECURITY). They describe the class of problem at source level only;
       no exploit was built or run. They are recorded for the owner's
@@ -650,6 +651,25 @@ components:
         href: {type: string, description: "absolute URL /perm/<id>"}
         match: {type: string}
         scopes: {type: array, items: {type: string}}
+    Customer:
+      type: object
+      x-source: alerta/models/customer.py:11-87; alerta/sql/schema.sql:100-106
+      description: |
+        A customer lookup mapping: `match` (a login, email, group name or
+        email domain) maps to `customer`. `match` is NOT NULL but **not
+        unique** (the unique constraint is dropped at `schema.sql:106`), and
+        `customer` is nullable. `get_customers_by_match`
+        (`postgres/base.py:1351-1367`) collects the `customer` of every row
+        matching the login and each group or domain; any `*` means all
+        customers, returned to callers as `[]`, that is **no customer
+        filtering** (`models/customer.py:84-87`). See
+        `spec/customer-mapping.md` section 1 for where this feeds
+        `g.customers`.
+      properties:
+        id: {type: string}
+        href: {type: string, description: "absolute URL /customer/<id>"}
+        match: {type: string}
+        customer: {type: [string, "null"]}
     ApiKey:
       type: object
       x-source: alerta/models/key.py:24-78, :100-111; alerta/sql/schema.sql:123-133
@@ -3222,6 +3242,161 @@ paths:
                   status: {const: ok}
                   scopes: {type: array, items: {type: string}}
                   total: {type: integer}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /customer:
+    description: |
+      **Customer mappings control customer visibility.** A mapping's
+      `match` is looked up against the login and, at password login, the
+      user's group names and email domain (`auth/basic.py:54`, `:95`), or
+      the email domain for HTTP Basic (`auth/decorators.py:147`), when
+      `CUSTOMER_VIEWS` is on (`auth/utils.py:42-49`). The resulting customers
+      are sealed into a password-login token, or recomputed per request for
+      HTTP Basic and the auth proxy.
+      - **SECURITY-relevant (source-derived, NOT verified): no customer
+        ceiling on mapping writes.** `POST` and `PUT` require only
+        `admin:customers`; nothing compares the mapped `customer` with the
+        caller's own `g.customers`. A holder of `admin:customers` who is
+        customer-scoped can therefore map their own login, a group they
+        belong to, or their domain to another customer, or to `*`, which
+        removes customer filtering entirely for that login
+        (`models/customer.py:84-87`). Nothing was executed. This parallels
+        G-SEC-1 and P-SEC-1; an owner decision.
+    post:
+      operationId: createCustomer
+      x-source: alerta/views/customers.py:16-37; alerta/models/customer.py:18-24; alerta/database/backends/postgres/base.py:1297-1303
+      x-scope: admin:customers
+      description: |
+        - `Customer.parse` reads `id`, `match` and `customer` with no
+          validation and no ValueError path, so the 400 handler is
+          unreachable. A non-object body raises outside it (inferred generic
+          500). A client-supplied `id` is used as is.
+        - A missing `match` (NOT NULL) or a duplicate `id` gives 500 with
+          the **database error text** (`:26-29`). A duplicate `match` is
+          accepted (no unique constraint). A null `customer` is stored.
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, id, customer]
+                properties:
+                  status: {const: ok}
+                  id: {type: string}
+                  customer: {$ref: '#/components/schemas/Customer'}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /customer/{customer_id}:
+    parameters:
+      - {name: customer_id, in: path, required: true, schema: {type: string}, description: "exact id match"}
+    get:
+      operationId: getCustomer
+      x-source: alerta/views/customers.py:40-50; alerta/database/backends/postgres/base.py:1305-1307
+      x-scope: read:customers
+      description: |
+        - Visible when the caller's scopes **literally contain** `admin` or
+          `admin:customers` (a list membership test, not `is_in_scope`), or
+          when the mapping's `customer` is in `g.customers`; otherwise 404.
+        - **An unknown id gives 500, not 404** (inferred, NOT_RUN): there is
+          no not-found check, so `find_by_id` returns None and the view then
+          reads `customer.serialize` or `customer.customer` on None, an
+          AttributeError answered by the generic handler.
+        - Callers with an empty `g.customers` and no literal admin scope get
+          404 for every existing mapping. That covers anonymous access with
+          `AUTH_REQUIRED` false (scopes `[]`) and ordinary `read`/`write`
+          users, who pass the decorator through `is_in_scope`.
+      responses:
+        "200":
+          description: Found and visible
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, total, customer]
+                properties:
+                  status: {const: ok}
+                  total: {const: 1}
+                  customer: {$ref: '#/components/schemas/Customer'}
+        "404": {description: "exists but not visible to the caller", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+    put:
+      operationId: updateCustomer
+      x-source: alerta/views/customers.py:89-109; alerta/models/customer.py:78-79; alerta/database/backends/postgres/base.py:1326-1341
+      x-scope: admin:customers
+      description: |
+        - An empty body gives 400 `nothing to change`; an unknown id gives
+          404 (this handler does check). No visibility check: any
+          `admin:customers` holder can edit any mapping.
+        - `match` and `customer` are written whenever the **key is
+          present**, even when null: `{"match": null}` violates NOT NULL
+          (generic 500), while `{"customer": null}` stores NULL. Other keys
+          are ignored; body keys `id` and `self` collide with the method
+          signatures (inferred TypeError, 500). A non-object body fails at
+          `**` (generic 500). The body is `{status, customer}` with no
+          `total`.
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, customer]
+                properties:
+                  status: {const: ok}
+                  customer: {$ref: '#/components/schemas/Customer'}
+        "400": {description: "nothing to change", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+    delete:
+      operationId: deleteCustomer
+      x-source: alerta/views/customers.py:112-128; alerta/database/backends/postgres/base.py:1343-1349
+      x-scope: admin:customers
+      description: "An unknown id gives 404. No visibility check."
+      responses:
+        "200": {description: Deleted, content: {application/json: {schema: {type: object, required: [status], properties: {status: {const: ok}}}}}}
+        "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /customers:
+    get:
+      operationId: listCustomers
+      x-source: alerta/views/customers.py:53-86; alerta/database/backends/postgres/utils.py:442-462, :28-104; alerta/database/backends/postgres/base.py:1309-1324
+      x-scope: read:customers
+      description: |
+        - **The SQL is not customer-filtered.** `from_params` receives
+          `customers=g.customers` but ignores it (`utils.py:442-462`), so the
+          count, `pages` and `more` cover **all** mappings. The page is
+          fetched, and then rows are dropped in Python unless the caller
+          literally holds `admin` or `admin:customers` or the row's `customer`
+          is in `g.customers` (`:61-64`).
+        - A customer-scoped caller therefore sees only their visible rows of
+          that page, with `total` = the global count (the number of all
+          mappings is disclosed), and pages that can be partly or wholly
+          empty. When no row of the page is visible, the empty branch reports
+          `message: not found`, `customers: []` and **`total: 0`**, while
+          `pages` and `more` still reflect the global count.
+        - Anonymous access (`AUTH_REQUIRED` false) and ordinary users without
+          a mapped customer always get the empty branch.
+        - Filters: `match`, `customer`; `id` is ignored (EXCLUDE_FROM_QUERY).
+          Sorts: `match`, `customer`. No `sort-by` emits `ORDER BY (select
+          1)`.
+      parameters:
+        - {$ref: '#/components/parameters/Page'}
+        - {name: page-size, in: query, schema: {type: integer}}
+      responses:
+        "200": {description: "`{status, page, pageSize, pages, more, customers, total}`; empty adds `message: not found` and reports total 0", content: {application/json: {schema: {type: object, additionalProperties: true}}}}
+        "400": {description: "invalid filter or sort name", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "416": {description: "page out of range (computed from the unfiltered count)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         "401": {$ref: '#/components/responses/Unauthorized'}
         "403": {$ref: '#/components/responses/Forbidden'}
         "500": {$ref: '#/components/responses/ServerError'}
