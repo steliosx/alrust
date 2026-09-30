@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-09-30T00:52Z by claude-alrust, the sole writer of this
+_Last updated: 2026-09-30T01:01Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -30,6 +30,7 @@ review.
 | `codex/synthetic-key-preflight` HF-5 (on `db06ce44`) | codex | `e91dcabea1291b6540bc4d97636e6eef8df2bef0` | Claude: **APPROVE** for the differential-CLI credential contract (`SYNTHETIC-` plus 48 hex) |
 | `codex/hash-locked-harness` HF-4/HF-8 (on `e91dcabe`) | codex | `130145ea7b0f0b7502043c19b953e38da3e47a59` | Claude: **APPROVE**. Hash-locked wheels reproduced independently: offline install, tamper rejected, 40/40 tests. Citations corrected |
 | `codex/customer-conformance` (on `9d70dc2e`) | codex | `a7426411181f4dd3cc859581cc203ee4067c07b4` | Claude: **APPROVE** for the 4 customer HTTP vectors as source-derived expectations. Runtime is **NOT_RUN** and needs its own window, with CLI-seeded synthetic keys |
+| Customer runner (operations script, not in Git) | codex | `customer_reference_01.py` sha256 `4ba51ed9…8f16` | Claude: **APPROVE** for the four-vector execution scope (RF1 budget, RF2 deferred-stop cleanup). v2 `d937e69b` is superseded. No window requested yet |
 | `claude/spec-customer-mapping` | claude | `207f1bcac270afa40b8efc1bb2464e1886e48857` | Codex: **APPROVE** for its source-derived scope (C1–C19) |
 | `claude/spec-lifecycle-receive` | claude | `a1de491c6677a3134c65d0e0b086cae08b925087` | Codex: **APPROVE** for its source-derived scope (receive slice only). HTTP beyond the 2 smoke cases is NOT_RUN |
 | `claude/spec-lifecycle-actions` (on receive) | claude | `cedfcdff5afb8198bfb3588836156ca8510d076c` | Codex: **APPROVE** for its source-derived scope (A0–A6) |
@@ -38,7 +39,7 @@ review.
 | `claude/charter-sync` | claude | this head | Codex **APPROVE** at `ac667cf8`. This STATUS refresh needs its own review |
 | ALRUST-P0-CLOCK-01 policy | codex | design02 `67bb59f5…` | Claude: concurred, and approved as implemented in `db06ce44` |
 | `claude/adr-0004-webui` (on `c9bbfaf5`) | claude | `e5a23c46c4a735a2437657df20125617b423e37f` | Codex: **APPROVE** as a proposed assessment. No webui source is selected; E1–E3 are NOT_RUN; a re-pin would be the owner's call |
-| `claude/docs-landing` → draft [PR #2](https://github.com/steliosx/alrust/pull/2) (on `main`) | claude | `9409fde562482ddb4aca6a60ff1c90b9e6832dda` | README only (ALRUST-DOCS-LANDING-01); awaiting Codex review. The merge is the owner's |
+| `claude/docs-landing` → draft [PR #2](https://github.com/steliosx/alrust/pull/2) (on `main`) | claude | `fcc06d7301a2048ab6fc4c73a80f5874dd3d08f4` | README only (ALRUST-DOCS-LANDING-01). Codex REQUEST_CHANGES at `9409fde5` (LD1–LD4); corrections at `fcc06d73` await review. Hosted checks for PR #2: NOT_RUN (no workflow on `main`). The merge is the owner's |
 
 ## Checks
 
