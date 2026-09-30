@@ -2888,9 +2888,10 @@ paths:
             can neither fix nor delete the group;
           - `GET /groups` for any page that contains the row;
           - `user.get_groups()` for each member: `GET /user/{user_id}/groups`,
-            password login (`auth/basic.py:93`), and every auth-proxy request
-            (`auth/decorators.py:116` evaluates `get_groups()` as an argument
-            even when `CUSTOMER_VIEWS` is off).
+            password login (`auth/basic.py:93`), and every request that
+            selects the auth-proxy branch (`auth/decorators.py:116` evaluates
+            `get_groups()` as an argument even when `CUSTOMER_VIEWS` is off;
+            an API key or Bearer token is checked earlier).
           Whether alrust accepts, rejects or repairs such names is an owner
           decision; this spec records the reference path only.
         - A duplicate `name` raises inside `_updateone`, outside any handler
@@ -3006,9 +3007,11 @@ paths:
         Paged list of all groups (no customer filtering). Empty gives
         `message: not found` and total 0.
         - Paging (`utils/paging.py:9-33`) uses the count query's total.
-          With a zero count, `pages` is 0 and `more` is false, and any page
-          >= 1 is accepted (page 2 included); with a nonzero count, a page
-          beyond `pages` gives 416.
+          For a positive effective page size: with a zero count, `pages` is
+          0 and `more` is false, and any page >= 1 is accepted (page 2
+          included); with a nonzero count, a page beyond `pages` gives 416.
+          A negative `page-size` changes this arithmetic, and the resulting
+          negative LIMIT is not established here.
         - Filters: `name`, `text`, `count`; `id` is ignored
           (EXCLUDE_FROM_QUERY). **`count` is not a column**: it is a SELECT
           alias, which PostgreSQL does not resolve in WHERE, so a `count`
@@ -3046,9 +3049,13 @@ paths:
           `is_in_scope(want, g.scopes)`, else 403. Names are not validated
           against the known scopes; an unknown name passes only when the
           ceiling derivation reaches a scope the caller has (for example an
-          `admin` caller and `read:<anything>`). Anonymous callers
-          (`AUTH_REQUIRED` false) have `g.scopes == []`, so only `scopes:
-          []` passes.
+          `admin` caller and `read:<anything>`). **An empty-string scope
+          passes for any caller**: `is_in_scope` returns true for a falsy
+          wanted scope before comparing (`models/permission.py:96-97`), and
+          `Scope("")` is kept as is. Anonymous callers (`AUTH_REQUIRED` false)
+          have `g.scopes == []`, so for them only `scopes: []` or a list of
+          empty strings passes the ceiling. This is a control-flow trace;
+          the insert and endpoint outcome for such a list are NOT_RUN.
         - A missing `match` (NOT NULL) or a duplicate `match` (UNIQUE) or
           `id` gives 500 with the **database error text** (`:40-41`).
       responses:
@@ -3161,7 +3168,11 @@ paths:
           each response gives them a **fresh random uuid4 `id`** and an
           `href` that 404s. `total` is the stored count plus 3, and
           `pages`/`more` use that total, while each page returns up to
-          `page-size` stored rows **plus** the three entries.
+          `page-size` stored rows **plus** the three entries. For example,
+          with no stored rows and `page-size` 1 the total is 3, so page 1
+          has `pages` 3 and `more` true, page 3 has `more` false and page 4
+          gives 416, yet every valid page returns only the three built-in
+          entries (Page model trace; the HTTP response is NOT_RUN).
         - Filters: `match`, and `scope` (singular, column `scopes`), which
           takes the generic path `"scopes"=%(scopes)s`. The value is parsed
           as an array literal, so a plain scope name is an inferred SQL error
@@ -3191,9 +3202,14 @@ paths:
       x-scope: read:perms
       description: |
         `Scope.find_all()`: every `Scope` class attribute whose value starts
-        with `admin`, `write`, `read` or `delete`, in definition order, then
-        the `CUSTOM_SCOPES` added at startup (`Scope.init_app`, each checked
-        against `(admin|write|read|delete):\w+(\.\w+)?`, `:94-100`).
+        with `admin`, `write`, `read` or `delete`, in attribute insertion
+        order. `Scope.init_app` adds each `CUSTOM_SCOPES` entry (checked
+        against `(admin|write|read|delete):\w+(\.\w+)?`) with `setattr` under
+        a name derived by replacing `:` and `.` with `_` (`:94-100`). A new
+        name is appended; a name that already exists (a built-in such as
+        `read:alerts`, or a repeated entry) is overwritten in place, so the
+        list is not always the built-ins followed by `CUSTOM_SCOPES`
+        verbatim.
       responses:
         "200":
           description: All scope names
