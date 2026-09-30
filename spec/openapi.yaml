@@ -36,10 +36,19 @@ info:
        with scopes `[]` and no scope check (`:156-161`).
     4. With `AUTH_REQUIRED` and `ALLOW_READONLY`, anonymous callers get
        `READONLY_SCOPES` (`:164-169`).
-    5. Otherwise the request gets 401.
+    5. With `AUTH_REQUIRED` true, `ALLOW_READONLY` false and no
+       credentials, a request carrying a truthy `X-Appengine-Cron` header
+       and `X-Forwarded-For` exactly `0.1.0.1` is let through with **no scope
+       check** (Google App Engine cron, `:171-173`). This branch sets none of
+       `g.login`, `g.scopes` or `g.customers`; what the views then do
+       (customer filtering, audit, errors) is NOT established. Whether alrust
+       keeps this branch is an owner decision on the authentication
+       contract; this spec only records it.
+    6. Otherwise the request gets 401.
 
     A missing scope gives 403. The `{}` security alternative below
-    therefore means anonymous access **only** under branches 3 and 4.
+    therefore means access without credentials **only** under branches 3,
+    4 and 5.
 servers:
   - url: /
     description: Relative to the server's base URL
@@ -133,22 +142,29 @@ components:
       additionalProperties: true
       description: |
         This schema describes what the **parser accepts**; it adds no
-        validation of its own. Unknown fields are ignored.
+        validation of its own. Unknown fields are ignored. Where no `type`
+        is given, the parser does not check the type; success for
+        non-string values of such fields (assignment, storage) is NOT
+        established.
+        - **Absent and present-null differ.** `json.get(field, default)`
+          applies the default only when the field is absent. A present
+          `null` in `tags` or `attributes` fails the list/object check and
+          gives 400 (`:74-79`, `views/heartbeats.py:22-25`).
         - `request.json` behavior is inferred from Flask, NOT verified: a
           non-JSON content type gives 415 and malformed JSON gives 400
           (werkzeug handlers, `exceptions.py:83-94`). A JSON body that is
           not an object makes `json.get` raise AttributeError, which is not
           a ValueError, so it gives 500.
       properties:
-        id: {type: [string, "null"], description: "falsy gives a server uuid4"}
-        origin: {description: "falsy gives `<argv0>/<hostname>` of the server"}
+        id: {description: "not type-checked; falsy gives a server uuid4 (:51)"}
+        origin: {description: "not type-checked; falsy gives `<argv0>/<hostname>` of the server"}
         tags:
-          type: [array, "null"]
+          type: array
           description: |
-            Must be a list when present (400 otherwise). Element types are
-            **not** checked by the parser. Persisting non-string elements is
-            not established.
-        attributes: {type: [object, "null"], description: "must be an object when present (400); keys containing `.` or `$` give 400 (:30-32)"}
+            Absent gives `[]`. Present must be a list: `null` or any other
+            non-list gives 400. Element types are **not** checked by the
+            parser. Persisting non-string elements is not established.
+        attributes: {type: object, description: "absent gives {}; present must be an object (`null` or a non-object gives 400); keys containing `.` or `$` give 400 (:30-32)"}
         createTime:
           description: |
             A string must match `%Y-%m-%dT%H:%M:%S.%fZ` (400 otherwise). A
@@ -162,11 +178,11 @@ components:
             - Booleans pass the int check (true gives 1, false gives 0).
             - Floats and strings give 400. A negative value gives 400.
         customer:
-          type: [string, "null"]
           description: |
-            `""` gives 400. A null value is accepted and then assigned by
-            `assign_customer` (C11). A non-empty value goes through the same
-            assignment rules.
+            The parser only rejects `""` (400); it does not check the type.
+            Null or absent is assigned by `assign_customer` (C11). Any other
+            value goes through the same assignment rules; success for
+            non-string values is NOT established.
     HistoryEntry:
       type: object
       x-source: alerta/models/history.py:21-34
@@ -228,24 +244,29 @@ components:
       description: |
         What the **parser accepts** (lifecycle R0). Unknown fields are
         ignored. Parse errors give 400. Policy (R1.2) is applied afterwards.
+        Where no `type` is given, the parser does not check the type, and
+        success for other value types is NOT established.
+        - **Absent and present-null differ** for the four containers:
+          absent takes the default, while a present `null` fails the
+          list/object check and gives 400 (`alert.py:83-90`).
         A JSON body that is not an object gives 500 (AttributeError, as for
         HeartbeatInput; inferred, NOT verified).
       properties:
-        id: {type: [string, "null"], description: "falsy gives a server uuid4. A supplied id is used for a new alert; on duplicate or correlate the stored id is kept and the new id becomes lastReceiveId (R5, R6)"}
-        resource: {type: string, description: "required; empty gives 400"}
-        event: {type: string, description: "required; empty gives 400. `Heartbeat` is diverted (HB3)"}
-        environment: {type: [string, "null"], description: "must match ALLOWED_ENVIRONMENTS or the request gets 403 (R1.2)"}
-        severity: {type: [string, "null"], description: "not checked at parse time. An unknown severity gives 500, not 400 (R1.1)"}
-        correlate: {type: [array, "null"], description: "must be a list (400). Non-empty gets the event appended (R0.6)"}
-        status: {type: [string, "null"], description: "`blackout` bypasses the pre-receive plugins (R1 step 1)"}
-        service: {type: [array, "null"], description: "must be a list (400); empty gives 403 (R1.2)"}
-        group: {type: [string, "null"]}
+        id: {description: "not type-checked; falsy gives a server uuid4. A supplied id is used for a new alert; on duplicate or correlate the stored id is kept and the new id becomes lastReceiveId (R5, R6)"}
+        resource: {description: "required: absent or falsy gives 400 (:28-29); type not checked"}
+        event: {description: "required: absent or falsy gives 400 (:30-31); type not checked. `Heartbeat` is diverted (HB3)"}
+        environment: {description: "must match ALLOWED_ENVIRONMENTS or the request gets 403 (R1.2)"}
+        severity: {description: "not checked at parse time. An unknown severity gives 500, not 400 (R1.1)"}
+        correlate: {type: array, description: "absent gives []; present must be a list (null gives 400). Non-empty gets the event appended (R0.6)"}
+        status: {description: "`blackout` bypasses the pre-receive plugins (R1 step 1)"}
+        service: {type: array, description: "absent gives []; present must be a list (null gives 400); empty gives 403 (R1.2)"}
+        group: {}
         value: {}
-        text: {type: [string, "null"]}
-        tags: {type: [array, "null"], description: "must be a list (400)"}
-        attributes: {type: [object, "null"], description: "must be an object (400); keys with `.` or `$` give 400 (R0.2); null values are dropped by the post-receive rewrite (R1.3)"}
-        origin: {type: [string, "null"]}
-        type: {type: [string, "null"]}
+        text: {}
+        tags: {type: array, description: "absent gives []; present must be a list (null gives 400); element types not checked"}
+        attributes: {type: object, description: "absent gives {}; present must be an object (null gives 400); keys with `.` or `$` give 400 (R0.2); null values are dropped by the post-receive rewrite (R1.3)"}
+        origin: {}
+        type: {}
         createTime:
           description: |
             A string must match `%Y-%m-%dT%H:%M:%S.%fZ` (400 otherwise). A
@@ -253,7 +274,7 @@ components:
             server uses now (`format.py:55-57`).
         timeout: {type: [integer, boolean, "null"], description: "R0.4: null gives ALERT_TIMEOUT; booleans become 1 or 0; strings, floats and negative values give 400"}
         rawData: {}
-        customer: {type: [string, "null"], description: "`\"\"` gives 400; otherwise assigned by assign_customer, which can give 400 (C7-C11)"}
+        customer: {description: "the parser only rejects `\"\"` (400) and does not check the type; otherwise assigned by assign_customer, which can give 400 (C7-C11). Success for non-string values is NOT established"}
     AlertIdOnly:
       type: object
       required: [status]
@@ -295,7 +316,7 @@ paths:
         "401": {$ref: '#/components/responses/Unauthorized'}
         "403": {$ref: '#/components/responses/Forbidden'}
         "500": {$ref: '#/components/responses/ServerError'}
-      x-runtime: "NOT_RUN; Codex heartbeat vectors 9548f878 are approved as source and cover this 201 shape, upsert identity and slow status once executed"
+      x-runtime: "LOCAL_PASS (reference only) for the 201 shape and upsert identity: Codex vectors 9548f878, window alrust-heartbeat-vectors-reference-20260930-01, release 1ba053be, cleanup verified 4dbd2043. Parser edge cases, status computation, expiry and boundaries are NOT_RUN"
   /heartbeat/{heartbeat_id}:
     parameters:
       - name: heartbeat_id
@@ -314,6 +335,7 @@ paths:
         **No customer filter.** The view passes `g.get('customer')`
         (singular), which is never set, so any customer's heartbeat is
         returned (C19, HB4.2).
+      x-runtime: "LOCAL_PASS (reference only) for per-id access without customer filtering (C19), in the same heartbeat window. Prefix matching is NOT_RUN"
       responses:
         "200":
           description: Found
@@ -378,6 +400,7 @@ paths:
 
         **Order:** unordered unless `sort-by` is given (`(select 1)`,
         `pg/utils.py:50-51`).
+      x-runtime: "LOCAL_PASS (reference only), same heartbeat window: customer-scoped listing, and a status filter with an empty result giving total 0. The non-empty filtered total, the other filters and sorting are NOT_RUN"
       parameters:
         - {name: status, in: query, schema: {type: array, items: {type: string}}, style: form, explode: true, description: "repeatable and arbitrary. `ok`, `slow` and `expired` each add an OR branch in SQL; any other value is ignored, so `status=foo` alone applies no status predicate (pg.py:886-908)"}
         - {name: page, in: query, schema: {type: integer, default: 1}, description: "out of range gives 416 (paging.py:15-16)"}
@@ -408,13 +431,25 @@ paths:
             - a trailing `!` becomes **part of the key name**; it does not
               negate.
 
-            **Inferred SQL failures, giving 500, NOT verified:**
-            - `tag` compares the `tags` text[] column with a string;
-            - plain `attributes` compares the jsonb column with a string;
+            **Potential SQL failures (inferred from source, NOT verified;
+            no universal 500 is claimed):**
+            - `tag=v` compares the `tags` text[] column with a text
+              parameter. PostgreSQL parses array-literal text such as
+              `{a,b}` as an array, so such values may succeed; other values
+              are potential malformed-literal errors (500). Valid-literal
+              behavior is NOT_RUN.
+            - Plain `attributes=v` compares the jsonb column with a text
+              parameter. JSON-formatted text may be accepted as jsonb;
+              non-JSON text is a potential input error (500). NOT_RUN.
+
+            **Missing-name hypotheses** (independent of the value; NOT
+            verified):
             - `type` maps to column `event_type`, but the table's column is
-              `type` (`sql/schema.sql:109-118`, `pg/utils.py:280`). This
-              also breaks `sort-by=type`;
-            - `latency` and `since` are SELECT aliases, not columns.
+              `type` (`sql/schema.sql:109-118`, `pg/utils.py:280`). A
+              missing-column error (500) is inferred for any value; it would
+              also break `sort-by=type`.
+            - `latency` and `since` are SELECT-list aliases, not columns.
+              That a WHERE clause cannot reference them is a hypothesis.
       responses:
         "200":
           description: A page, possibly empty
@@ -637,8 +672,10 @@ paths:
         `ApiError("must supply 'tags' as json list")` without a code, and
         `BaseError.code` defaults to 500 (`exceptions.py:9-10`).
 
-        `tags` is not type-checked. A JSON string or object is inferred to
-        fail in SQL with 500 (NOT verified). The audit event is sent before
+        `tags` is not type-checked (NOT verified beyond source): a JSON
+        string is passed as text, which PostgreSQL may accept when it is an
+        array literal such as `{a,b}` and is otherwise a potential 500; an
+        object is a potential driver adaptation error (500). The audit event is sent before
         the write. The write itself uses `WHERE id = <full id> OR id LIKE '<full id>%'`
         (`pg.py:279-357`), so, as for heartbeat delete, a row whose id extends the
         found id is also written. Generated uuid4 ids make this practically
