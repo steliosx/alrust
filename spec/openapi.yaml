@@ -585,7 +585,15 @@ components:
     User:
       type: object
       x-source: alerta/models/user.py:29-97
-      description: "The password hash is not serialized. `email_verified` is serialized as false when null."
+      description: |
+        The password hash is not serialized. Reads rebuild the object through
+        `User.__init__` (`models/user.py:29-45`), which normalizes some fields
+        rather than showing the stored value: a falsy `name` or `text` becomes
+        `""`, a falsy `status` becomes `active`, falsy `attributes` becomes
+        `{}`, a missing `update_time` becomes now, and **`roles` is replaced
+        by `ADMIN_ROLES` whenever the email is in `ADMIN_USERS`**, regardless
+        of the stored roles. `email_verified` is serialized as false when
+        null.
       properties:
         id: {type: string}
         href: {type: string, description: "absolute URL /user/<id>"}
@@ -594,7 +602,7 @@ components:
         email: {type: [string, "null"]}
         domain: {type: [string, "null"]}
         status: {type: [string, "null"]}
-        roles: {type: array, items: {type: string}}
+        roles: {type: [array, "null"], items: {type: string}, description: "the stored text[] is nullable (schema.sql:164) and is passed through for non-admin emails, so a NULL row reads as null; not a claim that POST accepts null roles"}
         attributes: {type: object}
         createTime: {type: string}
         lastLogin: {type: [string, "null"]}
@@ -2461,14 +2469,19 @@ paths:
           **A missing password is hashed as the empty string**
           (`models/user.py:67`); whether the login flow then accepts an
           empty password is not established here.
-        - `ALLOWED_EMAIL_DOMAINS` (default `*`) gives 403; an existing user
-          with the same email gives 409. The scopes implied by `roles` must
+        - Unauthorized domain gives 403 only when `AUTH_REQUIRED` is true and
+          `ALLOWED_EMAIL_DOMAINS` neither contains `*` (the default) nor the
+          user's domain (`auth/utils.py:36-39`). An existing user with the
+          same email gives 409. The scopes implied by `roles` must
           be within the caller's, else 403.
-        - **A failed insert still returns 201.** The view catches the
-          `create()` exception but never raises the ApiError it builds
+        - **A failed insert is swallowed.** The view catches the `create()`
+          exception but never raises the ApiError it builds
           (`views/users.py:45-48`), so execution continues with the unsaved
-          object and returns `201` with data that was not stored (reference
-          defect; source-derived, NOT verified).
+          object. If the later steps succeed (for example with
+          `EMAIL_VERIFICATION` off, the default), the response is `201` with
+          data that was not stored. With verification on,
+          `send_confirmation` or the audit may raise instead. Reference
+          defect; source-derived, NOT verified.
       responses:
         "201":
           description: "Created (or, per the defect above, possibly not stored)"
@@ -2524,9 +2537,12 @@ paths:
           checks the scopes implied by `roles` only when the body has a
           truthy `roles` (`views/users.py:181-186`). `User.update` also
           accepts a legacy singular **`role`** and turns it into `roles =
-          [role]` (`models/user.py:180-181`). So `{"role": "admin"}` grants
-          any role without the ceiling check: a holder of `admin:users` can
-          make any user a full admin. Source-derived, NOT verified.
+          [role]` (`models/user.py:180-181`), and the backend writes `roles`.
+          So `{"role": "admin"}` grants any role without the ceiling check: a
+          holder of `admin:users` can give any user the `admin` role, whose
+          effective scopes follow the configured role-to-scope mapping (full
+          admin under the defaults). Source-derived, traced statically by
+          both agents, NOT verified.
         - Combined with AN1 (credential precedence branch 4): under
           `ALLOW_READONLY`, a caller without credentials reaches this
           handler without a scope check, and could set any user's `role`
@@ -2582,7 +2598,15 @@ paths:
       operationId: updateUserAttributes
       x-source: alerta/views/users.py:233-252
       x-scope: admin:users
-      description: "Missing or empty `attributes` gives 400. Merges into the stored attributes. Returns `{status: ok}` only."
+      description: |
+        Missing or empty `attributes` gives 400. `User.update_attributes`
+        calls `update_user_attributes` (`postgres/base.py:1102-1112`) with
+        `utils/collections.merge` (`:1-12`): nested objects are merged
+        **recursively**, then every **top-level** key whose value is `null`
+        is removed from the merged result (including pre-existing ones);
+        nested nulls are kept. Contrast `PUT /user/{user_id}` with
+        `attributes`, which is a shallow jsonb `||` that keeps nulls. Returns
+        `{status: ok}` only.
       responses:
         "200": {description: Updated, content: {application/json: {schema: {type: object, required: [status], properties: {status: {const: ok}}}}}}
         "400": {description: "missing attributes", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
@@ -2646,6 +2670,7 @@ paths:
         "403": {$ref: '#/components/responses/Forbidden'}
         "500": {$ref: '#/components/responses/ServerError'}
   /user/me/attributes:
+    description: "PUT uses the same recursive merge and top-level null removal as PUT /user/{user_id}/attributes."
     get:
       operationId: getMeAttributes
       x-source: alerta/views/users.py:115-125
@@ -2674,13 +2699,21 @@ paths:
       x-scope: admin:users
       description: |
         Paged list of all users plus `domains` (`ALLOWED_EMAIL_DOMAINS`).
-        Filters and sorts follow the generic rules with names `name`,
-        `login`, `email`, `domain`, `status`, `role`, `attributes`,
-        `createTime`, `lastLogin`, `text`, `updateTime` and
-        `email_verified`; `id` is ignored. `role` takes the generic path
-        (`"roles" = '<v>'`, an array compared with text), not an overlap.
-        No `sort-by` means no ordering. Empty gives `message: not found`
-        and total 0.
+        Empty gives `message: not found` and total 0.
+        - Filters: `name`, `login`, `email`, `domain`, `status`, `role`,
+          `attributes`, `createTime`, `lastLogin`, `text`, `updateTime`,
+          `email_verified`; `id` is ignored. Singular `role` takes the
+          generic path (`"roles" = '<v>'`, an array compared with text), not
+          an overlap; plural `roles` is not a filter (400).
+        - Sorts: the same names except `role` (`sort-by=role` gives 400),
+          plus `roles`.
+        - **`domain` is a computed property** (`models/user.py:47-55`), not
+          a users column (`schema.sql:158-181`), but the allow-list maps it
+          to SQL `domain`, so a `domain` filter or sort is an inferred SQL
+          error (500), not a derived-domain match. NOT_RUN.
+        - No `sort-by` emits `ORDER BY (select 1)`, so there is no
+          meaningful row order.
+        Codex's six builder-body cases confirm the generated fragments.
       parameters:
         - {$ref: '#/components/parameters/Page'}
         - {name: page-size, in: query, schema: {type: integer}}
