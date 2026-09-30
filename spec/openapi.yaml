@@ -1,0 +1,245 @@
+openapi: 3.1.0
+info:
+  title: Alerta API as implemented (reference v9.1.0) - slices extracted for alrust
+  version: "9.1.0-f4312727"
+  description: |
+    Phase 0 item 1: an OpenAPI description of the reference server **as
+    implemented** (the code, not the docs). It is extracted slice by slice.
+
+    - Source: `reference/alerta` @ `f4312727783dad64198b62ed778bbca98a5144a3`.
+      `x-source` gives `path:line` inside that tree.
+    - Evidence level: SOURCE_DERIVED unless an operation's `x-runtime` says
+      otherwise.
+    - Slices in this file: **heartbeats**. Alerts, blackouts, keys, users,
+      customers, management and the query grammar are not yet written.
+    - Cross-references: `spec/lifecycle.md` HB0-HB6; `spec/customer-mapping.md`
+      C11 and C19.
+
+    Common behavior (every operation below):
+    - Credentials follow `auth/decorators.py:25-175`: an API key
+      (`Authorization: Key`, `X-API-Key`, or `?api-key=`), Hawk, Bearer,
+      proxy, Basic, or none when `AUTH_REQUIRED` is false
+      (customer-mapping C1-C4).
+    - Every route also accepts `OPTIONS` (CORS). `?callback=` wraps the
+      response body as JSONP (`utils/response.py:7-19`).
+    - Errors use the ApiError body (`exceptions.py:98-107`).
+servers:
+  - url: /
+    description: Relative to the server's base URL
+components:
+  securitySchemes:
+    apiKeyHeader:
+      type: apiKey
+      in: header
+      name: X-API-Key
+    apiKeyAuthorization:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: "`Key <api-key>`"
+    apiKeyQuery:
+      type: apiKey
+      in: query
+      name: api-key
+    bearer:
+      type: http
+      scheme: bearer
+  schemas:
+    Error:
+      type: object
+      x-source: alerta/exceptions.py:98-107
+      required: [status, message, code, errors, requestId]
+      properties:
+        status: {const: error}
+        message: {type: string}
+        code: {type: integer}
+        errors: {description: "null or a list of strings"}
+        requestId: {type: [string, "null"]}
+    Heartbeat:
+      type: object
+      x-source: alerta/models/heartbeat.py:93-111
+      description: |
+        Every derived field is recomputed on each read, using the **app**
+        clock. The SQL `latency` and `since` columns are ignored
+        (lifecycle HB2).
+      properties:
+        id: {type: string, description: "uuid4 unless supplied; the stored id wins on upsert (HB0.1)"}
+        href: {type: string, description: "absolute URL /heartbeat/<id>"}
+        origin: {type: string}
+        tags: {type: array, items: {type: string}, description: "stored as sent; duplicates are kept"}
+        attributes: {type: object}
+        type: {type: string, description: "always `Heartbeat` from POST: the parser does not read `type` (heartbeat.py:84-92)"}
+        createTime: {type: string, description: "UTC YYYY-MM-DDThh:mm:ss.sssZ; client-supplied or server now"}
+        timeout: {type: integer, description: "seconds"}
+        maxLatency: {type: integer, description: "config HEARTBEAT_MAX_LATENCY (ms); not stored"}
+        receiveTime: {type: string}
+        customer: {type: [string, "null"]}
+        latency: {type: integer, description: "int((receiveTime - createTime) in ms); negative when the client clock is ahead"}
+        since: {type: integer, description: "int seconds since receiveTime (format.py:41-42)"}
+        status: {enum: [ok, slow, expired], description: "expired if since > timeout; otherwise slow if latency > maxLatency; otherwise ok"}
+    HeartbeatInput:
+      type: object
+      x-source: alerta/models/heartbeat.py:72-92
+      additionalProperties: true
+      description: Unknown fields are ignored. Only the properties below are read.
+      properties:
+        id: {type: string}
+        origin: {type: string, description: "default `<argv0>/<hostname>` of the server"}
+        tags: {type: array, items: {type: string}, description: "must be a list, else 400"}
+        attributes: {type: object, description: "must be an object, else 400; keys must not contain `.` or `$`, else 400"}
+        createTime: {type: string, description: "must match %Y-%m-%dT%H:%M:%S.%fZ, else 400"}
+        timeout: {type: integer, description: "must be int (bool accepted, R0.4 analogue) and >= 0, else 400; default HEARTBEAT_TIMEOUT"}
+        customer: {type: string, description: "empty string gives 400; otherwise assign_customer with admin:heartbeats (C11)"}
+paths:
+  /heartbeat:
+    post:
+      operationId: createHeartbeat
+      x-source: alerta/views/heartbeats.py:17-40
+      x-scope: write:heartbeats
+      summary: Create or upsert a heartbeat, keyed on (origin, customer)
+      description: |
+        - `ON CONFLICT (origin, COALESCE(customer, ''))` updates tags,
+          attributes, create_time, timeout and receive_time, and keeps the
+          stored `id` (`pg.py:851-861`; HB0.1).
+        - Heartbeats can also arrive as alerts whose event is `Heartbeat`.
+          That path answers 202 and is documented with `/alert` (HB3.1).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/HeartbeatInput'}
+      responses:
+        "201":
+          description: Created or updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, id, heartbeat]
+                properties:
+                  status: {const: ok}
+                  id: {type: string}
+                  heartbeat: {$ref: '#/components/schemas/Heartbeat'}
+        "400": {description: "parse error, or customer not allowed (C7, C10)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {description: "invalid or expired API key (C1)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "403": {description: "missing write:heartbeats", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "500": {description: "storage error (views/heartbeats.py:31-32)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+      x-runtime: "NOT_RUN; Codex heartbeat vectors 9548f878 are approved as source and cover this 201 shape, upsert identity and slow status once executed"
+  /heartbeat/{heartbeat_id}:
+    parameters:
+      - name: heartbeat_id
+        in: path
+        required: true
+        schema: {type: string}
+        description: |
+          Matched as `id = <v> OR id LIKE '<v>%'`, so a **prefix** matches
+          (`pg.py:863-872`). When several rows share the prefix, which one
+          is returned is undefined.
+    get:
+      operationId: getHeartbeat
+      x-source: alerta/views/heartbeats.py:43-54
+      x-scope: read:heartbeats
+      description: |
+        **No customer filter.** The view passes `g.get('customer')`
+        (singular), which is never set, so any customer's heartbeat is
+        returned (C19, HB4.2).
+      responses:
+        "200":
+          description: Found
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, total, heartbeat]
+                properties:
+                  status: {const: ok}
+                  total: {const: 1}
+                  heartbeat: {$ref: '#/components/schemas/Heartbeat'}
+        "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    delete:
+      operationId: deleteHeartbeat
+      x-source: alerta/views/heartbeats.py:91-108
+      x-scope: write:heartbeats
+      description: |
+        No customer filter, as for GET (C19). The lookup matches by prefix,
+        and the delete then targets that row's full id
+        (`heartbeat.py:178-179`).
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema: {type: object, required: [status], properties: {status: {const: ok}}}
+        "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "500": {description: "delete failed", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /heartbeats:
+    get:
+      operationId: listHeartbeats
+      x-source: alerta/views/heartbeats.py:57-88
+      x-scope: read:heartbeats
+      description: |
+        Filtered by `customers=g.customers` (customer-mapping C16).
+
+        **total and paging:** `total`, `pages` and `more` come from
+        `COUNT(1)` over the query **without** the status filter
+        (`hbv.py:62-66`, `pg.py:921-927`; HB4.1a).
+        - A non-empty page reports the unfiltered total.
+        - An empty page returns `total: 0` with `message: "not found"`
+          (`hbv.py:78-87`).
+
+        **Status filter:** evaluated in SQL on `NOW() at time zone 'utc'`,
+        with untruncated latency. It can therefore disagree with the
+        serialized `status` near the boundaries (HB4.1).
+
+        **Order:** unordered unless `sort-by` is given (`(select 1)`,
+        `pg/utils.py:50-51`).
+      parameters:
+        - {name: status, in: query, schema: {type: array, items: {enum: [ok, slow, expired]}}, style: form, explode: true, description: "repeatable; applied in SQL (pg.py:886-918)"}
+        - {name: page, in: query, schema: {type: integer, default: 1}, description: "out of range gives 416 (paging.py:15-16)"}
+        - {name: page-size, in: query, schema: {type: integer}, description: "default DEFAULT_PAGE_SIZE (50); `limit` is the deprecated alias (paging.py:19-25)"}
+        - {name: sort-by, in: query, schema: {type: array, items: {type: string}}, style: form, explode: true, description: "one of origin, tags, attributes, attributes.<k>, type, createTime, timeout, receiveTime, customer, latency, since; a `-` prefix reverses it. Anything else gives 400 (pg/utils.py:28-49, :273-288)"}
+        - name: filters
+          in: query
+          style: form
+          explode: true
+          schema: {type: object, additionalProperties: {type: string}}
+          description: |
+            `origin`, `tag`, `attributes.<k>`, `type`, `createTime`,
+            `timeout`, `receiveTime`, `customer`, `latency` and `since`
+            are accepted as filters (`pg/utils.py:55-104`, `:273-288`).
+            - A single value means equality; `~v` means ILIKE `%v%`; a
+              `!` suffix negates.
+            - Several values mean `= ANY(...)`, or a regex when any value
+              starts with `~`.
+            - `id` and the paging, sort and credential parameters are
+              excluded from filtering (`EXCLUDE_FROM_QUERY`, `:19-22`).
+              Any other name gives 400 `Invalid filter parameter`.
+            - Inferred, NOT verified: `tag=` compares the `tags` text[]
+              column for equality with a string. `latency`/`since` refer
+              to SELECT aliases, not columns. Such filters are expected to
+              fail in SQL and return 500.
+      responses:
+        "200":
+          description: A page, possibly empty
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, page, pageSize, pages, more, heartbeats, total]
+                properties:
+                  status: {const: ok}
+                  page: {type: integer}
+                  pageSize: {type: integer}
+                  pages: {type: integer}
+                  more: {type: boolean}
+                  heartbeats: {type: array, items: {$ref: '#/components/schemas/Heartbeat'}}
+                  total: {type: integer}
+                  message: {const: not found, description: "present only when the page is empty"}
+        "400": {description: "invalid filter or sort parameter", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "416": {description: "page out of range", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+security:
+  - apiKeyHeader: []
+  - apiKeyAuthorization: []
+  - apiKeyQuery: []
+  - bearer: []
+  - {}
