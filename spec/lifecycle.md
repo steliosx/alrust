@@ -244,6 +244,17 @@ Rules in evaluation order (no action):
 - **R5.5** When the status changes, the status-change hook runs **plugin
   `status_change`** on the *stored* alert, and it may rewrite the new status
   and text (`alert.py:301-302`, `utils/hooks.py:34-45`).
+- **R5.6 [V] Hook helper writes (OA-5).** After `process_status`,
+  `HookTrigger.process_status_change` **always** runs two helpers on the
+  alert it was given (`hooks.py:43-44`), even when `process_status` skipped
+  every plugin because the alert is suppressed (`utils/api.py:173-175`):
+  - `alert.tag(alert.tags)`, a SQL `DISTINCT UNNEST` union that
+    de-duplicates the stored tags; their order may change (`pg.py:312-319`);
+  - `update_attributes`, which drops null-valued keys (R1.3).
+
+  On receive, the hook fires only on a status change (dedup R5.5,
+  correlate `alert.py:358-360`), and it runs on the *stored* matched alert
+  (`duplicate_of`/`correlate_with`).
 
 ## R6. Correlate (`Alert.update`, `alert.py:338-379`, `pg.py:242-262`)
 
@@ -508,7 +519,14 @@ Fall-through, when no row above matched:
   - `updateTime` is now; `timeout` is the A4 value; `user` is the login.
 - **A5.2** The status-change hook runs on **every** action, even when the
   status did not change (`alert.py:666-667`). Unlike receive (R5.5), it is
-  not guarded by a status change.
+  not guarded by a status change. It is also not skipped for suppressed
+  (`blackout`) alerts, even though the pre-action plugin loop is (A2.2). So
+  **every action** applies the R5.6 helper writes to the loaded alert: the
+  tags are de-duplicated, and null-valued attributes are dropped, on that
+  same model object before `set_alert` writes the row. Example: a `blackout`
+  alert with a null attribute and a duplicated tag, given an unknown action,
+  keeps `major`/`blackout` (ACT-1) but loses the null and the duplicate.
+  (Added after Codex raised it as OA-5 on `678f1996`.)
 - **A5.3 [V]** The row update sets `severity`, `status`, `previousSeverity`
   (A2.5) and `update_time = now`, even when nothing changed. `tags` becomes
   the union, `attributes` are replaced with the loaded ones, and `timeout` is
