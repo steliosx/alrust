@@ -232,6 +232,19 @@ Rules:
   recorded as the reference contract without deciding alrust's behavior; any
   change is an owner decision (see `spec/openapi.yaml` `PUT
   /blackout/{blackout_id}`).
+- **C23** **Every API-key update rewrites the key's customer.**
+  `PUT /key/<key>` sets `update['customer'] = assign_customer(wanted=<body
+  customer>, permission=admin:keys)` (`views/keys.py:135`), and
+  `update_key` writes `customer` whenever the key is present
+  (`postgres/base.py:992-993`). An unscoped caller (no customers, for
+  example `admin`, `admin:keys` or `AUTH_REQUIRED=False`) that omits
+  `customer` sets it to **NULL**, so a formerly customer-scoped key becomes
+  unscoped. By C3 and C17, that key then reads **every** customer's alerts.
+  A single-customer caller sets its own customer; a multi-customer caller
+  gets 400. Source-derived, NOT verified. It is recorded as the reference
+  contract without deciding alrust's behavior; any change is an owner
+  decision (see `spec/openapi.yaml` `PUT /key/{key}`, which also records
+  the related expiry and scope defects).
 
 ## Positions and open questions
 
