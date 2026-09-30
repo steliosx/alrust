@@ -518,8 +518,11 @@ components:
           later, the driver returns a Decimal, and `CustomJSONEncoder`
           serializes Decimal as a **string** (`utils/format.py:43-44`). So
           an expired blackout shows `"0"` and an active one a decimal
-          string of seconds. Source-derived; Codex's driver and serializer
-          body probe agrees; HTTP NOT_RUN.
+          string of seconds. Source-derived and body-probed; **runtime
+          LOCAL_PASS** for the expired case (create `120`, reads `"0"`) in
+          window `alrust-blackout-reference-20260930-01` (release
+          `39dd3946`, cleanup verified `58aaa2f5`). The active-blackout
+          value is NOT_RUN.
       properties:
         id: {type: string}
         href: {type: string, description: "absolute URL /blackout/<id>"}
@@ -2018,6 +2021,7 @@ paths:
   /blackout:
     post:
       operationId: createBlackout
+      x-runtime: "LOCAL_PASS (reference only) for two owned expired-blackout cases (explicit times, duration from end - start, integer remaining on create, priority chain), window alrust-blackout-reference-20260930-01. Parser edges, customer rewrite (C22), active blackouts and matching are NOT_RUN"
       x-source: alerta/views/blackouts.py:17-45; alerta/database/backends/postgres/base.py:745-755
       x-scope: write:blackouts
       requestBody:
@@ -2240,8 +2244,10 @@ paths:
              `write` for `read-write`, `read` for `read-only`, and **`[]`
              for any other value**.
 
-          With an unrecognised `type`, the checked list is empty, so the
-          check passes. The key is stored with no scopes, and reads rebuild
+          For a body `user` **not** in `ADMIN_USERS` (the non-admin
+          branch), an unrecognised `type` gives an empty checked list, so
+          the check passes; an admin body user gets `ADMIN_SCOPES` first,
+          which the ceiling check does compare. The key is stored with no scopes, and reads rebuild
           it as `USER_DEFAULT_SCOPES`, which can exceed the caller's scopes.
           This is the create counterpart of the PUT `scopes: []` bypass
           (source-derived, NOT verified; owner decision).
