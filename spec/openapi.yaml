@@ -14,9 +14,8 @@ info:
       and the per-id alert operations); **alert queries** (`/alerts`,
       `/alerts/count`, `/alerts/history`, the top-N endpoints,
       `/environments`, `/services`, `/alerts/groups`, `/alerts/tags`) with
-      the non-`q` query parameters. Not yet written: the `q=` grammar
-      (`queryparser.py`), notes, blackouts, keys, users, customers and
-      management.
+      their query parameters, including the `q=` grammar. Not yet written:
+      notes, blackouts, keys, users, customers and management.
     - **Reference security defects** are recorded where found (marked
       SECURITY). They describe the class of problem at source level only;
       no exploit was built or run. They are recorded for the owner's
@@ -272,14 +271,81 @@ components:
       name: q
       in: query
       schema: {type: string}
-      x-source: alerta/database/backends/postgres/utils.py:144-157; queryparser.py
+      x-source: alerta/database/backends/postgres/utils.py:144-157; alerta/database/backends/postgres/queryparser.py:1-289
+      x-evidence: "SOURCE_DERIVED; the translations below were confirmed by Claude's pure-parser probe of the pinned queryparser.py (pyparsing 3.3.2 as pinned, run on Python 3.14; no app, SQL or HTTP). SQL execution of every translation is NOT_RUN."
       description: |
-        A query string parsed by `QueryParser` into the WHERE clause, with
-        `q.df` as the default field. A parse failure gives 400 `Failed to
-        parse query string.` with the parser error in `errors`. The grammar
-        is specified in the next slice (NOT yet written). When `q` is
-        present it **replaces** the initial `1=1`; the other filters are
-        still ANDed after it.
+        A Lucene-like query string, parsed by `QueryParser` into a SQL
+        fragment that **replaces** the initial `1=1`; the other filters are
+        still ANDed after it. An empty `q` is ignored (falsy). The same parser
+        serves blackouts (`utils.py:231-240`, a later slice).
+
+        **Errors.** A `ParseException` gives 400 `Failed to parse query
+        string.` with the exception in `errors` (a nested traceback list,
+        see Error). **Trailing input is silently ignored:** `parseString` is
+        called without `parseAll` (`queryparser.py:287`), so `foo )bar`
+        parses as `foo` alone. Only input with no parseable prefix (for
+        example `)`) gives 400.
+
+        **Fields.** `field:term`; with no field, the default field
+        (`q.df`, else `text`). Field names are used **directly as SQL
+        column names** in double quotes, not mapped from API names: use
+        `last_receive_id`, not `lastReceiveId`. An unknown column is an
+        inferred SQL error (500, NOT verified). Field names are words of
+        printable characters excluding `=><(){}[]^"~*?:\/.&|`, so they
+        cannot contain `"`. A `%` in a field name reaches the SQL text and
+        is an inferred driver formatting error (500, NOT verified). A
+        backslash escapes the next character in words.
+
+        **Terms** (all values are bound parameters):
+        - bare word `v`: `"field" ILIKE '%v%'`, a case-insensitive
+          **substring** match, not equality (`severity:major` also matches
+          any value containing `major`);
+        - on `tags`, `service` or `correlate`: exact element match,
+          `'v' = ANY("field")`, case-sensitive;
+        - `"a phrase"`: `"field" ~* '\ya phrase\y'`, a case-insensitive
+          regex with word boundaries. **The phrase text is a regex**:
+          metacharacters are live. On `tags`, `service` or `correlate` it is
+          an exact element match instead;
+        - wildcard (only `[a-z0-9]*[?*][a-z0-9]*`, lowercase): `*` becomes
+          `.*` and `?` becomes `.?` (zero or one character, unlike Lucene),
+          wrapped in `\y...\y` word boundaries;
+        - `/regex/`: `"field" ~* 'regex'`, unanchored;
+        - ranges `[a TO b]`, `{a TO b}` and mixed brackets: `>=`/`>` and
+          `<=`/`<`, with `*` meaning unbounded (`1=1`); one-sided `>=v`,
+          `>v`, `<=v`, `<v`. Bounds are text parameters that PostgreSQL
+          coerces to the column type (inferred);
+        - `_exists_:k`: attribute key present, `attributes ? 'k'`;
+        - `_.k:v` (attribute): `attributes->>'k' ILIKE '%v%'`, or the regex
+          form for a phrase. For any other prefix word `p.k`, `p` has
+          **every** `_` replaced by `attributes` and is used as a jsonb
+          column name: `raw_data.x:y` becomes `"rawattributesdata"`, an
+          inferred missing-column 500;
+        - `field:(sub query)`: the subquery's default field is replaced by
+          `field` (or the attribute key for `_.k:(...)`).
+
+        **Operators**, in precedence order: the `+` and `-` modifiers, then
+        `NOT`/`!`, then `AND`/`&&`, then `OR`/`||` or adjacency (**`a b`
+        means OR**).
+        - **`+` and `-` are emitted verbatim as SQL unary operators**
+          (`-a` becomes `- "text" ILIKE ...`), which is inferred to fail in
+          SQL (500, NOT verified). They do not have Lucene's required or
+          prohibit meaning.
+        - **`a OR NOT b` becomes `a AND NOT b`** (`queryparser.py:50-57`),
+          the same as `a NOT b`.
+    QDf:
+      name: q.df
+      in: query
+      schema: {type: string}
+      x-source: alerta/database/backends/postgres/utils.py:149-151; queryparser.py:284-289
+      description: |
+        The default field for `q` terms without a field (default `text`).
+        - **SECURITY (reference defect):** the value is not validated. It
+          replaces the placeholder `__default_field__` in the generated SQL
+          text by plain string replacement (`queryparser.py:289`), inside a
+          double-quoted identifier, with no escaping. Request text
+          therefore becomes SQL text (injection class), reachable with
+          `read:alerts`. Source-level only; not exercised. A benign column
+          name such as `resource` works as documented.
     AlertPathId:
       name: alert_id
       in: path
@@ -1054,6 +1120,7 @@ paths:
         - `autoRefresh` is the management switch `auto-refresh-allow`.
       parameters:
         - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/QDf'}
         - {$ref: '#/components/parameters/AlertFilters'}
         - {$ref: '#/components/parameters/AlertQueryId'}
         - {$ref: '#/components/parameters/AlertDateRange'}
@@ -1099,6 +1166,7 @@ paths:
         default, so the upper bound differs unless `to-date` is given.
       parameters:
         - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/QDf'}
         - {$ref: '#/components/parameters/AlertFilters'}
         - {$ref: '#/components/parameters/AlertQueryId'}
         - {$ref: '#/components/parameters/AlertDateRange'}
@@ -1144,6 +1212,7 @@ paths:
           With no such entry the variable is NULL and nothing matches.
       parameters:
         - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/QDf'}
         - {$ref: '#/components/parameters/AlertFilters'}
         - {$ref: '#/components/parameters/AlertQueryId'}
         - {$ref: '#/components/parameters/AlertDateRange'}
@@ -1185,6 +1254,7 @@ paths:
           `duplicateCount` is summed over the same rows.
       parameters:
         - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/QDf'}
         - {$ref: '#/components/parameters/AlertFilters'}
         - {$ref: '#/components/parameters/AlertGroupBy'}
         - {name: page-size, in: query, schema: {type: integer}}
@@ -1226,6 +1296,7 @@ paths:
           `duplicateCount` is summed over the same rows.
       parameters:
         - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/QDf'}
         - {$ref: '#/components/parameters/AlertFilters'}
         - {$ref: '#/components/parameters/AlertGroupBy'}
         - {name: page-size, in: query, schema: {type: integer}}
@@ -1268,6 +1339,7 @@ paths:
           and each such entry multiplies the rows (`UNNEST(history)`).
       parameters:
         - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/QDf'}
         - {$ref: '#/components/parameters/AlertFilters'}
         - {$ref: '#/components/parameters/AlertGroupBy'}
         - {name: page-size, in: query, schema: {type: integer}}
@@ -1311,6 +1383,7 @@ paths:
           and each such entry multiplies the rows (`UNNEST(history)`).
       parameters:
         - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/QDf'}
         - {$ref: '#/components/parameters/AlertFilters'}
         - {$ref: '#/components/parameters/AlertGroupBy'}
         - {name: page-size, in: query, schema: {type: integer}}
@@ -1354,6 +1427,7 @@ paths:
           `severity` history entry count.
       parameters:
         - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/QDf'}
         - {$ref: '#/components/parameters/AlertFilters'}
         - {$ref: '#/components/parameters/AlertGroupBy'}
         - {name: page-size, in: query, schema: {type: integer}}
@@ -1398,6 +1472,7 @@ paths:
           `severity` history entry count.
       parameters:
         - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/QDf'}
         - {$ref: '#/components/parameters/AlertFilters'}
         - {$ref: '#/components/parameters/AlertGroupBy'}
         - {name: page-size, in: query, schema: {type: integer}}
@@ -1447,6 +1522,7 @@ paths:
           1000-row limit.
       parameters:
         - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/QDf'}
         - {$ref: '#/components/parameters/AlertFilters'}
         - {$ref: '#/components/parameters/AlertQueryId'}
         - {$ref: '#/components/parameters/AlertDateRange'}
@@ -1490,6 +1566,7 @@ paths:
         truncated on large data. `total` is the number of listed pairs.
       parameters:
         - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/QDf'}
         - {$ref: '#/components/parameters/AlertFilters'}
         - {$ref: '#/components/parameters/AlertQueryId'}
         - {$ref: '#/components/parameters/AlertDateRange'}
@@ -1519,6 +1596,7 @@ paths:
       description: "Filtered `GROUP BY environment, \"group\"` with a 1000-row limit; items {environment, group, count}; `total` is the number of items."
       parameters:
         - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/QDf'}
         - {$ref: '#/components/parameters/AlertFilters'}
         - {$ref: '#/components/parameters/AlertQueryId'}
         - {$ref: '#/components/parameters/AlertDateRange'}
@@ -1548,6 +1626,7 @@ paths:
       description: "Filtered `GROUP BY environment, tag` over `UNNEST(tags)` with a 1000-row limit; items {environment, tag, count}. Alerts whose tags are SQL NULL (for example after untagging everything) contribute nothing."
       parameters:
         - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/QDf'}
         - {$ref: '#/components/parameters/AlertFilters'}
         - {$ref: '#/components/parameters/AlertQueryId'}
         - {$ref: '#/components/parameters/AlertDateRange'}
