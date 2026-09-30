@@ -84,9 +84,13 @@ Statuses: `open`, `assign`, `ack`, `shelved`, `blackout`, `closed`,
 2. **R1.2 [V] Reject policy** (`plugins/reject.py:27-39`, `settings.py:276-278`).
    Before any lookup or `transition()`, the request fails with **403**
    (`views/alerts.py:57-60`) when:
-   - the origin matches `ORIGIN_BLACKLIST` (empty by default);
-   - the environment does not fully match one of `ALLOWED_ENVIRONMENTS`
-     (default `Production`, `Development`), which includes the default `""`;
+   - the origin matches a pattern in `ORIGIN_BLACKLIST` (empty by default).
+     Each entry is a regular expression applied with `re.match`, which is
+     anchored at the start only: `foo` also blacklists `foobar` (`:24`, `:27`);
+   - the environment does not **fully** match one of `ALLOWED_ENVIRONMENTS`
+     (default `Production`, `Development`), which includes the default `""`.
+     Each entry is a regular expression applied with `re.fullmatch` (`:25`,
+     `:31`), so `Production-DR` is rejected under the defaults;
    - `service` is empty.
 3. Next, an `event` of `Heartbeat` is diverted to a heartbeat with **202**
    (`plugins/heartbeat.py`). Then, with the default blackout plugin
