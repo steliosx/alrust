@@ -206,7 +206,7 @@ components:
         severity: {type: [string, "null"]}
         status: {type: [string, "null"]}
         value: {}
-        text: {type: [string, "null"], description: "defaults to null (history.py:14); status and action requests pass `text` untyped, so a client-sent null or non-string is stored as sent (NOT verified beyond source)"}
+        text: {type: [string, "null"], description: "defaults to null (history.py:14); status and action text is passed untyped to history construction. It is then adapted into the `history` composite, whose `text` field is SQL text (pg.py:26-49, sql/schema.sql:5-15); persistence, coercion and response behavior for non-string values are NOT_VERIFIED"}
         type: {type: string, description: "change type, for example new, severity, status, value, note, dismiss, action or an action name (lifecycle A0)"}
         updateTime: {type: string, description: "receive entries use the client createTime; status and action entries use server now (A0.1)"}
         user: {type: [string, "null"]}
@@ -573,12 +573,20 @@ paths:
            - **Veto short-circuit:** once a plugin returns a falsy value
              (false or None), later plugins' `delete` is not called, and
              the local `alert.delete()` is skipped (`:221`). The view then
-             answers 500 `failed to delete alert` (`views/alerts.py:303-306`)
-             and the row remains.
+             answers 500 `failed to delete alert` (`views/alerts.py:303-306`).
+             The only guarantee is that the framework's local
+             `alert.delete()` call is skipped. Nothing is rolled back:
+             earlier plugins may already have written locally or forwarded
+             a delete (the forwarder makes remote calls,
+             `plugins/forwarder.py:107-124`). No atomicity is claimed for
+             custom or routed plugins.
            - NotImplementedError is ignored and leaves `delete` unchanged.
-           - Other exceptions: with `PLUGINS_RAISE_ON_ERROR` (default true)
-             they become a 500 and nothing is deleted; with it false they
-             are logged, `delete` keeps its previous value, and the loop
+           - RejectException gives 400 and another AlertaException gives
+             its own code (`utils/api.py:213-214`, `views/alerts.py:290-296`).
+           - Any other exception: with `PLUGINS_RAISE_ON_ERROR` (default
+             true) it becomes a 500 and the local `alert.delete()` is
+             skipped, with the same no-rollback caveat; with it false it is
+             logged, `delete` keeps its previous value, and the loop
              continues.
            - Of the default `PLUGINS` (`settings.py:272`), `remote_ip`,
              `reject`, `heartbeat` and `blackout` raise NotImplementedError;
@@ -607,7 +615,7 @@ paths:
         "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         "401": {$ref: '#/components/responses/Unauthorized'}
         "403": {$ref: '#/components/responses/Forbidden'}
-        "500": {description: "plugin veto (`failed to delete alert`, row kept), wrapped plugin error including the forwarding loop, or other failure", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "500": {description: "plugin veto (`failed to delete alert`; local alert.delete() skipped, earlier plugin effects not rolled back), wrapped plugin error including the forwarding loop, or other failure", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
   /alert/{alert_id}/status:
     parameters: [{$ref: '#/components/parameters/AlertId'}]
     put:
