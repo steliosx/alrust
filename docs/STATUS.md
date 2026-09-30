@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-09-30T05:20Z by claude-alrust, the sole writer of this
+_Last updated: 2026-09-30T06:00Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -9,7 +9,7 @@ file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 | Phase | State | Gate |
 |---|---|---|
-| 0 Spec + conformance | Lifecycle (receive, actions, housekeeping, heartbeats) and customer-mapping specs source-derived and reviewed. Separate scoped reference HTTP runs: smoke 2, customer 4, operator 5, metadata 2, heartbeat 3, heartbeat input/query 4, metadata mutations 3 (each LOCAL_PASS at its own head and window; the first metadata-mutations attempt FAILED on a harness precondition, HF9, and is preserved). OpenAPI: heartbeat, single-alert and alert-query slices (source-derived, reviewed); the `q=` grammar and other resources outstanding | **Open.** These are separate scoped runs, not a full-suite pass. Hosted CI has never executed. OpenAPI extraction and broader vectors are outstanding |
+| 0 Spec + conformance | Lifecycle (receive, actions, housekeeping, heartbeats) and customer-mapping specs source-derived and reviewed. Separate scoped reference HTTP runs: smoke 2, customer 4, operator 5, metadata 2, heartbeat 3, heartbeat input/query 4, metadata mutations 3, alert queries 3 (each LOCAL_PASS at its own head and window; the first metadata-mutations attempt FAILED on a harness precondition, HF9, and is preserved). OpenAPI: heartbeat, single-alert and alert-query slices plus the `q=` grammar (source-derived, reviewed); notes, blackouts, keys, users, customers and management outstanding | **Open.** These are separate scoped runs, not a full-suite pass. Hosted CI has never executed. OpenAPI extraction and broader vectors are outstanding |
 | 1 Domain/engine/store | blocked on 0 | — |
 | 2 HTTP API | blocked on 1 | — |
 | 3 Auth | blocked on 2 | — |
@@ -36,13 +36,14 @@ review.
 | `claude/spec-lifecycle-actions` (on receive) | claude | `cedfcdff5afb8198bfb3588836156ca8510d076c` | Codex: **APPROVE** for its source-derived scope (A0–A6) |
 | `claude/spec-lifecycle-housekeeping` (on actions) | claude | `c6aecf66d55d476c2ff936588e2f68d9a9ed9648` | Codex: **APPROVE** for its source-derived scope (K0–K5). Deletion semantics preserved |
 | `claude/spec-lifecycle-heartbeats` (on housekeeping) | claude | `84b2ed5de5b15d0baac5b24a423f8f1c23cb4ad1` | Codex: **APPROVE** for the source-derived cumulative lifecycle (OA-1 through OA-6 closed). R1.3 and OA-5/A5.2 are corroborated at runtime by the metadata run (`678f1996`, window released `0f72c944`). The other exception, custom-plugin and receive-status-change edges are runtime NOT_RUN |
-| `claude/charter-sync` | claude | this head | Latest Codex review: **APPROVE** at `396b8ab0` (`359cf54b`). This head needs its own review |
-| `claude/spec-openapi` (on `e839ceaf`) | claude | `806dbed0e01b1928a0136f81d6ebc68e8f20186d` | OpenAPI "as implemented": heartbeat, single-alert and **alert-query** slices (`/alerts`, count, history, top-N including the web UI's `/alerts/top10/*`, environments, services, groups, tags). Codex **APPROVE** for the source-description scope (`53f52e35`) after the REQUEST_CHANGES rounds `00191bab` (`d004dd02`) and `3816ed1b` (`0720455c`); all OAH, OAA and OAQ findings closed. It records reference **SECURITY** defects at source level (see Owner). Not a complete spec: `q=` grammar, notes, blackouts, keys, users, customers and management outstanding. HTTP, SQL and validator NOT_RUN |
+| `claude/charter-sync` | claude | this head | Latest Codex review: **APPROVE_WITH_COMMENTS** at `4e700f48` (`15236b52`; ST24-C1 applied here). This head needs its own review |
+| `claude/spec-openapi` (on `e839ceaf`) | claude | `e191dcd7dbd407d29e66a2d7ea85b4596281ee0f` | OpenAPI "as implemented": heartbeat, single-alert and alert-query slices (Codex APPROVE at `806dbed0`, `53f52e35`) plus the **`q=` grammar** (`b76fa743` REQUEST_CHANGES `3e035b53`; `81e47ef7` **APPROVE_WITH_COMMENTS** `591429de`; `e191dcd7` applies OQ-C1 and the date-range adapter note, pending review). Records reference **SECURITY** defects (four; see Owner) and the `q=` flat-chain operand defect. Translations confirmed by both agents' pure-parser probes; HTTP, SQL and validator NOT_RUN |
 | `codex/harness-integration` (on `e839ceaf`) | codex | `061d2a969d8fc4bd876f54885758727c5643c896` | Claude **APPROVE** for the source/offline scope: provenance verified, guard PASS, 50 offline tests, 16 collected. HTTP NOT_RUN at this head |
 | `codex/heartbeat-input-query` (on `061d2a96`) | codex | `60d2e021eeb9c1040cfa3bdb373cfe949e9b5db0` | Claude **APPROVE** for the source/offline scope (`ab47f0a4`): 4 vectors (present-null containers, unknown-only status, pre-filter total and paging). Runner `48e3f654` approved (`99738ba0`). Window `alrust-heartbeat-input-query-reference-20260930-01`: REQUEST `586679fb`, ACK `d8afb6df`, START `ff2b9fac`, **RELEASED** `ef919f45`. Runtime: **LOCAL_PASS**, 4 HTTP tests in 0.42 s plus config and stored-key attestations, frozen `60d2e021`. Cleanup and key-free capture verified by both agents (`312fdb6f`). Reference only |
 | `codex/metadata-mutations` (on `60d2e021`) | codex | `70a40be307aceeb6719e80f1bdc162a24c9c1017` | Claude **APPROVE** source/offline (`f3d8fe45`); runner `94b53328` (`9deac923`). Window `…-metadata-mutations-reference-20260930-01`: ACK `317124e0`, START `d9737019`, RELEASED `b317ee1c`: **FAIL**, 2 passed and 1 failed at a harness precondition (HF9: the default `remote_ip` plugin adds `attributes.ip`). Cleanup verified by both (`fa615dfa`). Claude's review had wrongly called the precondition runtime-corroborated; corrected on record. Preserved, not rerun |
 | `codex/metadata-mutations-correction` (on `70a40be3`) | codex | `a5ce0e122646f4c557ae46f7901ffc855adf6a95` | HF9 fix: Claude **APPROVE** source/offline (`c10b6b6e`); runner 02 `1b8c8721` (`43c17960`). Window `…-20260930-02`: ACK `4185564e`, START `fb38a738`, **RELEASED** `399b7344`. Runtime: **LOCAL_PASS**, 3 HTTP tests in 0.47 s (tag/untag missing input gives 500 with no change; untag-all gives `[]`; removing every attribute gives 500 while `{}` is saved). Cleanup and key-free capture verified by both (`89fe250b`). HF9 closed. Reference only |
-| `codex/alert-query-conformance` (on `a5ce0e12`) | codex | `9e33dc2af0292381db1d4f4afebe25170ca68568` | Claude **APPROVE_WITH_COMMENTS** source/offline (`3e497d36`): 3 benign query vectors (filtered list and counts, `show-history`, repeated plain filter with `event!`). QH-C1 (a DB TimeZone dependency) was withdrawn after Codex showed the pinned datetime adapter sends untyped literals. No runner or window yet; HTTP NOT_RUN |
+| `codex/alert-query-conformance` (on `a5ce0e12`) | codex | `9e33dc2af0292381db1d4f4afebe25170ca68568` | Claude **APPROVE_WITH_COMMENTS** source/offline (`3e497d36`; QH-C1 withdrawn). Runner `1c9a9ef6` REQUEST_CHANGES (`35364490`, AQR-1: exact `UTC` zone gate); runner v2 `9efe0a41` APPROVE (`ac973a62`). Window `alrust-alert-query-reference-20260930-01`: ACK `302b7277`, START `bf6a054a`, **RELEASED** `e2cac6d5`. Runtime: **LOCAL_PASS**, 3 HTTP tests in 0.43 s; observed session zone `Etc/UTC` (metadata; the rejected exact gate would have failed). Cleanup and key-free capture verified by both (`590b22a8`). Reference only |
+| `codex/scaffold-clock-correction` (on `9e33dc2a`) | codex | `4f808c9d1c1615d5fb347e4cbed3d597c8f566b5` | HF7 fix (+1 ms on the smoke duplicate's client time): Claude **APPROVE** source/offline (`93d30e4b`). HTTP NOT_RUN |
 | ALRUST-P0-CLOCK-01 policy | codex | design02 `67bb59f5…` | Claude: concurred, and approved as implemented in `db06ce44` |
 | `claude/adr-0004-webui` (on `c9bbfaf5`) | claude | `e5a23c46c4a735a2437657df20125617b423e37f` | Codex: **APPROVE** as a proposed assessment. No webui source is selected; E1–E3 are NOT_RUN; a re-pin would be the owner's call |
 | `claude/docs-landing` → [PR #2](https://github.com/steliosx/alrust/pull/2) (on `main`) | claude | `fcc06d7301a2048ab6fc4c73a80f5874dd3d08f4` | README only (ALRUST-DOCS-LANDING-01). Codex: **APPROVE** at `fcc06d73` (LD1–LD4 closed; `9409fde5` REQUEST_CHANGES is historical). **Marked ready for owner review**, not merged. Hosted checks for PR #2: NOT_RUN (no workflow on `main`). **The merge is the owner's** |
@@ -100,27 +101,35 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
 
 ## Next actions
 
-- **codex-alrust:** review this STATUS head; a runner for the query vectors
-  (`9e33dc2a`) for separate review.
-- **claude-alrust:** next OpenAPI slice: the `q=` grammar (`queryparser.py`)
-  plus the date-range adapter note (untyped ISO literal, millisecond
-  truncation); review Codex's heads; keep STATUS current.
+- **codex-alrust:** review this STATUS head and OpenAPI `e191dcd7`;
+  further bounded vectors as separate reviewed heads.
+- **claude-alrust:** next OpenAPI slices (notes, then blackouts, which
+  reuse the `q=` parser); review Codex's heads; keep STATUS current.
 - **Owner:**
   - PR #2 merge (approved, ready);
   - Actions billing;
   - the repository-protection plan;
   - **new, SECURITY (reference defects, source-level only, no exploit built
     or run; independently confirmed by Codex):** the pinned Alerta server
-    builds SQL by string formatting from request or stored text in three
+    builds SQL by string formatting from request or stored text in **four**
     places: `sort-by=attributes.<key>` (ORDER BY), `group-by` on the top-N
-    endpoints (SELECT and GROUP BY, unvalidated), and stored environment
-    names on `/environments` (an IN list; arbitrary names can be stored via
-    the `status: blackout` pre-receive bypass). The first two are reachable
-    with `read:alerts`; the third needs `write:alerts`. Owner decisions:
+    endpoints (SELECT and GROUP BY, unvalidated), `q.df`, the default
+    search field (replaced into a quoted identifier), and stored
+    environment names on `/environments` (an IN list; arbitrary names can
+    be stored via the `status: blackout` pre-receive bypass). The first
+    three are reachable with `read:alerts`; the fourth needs
+    `write:alerts`. Owner decisions:
     (a) what alrust does for these inputs, for example allow-listing
     `group-by` and quoting the attribute key, recorded in DECISIONS once
     decided; (b) whether production Alerta runs this version and is
     exposed, and whether to report upstream. Not blocking Phase 0 source
+    work;
+  - **new, alert behavior:** the reference `q=` search keeps only the first
+    two operands of any flat same-operator chain, silently. `disk full
+    server` searches only `disk` OR `full`; `a AND b AND c` ignores `c`
+    (`queryparser.py:20-26`; confirmed by both agents' parser probes).
+    Should alrust reproduce this for compatibility or search every operand?
+    This changes which alerts operators see. Not blocking Phase 0 source
     work;
   - **new, not blocking:** whether alrust keeps the reference's App Engine
     cron auth branch. With `AUTH_REQUIRED` on, no credentials and
