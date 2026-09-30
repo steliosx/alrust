@@ -507,9 +507,18 @@ components:
         - `priority` is recomputed from the fields; the stored `priority`
           column is not shown, and updates never refresh it;
         - `status` is computed on the **app** clock (`:82-90`).
-        `remaining` comes from SQL on reads and updates:
-        `GREATEST(end_time - GREATEST(start_time, NOW() at time zone 'utc'), 0)`
-        seconds (DB clock). On create it is the duration.
+        `remaining` has **two representations** (OB-R4):
+        - on create, `RETURNING *, duration AS remaining`
+          (`postgres/base.py:753`) gives the integer duration, a JSON
+          number;
+        - on reads, list and updates it is `GREATEST(EXTRACT(EPOCH FROM
+          (end_time - GREATEST(start_time, NOW() at time zone 'utc'))), 0)`
+          (DB clock). `EXTRACT` returns `numeric` on PostgreSQL 14 and
+          later, the driver returns a Decimal, and `CustomJSONEncoder`
+          serializes Decimal as a **string** (`utils/format.py:43-44`). So
+          an expired blackout shows `"0"` and an active one a decimal
+          string of seconds. Source-derived; Codex's driver and serializer
+          body probe agrees; HTTP NOT_RUN.
       properties:
         id: {type: string}
         href: {type: string, description: "absolute URL /blackout/<id>"}
@@ -532,7 +541,7 @@ components:
         endTime: {type: string}
         duration: {type: integer, description: "recomputed; can be negative if endTime precedes startTime"}
         status: {enum: [pending, active, expired]}
-        remaining: {type: number}
+        remaining: {type: [integer, string], description: "integer on create; a numeric string (seconds, possibly fractional) on reads, list and updates"}
         user: {type: [string, "null"]}
         createTime: {type: string}
         text: {type: [string, "null"]}
