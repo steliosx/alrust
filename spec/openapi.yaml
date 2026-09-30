@@ -2030,8 +2030,8 @@ paths:
       x-scope: write:blackouts
       description: |
         - Lookup: unfiltered when `AUTH_REQUIRED` is false or the caller has
-          `admin` or `admin:blackouts`; otherwise filtered by the caller's
-          customers. An empty or missing body gives 400 `nothing to change`.
+          `admin` **or** `admin:blackouts` (`views/blackouts.py:102-107`);
+          otherwise filtered by the caller's customers. An empty or missing body gives 400 `nothing to change`.
         - **`customer` is always rewritten** (planned customer-mapping C22).
           The view sets `update['customer'] = assign_customer(wanted=body
           customer)`, and the SQL writes `customer` whenever the key is
@@ -2047,17 +2047,28 @@ paths:
           `COALESCE(login, user)`.
         - **Nothing is recomputed**: changing times does not update the
           stored `duration`, changing fields does not update the stored
-          `priority`, and a `duration`-only change does not move `endTime`.
-          Reads recompute `duration` and `priority` (see Blackout), so a
-          `duration`-only update has no visible or matching effect, and
-          `sort-by=priority` or `duration` sorts on stale columns.
-        - A malformed `startTime` or `endTime` string raises ValueError in
-          `Blackout.update`, outside any try block, giving the generic 500
-          (unlike 400 on create). A non-string time is silently ignored.
+          `priority`, and changing `duration` does not move `endTime`.
+          Reads recompute `duration` and `priority` (see Blackout), so the
+          stored `duration` column **by itself** changes neither `endTime`,
+          the displayed duration, nor timing matches; `sort-by=priority` or
+          `duration` sorts on stale columns. A body that sets only
+          `duration` still rewrites `customer` (above, C22) and `user`, so
+          the request as a whole can change the customer and therefore
+          customer matching.
+        - Times (`models/blackout.py:237-240`): only **truthy** `startTime`
+          and `endTime` values are parsed. A truthy malformed string raises
+          ValueError outside any try block, giving the generic 500 (unlike
+          400 on create). A truthy non-string (for example a number) parses
+          to None and the SQL skips it (`is not None`). A **falsy non-null**
+          value (`""`, `0`, `false`) is not parsed, reaches the SQL
+          unchanged and is written as `start_time`/`end_time`
+          (`postgres/base.py:824-827`); what PostgreSQL does with it is
+          NOT_RUN. Codex's inert method probe covered eight such values.
         - As for note updates, a body key `id` (or `self`) collides with the
           positional or bound arguments of `update(self, **kwargs)` and
           `update_blackout(self, id, **kwargs)`, an inferred TypeError and
-          generic 500 before SQL (NOT verified).
+          generic 500 before the blackout UPDATE SQL. The lookup and audit
+          have already run (NOT verified).
       requestBody:
         required: true
         content:
@@ -2108,14 +2119,24 @@ paths:
           (inferred; observed zone `Etc/UTC` in the reference runs). The
           SQL status also uses the DB clock, while the serialized `status`
           uses the app clock.
-        - Other filters and `sort-by` follow the generic rules (see
-          AlertFilters and AlertSortBy, including the SECURITY note on
-          `attributes.<k>` sorting) with these names: `priority`,
-          `environment`, `service`, `resource`, `event`, `group`, `tag`,
-          `customer`, `startTime`, `endTime`, `duration`, `remaining`,
-          `user`, `createTime`, `text`. `remaining` is a SELECT alias: as a
-          filter it is an inferred SQL error (500). `priority` and
-          `duration` filter and sort on the stale stored columns.
+        - Other filters and `sort-by` follow the generic rules of
+          AlertFilters and AlertSortBy, but with this endpoint's own
+          allow-list (`utils.py:203-222`):
+          - **filter names**: `id`, `priority`, `environment`, `service`,
+            `resource`, `event`, `group`, `tag`, `customer`, `startTime`,
+            `endTime`, `duration`, `remaining`, `user`, `createTime`,
+            `text` (`status` is handled above, `tags` is not a filter);
+          - **sort names**: the same except `id` and `tag`, plus `tags`
+            and `status`. The table has no `status` column, so
+            `sort-by=status` is an inferred SQL error (500); `remaining`
+            sorts on the SELECT alias.
+          - The blackout allow-list has no `attributes` entry, so
+            `attributes.<k>` is **not** accepted here (400); the
+            `attributes.<k>` sort SECURITY note does not apply to this
+            endpoint.
+          - `remaining` is a SELECT alias: as a filter it is an inferred
+            SQL error (500). `priority` and `duration` filter and sort on
+            the stale stored columns.
         - No `sort-by` means no ordering (`(select 1)`).
         - Paging as for heartbeats: `total` is the full count; an empty
           page gives `total: 0` with `message: not found`.
