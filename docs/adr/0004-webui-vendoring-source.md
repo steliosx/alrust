@@ -54,10 +54,13 @@
   Vue CLI 5 are more likely to build. Verify with `npm ci && npm run build`
   for A and B, each in an isolated copy. This is also a prerequisite for the
   Phase 6 Tauri packaging.
-- **E2, dependency advisories.** Run `npm audit --omit=dev` on each lockfile.
-  Record advisory IDs, severities, the affected locked versions and whether
-  each applies to production (build-only or runtime). Counts alone cannot
-  justify a choice.
+- **E2, dependency advisories.** Run a **full-tree** `npm audit` on each
+  lockfile, and `npm audit --omit=dev` alongside it. Development
+  dependencies (Vue CLI, Sass, TypeScript tooling) execute during install and
+  asset builds, so omitting them can hide supply-chain advisories that
+  matter here. Record advisory IDs, severities, the affected locked versions
+  and whether each applies at build time only or at runtime in the deployed
+  assets. Counts alone cannot justify a choice.
 - **E3, runtime equivalence against the reference.** Load both builds
   against the pinned reference server and compare the network calls,
   including:
@@ -72,6 +75,11 @@
 
 ## Recommendation (for review, not decided)
 
+Whichever source is chosen, the choice is **conditional on E3 passing**: the
+UI must work against alrust without source changes (Phase 2), and the axios
+0.28→1.14 difference in B, or any build-toolchain substitution for A, may
+change filters, authorization headers, cancellation or error handling.
+
 Prefer **A** if E1 shows it builds reproducibly on a supported toolchain.
 It keeps the reference pin, and the extra change is one line that matters
 only for the Keycloak provider. If A does not build without an unsupported
@@ -82,4 +90,4 @@ code changes beyond config" gate for the vendored webui is measured against
 the chosen source, and the chosen source is recorded here.
 
 **An unreleased commit is not automatically preferred.** B is justified
-only by E1/E2 evidence, not by recency.
+only by E1/E2 evidence, not by recency, and, like A, only if E3 passes.
