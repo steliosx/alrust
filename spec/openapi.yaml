@@ -10,10 +10,12 @@ info:
       `x-source` gives `path:line` inside that tree.
     - Evidence level: SOURCE_DERIVED unless an operation's `x-runtime` says
       otherwise.
-    - Slices in this file: **heartbeats**. Alerts, blackouts, keys, users,
-      customers, management and the query grammar are not yet written.
-    - Cross-references: `spec/lifecycle.md` HB0-HB6; `spec/customer-mapping.md`
-      C11 and C19.
+    - Slices in this file: **heartbeats**; **single alerts** (`POST /alert`
+      and the per-id alert operations). Not yet written: the alert list,
+      count and top-N endpoints with the `q=` query grammar, notes,
+      blackouts, keys, users, customers and management.
+    - Cross-references: `spec/lifecycle.md` R0-R7, A0-A5 and HB0-HB6;
+      `spec/customer-mapping.md` C7-C11 and C16-C19.
 
     Common behavior (every operation below):
     - Credentials follow `auth/decorators.py:25-175`: an API key
@@ -63,6 +65,23 @@ components:
     Unauthorized: {description: "invalid or expired API key, bad token, or no credentials while AUTH_REQUIRED (auth/decorators.py:42-45, :174-175)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     Forbidden: {description: "missing required scope (auth/decorators.py:51-52 and peers)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     ServerError: {description: "ApiError 500, or an unhandled exception with message 'An internal error has occurred!' (exceptions.py:120-136)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  parameters:
+    AlertId:
+      name: alert_id
+      in: path
+      required: true
+      schema: {type: string}
+      description: |
+        Looked up by `get_alert`: `id ~* '^<v>' OR last_receive_id ~*
+        '^<v>'`, a case-insensitive **regex** prefix on the raw path value,
+        plus `customer = ANY(g.customers)` when the caller has customers
+        (`pg.py:293-299`; customer-mapping C16-C18).
+        - Regex metacharacters are live: `.` matches any character. An
+          invalid regex, for example `(`, is inferred to give 500 (NOT
+          verified).
+        - If several rows match, which one is used is undefined.
+        - A customer-scoped key gets 404 for another customer's alert
+          (C17).
   schemas:
     Error:
       type: object
@@ -148,6 +167,100 @@ components:
             `""` gives 400. A null value is accepted and then assigned by
             `assign_customer` (C11). A non-empty value goes through the same
             assignment rules.
+    HistoryEntry:
+      type: object
+      x-source: alerta/models/history.py:21-34
+      properties:
+        id: {type: string, description: "the alert id"}
+        href: {type: string}
+        event: {type: string}
+        severity: {type: [string, "null"]}
+        status: {type: [string, "null"]}
+        value: {}
+        text: {type: string}
+        type: {type: string, description: "change type, for example new, severity, status, action or an action name (lifecycle A0)"}
+        updateTime: {type: string, description: "receive entries use the client createTime; status and action entries use server now (A0.1)"}
+        user: {type: [string, "null"]}
+        timeout: {type: [integer, "null"]}
+    Alert:
+      type: object
+      x-source: alerta/models/alert.py:119-149; alerta/utils/format.py:27-65
+      description: |
+        Dates are serialized as `YYYY-MM-DDThh:mm:ss.sssZ` (UTC, milliseconds,
+        `format.py:64-65`). Every read hydrates the row through
+        `Alert.__init__`, so database NULLs in `tags` or `timeout` appear as
+        `[]` and `ALERT_TIMEOUT` (lifecycle A1.3a).
+      properties:
+        id: {type: string}
+        href: {type: string, description: "absolute URL /alert/<id>"}
+        resource: {type: string}
+        event: {type: string}
+        environment: {type: string}
+        severity: {type: string}
+        correlate: {type: array, items: {type: string}}
+        status: {type: string, description: "any string: PUT status stores it unvalidated (A1.2)"}
+        service: {type: array, items: {type: string}}
+        group: {type: string}
+        value: {description: "as sent, except that JSON integers and booleans become strings (R0.3)"}
+        text: {type: string}
+        tags: {type: array, items: {type: string}}
+        attributes: {type: object}
+        origin: {type: string}
+        type: {type: string, description: "request field `type`; default exceptionAlert"}
+        createTime: {type: string}
+        timeout: {type: integer}
+        rawData: {}
+        customer: {type: [string, "null"]}
+        duplicateCount: {type: integer}
+        repeat: {type: boolean}
+        previousSeverity: {type: [string, "null"]}
+        trendIndication: {type: [string, "null"]}
+        receiveTime: {type: string}
+        lastReceiveId: {type: string}
+        lastReceiveTime: {type: string}
+        updateTime: {type: [string, "null"]}
+        history: {type: array, items: {$ref: '#/components/schemas/HistoryEntry'}, description: "sorted by updateTime ascending in the response (alert.py:149); stored newest first, capped at HISTORY_LIMIT"}
+    AlertInput:
+      type: object
+      x-source: alerta/models/alert.py:26-117; alerta/utils/format.py:53-61
+      additionalProperties: true
+      required: [resource, event]
+      description: |
+        What the **parser accepts** (lifecycle R0). Unknown fields are
+        ignored. Parse errors give 400. Policy (R1.2) is applied afterwards.
+        A JSON body that is not an object gives 500 (AttributeError, as for
+        HeartbeatInput; inferred, NOT verified).
+      properties:
+        id: {type: [string, "null"], description: "falsy gives a server uuid4. A supplied id is used for a new alert; on duplicate or correlate the stored id is kept and the new id becomes lastReceiveId (R5, R6)"}
+        resource: {type: string, description: "required; empty gives 400"}
+        event: {type: string, description: "required; empty gives 400. `Heartbeat` is diverted (HB3)"}
+        environment: {type: [string, "null"], description: "must match ALLOWED_ENVIRONMENTS or the request gets 403 (R1.2)"}
+        severity: {type: [string, "null"], description: "not checked at parse time. An unknown severity gives 500, not 400 (R1.1)"}
+        correlate: {type: [array, "null"], description: "must be a list (400). Non-empty gets the event appended (R0.6)"}
+        status: {type: [string, "null"], description: "`blackout` bypasses the pre-receive plugins (R1 step 1)"}
+        service: {type: [array, "null"], description: "must be a list (400); empty gives 403 (R1.2)"}
+        group: {type: [string, "null"]}
+        value: {}
+        text: {type: [string, "null"]}
+        tags: {type: [array, "null"], description: "must be a list (400)"}
+        attributes: {type: [object, "null"], description: "must be an object (400); keys with `.` or `$` give 400 (R0.2); null values are dropped by the post-receive rewrite (R1.3)"}
+        origin: {type: [string, "null"]}
+        type: {type: [string, "null"]}
+        createTime:
+          description: |
+            A string must match `%Y-%m-%dT%H:%M:%S.%fZ` (400 otherwise). A
+            non-string value, including null, is silently ignored and the
+            server uses now (`format.py:55-57`).
+        timeout: {type: [integer, boolean, "null"], description: "R0.4: null gives ALERT_TIMEOUT; booleans become 1 or 0; strings, floats and negative values give 400"}
+        rawData: {}
+        customer: {type: [string, "null"], description: "`\"\"` gives 400; otherwise assigned by assign_customer, which can give 400 (C7-C11)"}
+    AlertIdOnly:
+      type: object
+      required: [status]
+      properties:
+        status: {const: ok}
+        message: {type: string}
+        id: {type: string}
 paths:
   /heartbeat:
     post:
@@ -324,6 +437,305 @@ paths:
         "401": {$ref: '#/components/responses/Unauthorized'}
         "403": {$ref: '#/components/responses/Forbidden'}
         "500": {$ref: '#/components/responses/ServerError'}
+  /alert:
+    post:
+      operationId: receiveAlert
+      x-source: alerta/views/alerts.py:38-85; alerta/utils/api.py:14-90
+      x-scope: write:alerts
+      summary: Receive an alert (create, deduplicate or correlate)
+      description: |
+        Lifecycle R0-R7 specify the processing. Order: parse (400),
+        `assign_customer` (400), then pre-receive plugins and the
+        duplicate/correlate/create dispatch (R1).
+
+        Error mapping in this view (`:55-77`):
+        - RejectException gives **403** (R1.2).
+        - RateLimit gives **429** with body `{status: error, message, id}`,
+          which is **not** the Error shape. No bundled plugin raises
+          RateLimit, so the default configuration never returns 429.
+        - HeartbeatReceived, BlackoutPeriod and ForwardingLoop give **202**
+          (see the response below).
+        - Another AlertaException gives its own code.
+        - Any other exception gives 500 whose `message` is the exception
+          text, **not** the generic `An internal error has occurred!`. This
+          includes the R1.1 wrap: an unknown severity gives 500.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AlertInput'}
+      responses:
+        "201":
+          description: Stored (new, duplicate or correlated). There is no Location header.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, id, alert]
+                properties:
+                  status: {const: ok}
+                  id: {type: string, description: "the stored alert id, which differs from a supplied id on duplicate or correlate"}
+                  alert: {$ref: '#/components/schemas/Alert'}
+        "202":
+          description: |
+            Accepted but not stored as an alert:
+            - event `Heartbeat`: `id` is the **heartbeat** id (HB3);
+            - blackout: `id` is the parsed alert's id, and nothing is stored;
+            - forwarding loop: no `id`.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AlertIdOnly'}
+        "400": {description: "parse error (R0) or customer assignment (C7-C11)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {description: "missing scope, or rejected by policy (R1.2)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "429": {description: "RateLimit from a non-bundled plugin", content: {application/json: {schema: {type: object, required: [status, message, id], properties: {status: {const: error}, message: {type: string}, id: {type: string}}}}}}
+        "500": {$ref: '#/components/responses/ServerError'}
+      x-runtime: "The reference smoke (create, dedup) and customer vectors ran LOCAL_PASS for their own cases only. The 202, 403, 429 and 500 branches are NOT_RUN"
+  /alert/{alert_id}:
+    parameters:
+      - {$ref: '#/components/parameters/AlertId'}
+    get:
+      operationId: getAlert
+      x-source: alerta/views/alerts.py:88-100
+      x-scope: read:alerts
+      responses:
+        "200":
+          description: Found
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, total, alert]
+                properties:
+                  status: {const: ok}
+                  total: {const: 1}
+                  alert: {$ref: '#/components/schemas/Alert'}
+        "404": {description: "not found, or another customer's alert (C17)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+    delete:
+      operationId: deleteAlert
+      x-source: alerta/views/alerts.py:276-306; alerta/utils/api.py:203-221
+      x-scope: delete:alerts
+      description: |
+        1. Lookup as for GET (404 when missing).
+        2. `process_delete` runs every plugin's `delete`. Of the default
+           `PLUGINS` (`settings.py:272`), `remote_ip`, `reject`, `heartbeat`
+           and `blackout` raise NotImplementedError, which is ignored; the
+           forwarder returns true (`plugins/forwarder.py:101-126`).
+        3. The row is deleted. The write itself uses `WHERE id = <full id> OR id LIKE '<full id>%'`
+        (`pg.py:279-357`), so, as for heartbeat delete, a row whose id extends the
+        found id is also written. Generated uuid4 ids make this practically
+        exact; client-supplied ids do not. Source-derived, NOT verified.
+
+        Housekeeping deletion is separate (K1).
+
+        **Forwarding loop gives 500, and the local delete is skipped.** A
+        request whose loop header already names this server makes
+        `forwarder.delete` raise ForwardingLoop (`plugins/forwarder.py:103-105`).
+        ForwardingLoop is not an AlertaException, so `process_delete` wraps it
+        as `ApiError("Error while running delete plugin 'forwarder': ...")`
+        under the default `PLUGINS_RAISE_ON_ERROR`, and the view answers 500
+        (`views/alerts.py:297-298`). By contrast, PUT action answers a loop
+        with 202 (A2.2), and PUT status has no loop check (the forwarder's
+        `status_change` is a no-op, `plugins/forwarder.py:69-70`).
+        Source-derived, NOT verified.
+      responses:
+        "200": {description: Deleted, content: {application/json: {schema: {type: object, required: [status], properties: {status: {const: ok}}}}}}
+        "400": {description: "RejectException from a plugin", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /alert/{alert_id}/status:
+    parameters: [{$ref: '#/components/parameters/AlertId'}]
+    put:
+      operationId: setAlertStatus
+      x-source: alerta/views/alerts.py:104-141; alerta/models/alert.py:616-642; alerta/database/backends/postgres/base.py:279-291
+      x-scope: write:alerts
+      description: |
+        Lifecycle A1. No state machine and no validation: any non-empty
+        string is stored as the status (A1.2).
+        - The raw `timeout` is written to the row, so an absent timeout
+          stores database NULL, while the API still shows `ALERT_TIMEOUT`
+          (A1.3, A1.3a).
+        - `timeout` is not type-checked. A value PostgreSQL cannot store as
+          an integer is inferred to give 500 (NOT verified).
+        - Tags are unioned and de-duplicated by the UPDATE (`DISTINCT
+          UNNEST`), so their order may change.
+
+        The write itself uses `WHERE id = <full id> OR id LIKE '<full id>%'`
+        (`pg.py:279-357`), so, as for heartbeat delete, a row whose id extends the
+        found id is also written. Generated uuid4 ids make this practically
+        exact; client-supplied ids do not. Source-derived, NOT verified.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status: {type: string, description: "required; missing or empty gives 400"}
+                text: {type: string, default: ""}
+                timeout: {description: "unvalidated; see above"}
+      responses:
+        "200": {description: "Status set. The alert is not returned (A1.5)", content: {application/json: {schema: {type: object, required: [status], properties: {status: {const: ok}}}}}}
+        "400": {description: "missing status, or a plugin RejectException", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+      x-runtime: "Codex operator vectors a4d75716 (5 tests, LOCAL_PASS in the operator window) cover selected A1/A2 cases only; see STATUS. Untyped timeout and prefix writes are NOT_RUN"
+  /alert/{alert_id}/action:
+    parameters: [{$ref: '#/components/parameters/AlertId'}]
+    put:
+      operationId: actionAlert
+      x-source: alerta/views/alerts.py:145-191; alerta/models/alert.py:644-697
+      x-scope: write:alerts
+      description: |
+        Lifecycle A2-A5: pre-action plugins, `from_action` with
+        `transition()` (severity **is** applied here, A2.5), then
+        post-action plugins. Timeouts follow A4.
+
+        The write itself uses `WHERE id = <full id> OR id LIKE '<full id>%'`
+        (`pg.py:279-357`), so, as for heartbeat delete, a row whose id extends the
+        found id is also written. Generated uuid4 ids make this practically
+        exact; client-supplied ids do not. Source-derived, NOT verified.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                action: {type: string, description: "required; missing or empty gives 400. Valid names come from the alarm model (A3)"}
+                text: {type: string, description: "default `<action> operator action`"}
+                timeout: {description: "falsy values fall back per A4"}
+      responses:
+        "200": {description: "Action applied. The alert is not returned", content: {application/json: {schema: {type: object, required: [status], properties: {status: {const: ok}}}}}}
+        "202": {description: "forwarding loop (A2.2)", content: {application/json: {schema: {$ref: '#/components/schemas/AlertIdOnly'}}}}
+        "400": {description: "missing action, or a plugin RejectException", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "409": {description: "invalid or redundant action (A2.3)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+      x-runtime: "Codex operator vectors a4d75716 (LOCAL_PASS in the operator window) cover selected A2-A5 cases only; see STATUS"
+  /alert/{alert_id}/tag:
+    parameters: [{$ref: '#/components/parameters/AlertId'}]
+    put:
+      operationId: tagAlert
+      x-source: alerta/views/alerts.py:195-218; alerta/database/backends/postgres/base.py:312-319
+      x-scope: write:alerts
+      description: |
+        `tags = ARRAY(SELECT DISTINCT UNNEST(tags || <new>))`: a union that
+        is de-duplicated, with **undefined order**. No history entry is
+        written and `updateTime` is unchanged. No plugins run.
+
+        **A missing or empty `tags` gives 500, not 400.** The view raises
+        `ApiError("must supply 'tags' as json list")` without a code, and
+        `BaseError.code` defaults to 500 (`exceptions.py:9-10`).
+
+        `tags` is not type-checked. A JSON string or object is inferred to
+        fail in SQL with 500 (NOT verified). The audit event is sent before
+        the write. The write itself uses `WHERE id = <full id> OR id LIKE '<full id>%'`
+        (`pg.py:279-357`), so, as for heartbeat delete, a row whose id extends the
+        found id is also written. Generated uuid4 ids make this practically
+        exact; client-supplied ids do not. Source-derived, NOT verified.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tags: {type: array, items: {type: string}}
+      responses:
+        "200": {description: Tagged, content: {application/json: {schema: {type: object, required: [status], properties: {status: {const: ok}}}}}}
+        "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {description: "missing or empty tags (message `must supply 'tags' as json list`), SQL failure, or no row updated", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /alert/{alert_id}/untag:
+    parameters: [{$ref: '#/components/parameters/AlertId'}]
+    put:
+      operationId: untagAlert
+      x-source: alerta/views/alerts.py:222-245; alerta/database/backends/postgres/base.py:321-328
+      x-scope: write:alerts
+      description: |
+        `tags = (SELECT array_agg(t) FROM unnest(tags) t WHERE NOT t = ANY(<tags>))`.
+        - When no tag remains, including an untag on an alert that had no
+          tags, `array_agg` gives SQL **NULL**, not `{}`. The API still
+          shows `[]` (hydration, `alert.py:62`). The NULL is visible to SQL
+          readers such as the list filters (next slice).
+        - Missing or empty `tags` gives **500**, as for tag.
+        - No history entry, `updateTime` unchanged, no plugins.
+
+        The write itself uses `WHERE id = <full id> OR id LIKE '<full id>%'`
+        (`pg.py:279-357`), so, as for heartbeat delete, a row whose id extends the
+        found id is also written. Generated uuid4 ids make this practically
+        exact; client-supplied ids do not. Source-derived, NOT verified.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tags: {type: array, items: {type: string}}
+      responses:
+        "200": {description: Untagged, content: {application/json: {schema: {type: object, required: [status], properties: {status: {const: ok}}}}}}
+        "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {description: "missing or empty tags, SQL failure, or no row updated", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /alert/{alert_id}/attributes:
+    parameters: [{$ref: '#/components/parameters/AlertId'}]
+    put:
+      operationId: updateAlertAttributes
+      x-source: alerta/views/alerts.py:249-272; alerta/models/alert.py:464-465; alerta/database/backends/postgres/base.py:339-349
+      x-scope: write:alerts
+      description: |
+        A read-modify-write in Python: the attributes loaded by the lookup
+        are updated with the request map, and every key whose value is
+        `null` is dropped, so `{"k": null}` **deletes** `k`. The full
+        result replaces the column. Concurrent updates can therefore lose
+        each other's keys.
+        - Keys containing `.` or `$` are **accepted** here, unlike on
+          receive (R0.2).
+        - No history entry, `updateTime` unchanged, no plugins.
+        - A missing or empty `attributes` gives 400.
+        - A non-object value goes through Python `dict.update`. Most such
+          values give 500. A list of two-character strings or of pairs is
+          accepted as key/value pairs (Python semantics; NOT verified).
+
+        **Committed, then 500.** The view tests the returned map for
+        truthiness (`views/alerts.py:269`). When the result is empty, for
+        example removing the only attribute with `{"k": null}`, the
+        UPDATE has already been committed (`_updateone` commits before it
+        returns, `pg.py:1568-1576`) and the response is **500**
+        `failed to update attributes`. Source-derived, NOT verified.
+
+        The write itself uses `WHERE id = <full id> OR id LIKE '<full id>%'`
+        (`pg.py:279-357`), so, as for heartbeat delete, a row whose id extends the
+        found id is also written. Generated uuid4 ids make this practically
+        exact; client-supplied ids do not. Source-derived, NOT verified.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                attributes: {type: object}
+      responses:
+        "200": {description: Updated, content: {application/json: {schema: {type: object, required: [status], properties: {status: {const: ok}}}}}}
+        "400": {description: "missing or empty attributes", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {description: "resulting attribute map is empty (after commit), or other failure", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
 security:
   - apiKeyHeader: []
   - apiKeyAuthorization: []
