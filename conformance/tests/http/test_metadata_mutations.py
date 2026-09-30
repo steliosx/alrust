@@ -35,12 +35,14 @@ def test_removing_last_attribute_returns_500_but_change_is_observable(metadata_s
     # falsy after the write commits. An HTTP error is not a rollback guarantee.
     path, _ = metadata_session.create()
     before = metadata_session.read(path)
-    # The default remote_ip pre-receive plugin adds ip on this loopback target.
-    # Attest the exact fixture state before removing both known attributes.
-    assert before['attributes'] == {
-        'SYNTHETIC-keep': 'retained', 'ip': '127.0.0.1'}
+    # remote_ip derives ip from the request route; no forwarding header is sent.
+    # Attest both known keys and their value prerequisites before removing all.
+    attributes = before['attributes']
+    assert set(attributes) == {'SYNTHETIC-keep', 'ip'}
+    assert attributes['SYNTHETIC-keep'] == 'retained'
+    assert isinstance(attributes['ip'], str) and attributes['ip']
     error = metadata_session.request('PUT', path + '/attributes', {
-        'attributes': {'SYNTHETIC-keep': None, 'ip': None}}, 500)
+        'attributes': {key: None for key in attributes}}, 500)
     assert error['status'] == 'error'
     assert error['code'] == 500
     assert error['message'] == 'failed to update attributes'

@@ -21,8 +21,12 @@ normal receive path removes its synthetic null attribute and deduplicates
 the stored tags. The default `remote_ip` pre-receive plugin also adds
 `ip: "127.0.0.1"` on the reviewed loopback target
 (`alerta/plugins/remote_ip.py:16-19`). The removal case requires exactly
-`{"SYNTHETIC-keep": "retained", "ip": "127.0.0.1"}` and removes both keys;
-it fails before mutation if that prerequisite differs. No plugin is disabled.
+the key set `{"SYNTHETIC-keep", "ip"}`, the retained synthetic value and
+a nonempty string `ip`; it removes every attested key. The plugin derives
+`ip` from the request access route, falling back to the remote address;
+the client sends no `X-Forwarded-For` and disables environment proxies.
+The observed loopback value is not a universal IP-value oracle. Unknown
+attributes fail the prerequisite before mutation. No plugin is disabled.
 No production inputs or credentials are needed.
 
 Only the existing `metadata_session` fixture is imported from
