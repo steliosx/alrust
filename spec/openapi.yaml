@@ -18,8 +18,8 @@ info:
       **blackouts**; **API keys**; **users**; **groups**; **permissions**
       (with `/scopes`); **customers**; **`/config`**; **management**;
       the root index `/` and `/_`; the **webhook dispatcher**
-      (`/webhooks/{webhook}`, generic only). Not yet written: the twelve
-      provider webhook payload mappings, the auth routes and other routes
+      (`/webhooks/{webhook}`) and the **prometheus** provider mapping.
+      Not yet written: the other eleven provider webhook payload mappings, the auth routes and other routes
       the static inventory lists.
     - **Reference security defects** are recorded where found (marked
       SECURITY). They describe the class of problem at source level only;
@@ -3981,6 +3981,101 @@ paths:
       x-scope: write:webhooks
       summary: Same handler as POST
       description: *webhookDispatch
+      responses: *webhookResponses
+      x-runtime: "NOT_RUN"
+  /webhooks/prometheus:
+    post:
+      operationId: receiveWebhookPrometheus
+      x-source: alerta/webhooks/prometheus.py:16-116; alerta/webhooks/custom.py:17-91
+      x-scope: write:webhooks
+      summary: Prometheus Alertmanager webhook (provider mapping)
+      description: |
+        A concrete instance of `/webhooks/{webhook}`: the dispatcher order,
+        auth, logging (W-SEC-1), batch handling (W-DL-1), error mapping and
+        responses there all apply. Present only while the `prometheus` entry
+        point loaded successfully. GET reaches the same code and, with no
+        body, gives the 400 below. This entry documents the mapping only.
+
+        Payload (`incoming`, `:110-116`): if the payload is falsy or lacks an
+        `alerts` key, 400 `no alerts in Prometheus notification payload`.
+        `'alerts' in payload` is a substring test when the dispatcher fell
+        back to raw text, so a non-JSON body containing `alerts` raises
+        TypeError at `payload['alerts']`; the dispatcher's legacy retry then
+        fails with a missing-`path` TypeError, an unhandled **500**. An
+        `alerts` value that is not a list of objects fails per item with 400
+        (exception text). An empty list gives 201 `{status: ok, ids: []}`.
+
+        Per alert (`parse_prometheus`, `:16-101`), in order:
+        1. `status` defaults to `firing`.
+        2. Every label value `v` becomes `v.format(**labels)` (original
+           labels); every annotation value becomes `v.format(**expanded
+           labels)`. Any exception keeps the raw value, so non-strings and
+           invalid formats pass through unchanged. Format specifications are
+           payload-controlled (WP-SEC-1, source-level: a large width
+           allocates a large string).
+        3. A truthy `annotations.alertname` replaces `labels.alertname`.
+        4. `severity`: `firing` pops `labels.severity` (default `warning`);
+           `resolved` uses the alarm model's normal severity
+           (`DEFAULT_NORMAL_SEVERITY`, else `normal` for ALERTA or `OK` for
+           ISA_18_2) and leaves any `severity` label in place, so it becomes
+           a tag; any other status gives `unknown`. `warning` and `unknown`
+           are ALERTA-model names; ISA_18_2's severity map has neither (its
+           unknown is `Unknown`), and what processing then does is NOT
+           established.
+        5. `resource` = popped `exported_instance` if truthy, else popped
+           `instance`, else `n/a` (a truthy `exported_instance` leaves
+           `instance` as a tag).
+        6. `event` = popped `event` if truthy, else popped `alertname`; with
+           neither, KeyError gives 400 `'alertname'`.
+        7. `environment` = popped `environment`, default config
+           `DEFAULT_ENVIRONMENT` (`Production`); the reject plugin then
+           applies `ALLOWED_ENVIRONMENTS` as for `/alert` (403).
+        8. `customer` = popped `customer`, then `assign_customer` in the
+           dispatcher.
+        9. `correlate` = popped `correlate` split on `,`, else null.
+        10. `service` = popped `service` split on `,`; absent gives `['']`
+            (one empty string), not `[]`.
+        11. `group` = popped `group` if truthy, else popped `job`, else
+            `Prometheus`.
+        12. `origin` = `prometheus/` + popped `monitor` (default `-`).
+        13. `timeout` = `int(popped timeout)` or null; `0` or a non-integer
+            gives null (the server default applies).
+        14. `tags` = every remaining label as `k=v`.
+        15. From annotations: `value`, `summary` and `description` are
+            popped; `text` = description, else summary, else
+            `<SEVERITY>: <resource> is <event>`.
+        16. `attributes` = `{startsAt, endsAt}` from the alert (missing keys
+            give 400), then every remaining annotation (which can override
+            them), plus `externalUrl` = payload `externalURL` when truthy and
+            `moreInfo` = an HTML anchor built from `generatorURL` **without
+            escaping** (WUI-SEC-1: the pinned web UI renders such attributes
+            as HTML).
+        17. `type` = `prometheusAlert`; `rawData` = the alert object,
+            stored JSON-encoded (psycopg2 `Json` adapter).
+
+        Source-derived; runtime NOT_RUN.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [alerts]
+              properties:
+                externalURL: {type: string}
+                alerts:
+                  type: array
+                  items:
+                    type: object
+                    required: [labels, annotations, startsAt, endsAt]
+                    properties:
+                      status: {type: string, description: "firing (default), resolved, or other (severity unknown)"}
+                      labels: {type: object, additionalProperties: true}
+                      annotations: {type: object, additionalProperties: true}
+                      startsAt: {}
+                      endsAt: {}
+                      generatorURL: {type: string}
+              additionalProperties: true
       responses: *webhookResponses
       x-runtime: "NOT_RUN"
   /:
