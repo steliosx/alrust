@@ -3877,7 +3877,7 @@ paths:
              legacy signature). That second call is outside the try, so its
              exceptions reach the app's registered handlers
              (`exceptions.py:74-80`, `app.py:67`): an `ApiError` keeps its
-             code; a `BasicAuthError` keeps its code (401) with
+             code; a `BasicAuthError` keeps the code it carries (401, for example) with
              `WWW-Authenticate`; a Werkzeug `HTTPException` keeps its code;
              anything else (AlertaException included) is the generic
              unhandled 500 (W-C1). On the **first** call, all of these
@@ -4016,7 +4016,9 @@ paths:
           `OPTIONS` in set order, which is not defined.
         - The list is sorted by `href`.
         This exposes the route map, including management and custom webhook
-        names, without credentials (source-derived, NOT_RUN).
+        names, without credentials (source-derived; the reference run below
+        used `AUTH_REQUIRED` false and a synthetic key, so it does not test
+        this).
       security: [{}]
       responses:
         "200":
@@ -4039,6 +4041,7 @@ paths:
                         rel: {type: string}
                         href: {type: string}
                         method: {type: string}
+      x-runtime: "LOCAL_PASS (reference only, instrumented pinned reference, window alrust-root-index-reference-20260930-01): with BASE_URL empty, one GET / returned 200 and exactly the served route inventory frozen during setup (120 links: 108 url_map rules and all 12 built-in webhooks, static included), including the `/` rule's double-slash href and the one-slash uri. Other BASE_URL values, the absolute_url fallback, access without credentials, HEAD, OPTIONS and CORS are NOT_RUN"
   /_:
     get:
       operationId: apiDebugOk
@@ -4048,6 +4051,7 @@ paths:
       security: [{}]
       responses:
         "200": {description: "OK", content: {text/html: {schema: {const: OK}}}}
+      x-runtime: "LOCAL_PASS (reference only, instrumented pinned reference, window alrust-root-debug-reference-20260930-01): one GET /_ returned 200 and the exact text OK. HEAD, OPTIONS and CORS are NOT_RUN"
 
 security:
   - apiKeyHeader: []
