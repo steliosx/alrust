@@ -14,8 +14,8 @@ info:
       and the per-id alert operations); **alert queries** (`/alerts`,
       `/alerts/count`, `/alerts/history`, the top-N endpoints,
       `/environments`, `/services`, `/alerts/groups`, `/alerts/tags`) with
-      their query parameters, including the `q=` grammar; **alert notes**.
-      Not yet written: blackouts, keys, users, customers and management.
+      their query parameters, including the `q=` grammar; **alert notes**;
+      **blackouts**. Not yet written: keys, users, customers and management.
     - **Reference security defects** are recorded where found (marked
       SECURITY). They describe the class of problem at source level only;
       no exploit was built or run. They are recorded for the owner's
@@ -486,6 +486,79 @@ components:
             Null or absent is assigned by `assign_customer` (C11). Any other
             value goes through the same assignment rules; success for
             non-string values is NOT established.
+    Blackout:
+      type: object
+      x-source: alerta/models/blackout.py:24-137, :190-210; alerta/sql/schema.sql:78-97
+      description: |
+        Every read builds the object through `Blackout.__init__`, which
+        **recomputes** several fields instead of using the stored columns:
+        - `duration` is recomputed as `int(endTime - startTime)` seconds;
+          the stored `duration` column is not shown;
+        - `priority` is recomputed from the fields; the stored `priority`
+          column is not shown, and updates never refresh it;
+        - `status` is computed on the **app** clock (`:82-90`).
+        `remaining` comes from SQL on reads and updates:
+        `GREATEST(end_time - GREATEST(start_time, NOW() at time zone 'utc'), 0)`
+        seconds (DB clock). On create it is the duration.
+      properties:
+        id: {type: string}
+        href: {type: string, description: "absolute URL /blackout/<id>"}
+        priority:
+          type: integer
+          description: |
+            Computed (`:63-80`): 0 by default; 2 for resource without event;
+            else 3 when service is set; else 4 for event without resource;
+            else 5 for group; else 6 for resource and event; else 7 for tags.
+            **Any origin makes it 8**, overriding the rest.
+        environment: {type: string}
+        service: {type: array, items: {type: string}}
+        resource: {type: [string, "null"]}
+        event: {type: [string, "null"]}
+        group: {type: [string, "null"]}
+        tags: {type: array, items: {type: string}}
+        origin: {type: [string, "null"]}
+        customer: {type: [string, "null"]}
+        startTime: {type: string}
+        endTime: {type: string}
+        duration: {type: integer, description: "recomputed; can be negative if endTime precedes startTime"}
+        status: {enum: [pending, active, expired]}
+        remaining: {type: number}
+        user: {type: [string, "null"]}
+        createTime: {type: string}
+        text: {type: [string, "null"]}
+    BlackoutInput:
+      type: object
+      x-source: alerta/models/blackout.py:25-48, :92-114
+      additionalProperties: true
+      required: [environment]
+      description: |
+        Parser acceptance. **Any** exception during parsing gives 400
+        (`views/blackouts.py:22-25`), with the exception text as the message.
+        A missing `environment` raises KeyError, so the message is
+        `'environment'`.
+      properties:
+        environment: {description: "required; absent gives 400 `'environment'`, empty gives 400"}
+        service: {type: array, description: "must be a list when present (a present null gives 400)"}
+        tags: {type: array, description: "must be a list when present (a present null gives 400)"}
+        resource: {description: "`\"\"` gives 400"}
+        event: {description: "`\"\"` gives 400"}
+        group: {description: "`\"\"` gives 400"}
+        origin: {description: "`\"\"` gives 400; any origin sets priority 8"}
+        customer: {description: "assigned by assign_customer with admin:blackouts (C11)"}
+        startTime: {description: "string in `%Y-%m-%dT%H:%M:%S.%fZ` (else 400); non-string or absent means now"}
+        endTime:
+          description: |
+            As startTime. When set, `duration = int(end - start)` with no
+            check that end follows start, so a negative duration is
+            accepted.
+        duration:
+          description: |
+            Used only without endTime. **A falsy value, including 0, gives
+            `BLACKOUT_DURATION`** (3600). A non-number fails in the
+            timedelta arithmetic and gives 400 via the catch-all.
+        user: {description: "kept only for admin or admin:blackouts callers; otherwise replaced by the caller's login"}
+        text: {}
+        id: {description: "falsy gives uuid4"}
     Note:
       type: object
       x-source: alerta/models/note.py:16-67; alerta/sql/schema.sql:65-75
@@ -1879,6 +1952,180 @@ paths:
       responses:
         "200": {description: Deleted, content: {application/json: {schema: {type: object, required: [status], properties: {status: {const: ok}}}}}}
         "404": {description: "alert not found / note not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /blackout:
+    post:
+      operationId: createBlackout
+      x-source: alerta/views/blackouts.py:17-45; alerta/database/backends/postgres/base.py:745-755
+      x-scope: write:blackouts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/BlackoutInput'}
+      responses:
+        "201":
+          description: "Created. Header `Location: /blackout/<id>` (absolute)"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, id, blackout]
+                properties:
+                  status: {const: ok}
+                  id: {type: string}
+                  blackout: {$ref: '#/components/schemas/Blackout'}
+        "400": {description: "parse error or customer assignment", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {description: "insert failure, with the exception text as the message", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /blackout/{blackout_id}:
+    parameters:
+      - {name: blackout_id, in: path, required: true, schema: {type: string}, description: "exact id match (`WHERE id = <id>`)"}
+    get:
+      operationId: getBlackout
+      x-source: alerta/views/blackouts.py:48-58; alerta/database/backends/postgres/base.py:757-765
+      x-scope: read:blackouts
+      description: "**No customer filter**: `Blackout.find_by_id(blackout_id)` passes no customers (C19)."
+      responses:
+        "200":
+          description: Found
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, total, blackout]
+                properties:
+                  status: {const: ok}
+                  total: {const: 1}
+                  blackout: {$ref: '#/components/schemas/Blackout'}
+        "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+    put:
+      operationId: updateBlackout
+      x-source: alerta/views/blackouts.py:94-124; alerta/models/blackout.py:236-246; alerta/database/backends/postgres/base.py:803-839
+      x-scope: write:blackouts
+      description: |
+        - Lookup: unfiltered when `AUTH_REQUIRED` is false or the caller has
+          `admin` or `admin:blackouts`; otherwise filtered by the caller's
+          customers. An empty or missing body gives 400 `nothing to change`.
+        - **`customer` is always rewritten** (planned customer-mapping C22).
+          The view sets `update['customer'] = assign_customer(wanted=body
+          customer)`, and the SQL writes `customer` whenever the key is
+          present. A body without `customer` therefore sets it to the
+          caller's assigned value: **NULL for an unscoped caller, clearing
+          an existing customer**, or the caller's own customer for a
+          scoped one. Source-derived, NOT verified. Any change for alrust is
+          an owner decision.
+        - Written columns: `environment` (when not null); `service`, `tags`
+          (a null becomes `[]`), `resource`, `event`, `group`, `origin`,
+          `duration` and `text` when the key is present; `startTime` and
+          `endTime` when they parse to a value; `user` is
+          `COALESCE(login, user)`.
+        - **Nothing is recomputed**: changing times does not update the
+          stored `duration`, changing fields does not update the stored
+          `priority`, and a `duration`-only change does not move `endTime`.
+          Reads recompute `duration` and `priority` (see Blackout), so a
+          `duration`-only update has no visible or matching effect, and
+          `sort-by=priority` or `duration` sorts on stale columns.
+        - A malformed `startTime` or `endTime` string raises ValueError in
+          `Blackout.update`, outside any try block, giving the generic 500
+          (unlike 400 on create). A non-string time is silently ignored.
+        - As for note updates, a body key `id` (or `self`) collides with the
+          positional or bound arguments of `update(self, **kwargs)` and
+          `update_blackout(self, id, **kwargs)`, an inferred TypeError and
+          generic 500 before SQL (NOT verified).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, additionalProperties: true}
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, blackout]
+                properties:
+                  status: {const: ok}
+                  blackout: {$ref: '#/components/schemas/Blackout'}
+        "400": {description: "nothing to change, or customer assignment", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "404": {description: "not found or not visible", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+    delete:
+      operationId: deleteBlackout
+      x-source: alerta/views/blackouts.py:127-144
+      x-scope: write:blackouts
+      description: "**No customer filter**: the view passes `g.get('customer')`, singular, which is never set (C19)."
+      responses:
+        "200": {description: Deleted, content: {application/json: {schema: {type: object, required: [status], properties: {status: {const: ok}}}}}}
+        "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /blackouts:
+    get:
+      operationId: listBlackouts
+      x-source: alerta/views/blackouts.py:61-91; alerta/database/backends/postgres/utils.py:201-268; alerta/database/backends/postgres/base.py:766-781
+      x-scope: read:blackouts
+      description: |
+        - Filtered by `customer = ANY(g.customers)` for scoped callers.
+        - `q` and `q.df` use the same parser as alerts (see Q and QDf,
+          including the SECURITY note on `q.df`).
+        - `status` is repeatable: `active`, `pending` and `expired` each add
+          an OR branch; other values are ignored. **The `active` branch mixes
+          clocks**: `start_time <= NOW() at time zone 'utc' AND end_time >
+          NOW()` (`utils.py:255-256`). The second comparison uses a
+          timestamptz against a timestamp column, which PostgreSQL converts
+          with the session TimeZone, so it depends on the session zone
+          (inferred; observed zone `Etc/UTC` in the reference runs). The
+          SQL status also uses the DB clock, while the serialized `status`
+          uses the app clock.
+        - Other filters and `sort-by` follow the generic rules (see
+          AlertFilters and AlertSortBy, including the SECURITY note on
+          `attributes.<k>` sorting) with these names: `priority`,
+          `environment`, `service`, `resource`, `event`, `group`, `tag`,
+          `customer`, `startTime`, `endTime`, `duration`, `remaining`,
+          `user`, `createTime`, `text`. `remaining` is a SELECT alias: as a
+          filter it is an inferred SQL error (500). `priority` and
+          `duration` filter and sort on the stale stored columns.
+        - No `sort-by` means no ordering (`(select 1)`).
+        - Paging as for heartbeats: `total` is the full count; an empty
+          page gives `total: 0` with `message: not found`.
+      parameters:
+        - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/QDf'}
+        - {name: status, in: query, schema: {type: array, items: {type: string}}, style: form, explode: true}
+        - {$ref: '#/components/parameters/Page'}
+        - {name: page-size, in: query, schema: {type: integer}}
+        - {name: sort-by, in: query, schema: {type: array, items: {type: string}}, style: form, explode: true}
+      responses:
+        "200":
+          description: A page, possibly empty
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, page, pageSize, pages, more, blackouts, total]
+                properties:
+                  status: {const: ok}
+                  page: {type: integer}
+                  pageSize: {type: integer}
+                  pages: {type: integer}
+                  more: {type: boolean}
+                  blackouts: {type: array, items: {$ref: '#/components/schemas/Blackout'}}
+                  total: {type: integer}
+                  message: {const: not found}
+        "400": {description: "invalid filter or sort name, or q parse failure", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "416": {description: "page out of range", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         "401": {$ref: '#/components/responses/Unauthorized'}
         "403": {$ref: '#/components/responses/Forbidden'}
         "500": {$ref: '#/components/responses/ServerError'}
