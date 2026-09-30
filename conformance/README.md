@@ -164,3 +164,10 @@ that integration. This follow-up adds three metadata cases; existing fixture/tes
 library/lock/guard/reference are unchanged. It needs a fresh review; integration
 HTTP and this head's HTTP are NOT_RUN. The frozen four-case result above is separate. Hosted billing and the full Phase0 gate
 remain separate.
+
+Three new [benign alert-query cases](alert-queries.md) cover exact-resource
+listing/counts, history display and repeated plain filters with event
+negation. They reuse the existing owned-alert fixture without changing the
+library, dependencies or reference pins. This query head requires fresh
+independent review and its own bounded runner/window. Its HTTP is NOT_RUN;
+parent metadata approval and historical reference passes do not carry forward.
