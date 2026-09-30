@@ -3462,16 +3462,22 @@ paths:
           Flask 3.1.3); under another WSGI server the configured value is
           emitted unchanged. The runtime check covered only booleans
           `false` under controlled settings.
-        - `alarm_model.name` is the display name the model sets at
-          registration: for `ALARM_MODEL=ALERTA` it is `Alerta 9.1.0` at this
-          pin (`alarms/alerta.py:81-82`), not the selector string.
+        - **The model block depends on `ALARM_MODEL`** (`settings.py:29`;
+          `models/alarms/__init__.py:8-10`, `:32-35` load
+          `alerta.models.alarms.<model>`). The reference ships `ALERTA` (the
+          default) and `ISA_18_2`. `alarm_model.name` is the display name the
+          model sets at registration, not the selector string: `Alerta 9.1.0`
+          for `ALERTA` at this pin (`alarms/alerta.py:81-82`), and
+          `ANSI/ISA 18.2` for `ISA_18_2` (`alarms/isa_18_2.py:77`).
           `alarm_model.severity` and `colors` are `SEVERITY_MAP` and
           `COLOR_MAP` as configured when truthy (unchanged, whatever their
           type), else the model's default objects; `normal_severity` and
           `previous_severity` likewise come from the configured value when
           truthy, else the model default (`alarms/alerta.py:84-91`).
-          `status` is the model's constant status map, and `defaults.status`
-          is the constant `open`.
+          `status` is the loaded model's constant status map, and
+          `defaults.status` is the model's `DEFAULT_STATUS`: `open` for
+          `ALERTA` and `NORM` for `ISA_18_2` (`alarms/isa_18_2.py:46`,
+          `:83`). Only the `ALERTA` values were runtime-checked.
         - The top-level `severity` and `colors` are the same objects as
           `alarm_model.severity` and `alarm_model.colors` (`:42-43`, kept for
           compatibility).
@@ -3479,9 +3485,9 @@ paths:
           `basic`, else false (`:30`).
         - All other values are the configured settings as is; their types
           follow the configuration and are not constrained here. Only the
-          keysets, `endpoint` (a string whenever the response succeeds),
-          `alarm_model.name`, `alarm_model.status` and `defaults.status` are
-          source-guaranteed.
+          keysets, `endpoint` (a string whenever the response succeeds), and
+          `alarm_model.name`, `alarm_model.status` and `defaults.status` as
+          fixed per shipped model (listed above) are source-guaranteed.
       security: [{}]
       responses:
         "200":
@@ -3500,7 +3506,7 @@ paths:
                     additionalProperties: false
                     required: [name, severity, colors, status, defaults]
                     properties:
-                      name: {type: string}
+                      name: {type: string, description: "Alerta 9.1.0 for ALERTA, ANSI/ISA 18.2 for ISA_18_2"}
                       severity: {description: "SEVERITY_MAP as configured when truthy, else the model default object (severity name to level)"}
                       colors: {description: "COLOR_MAP as configured when truthy, else the model default object"}
                       status: {type: object, description: "the model's constant status map (status name to rank)"}
@@ -3509,7 +3515,7 @@ paths:
                         additionalProperties: false
                         required: [status, normal_severity, previous_severity]
                         properties:
-                          status: {const: open}
+                          status: {type: string, description: "the model's DEFAULT_STATUS: open for ALERTA, NORM for ISA_18_2"}
                           normal_severity: {description: "DEFAULT_NORMAL_SEVERITY as configured when truthy, else the model default"}
                           previous_severity: {description: "DEFAULT_PREVIOUS_SEVERITY as configured when truthy, else the model default"}
                   auth_required: {description: "AUTH_REQUIRED; boolean by default or from the environment, else as configured"}
