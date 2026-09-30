@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-09-30T11:10Z by claude-alrust, the sole writer of this
+_Last updated: 2026-09-30T11:20Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -36,7 +36,7 @@ review.
 | `claude/spec-lifecycle-actions` (on receive) | claude | `cedfcdff5afb8198bfb3588836156ca8510d076c` | Codex: **APPROVE** for its source-derived scope (A0–A6) |
 | `claude/spec-lifecycle-housekeeping` (on actions) | claude | `c6aecf66d55d476c2ff936588e2f68d9a9ed9648` | Codex: **APPROVE** for its source-derived scope (K0–K5). Deletion semantics preserved |
 | `claude/spec-lifecycle-heartbeats` (on housekeeping) | claude | `84b2ed5de5b15d0baac5b24a423f8f1c23cb4ad1` | Codex: **APPROVE** for the source-derived cumulative lifecycle (OA-1 through OA-6 closed). R1.3 and OA-5/A5.2 are corroborated at runtime by the metadata run (`678f1996`, window released `0f72c944`). The other exception, custom-plugin and receive-status-change edges are runtime NOT_RUN |
-| `claude/charter-sync` | claude | this head | Latest Codex review: **APPROVE_EXACT_SOURCE_WITH_COMMENT** at `10bed7e8` (`c7c629aa`; ST29-C1: checking production exposure is the owner's, under the production-access gate, not an agent task). This head needs its own review |
+| `claude/charter-sync` | claude | this head | Latest Codex review: **APPROVE_EXACT_SOURCE_WITH_COMMENT** at `48b11e3c` (`136ef825`; ST30-C1, fixed on this head). Earlier: `10bed7e8` (`c7c629aa`; ST29-C1: checking production exposure is the owner's, under the production-access gate, not an agent task). This head needs its own review |
 | `claude/spec-openapi` (on `e839ceaf`) | claude | `b4afb16739575cac2c1dcd653a0806f96931f08f` | All slices through **groups** and **permissions/`/scopes`** approved: Codex **APPROVE_SOURCE_SCHEMA** at `b4afb167` (`10a6a67a`), cumulative from `0f838ef1` (users, `39cfa00f`), after REQUEST_CHANGES at `08d751a9` (`55f80373`, GR-R1), `12631144` (`61d27586`, PR-R1) and `593f511e` (`cafc8a8f`). 48 paths, 64 operations. Records G-SEC-1, P-SEC-1, G-DEF-1 and GR-R1 (see Owner), confirmed by Codex as source traces. SQL, HTTP, auth and validator NOT_RUN |
 | `codex/harness-integration` (on `e839ceaf`) | codex | `061d2a969d8fc4bd876f54885758727c5643c896` | Claude **APPROVE** for the source/offline scope: provenance verified, guard PASS, 50 offline tests, 16 collected. HTTP NOT_RUN at this head |
 | `codex/heartbeat-input-query` (on `061d2a96`) | codex | `60d2e021eeb9c1040cfa3bdb373cfe949e9b5db0` | Claude **APPROVE** for the source/offline scope (`ab47f0a4`): 4 vectors (present-null containers, unknown-only status, pre-filter total and paging). Runner `48e3f654` approved (`99738ba0`). Window `alrust-heartbeat-input-query-reference-20260930-01`: REQUEST `586679fb`, ACK `d8afb6df`, START `ff2b9fac`, **RELEASED** `ef919f45`. Runtime: **LOCAL_PASS**, 4 HTTP tests in 0.42 s plus config and stored-key attestations, frozen `60d2e021`. Cleanup and key-free capture verified by both agents (`312fdb6f`). Reference only |
@@ -162,25 +162,36 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
     executed; confirmed by Codex as source traces; same class as the users
     item):**
     - G-SEC-1: at password login, group names are passed to the role lookup
-      (`auth/basic.py:52-53`, `:93-94`), so a group named `admin` gives its
-      members `ADMIN_SCOPES`. No group endpoint applies a role ceiling, so
-      a holder of `admin:groups` can create that group, add any user
-      (including themselves) and obtain full admin at the next login; a
-      removal does not revoke a token (default 14 days). Under
-      `CUSTOMER_VIEWS`, group names also act as customer match keys;
+      (`auth/basic.py:52-53`, `:93-94`), so a group whose name is in the
+      configured `ADMIN_ROLES` (default `['admin']`) gives its members
+      `ADMIN_SCOPES`. No group endpoint applies a role ceiling, so a holder
+      of `admin:groups` can create that group, add any user (including
+      themselves), and that user obtains full admin at their next
+      successful password login (the usual password, account-status,
+      domain and email-verification checks still apply). The token keeps
+      those scopes until it expires (default 14 days), even after removal.
+      Under `CUSTOMER_VIEWS`, group names also act as customer match keys;
     - P-SEC-1: `PUT /perm/<id>` applies neither the scope ceiling nor the
       reserved role names that `POST /perm` does
       (`views/permissions.py:132-156` against `:26-36`), so a holder of
       `admin:perms` can give any role, including the default `user` role,
       any scope such as `admin`. `POST` also lets empty-string scopes
       through its ceiling;
-    - GR-R1 (availability, data integrity): `PUT /group/<id>` with
-      `{"name": ""}` commits the empty name and then returns 500, after
-      which the group can no longer be read, fixed or deleted through the
-      API, and its members' password logins and auth-proxy requests fail;
-    - G-DEF-1: with `AUTH_PROXY` and `CUSTOMER_VIEWS` on, a proxy user in any
-      group hits an inferred 500 on every proxy request (Group objects are
-      bound as SQL parameters).
+    - GR-R1 (availability, data integrity; inferred from source): `PUT
+      /group/<id>` with `{"name": ""}` commits the empty name and then
+      returns 500. After that the group can no longer be read, fixed or
+      deleted through the API. A member's password login fails once it
+      passes the usual credential, account, domain and email checks, and
+      so does every member request that selects the auth-proxy branch;
+      API key, Hawk and Bearer requests are checked earlier
+      (`auth/decorators.py:31-95` against `:104-116`) and do not reach it;
+    - G-DEF-1 (inferred from source, not executed): for a login that is
+      not in `ADMIN_USERS`, when a request selects the auth-proxy branch
+      with `CUSTOMER_VIEWS` on and the user is in at least one group, Group
+      objects are bound as SQL parameters, predicting a 500
+      (`auth/decorators.py:104-116`, `auth/utils.py:42-49`,
+      `postgres/base.py:1351-1359`). `ADMIN_USERS` logins return `*` before
+      any SQL, and earlier authentication paths bypass the branch.
     Decide alrust's behavior (for example whether group names act as roles,
     and whether role, group and permission edits share one ceiling) and
     check whether production grants `admin:groups` or `admin:perms` apart
