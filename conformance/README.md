@@ -18,8 +18,9 @@ Four customer-mapping cases were authored from the reviewed source spec; their
 prior-head local runtime result is recorded below. Operator cases also have a
 separate prior-head reference result; metadata cases also have a scoped frozen-head
 reference result. Three frozen-head heartbeat cases also have a separate reference result. Four
-new [heartbeat input/query cases](heartbeat-input-query.md) are SOURCE_DERIVED /
-HTTP NOT_RUN.
+new [heartbeat input/query cases](heartbeat-input-query.md) have a separate frozen-head
+reference result below. Three new [metadata mutation cases](metadata-mutations.md)
+are SOURCE_DERIVED / HTTP NOT_RUN at this head.
 Lifecycle, broader auth, query, heartbeat, timeout
 and stateful shrinking coverage remain incomplete. Empty Rust crates and offline harness
 tests are not evidence of Alerta compatibility.
@@ -142,15 +143,20 @@ assertions can only check tag content/count because reference ordering is undefi
 
 Three [heartbeat vectors](heartbeats.md) passed only at the frozen head and
 window above. Four [input/query follow-up cases](heartbeat-input-query.md)
-remain HTTP NOT_RUN. They require a fresh exact-source verdict and reviewed
-runner/window. No released heartbeat or metadata window authorizes them.
+passed only at frozen `60d2e021eeb9c1040cfa3bdb373cfe949e9b5db0` in window
+`alrust-heartbeat-input-query-reference-20260930-01`, in 0.42s with runner
+`48e3f654`, RELEASE `ef919f45`, independently confirmed `312fdb6f`.
+That scope does not execute or approve this new head. Three new
+[metadata mutation cases](metadata-mutations.md) remain HTTP NOT_RUN, needing
+a fresh source verdict and reviewed runner/window. No released window authorizes them.
 This changed head has no runtime pass or inherited review approval.
 
 The reviewed base integration `061d2a969d8fc4bd876f54885758727c5643c896`
 (Claude source/offline APPROVE `3d0e68fd`, 50 tests and 16 collected) combines guard `e839ceaf`, hash/clock/key
 harness `130145ea` and HTTP vectors `9548f878` without changing the Python
 code, locks, guard or pinned reference files. Its README resolved the branch
-overlap. This follow-up adds four HTTP cases without changing the existing
-fixture/tests/library/lock/guard/reference. It needs a fresh review; integration
-HTTP and follow-up HTTP are NOT_RUN. Hosted billing and the full Phase0 gate
+overlap. The previous `60d2e021` follow-up added four heartbeat HTTP cases without changing
+that integration. This follow-up adds three metadata cases; existing fixture/tests/
+library/lock/guard/reference are unchanged. It needs a fresh review; integration
+HTTP and this head's HTTP are NOT_RUN. The frozen four-case result above is separate. Hosted billing and the full Phase0 gate
 remain separate.
