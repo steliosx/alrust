@@ -2835,8 +2835,9 @@ paths:
       description: |
         - `Group.parse` reads `id`, `name` and `text`. A falsy `name` gives
           400 `Missing mandatory value for name`; a non-object body raises
-          outside that handler (inferred generic 500). **A client-supplied
-          `id` is used as is**; otherwise it is a new uuid4. A falsy `text`
+          outside that handler (inferred generic 500). **A truthy
+          client-supplied `id` is kept**; an omitted, null or falsy one
+          becomes a new uuid4 (`models/group.py:75`). A falsy `text`
           is stored as `""`. Values are not type-checked.
         - Any insert error, such as a duplicate `name` (UNIQUE) or `id`
           (PRIMARY KEY), gives 500 whose message is the **database error
@@ -3060,7 +3061,8 @@ paths:
       description: |
         - `scopes` that is not a list gives 400 `scopes must be a list`. A
           non-object body raises outside that handler (inferred generic
-          500). A client-supplied `id` is used as is.
+          500). A truthy client-supplied `id` is kept; an omitted, null or
+          falsy one becomes a new uuid4 (`models/permission.py:18`).
         - `match` equal to `DEFAULT_ADMIN_ROLE`, `DEFAULT_USER_ROLE` or
           `DEFAULT_GUEST_ROLE` (`admin`, `user`, `guest`) gives 409 `<match>
           role already exists`. Other names in `ADMIN_ROLES`, `USER_ROLES`
@@ -3247,22 +3249,37 @@ paths:
         "500": {$ref: '#/components/responses/ServerError'}
   /customer:
     description: |
-      **Customer mappings control customer visibility.** A mapping's
-      `match` is looked up against the login and, at password login, the
-      user's group names and email domain (`auth/basic.py:54`, `:95`), or
-      the email domain for HTTP Basic (`auth/decorators.py:147`), when
-      `CUSTOMER_VIEWS` is on (`auth/utils.py:42-49`). The resulting customers
-      are sealed into a password-login token, or recomputed per request for
-      HTTP Basic and the auth proxy.
-      - **SECURITY-relevant (source-derived, NOT verified): no customer
-        ceiling on mapping writes.** `POST` and `PUT` require only
-        `admin:customers`; nothing compares the mapped `customer` with the
-        caller's own `g.customers`. A holder of `admin:customers` who is
-        customer-scoped can therefore map their own login, a group they
-        belong to, or their domain to another customer, or to `*`, which
-        removes customer filtering entirely for that login
-        (`models/customer.py:84-87`). Nothing was executed. This parallels
-        G-SEC-1 and P-SEC-1; an owner decision.
+      **Customer mappings control customer visibility.** Only with
+      `CUSTOMER_VIEWS` on (`auth/utils.py:42-49`), and after
+      `get_customers_by_match` returns `*` for any login in `ADMIN_USERS`
+      (`postgres/base.py:1351-1353`), a mapping's `match` is compared with
+      different names depending on how the user authenticated. An API key,
+      Hawk or Bearer credential is checked earlier and takes precedence:
+      - password login (`POST /auth/login`): the login, the user's group
+        names and the email domain if any (`auth/basic.py:93-95`), after the
+        usual password, account, domain and email-verification checks. The
+        result is sealed into the Bearer token and **kept until the token
+        expires**, not recomputed per request;
+      - HTTP Basic, per request: the user's email and email domain only
+        (`auth/decorators.py:146-148`);
+      - auth proxy, per request: the login plus `user.get_groups()`, which
+        passes Group objects, not names (`auth/decorators.py:104-116`). For a
+        login not in `ADMIN_USERS` with at least one group this is the
+        G-DEF-1 defect (see `/group`: an inferred 500); with no group only
+        the login matches.
+      - **SECURITY-relevant (source-confirmed by both agents, static, NOT
+        verified): no customer ceiling on mapping writes (C-SEC-1).** `POST`
+        and `PUT` require only `admin:customers` through the shared
+        decorator; nothing compares the mapped `customer` with the caller's
+        own `g.customers`. A customer-scoped holder of `admin:customers` can
+        therefore map a name that one of the lookups above will later match
+        for them (their login, one of their group names, or their email
+        domain, per path) to another customer, or to `*`, which the lookup
+        returns as `[]`, no customer filtering (`models/customer.py:84-87`).
+        It takes effect at the next successful matching lookup. This is the
+        absence of a source ceiling, not an executed exploit or a
+        production-exposure finding; it parallels G-SEC-1 and P-SEC-1, and
+        is an owner decision.
     post:
       operationId: createCustomer
       x-source: alerta/views/customers.py:16-37; alerta/models/customer.py:18-24; alerta/database/backends/postgres/base.py:1297-1303
@@ -3271,7 +3288,8 @@ paths:
         - `Customer.parse` reads `id`, `match` and `customer` with no
           validation and no ValueError path, so the 400 handler is
           unreachable. A non-object body raises outside it (inferred generic
-          500). A client-supplied `id` is used as is.
+          500). A truthy client-supplied `id` is kept; an omitted, null or
+          falsy one becomes a new uuid4 (`models/customer.py:15`).
         - A missing `match` (NOT NULL) or a duplicate `id` gives 500 with
           the **database error text** (`:26-29`). A duplicate `match` is
           accepted (no unique constraint). A null `customer` is stored.
@@ -3373,18 +3391,25 @@ paths:
       x-source: alerta/views/customers.py:53-86; alerta/database/backends/postgres/utils.py:442-462, :28-104; alerta/database/backends/postgres/base.py:1309-1324
       x-scope: read:customers
       description: |
-        - **The SQL is not customer-filtered.** `from_params` receives
-          `customers=g.customers` but ignores it (`utils.py:442-462`), so the
-          count, `pages` and `more` cover **all** mappings. The page is
-          fetched, and then rows are dropped in Python unless the caller
-          literally holds `admin` or `admin:customers` or the row's `customer`
-          is in `g.customers` (`:61-64`).
+        - **The SQL has no caller-customer ceiling.** `from_params` receives
+          `customers=g.customers` but ignores it (`utils.py:442-462`); it
+          still applies the explicit `match` and `customer` filters
+          (`QueryBuilder.filter_query`, `:55-104`), and `get_customers` and
+          `get_customers_count` share that `query.where`
+          (`postgres/base.py:1309-1324`). So the count, `pages` and `more`
+          cover **all mappings matching the query**, whatever the caller's
+          customers; with no filter, that is every stored mapping. The page
+          is fetched, and then rows are dropped in Python unless the caller
+          literally holds `admin` or `admin:customers` or the row's
+          `customer` is in `g.customers` (`views/customers.py:61-64`).
         - A customer-scoped caller therefore sees only their visible rows of
-          that page, with `total` = the global count (the number of all
-          mappings is disclosed), and pages that can be partly or wholly
-          empty. When no row of the page is visible, the empty branch reports
-          `message: not found`, `customers: []` and **`total: 0`**, while
-          `pages` and `more` still reflect the global count.
+          that page, with `total` = the pre-visibility query count (which
+          discloses how many mappings match, for example all of them with
+          no filter), and pages that can be partly or wholly empty. When no
+          row of the page is visible, the empty branch reports `message: not
+          found`, `customers: []` and **`total: 0`**, while `pages` and
+          `more` still come from the pre-visibility count. This is reference
+          behavior recorded as is, not a repair.
         - Anonymous access (`AUTH_REQUIRED` false) and ordinary users without
           a mapped customer always get the empty branch.
         - Filters: `match`, `customer`; `id` is ignored (EXCLUDE_FROM_QUERY).
@@ -3396,7 +3421,7 @@ paths:
       responses:
         "200": {description: "`{status, page, pageSize, pages, more, customers, total}`; empty adds `message: not found` and reports total 0", content: {application/json: {schema: {type: object, additionalProperties: true}}}}
         "400": {description: "invalid filter or sort name", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
-        "416": {description: "page out of range (computed from the unfiltered count)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "416": {description: "page out of range (computed from the pre-visibility query count)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         "401": {$ref: '#/components/responses/Unauthorized'}
         "403": {$ref: '#/components/responses/Forbidden'}
         "500": {$ref: '#/components/responses/ServerError'}
