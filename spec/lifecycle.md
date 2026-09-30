@@ -521,11 +521,24 @@ Fall-through, when no row above matched:
   status did not change (`alert.py:666-667`). Unlike receive (R5.5), it is
   not guarded by a status change. It is also not skipped for suppressed
   (`blackout`) alerts, even though the pre-action plugin loop is (A2.2). So
-  **every action** applies the R5.6 helper writes to the loaded alert: the
-  tags are de-duplicated, and null-valued attributes are dropped, on that
-  same model object before `set_alert` writes the row. Example: a `blackout`
-  alert with a null attribute and a duplicated tag, given an unknown action,
-  keeps `major`/`blackout` (ACT-1) but loses the null and the duplicate.
+  **every action** applies the R5.6 helper writes. The three layers must
+  be kept apart (OA-6):
+  - **Loaded model:** `Alert.tag` returns the `db.tag_alert` result without
+    assigning `self.tags` (`alert.py:452-453`), so the model **keeps its
+    duplicate tags**. `process_status_change` does assign
+    `alert.attributes` (`hooks.py:44`), so the model's attributes are
+    null-free.
+  - **Helper DB write:** `tag_alert` de-duplicates the stored tags, and
+    `update_attributes` drops the null keys in the stored row.
+  - **Final row and response:** `set_alert` writes
+    `tags = DISTINCT UNNEST(stored tags || self.tags)` (`pg.py:279-291`),
+    which de-duplicates again, together with the null-free
+    `self.attributes`. The alert returned (`from_db`) and any later GET
+    therefore show de-duplicated tags and no null keys.
+
+  Example: a `blackout` alert with a null attribute and a duplicated tag,
+  given an unknown action, keeps `major`/`blackout` (ACT-1), and its stored
+  and returned state loses the null and the duplicate.
   (Added after Codex raised it as OA-5 on `678f1996`.)
 - **A5.3 [V]** The row update sets `severity`, `status`, `previousSeverity`
   (A2.5) and `update_time = now`, even when nothing changed. `tags` becomes
