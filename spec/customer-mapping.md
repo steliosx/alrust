@@ -172,8 +172,13 @@ Rules:
   alerts, UNNEST(service) svc`, also unfiltered (`postgres/base.py:705-706`).
   Only the per-name counts use the filtered query, which carries
   `customer=ANY(g.customers)` (C16). A customer-scoped caller therefore sees
-  **other customers' environment and service names**, listed with zero
-  counts. For `/environments`, `total` is the filtered
+  environment and service **names that occur only in other customers'
+  alerts**. Customer scope filters rows, not the ownership of a name: a name
+  with no rows matching this caller's filters is listed with a zero count,
+  while a name the caller shares with another customer can show a non-zero
+  count from the caller's own rows. Other filters and the counting query's
+  row limit also affect counts, so no name is guaranteed a zero count. For
+  `/environments`, `total` is the filtered
   `COUNT(DISTINCT environment)` and can disagree with the listed page.
   Source-derived, NOT verified. It is recorded as the reference contract
   without deciding alrust's behavior; any change is an owner decision
