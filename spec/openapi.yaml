@@ -41,8 +41,14 @@ info:
     2. Then Hawk, Bearer, proxy and Basic, in that order.
     3. With no credentials and `AUTH_REQUIRED` false, access is anonymous,
        with scopes `[]` and no scope check (`:156-161`).
-    4. With `AUTH_REQUIRED` and `ALLOW_READONLY`, anonymous callers get
-       `READONLY_SCOPES` (`:164-169`).
+    4. With `AUTH_REQUIRED` and `ALLOW_READONLY`, a request without
+       credentials gets `READONLY_SCOPES` and is then dispatched **without
+       checking the endpoint's required scope** (`:164-169` returns the
+       handler directly, with no `is_in_scope` call), so this branch also
+       reaches `write:*` and `delete:*` endpoints. **Reference auth defect**
+       (AN1, found by Codex; static source inspection only, no request
+       executed, handler outcomes NOT_RUN). Whether alrust keeps this is an
+       owner authentication-contract decision.
     5. With `AUTH_REQUIRED` true, `ALLOW_READONLY` false and no
        credentials, a request carrying a truthy `X-Appengine-Cron` header
        and `X-Forwarded-For` exactly `0.1.0.1` is let through with **no scope
@@ -53,9 +59,13 @@ info:
        contract; this spec only records it.
     6. Otherwise the request gets 401.
 
-    A missing scope gives 403. The `{}` security alternative below
-    therefore means access without credentials **only** under branches 3,
-    4 and 5.
+    The API key, Bearer, proxy and Basic branches check the required scope,
+    giving 403 when it is missing (`:51-52`, `:88-89`, `:119-120`,
+    `:150-151`). The Hawk branch assigns `ADMIN_SCOPES` to any
+    authenticated signature and dispatches without a check (`:56-67`). Branches 3, 4
+    and 5 dispatch without a scope check. The `{}` security alternative
+    below therefore means access without credentials, to **any** endpoint,
+    under branches 3, 4 and 5.
 servers:
   - url: /
     description: Relative to the server's base URL
@@ -1868,11 +1878,13 @@ paths:
         up with the usual customer filter (404 when not visible), but the
         note is then found by `Note.find_by_id(note_id)`, which is
         `WHERE id = <note_id>` with no alert or customer predicate
-        (`postgres/base.py:1381-1386`). A caller who passes this
-        endpoint's `write:alerts` check (or the no-auth policy), can see
-        some alert, and knows a note id can therefore act on that note,
-        including another customer's. Read-only access alone is not
-        enough.
+        (`postgres/base.py:1381-1386`). A caller who can see some alert,
+        knows a note id and reaches this handler can therefore act on that
+        note, including another customer's. Credentialed keys or users with
+        only read scopes fail the `write:alerts` check. Callers without
+        credentials reach the handler under the policy branches that skip
+        the scope check (credential precedence 3 and 4, and 5 with
+        unestablished handler outcome), including `ALLOW_READONLY`.
         Source-derived, NOT verified. alrust behavior here is an owner
         decision.
         - An empty or missing body gives 400 `nothing to change`.
@@ -1883,12 +1895,17 @@ paths:
           `process_note`'s result. The audit event is sent first.
         - **Reserved keys:** a body key `id` collides with
           `update_note`'s positional `id`, and `self` with the bound
-          method, raising TypeError before any SQL, which the generic
+          method, raising TypeError before the note update SQL (the
+          alert and note lookups have already run), which the generic
           handler maps to 500. Codex's body probe with an inert backend
           confirmed zero update calls for `id`. With the default plugins
           (no `take_note`) nothing is written; a custom note plugin may
-          already have acted. A JSON body that is not an object fails the
-          same way.
+          already have acted. A **falsy** body (`null`, `[]`, `0`, `false`,
+          `""`, `{}`) gives 400 `nothing to change` first. A **truthy**
+          non-object body (a non-empty list, string, number or `true`)
+          passes that check and fails with TypeError at
+          `update['user'] = ...`, giving 500. Codex's body probe covered
+          eleven ordinary bodies; HTTP NOT_RUN.
         - Otherwise only `text` (when not null), `attributes` (when not
           null) and `user` (`COALESCE(login, user)`) are written, and
           `update_time` becomes the database's UTC now. Other ordinary keys
@@ -1938,11 +1955,13 @@ paths:
         up with the usual customer filter (404 when not visible), but the
         note is then found by `Note.find_by_id(note_id)`, which is
         `WHERE id = <note_id>` with no alert or customer predicate
-        (`postgres/base.py:1381-1386`). A caller who passes this
-        endpoint's `write:alerts` check (or the no-auth policy), can see
-        some alert, and knows a note id can therefore act on that note,
-        including another customer's. Read-only access alone is not
-        enough.
+        (`postgres/base.py:1381-1386`). A caller who can see some alert,
+        knows a note id and reaches this handler can therefore act on that
+        note, including another customer's. Credentialed keys or users with
+        only read scopes fail the `write:alerts` check. Callers without
+        credentials reach the handler under the policy branches that skip
+        the scope check (credential precedence 3 and 4, and 5 with
+        unestablished handler outcome), including `ALLOW_READONLY`.
         Source-derived, NOT verified. alrust behavior here is an owner
         decision.
         - 404 messages differ: `alert not found` and `note not found`.
