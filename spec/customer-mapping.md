@@ -188,8 +188,10 @@ Rules:
   filter (C16; 404 when not visible), but:
   - `PUT` and `DELETE /alert/<id>/note/<note_id>` then find the note with
     `WHERE id = <note_id>` only (`postgres/base.py:1381-1386`). A caller who
-    can see any alert can update or delete **any** note by id, including a
-    note of another customer's alert. A delete also prepends its
+    passes the endpoint's `write:alerts` check (or the no-auth policy), can
+    see some alert, and knows a note id can update or delete that note,
+    including a note of another customer's alert. Read-only access alone is
+    not enough. A delete also prepends its
     `note dismissed` history entry to the **path** alert, not the note's
     own alert.
   - `GET /alert/<id>/notes` selects `WHERE alert ~* <alert id>`
