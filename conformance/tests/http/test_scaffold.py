@@ -1,5 +1,5 @@
 """Initial synthetic contract cases, cited to reference f431272 (not full parity)."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import uuid
 
 
@@ -32,6 +32,10 @@ def test_synthetic_create_and_deduplicate(target):
         assert alert['duplicateCount'] == 0
         assert alert['repeat'] is False
         payload['id'] = str(uuid.uuid4())
+        # Distinct client times avoid ties if a later vector adds history.
+        # This unchanged duplicate does not assert a new history entry.
+        payload['createTime'] = (datetime.fromisoformat(payload['createTime'].replace('Z', '+00:00'))
+                                 + timedelta(milliseconds=1)).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
         duplicate = target.request('POST', '/alert', payload)
         if duplicate.status == 201:
             created_ids.add(str(uuid.UUID(duplicate.body['id'])))
