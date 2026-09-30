@@ -11,9 +11,17 @@ info:
     - Evidence level: SOURCE_DERIVED unless an operation's `x-runtime` says
       otherwise.
     - Slices in this file: **heartbeats**; **single alerts** (`POST /alert`
-      and the per-id alert operations). Not yet written: the alert list,
-      count and top-N endpoints with the `q=` query grammar, notes,
-      blackouts, keys, users, customers and management.
+      and the per-id alert operations); **alert queries** (`/alerts`,
+      `/alerts/count`, `/alerts/history`, the top-N endpoints,
+      `/environments`, `/services`, `/alerts/groups`, `/alerts/tags`) with
+      the non-`q` query parameters. Not yet written: the `q=` grammar
+      (`queryparser.py`), notes, blackouts, keys, users, customers and
+      management.
+    - **Reference security defects** are recorded where found (marked
+      SECURITY). They describe the class of problem at source level only;
+      no exploit was built or run. They are recorded for the owner's
+      decision; this spec describes the reference and decides nothing
+      about alrust.
     - Cross-references: `spec/lifecycle.md` R0-R7, A0-A5 and HB0-HB6;
       `spec/customer-mapping.md` C7-C11 and C16-C19.
 
@@ -75,7 +83,176 @@ components:
     Forbidden: {description: "missing required scope (auth/decorators.py:51-52 and peers)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     ServerError: {description: "ApiError 500, or an unhandled exception with message 'An internal error has occurred!' (exceptions.py:120-136)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
   parameters:
-    AlertId:
+    AlertFilters:
+      name: filters
+      in: query
+      style: form
+      explode: true
+      schema: {type: object, additionalProperties: {type: string}}
+      x-source: alerta/database/backends/postgres/utils.py:19-22, :55-104, :107-198
+      description: |
+        Built by `Alerts.from_params` then `QueryBuilder.filter_query`.
+        Every predicate below is ANDed. A customer-scoped caller also gets
+        `customer = ANY(g.customers)` (C16).
+        `from_params` runs on **every** endpoint in this slice, so `q`,
+        filters, `id`, dates, `sort-by` and `group-by` are parsed (and an
+        invalid filter or `sort-by` name gives 400) everywhere, even where
+        the result is not sorted or grouped. Only `/alerts` sorts, and only
+        the top-N endpoints use `group-by`.
+
+        **Names.** Excluded names are skipped by the generic filter:
+        `_`, `callback`, `token`, `api-key`, `q`, `q.df`, `id`,
+        `from-date`, `to-date`, `sort-by`, `group-by`, `page`, `page-size`,
+        `limit`, `show-raw-data`, `show-history`. Accepted filter names are
+        `resource`, `event`, `environment`, `severity`, `correlate`,
+        `status`, `service`, `group`, `value`, `text`, `tag`,
+        `attributes`, `attributes.<k>`, `origin`, `type`, `createTime`,
+        `timeout`, `rawData`, `customer`, `duplicateCount`, `repeat`,
+        `previousSeverity`, `trendIndication`, `receiveTime`,
+        `lastReceiveId`, `lastReceiveTime`, `updateTime`, each optionally
+        with a `!` suffix. Anything else, including `tags`, gives 400
+        `Invalid filter parameter: <name>`.
+
+        **Generic path** (every accepted name except `service` and
+        `attributes.<k>`):
+        - one value: `= v`; `~v` means `ILIKE '%v%'`; a `!` suffix
+          negates (`!=` or `NOT ILIKE`);
+        - several values: `= ANY(values)`, or, when **any** value starts
+          with `~`, a case-insensitive **unanchored** regex made by
+          joining all values with `|` after stripping `~`, so plain values
+          become regex fragments too (`status=open&status=~ack` is
+          `status ~* 'open|ack'`). Regex metacharacters are live.
+
+        **`service`**: array overlap, `service && ARRAY[values]`. The
+        `service!` form falls to the generic path: one value compares the
+        text[] column with a text parameter, which PostgreSQL may parse as
+        an array literal (value-dependent, as for `tag=v`); NOT verified.
+
+        **`attributes.<k>=v`**: `attributes @> {"k": first value}`. Extra
+        values are ignored, `~` is literal, and a trailing `!` becomes
+        part of the key.
+
+        **`duplicateCount` and `repeat` are applied twice**
+        (`utils.py:176-183` and again by the generic path):
+        - `duplicateCount`: `params.get('duplicateCount', int)` passes `int`
+          as the *default*, not the type, so both predicates compare with
+          the raw string;
+        - `repeat`: the special predicate computes a boolean from `true`,
+          `t`, `1`, `yes`, `y` or `on`, but the generic path then overwrites
+          the same query variable with the raw string.
+
+          PostgreSQL then parses the raw strings as integer or boolean
+          input; values it rejects are potential 500s (NOT verified).
+
+        **Potential SQL failures** (inferred, NOT verified; no universal
+        500 is claimed):
+        - `tag=v`: generic path, `"tags" = 'v'` compares text[] with a text
+          parameter (array-literal caveat as for heartbeats). Several `tag`
+          values give `"tags" = ANY(text[])`, a text[]-to-text comparison
+          that is inferred to fail for any value.
+        - `type` maps to column `event_type`, but the alerts column is
+          `type` (`base.py:417`): inferred missing-column 500 for any
+          value, and for `sort-by=type`.
+    AlertQueryId:
+      name: id
+      in: query
+      schema: {type: array, items: {type: string}}
+      style: form
+      explode: true
+      x-source: alerta/database/backends/postgres/utils.py:184-191
+      description: |
+        - One value: `alerts.id LIKE 'v%' OR last_receive_id LIKE 'v%'`,
+          case-sensitive; `%` and `_` in `v` are live wildcards.
+        - Several values: `id ~* '^v1|^v2' OR last_receive_id ~* ...`,
+          case-insensitive, with regex metacharacters live.
+        - This differs from the per-id path, which always uses the regex
+          (C18).
+    AlertDateRange:
+      name: from-date
+      in: query
+      schema: {type: string}
+      x-source: alerta/database/backends/postgres/utils.py:165-174; werkzeug 3.1.7 MultiDict.get
+      description: |
+        `from-date` gives `last_receive_time > v`; `to-date` (a separate
+        parameter of the same form) gives `last_receive_time <= v`. Both
+        use the format `%Y-%m-%dT%H:%M:%S.%fZ` as UTC.
+        - **A malformed date is silently ignored.** The value is converted
+          by `MultiDict.get(type=DateTime.parse)`, and werkzeug 3.1.7 (the
+          pinned version) returns the default when the conversion raises
+          ValueError or TypeError.
+        - `to-date` defaults to the query time (the app clock) on
+          `GET /alerts` only; the other endpoints have no upper bound unless
+          it is given.
+    AlertSortBy:
+      name: sort-by
+      in: query
+      schema: {type: array, items: {type: string}}
+      style: form
+      explode: true
+      x-source: alerta/database/backends/postgres/utils.py:28-52, :109-138; base.py:410-440
+      description: |
+        Any accepted name with a sort column (all filter names except
+        `tag`, plus `tags`), or `attributes.<k>`; a `-` prefix reverses it.
+        Anything else gives 400 `Sorting by '<name>' field not supported.`
+        - Base directions are ascending, except `createTime`,
+          `receiveTime`, `lastReceiveTime` and `updateTime`, which are
+          descending.
+        - `severity` sorts by the alarm model's severity code, and
+          `status` by its status state. Both use an **inner** JOIN against
+          the model's VALUES list (`base.py:425-432`), so an alert whose
+          severity or status is not in the model **drops out of the page**
+          while `total` and the counts still include it. PUT status stores
+          any string (lifecycle A1.2), so this is reachable. Source-derived,
+          NOT verified.
+        - **No `sort-by` means no ordering**: the ORDER BY is
+          `(select 1)`, which is truthy, so the `last_receive_time`
+          fallback in `get_alerts` never applies. Page contents are then
+          unordered.
+        - **SECURITY (reference defect):** for `attributes.<k>`, the second
+          dot-separated segment (`split('.')[1]`) is inserted into the ORDER BY clause as
+          `attributes->'<k>'` by string formatting, with no quoting or
+          parameter (`utils.py:38-39`, `:46-47`). Request text therefore
+          becomes SQL text (injection class). Source-level only; not
+          exercised. The same `sort_by_columns` serves heartbeats and other
+          lists.
+    AlertGroupBy:
+      name: group-by
+      in: query
+      schema: {type: string}
+      x-source: alerta/database/backends/postgres/utils.py:196; base.py:555-625
+      description: |
+        Used only by the top-N endpoints (first value), which default to
+        `event`. The value names the grouping column and the response key.
+        - **SECURITY (reference defect):** the value is **not validated**
+          and is formatted directly into `SELECT {group}` and
+          `GROUP BY {group}` (`base.py:557-568`, `:585-596`, `:611-623`).
+          Request text therefore becomes SQL text (injection class). An
+          invalid column name is a SQL error (500). Source-level only; not
+          exercised.
+    Page:
+      name: page
+      in: query
+      schema: {type: integer, default: 1}
+      x-source: alerta/utils/paging.py:9-33
+      description: |
+        `page`, `page-size` and the deprecated `limit` alias. A non-integer
+        is silently replaced by the default (werkzeug `MultiDict.get`), and
+        `page-size` 0 means `DEFAULT_PAGE_SIZE`. 416 `page out of range` is
+        returned when `page` < 1, or when there are items and `page` >
+        pages.
+    Q:
+      name: q
+      in: query
+      schema: {type: string}
+      x-source: alerta/database/backends/postgres/utils.py:144-157; queryparser.py
+      description: |
+        A query string parsed by `QueryParser` into the WHERE clause, with
+        `q.df` as the default field. A parse failure gives 400 `Failed to
+        parse query string.` with the parser error in `errors`. The grammar
+        is specified in the next slice (NOT yet written). When `q` is
+        present it **replaces** the initial `1=1`; the other filters are
+        still ANDed after it.
+    AlertPathId:
       name: alert_id
       in: path
       required: true
@@ -541,7 +718,7 @@ paths:
       x-runtime: "The reference smoke (create, dedup) and customer vectors ran LOCAL_PASS for their own cases only. The 202, 403, 429 and 500 branches are NOT_RUN"
   /alert/{alert_id}:
     parameters:
-      - {$ref: '#/components/parameters/AlertId'}
+      - {$ref: '#/components/parameters/AlertPathId'}
     get:
       operationId: getAlert
       x-source: alerta/views/alerts.py:88-100
@@ -617,7 +794,7 @@ paths:
         "403": {$ref: '#/components/responses/Forbidden'}
         "500": {description: "plugin veto (`failed to delete alert`; local alert.delete() skipped, earlier plugin effects not rolled back), wrapped plugin error including the forwarding loop, or other failure", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
   /alert/{alert_id}/status:
-    parameters: [{$ref: '#/components/parameters/AlertId'}]
+    parameters: [{$ref: '#/components/parameters/AlertPathId'}]
     put:
       operationId: setAlertStatus
       x-source: alerta/views/alerts.py:104-141; alerta/models/alert.py:616-642; alerta/database/backends/postgres/base.py:279-291
@@ -656,7 +833,7 @@ paths:
         "500": {$ref: '#/components/responses/ServerError'}
       x-runtime: "Codex operator vectors a4d75716 (5 tests, LOCAL_PASS in the operator window) cover selected A1/A2 cases only; see STATUS. Untyped timeout and prefix writes are NOT_RUN"
   /alert/{alert_id}/action:
-    parameters: [{$ref: '#/components/parameters/AlertId'}]
+    parameters: [{$ref: '#/components/parameters/AlertPathId'}]
     put:
       operationId: actionAlert
       x-source: alerta/views/alerts.py:145-191; alerta/models/alert.py:644-697
@@ -691,7 +868,7 @@ paths:
         "500": {$ref: '#/components/responses/ServerError'}
       x-runtime: "Codex operator vectors a4d75716 (LOCAL_PASS in the operator window) cover selected A2-A5 cases only; see STATUS"
   /alert/{alert_id}/tag:
-    parameters: [{$ref: '#/components/parameters/AlertId'}]
+    parameters: [{$ref: '#/components/parameters/AlertPathId'}]
     put:
       operationId: tagAlert
       x-source: alerta/views/alerts.py:195-218; alerta/database/backends/postgres/base.py:312-319
@@ -728,7 +905,7 @@ paths:
         "403": {$ref: '#/components/responses/Forbidden'}
         "500": {description: "missing or empty tags (message `must supply 'tags' as json list`), SQL failure, or no row updated", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
   /alert/{alert_id}/untag:
-    parameters: [{$ref: '#/components/parameters/AlertId'}]
+    parameters: [{$ref: '#/components/parameters/AlertPathId'}]
     put:
       operationId: untagAlert
       x-source: alerta/views/alerts.py:222-245; alerta/database/backends/postgres/base.py:321-328
@@ -761,7 +938,7 @@ paths:
         "403": {$ref: '#/components/responses/Forbidden'}
         "500": {description: "missing or empty tags, SQL failure, or no row updated", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
   /alert/{alert_id}/attributes:
-    parameters: [{$ref: '#/components/parameters/AlertId'}]
+    parameters: [{$ref: '#/components/parameters/AlertPathId'}]
     put:
       operationId: updateAlertAttributes
       x-source: alerta/views/alerts.py:249-272; alerta/models/alert.py:464-465; alerta/database/backends/postgres/base.py:339-349
@@ -806,6 +983,408 @@ paths:
         "401": {$ref: '#/components/responses/Unauthorized'}
         "403": {$ref: '#/components/responses/Forbidden'}
         "500": {description: "resulting attribute map is empty (after commit), or other failure", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /alerts:
+    get:
+      operationId: searchAlerts
+      x-source: alerta/views/alerts.py:309-355; alerta/database/backends/postgres/base.py:410-440, :538-555
+      x-scope: read:alerts
+      summary: List alerts (the web UI's main query)
+      description: |
+        - `total`, `severityCounts` and `statusCounts` come from GROUP BY
+          counts over the whole filtered set; `total` is the sum of the
+          severity counts. Paging uses that total.
+        - Each listed alert has `rawData: null` and `history: []` unless
+          `show-raw-data` or `show-history` is truthy (`true`, `t`, `1`,
+          `yes`, `y`, `on`, case-insensitive) (`base.py:410-423`).
+        - `lastTime` is the latest `lastReceiveTime` **on this page**,
+          not over the filtered set; on an empty page it is the query time.
+        - `to-date` defaults to the query time here only (see
+          from-date).
+        - With no `sort-by` the page is **unordered** (see sort-by).
+        - An empty result gives `pages: 0`, `more: false`, `total: 0` and
+          `message: not found`. Unlike heartbeats, `pages` is 0, not the
+          computed page count.
+        - `autoRefresh` is the management switch `auto-refresh-allow`.
+      parameters:
+        - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/AlertFilters'}
+        - {$ref: '#/components/parameters/AlertQueryId'}
+        - {$ref: '#/components/parameters/AlertDateRange'}
+        - {name: to-date, in: query, schema: {type: string}, description: "see from-date"}
+        - {$ref: '#/components/parameters/AlertSortBy'}
+        - {$ref: '#/components/parameters/Page'}
+        - {name: page-size, in: query, schema: {type: integer}}
+        - {name: show-raw-data, in: query, schema: {type: string}}
+        - {name: show-history, in: query, schema: {type: string}}
+      responses:
+        "200":
+          description: A page, possibly empty
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, page, pageSize, pages, more, alerts, total, statusCounts, severityCounts, lastTime, autoRefresh]
+                properties:
+                  status: {const: ok}
+                  page: {type: integer}
+                  pageSize: {type: integer}
+                  pages: {type: integer}
+                  more: {type: boolean}
+                  alerts: {type: array, items: {$ref: '#/components/schemas/Alert'}}
+                  total: {type: integer}
+                  statusCounts: {type: object, additionalProperties: {type: integer}, description: "status -> count over the whole filtered set"}
+                  severityCounts: {type: object, additionalProperties: {type: integer}, description: "severity -> count over the whole filtered set"}
+                  lastTime: {type: string}
+                  autoRefresh: {type: boolean}
+                  message: {const: not found}
+        "416": {description: "page out of range", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "400": {description: "invalid filter or sort name, or q parse failure", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /alerts/count:
+    get:
+      operationId: countAlerts
+      x-source: alerta/views/alerts.py:381-398
+      x-scope: read:alerts
+      description: |
+        The same counts as `GET /alerts`, but with **no** `to-date`
+        default, so the upper bound differs unless `to-date` is given.
+      parameters:
+        - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/AlertFilters'}
+        - {$ref: '#/components/parameters/AlertQueryId'}
+        - {$ref: '#/components/parameters/AlertDateRange'}
+        - {name: to-date, in: query, schema: {type: string}, description: "see from-date"}
+      responses:
+        "200":
+          description: Counts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, total, severityCounts, statusCounts, autoRefresh]
+                properties:
+                  status: {const: ok}
+                  total: {type: integer}
+                  severityCounts: {type: object, additionalProperties: {type: integer}, description: "severity -> count over the whole filtered set"}
+                  statusCounts: {type: object, additionalProperties: {type: integer}, description: "status -> count over the whole filtered set"}
+                  autoRefresh: {type: boolean}
+        "400": {description: "invalid filter or sort name, or q parse failure", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /alerts/history:
+    get:
+      operationId: alertHistory
+      x-source: alerta/views/alerts.py:358-378; alerta/database/backends/postgres/base.py:477-515; alerta/models/history.py:100-130
+      x-scope: read:alerts
+      description: |
+        History entries (up to `HISTORY_LIMIT` per alert) of the filtered
+        alerts, ordered by entry `updateTime` descending. `total` is the
+        number of entries on this page; there is no paging metadata, and
+        `Page(items=0)` means only `page` < 1 gives 416.
+        - Entries carry alert context (resource, environment, service,
+          group, tags, attributes, origin, customer). `severity`, `status`
+          and `value` are **omitted** when falsy.
+        - Entry `id` and `href` follow HistoryEntry (the entry source,
+          not necessarily the alert).
+        - **A single `id` filter is rewritten** (`base.py:479-485`): the
+          server first finds an alert with a history entry whose id is LIKE
+          `v%`, then replaces the `id` query variable with that result row
+          before running the main query. How the driver adapts a row value
+          in `LIKE`, and therefore which alerts match, is NOT established.
+          With no such entry the variable is NULL and nothing matches.
+      parameters:
+        - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/AlertFilters'}
+        - {$ref: '#/components/parameters/AlertQueryId'}
+        - {$ref: '#/components/parameters/AlertDateRange'}
+        - {name: to-date, in: query, schema: {type: string}, description: "see from-date"}
+        - {$ref: '#/components/parameters/Page'}
+      responses:
+        "200":
+          description: "Entries, possibly none (`message: not found`)"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, history, total]
+                properties:
+                  status: {const: ok}
+                  history: {type: array, items: {type: object, additionalProperties: true}}
+                  total: {type: integer}
+                  message: {const: not found}
+        "400": {description: "invalid filter or sort name, or q parse failure", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /alerts/topn/count:
+    get:
+      operationId: topnCount
+      x-source: alerta/views/alerts.py:404-428; alerta/database/backends/postgres/base.py:556-580
+      x-scope: read:alerts
+      summary: Top N groups by row count
+      description: |
+        Aliases `/alerts/top10/...` and `/alerts/topn/...` are identical.
+        N is `page-size` (default `DEFAULT_PAGE_SIZE`); `Page(..., items=1)`
+        means any `page` other than 1 gives 416. Grouping column: see
+        `group-by` (SECURITY).
+        - **`count` is not a number of alerts.** The query joins
+          `UNNEST(service)`, so an alert is counted once per service, and
+          alerts with an empty `service` array are excluded.
+          `duplicateCount` is summed over the same rows.
+      parameters:
+        - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/AlertFilters'}
+        - {$ref: '#/components/parameters/AlertGroupBy'}
+        - {name: page-size, in: query, schema: {type: integer}}
+      responses:
+        "200":
+          description: "`total` is the number of groups returned. An empty result adds `message: not found`"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, top10, total]
+                properties:
+                  status: {const: ok}
+                  top10: {type: array, items: {type: object, description: "keys count, duplicateCount, environments, services, resources [{id, resource, href}], plus one key named after the group-by column", additionalProperties: true}}
+                  total: {type: integer}
+                  message: {const: not found}
+        "416": {description: "page other than 1", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "400": {description: "invalid filter or sort name, or q parse failure", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /alerts/topn/flapping:
+    get:
+      operationId: topnFlapping
+      x-source: alerta/views/alerts.py:431-455; alerta/database/backends/postgres/base.py:582-606
+      x-scope: read:alerts
+      summary: Top N flapping groups
+      description: |
+        Aliases `/alerts/top10/...` and `/alerts/topn/...` are identical.
+        N is `page-size` (default `DEFAULT_PAGE_SIZE`); `Page(..., items=1)`
+        means any `page` other than 1 gives 416. Grouping column: see
+        `group-by` (SECURITY).
+        - **`count` is not a number of alerts.** The query joins
+          `UNNEST(service)`, so an alert is counted once per service, and
+          alerts with an empty `service` array are excluded.
+          `duplicateCount` is summed over the same rows.
+        - Only alerts with at least one `severity` history entry count,
+          and each such entry multiplies the rows (`UNNEST(history)`).
+      parameters:
+        - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/AlertFilters'}
+        - {$ref: '#/components/parameters/AlertGroupBy'}
+        - {name: page-size, in: query, schema: {type: integer}}
+      responses:
+        "200":
+          description: "`total` is the number of groups returned. An empty result adds `message: not found`"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, top10, total]
+                properties:
+                  status: {const: ok}
+                  top10: {type: array, items: {type: object, description: "keys count, duplicateCount, environments, services, resources [{id, resource, href}], plus one key named after the group-by column", additionalProperties: true}}
+                  total: {type: integer}
+                  message: {const: not found}
+        "416": {description: "page other than 1", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "400": {description: "invalid filter or sort name, or q parse failure", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /alerts/topn/standing:
+    get:
+      operationId: topnStanding
+      x-source: alerta/views/alerts.py:458-482; alerta/database/backends/postgres/base.py:608-633
+      x-scope: read:alerts
+      summary: Top N standing groups
+      description: |
+        Aliases `/alerts/top10/...` and `/alerts/topn/...` are identical.
+        N is `page-size` (default `DEFAULT_PAGE_SIZE`); `Page(..., items=1)`
+        means any `page` other than 1 gives 416. Grouping column: see
+        `group-by` (SECURITY).
+        - **`count` is not a number of alerts.** The query joins
+          `UNNEST(service)`, so an alert is counted once per service, and
+          alerts with an empty `service` array are excluded.
+          `duplicateCount` is summed over the same rows.
+        - Ordered by the summed `last_receive_time - create_time` over the
+          same multiplied rows; that sum is not returned. Only alerts with a
+          `severity` history entry count.
+      parameters:
+        - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/AlertFilters'}
+        - {$ref: '#/components/parameters/AlertGroupBy'}
+        - {name: page-size, in: query, schema: {type: integer}}
+      responses:
+        "200":
+          description: "`total` is the number of groups returned. An empty result adds `message: not found`"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, top10, total]
+                properties:
+                  status: {const: ok}
+                  top10: {type: array, items: {type: object, description: "keys count, duplicateCount, environments, services, resources [{id, resource, href}], plus one key named after the group-by column", additionalProperties: true}}
+                  total: {type: integer}
+                  message: {const: not found}
+        "416": {description: "page other than 1", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "400": {description: "invalid filter or sort name, or q parse failure", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /environments:
+    get:
+      operationId: listEnvironments
+      x-source: alerta/views/alerts.py:485-517; alerta/database/backends/postgres/base.py:637-681
+      x-scope: read:alerts
+      description: |
+        **The environment list is not filtered** (`base.py:639`): the
+        page of names comes from `SELECT DISTINCT environment FROM alerts`
+        over **all** alerts, ignoring the filters and the customer scope.
+        Only the per-environment counts use the filtered query, so a
+        customer-scoped caller sees other customers' environment names with
+        zero counts. This is to be recorded as C20 in spec/customer-mapping.md in a separate head.
+        - `total` is the **filtered** `COUNT(DISTINCT environment)`, so it
+          can disagree with the listed page.
+        - **SECURITY (reference defect):** the listed names are then
+          formatted into a SQL literal list, `environment in ('<name>', ...)`,
+          without escaping (`base.py:646`). Stored environment values are
+          normally limited by the reject policy, but an alert received with
+          `status: blackout` skips the pre-receive plugins (lifecycle R1
+          step 1), so a `write:alerts` caller can store an arbitrary
+          environment string that later becomes SQL text (second-order
+          injection class). Source-level only; not exercised.
+        - Counts use `GROUP BY environment, CUBE(severity, status)` with a
+          1000-row limit.
+      parameters:
+        - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/AlertFilters'}
+        - {$ref: '#/components/parameters/AlertQueryId'}
+        - {$ref: '#/components/parameters/AlertDateRange'}
+        - {name: to-date, in: query, schema: {type: string}, description: "see from-date"}
+        - {$ref: '#/components/parameters/Page'}
+      responses:
+        "200":
+          description: "`environments` items: {environment, severityCounts, statusCounts, count}. Empty gives `message: not found` and total 0"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, environments, page, pageSize, pages, more, total]
+                properties:
+                  status: {const: ok}
+                  environments: {type: array, items: {type: object}}
+                  page: {type: integer}
+                  pageSize: {type: integer}
+                  pages: {type: integer}
+                  more: {type: boolean}
+                  total: {type: integer}
+                  message: {const: not found}
+        "416": {description: "page out of range", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "400": {description: "invalid filter or sort name, or q parse failure", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /services:
+    get:
+      operationId: listServices
+      x-source: alerta/views/alerts.py:520-542; alerta/database/backends/postgres/base.py:684-715
+      x-scope: read:alerts
+      description: |
+        **The service list is not filtered** (`base.py:705-706`): the
+        (environment, service) pairs come from `SELECT DISTINCT` over all
+        alerts, ignoring the filters and the customer scope, so a
+        customer-scoped caller sees other customers' service names with
+        zero counts (the planned C20). The counts use the filtered query with
+        `CUBE(severity, status)` and a 1000-row limit, so counts can be
+        truncated on large data. `total` is the number of listed pairs.
+      parameters:
+        - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/AlertFilters'}
+        - {$ref: '#/components/parameters/AlertQueryId'}
+        - {$ref: '#/components/parameters/AlertDateRange'}
+        - {name: to-date, in: query, schema: {type: string}, description: "see from-date"}
+      responses:
+        "200":
+          description: "`services` items: {environment, service, severityCounts, statusCounts, count}"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, services, total]
+                properties:
+                  status: {const: ok}
+                  services: {type: array, items: {type: object}}
+                  total: {type: integer}
+                  message: {const: not found}
+        "400": {description: "invalid filter or sort name, or q parse failure", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /alerts/groups:
+    get:
+      operationId: listAlertGroups
+      x-source: alerta/views/alerts.py:545-567; alerta/database/backends/postgres/base.py:718-731
+      x-scope: read:alerts
+      description: "Filtered `GROUP BY environment, \"group\"` with a 1000-row limit; items {environment, group, count}; `total` is the number of items."
+      parameters:
+        - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/AlertFilters'}
+        - {$ref: '#/components/parameters/AlertQueryId'}
+        - {$ref: '#/components/parameters/AlertDateRange'}
+        - {name: to-date, in: query, schema: {type: string}, description: "see from-date"}
+      responses:
+        "200":
+          description: "Groups, possibly none (`message: not found`)"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, groups, total]
+                properties:
+                  status: {const: ok}
+                  groups: {type: array, items: {type: object}}
+                  total: {type: integer}
+                  message: {const: not found}
+        "400": {description: "invalid filter or sort name, or q parse failure", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /alerts/tags:
+    get:
+      operationId: listAlertTags
+      x-source: alerta/views/alerts.py:570-593; alerta/database/backends/postgres/base.py:734-741
+      x-scope: read:alerts
+      description: "Filtered `GROUP BY environment, tag` over `UNNEST(tags)` with a 1000-row limit; items {environment, tag, count}. Alerts whose tags are SQL NULL (for example after untagging everything) contribute nothing."
+      parameters:
+        - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/AlertFilters'}
+        - {$ref: '#/components/parameters/AlertQueryId'}
+        - {$ref: '#/components/parameters/AlertDateRange'}
+        - {name: to-date, in: query, schema: {type: string}, description: "see from-date"}
+      responses:
+        "200":
+          description: "Tags, possibly none (`message: not found`)"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, tags, total]
+                properties:
+                  status: {const: ok}
+                  tags: {type: array, items: {type: object}}
+                  total: {type: integer}
+                  message: {const: not found}
+        "400": {description: "invalid filter or sort name, or q parse failure", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
 security:
   - apiKeyHeader: []
   - apiKeyAuthorization: []
