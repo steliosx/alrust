@@ -185,16 +185,29 @@ components:
             non-string values is NOT established.
     HistoryEntry:
       type: object
-      x-source: alerta/models/history.py:21-34
+      x-source: alerta/models/history.py:8-34; alerta/models/alert.py:305-330, :365-379, :571-607
+      description: |
+        Entries are returned as stored; identifiers and times are not
+        normalized. `id` and `href` identify the entry's source, which is
+        **not necessarily the stored alert**:
+        - duplicate and correlate entries carry the **incoming** alert's id
+          (`History(id=self.id)` on the parsed alert, `alert.py:305-330`,
+          `:365-379`). That is the id that becomes `lastReceiveId`; a
+          client that sends no id gets a fresh uuid4 here;
+        - note and dismiss entries carry the **note** id (`:571-607`);
+        - create, status, action and housekeeping entries carry the stored
+          alert id.
+        `href` is `/alert/<entry id>` (`history.py:24`), so it need not
+        resolve to this alert.
       properties:
-        id: {type: string, description: "the alert id"}
-        href: {type: string}
+        id: {type: string, description: "entry source id; see above"}
+        href: {type: string, description: "absolute URL /alert/<entry id>; not necessarily this alert"}
         event: {type: string}
         severity: {type: [string, "null"]}
         status: {type: [string, "null"]}
         value: {}
-        text: {type: string}
-        type: {type: string, description: "change type, for example new, severity, status, action or an action name (lifecycle A0)"}
+        text: {type: [string, "null"], description: "defaults to null (history.py:14); status and action requests pass `text` untyped, so a client-sent null or non-string is stored as sent (NOT verified beyond source)"}
+        type: {type: string, description: "change type, for example new, severity, status, value, note, dismiss, action or an action name (lifecycle A0)"}
         updateTime: {type: string, description: "receive entries use the client createTime; status and action entries use server now (A0.1)"}
         user: {type: [string, "null"]}
         timeout: {type: [integer, "null"]}
@@ -316,7 +329,7 @@ paths:
         "401": {$ref: '#/components/responses/Unauthorized'}
         "403": {$ref: '#/components/responses/Forbidden'}
         "500": {$ref: '#/components/responses/ServerError'}
-      x-runtime: "LOCAL_PASS (reference only) for the 201 shape and upsert identity: Codex vectors 9548f878, window alrust-heartbeat-vectors-reference-20260930-01, release 1ba053be, cleanup verified 4dbd2043. Parser edge cases, status computation, expiry and boundaries are NOT_RUN"
+      x-runtime: "LOCAL_PASS (reference only) for the 201 shape and upsert identity: Codex vectors 9548f878, window alrust-heartbeat-vectors-reference-20260930-01, release 1ba053be, cleanup verified 4dbd2043. The selected slow-status checks executed; parser edge cases and broader derived-status, expiry and boundary coverage are NOT_RUN"
   /heartbeat/{heartbeat_id}:
     parameters:
       - name: heartbeat_id
@@ -555,10 +568,22 @@ paths:
       x-scope: delete:alerts
       description: |
         1. Lookup as for GET (404 when missing).
-        2. `process_delete` runs every plugin's `delete`. Of the default
-           `PLUGINS` (`settings.py:272`), `remote_ip`, `reject`, `heartbeat`
-           and `blackout` raise NotImplementedError, which is ignored; the
-           forwarder returns true (`plugins/forwarder.py:101-126`).
+        2. `process_delete` evaluates `delete = delete and
+           plugin.delete(...)` over the routed plugins (`utils/api.py:210`).
+           - **Veto short-circuit:** once a plugin returns a falsy value
+             (false or None), later plugins' `delete` is not called, and
+             the local `alert.delete()` is skipped (`:221`). The view then
+             answers 500 `failed to delete alert` (`views/alerts.py:303-306`)
+             and the row remains.
+           - NotImplementedError is ignored and leaves `delete` unchanged.
+           - Other exceptions: with `PLUGINS_RAISE_ON_ERROR` (default true)
+             they become a 500 and nothing is deleted; with it false they
+             are logged, `delete` keeps its previous value, and the loop
+             continues.
+           - Of the default `PLUGINS` (`settings.py:272`), `remote_ip`,
+             `reject`, `heartbeat` and `blackout` raise NotImplementedError;
+             the forwarder returns true (`plugins/forwarder.py:101-126`). So
+             the defaults never veto.
         3. The row is deleted. The write itself uses `WHERE id = <full id> OR id LIKE '<full id>%'`
         (`pg.py:279-357`), so, as for heartbeat delete, a row whose id extends the
         found id is also written. Generated uuid4 ids make this practically
@@ -582,7 +607,7 @@ paths:
         "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         "401": {$ref: '#/components/responses/Unauthorized'}
         "403": {$ref: '#/components/responses/Forbidden'}
-        "500": {$ref: '#/components/responses/ServerError'}
+        "500": {description: "plugin veto (`failed to delete alert`, row kept), wrapped plugin error including the forwarding loop, or other failure", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
   /alert/{alert_id}/status:
     parameters: [{$ref: '#/components/parameters/AlertId'}]
     put:
@@ -644,7 +669,7 @@ paths:
             schema:
               type: object
               properties:
-                action: {type: string, description: "required; missing or empty gives 400. Valid names come from the alarm model (A3)"}
+                action: {type: string, description: "required; missing or empty gives 400. Not an enum: a non-empty action name the alarm model does not know is accepted with 200, severity and status unchanged, and an `action` history entry written (lifecycle A3 row ACT-1). Known actions that are invalid or redundant for the current state give 409 (A2.3)"}
                 text: {type: string, description: "default `<action> operator action`"}
                 timeout: {description: "falsy values fall back per A4"}
       responses:
