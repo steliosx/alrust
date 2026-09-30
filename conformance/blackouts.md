@@ -7,7 +7,7 @@ OpenAPI review establishes runtime behavior for this changed head.
 
 | Case | Source-derived expectation | Reference source |
 |---|---|---|
-| Owned create/detail/list/duration/time update/delete | Explicit endTime determines duration, ignoring input duration. Create returns integer remaining equal to duration. Reads of the expired period return numeric remaining serialized as a decimal string. A duration-only update leaves the displayed interval unchanged in this fixture; an endTime update changes displayed duration. Exact-resource list finds the owned row; delete removes it | models/blackout.py:25-61,92-137,190-210,236-246; views/blackouts.py:17-144; postgres/base.py:745-852; utils/format.py:39-42 |
+| Owned create/detail/list/duration/time update/delete | Explicit endTime determines duration, ignoring input duration. Create returns integer remaining equal to duration. Reads of the expired period return numeric remaining serialized as a decimal string. A duration-only update leaves the displayed interval unchanged in this fixture; an endTime update changes displayed duration. Exact-resource list finds the owned row; delete removes it | models/blackout.py:25-61,92-137,190-210,236-246; views/blackouts.py:17-144; postgres/base.py:745-852; utils/format.py:43-44 |
 | Origin override and priority chain | Origin makes priority 8. Removing it exposes service priority 3, clearing service exposes group priority 5, clearing group exposes resource+event priority 6. API reads recompute priority; all other raw fields remain equal | models/blackout.py:63-80,190-210; postgres/base.py:803-839 |
 
 Every record has a fresh UUID and unique synthetic resource. Successful create

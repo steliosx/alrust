@@ -87,7 +87,7 @@ def timestamp(value):
 
 
 def assert_expired_read(record):
-    # base.py:757-781,803-839 numeric EXTRACT; format.py:39-42 Decimal -> str.
+    # base.py:757-781,803-839 numeric EXTRACT; format.py:43-44 Decimal -> str.
     assert record['status'] == 'expired'
     assert type(record['remaining']) is str and Decimal(record['remaining']) == 0
     assert type(record['duration']) is int
