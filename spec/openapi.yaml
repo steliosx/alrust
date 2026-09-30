@@ -139,28 +139,37 @@ components:
         values are ignored, `~` is literal, and a trailing `!` becomes
         part of the key.
 
-        **`duplicateCount` and `repeat` get two predicates that share one
-        query variable** (`duplicate_count` or `repeat`): a special equality
-        (`utils.py:176-183`) and then the generic path, which **overwrites**
-        that variable. Both predicates therefore bind whatever the generic
-        path wrote:
-        - one plain value: the raw string (for `duplicateCount`, the
-          special code's `params.get('duplicateCount', int)` passes `int` as
-          the *default*, not the type; for `repeat`, the boolean it computes
-          is replaced);
-        - several plain values: the **list** of strings, bound by both the
-          special `=` and the generic `= ANY(...)`;
-        - one `~v` value: the wildcard string `%v%`, bound by both the
-          special `=` and the generic `ILIKE`;
-        - several values with a `~`: the generic path writes a separate
-          `regex_*` variable, so the special predicate keeps the raw string.
+        **`duplicateCount` and `repeat` can get two predicates that share
+        one query variable** (`duplicate_count` or `repeat`):
+        - **Prerequisite:** the special equality (`utils.py:176-183`) is
+          added only when `params.get(<base name>)`, the **first** value of
+          the un-negated name, is non-empty. Otherwise, and for the `!`
+          forms alone, only the generic predicate applies.
+        - When both apply, the special code first writes the variable:
+          `duplicateCount` writes the raw first string
+          (`params.get('duplicateCount', int)` passes `int` as the
+          *default*, not the type); `repeat` writes a boolean computed from
+          `true`, `t`, `1`, `yes`, `y` or `on`. Then the generic path runs:
+          - one plain value: it **overwrites** the shared variable with the
+            raw string;
+          - several plain values: it overwrites it with the **list** of
+            strings, bound by both the special `=` and the generic
+            `= ANY(...)`;
+          - one `~v` value: it overwrites it with the wildcard string
+            `%v%`, bound by both the special `=` and the generic `ILIKE`;
+          - several values including a `~`: it writes only a separate
+            `regex_*` variable, so the shared variable keeps the special
+            value (the raw first string for `duplicateCount`, the computed
+            **boolean** for `repeat`).
 
-        The `!` forms (`duplicateCount!`, `repeat!`) do not trigger the
-        special predicate. How PostgreSQL treats each binding (integer or
-        boolean parsing, list or wildcard against a scalar column) is
-        inferred: potential 500s, NOT verified. The bindings themselves
-        were confirmed by Codex's pure body probe with the pinned werkzeug
-        (no app, SQL or HTTP).
+        How PostgreSQL treats each binding (integer or boolean parsing, a
+        list or wildcard against a scalar column) is inferred: potential
+        500s, NOT verified. Evidence for the bindings: Codex's six-case
+        pinned-werkzeug body probe (single, repeated and single-`~`
+        branches) and her separate three-case probe of the
+        repeated-with-`~` branch (for example `repeat=true&repeat=~false`
+        gives `repeat: true` and `regex_repeat: 'true|false'`). Both are
+        body probes only, with no app, SQL or HTTP.
 
         **Potential SQL failures** (inferred, NOT verified; no universal
         500 is claimed):
