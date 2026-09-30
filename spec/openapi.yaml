@@ -15,8 +15,8 @@ info:
       `/alerts/count`, `/alerts/history`, the top-N endpoints,
       `/environments`, `/services`, `/alerts/groups`, `/alerts/tags`) with
       their query parameters, including the `q=` grammar; **alert notes**;
-      **blackouts**; **API keys**; **users**. Not yet written: groups,
-      permissions, customers and management.
+      **blackouts**; **API keys**; **users**; **groups**. Not yet written:
+      permissions, customers, `/config` and management.
     - **Reference security defects** are recorded where found (marked
       SECURITY). They describe the class of problem at source level only;
       no exploit was built or run. They are recorded for the owner's
@@ -609,6 +609,33 @@ components:
         text: {type: [string, "null"]}
         updateTime: {type: [string, "null"]}
         email_verified: {type: boolean}
+    Group:
+      type: object
+      x-source: alerta/models/group.py:66-125; alerta/sql/schema.sql:184-192
+      description: |
+        `count` is `COALESCE(CARDINALITY(users), 0)` over the stored member
+        id array (`postgres/base.py:1140-1159`; create returns `0 AS count`,
+        `:1132-1138`). Membership is stored only in `groups.users` (text[],
+        no foreign key), and deleting a user does not remove its id there
+        (`postgres/base.py` `delete_user`). `count` can therefore exceed the
+        number of entries `GET /group/{group_id}/users` returns, which joins
+        against existing users. The `tags` and `attributes` columns are not
+        serialized. A falsy stored `text` reads as `""` (`:77`).
+      properties:
+        id: {type: string}
+        href: {type: string, description: "absolute URL /group/<id>"}
+        name: {type: string}
+        text: {type: string}
+        count: {type: integer}
+    GroupUser:
+      type: object
+      x-source: alerta/models/group.py:11-45
+      properties:
+        id: {type: string}
+        href: {type: string, description: "absolute URL /user/<id>"}
+        login: {type: [string, "null"], description: "the user's login, or the email when the login is falsy (:42)"}
+        name: {type: [string, "null"]}
+        status: {type: [string, "null"]}
     ApiKey:
       type: object
       x-source: alerta/models/key.py:24-78, :100-111; alerta/sql/schema.sql:123-133
@@ -2719,6 +2746,242 @@ paths:
         - {name: page-size, in: query, schema: {type: integer}}
       responses:
         "200": {description: "`{status, page, pageSize, pages, more, users, domains, total}`", content: {application/json: {schema: {type: object, additionalProperties: true}}}}
+        "400": {description: "invalid filter or sort name", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "416": {description: "page out of range", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /group:
+    description: |
+      **Groups act as roles and customer match keys at password login.**
+      `POST /auth/login` (`auth/login.py:7-18`; every `AUTH_PROVIDER` other
+      than `ldap` and `cas`) and `POST /auth/signup` call `basic.login` or
+      `signup`, which compute `groups = [g.name for g in user.get_groups()]`
+      and then:
+      - scopes = `Permission.lookup(login, roles=user.roles + groups)`
+        (`auth/basic.py:52-53`, `:93-94`). `get_scopes_by_match`
+        (`postgres/base.py:1277-1293`) returns `ADMIN_SCOPES` for any match
+        in `ADMIN_ROLES` (default `['admin']`, `settings.py:65-66`), adds the
+        user or guest default scopes for `USER_ROLES` or `GUEST_ROLES`, and
+        adds the scopes of any `perms` row whose `match` equals the name;
+      - customers = `get_customers(login, groups + [domain])`
+        (`auth/basic.py:54`, `:95`), which uses `customers.match` when
+        `CUSTOMER_VIEWS` is on (`auth/utils.py:42-49`,
+        `postgres/base.py:1351-1367`).
+      The resulting scopes and customers are sealed into the Bearer token,
+      which lasts `TOKEN_EXPIRE_DAYS` (default 14, `settings.py:174`), so a
+      membership change applies at the next login and a removal does not
+      revoke an issued token.
+      - **SECURITY (reference defect, source-derived, NOT verified):
+        `admin:groups` confers any role.** No group endpoint compares the
+        scopes a group name implies against the caller's scopes (unlike the
+        `roles` ceiling on `PUT /user/{user_id}`). A holder of
+        `admin:groups` can create or rename a group to `admin` (or to any
+        `perms` match) and add any user, including themselves, and that
+        user receives `ADMIN_SCOPES` at their next password login. Under
+        `CUSTOMER_VIEWS`, a group named like a `customers.match` value
+        likewise widens the members' customer visibility. Traced statically;
+        nothing executed. Whether alrust keeps group names as roles is an
+        owner decision.
+      - **Reference defect (auth proxy, inferred, NOT_RUN):** the proxy
+        branch passes `user.get_groups()` (Group objects, not names) to
+        `get_customers` (`auth/decorators.py:116`, `models/user.py:191-192`).
+        With `CUSTOMER_VIEWS` on, a proxy user who is not in `ADMIN_USERS`
+        and belongs to at least one group reaches
+        `SELECT customer FROM customers WHERE match=%s` with a Group object
+        as the parameter (`postgres/base.py:1357-1359`), an inferred
+        adaptation error and 500 on every request. The proxy branch takes
+        its scopes from the roles header, not from groups (`:117`).
+    post:
+      operationId: createGroup
+      x-source: alerta/views/groups.py:17-38; alerta/models/group.py:71-86; alerta/database/backends/postgres/base.py:1132-1138
+      x-scope: admin:groups
+      description: |
+        - `Group.parse` reads `id`, `name` and `text`. A falsy `name` gives
+          400 `Missing mandatory value for name`; a non-object body raises
+          outside that handler (inferred generic 500). **A client-supplied
+          `id` is used as is**; otherwise it is a new uuid4. A falsy `text`
+          is stored as `""`. Values are not type-checked.
+        - Any insert error, such as a duplicate `name` (UNIQUE) or `id`
+          (PRIMARY KEY), gives 500 whose message is the **database error
+          text** (`str(e)`, `:29-30`).
+        - The success body is `{status, id, group}`; `group.count` is 0.
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, id, group]
+                properties:
+                  status: {const: ok}
+                  id: {type: string}
+                  group: {$ref: '#/components/schemas/Group'}
+        "400": {description: "missing name", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /group/{group_id}:
+    parameters:
+      - {name: group_id, in: path, required: true, schema: {type: string}, description: "exact id match"}
+    get:
+      operationId: getGroup
+      x-source: alerta/views/groups.py:41-51; alerta/database/backends/postgres/base.py:1140-1142
+      x-scope: read:groups
+      responses:
+        "200":
+          description: Found
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, total, group]
+                properties:
+                  status: {const: ok}
+                  total: {const: 1}
+                  group: {$ref: '#/components/schemas/Group'}
+        "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+    put:
+      operationId: updateGroup
+      x-source: alerta/views/groups.py:111-131; alerta/models/group.py:142-143; alerta/database/backends/postgres/base.py:1170-1185
+      x-scope: admin:groups
+      description: |
+        - An empty or missing body gives 400 `nothing to change`; an unknown
+          id gives 404. The audit event is sent before the update.
+        - The body is passed as keyword arguments. Only `name` and `text`
+          are written, each when **not null**, and `update_time` is always
+          set, so a body with neither returns 200 with the group unchanged.
+        - **An empty-string `name` is written.** Create rejects a falsy
+          name, but update checks only `is not None`, so `{"name": ""}`
+          stores `""` (source-derived, NOT_RUN).
+        - A duplicate `name` raises inside `_updateone`, outside any handler
+          (generic 500). A body key `id` collides with
+          `update_group(self, id, **kwargs)`, and `self` with
+          `Group.update(self, **kwargs)`: inferred TypeError and 500. A
+          non-object body also fails at `**` (generic 500).
+        - The body is `{status, group}` with no `total`.
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, group]
+                properties:
+                  status: {const: ok}
+                  group: {$ref: '#/components/schemas/Group'}
+        "400": {description: "nothing to change", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+    delete:
+      operationId: deleteGroup
+      x-source: alerta/views/groups.py:178-194; alerta/database/backends/postgres/base.py:1205-1211
+      x-scope: admin:groups
+      description: "Deletes the row, and with it the membership array. Users are untouched."
+      responses:
+        "200": {description: Deleted, content: {application/json: {schema: {type: object, required: [status], properties: {status: {const: ok}}}}}}
+        "404": {description: "not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /group/{group_id}/users:
+    parameters:
+      - {name: group_id, in: path, required: true, schema: {type: string}}
+    get:
+      operationId: getGroupUsers
+      x-source: alerta/views/groups.py:54-75; alerta/database/backends/postgres/base.py:1161-1168
+      x-scope: read:groups
+      description: |
+        An unknown group gives 404. Members are the stored ids **inner
+        joined** with `users`, so ids of deleted users are silently omitted
+        (and still counted in `Group.count`). No ORDER BY, so the order is
+        not defined. No members gives `users: []` and `total: 0`.
+      responses:
+        "200":
+          description: Members
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, users, total]
+                properties:
+                  status: {const: ok}
+                  users: {type: array, items: {$ref: '#/components/schemas/GroupUser'}}
+                  total: {type: integer}
+        "404": {description: "group not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /group/{group_id}/user/{user_id}:
+    parameters:
+      - {name: group_id, in: path, required: true, schema: {type: string}}
+      - {name: user_id, in: path, required: true, schema: {type: string}}
+    put:
+      operationId: addUserToGroup
+      x-source: alerta/views/groups.py:134-153; alerta/database/backends/postgres/base.py:1187-1194
+      x-scope: admin:groups
+      description: |
+        An unknown group gives 404; an unknown user gives **400** `invalid
+        user`. The array becomes `DISTINCT` of old plus new, so re-adding is
+        idempotent and element order is not preserved. The audit event is
+        named `user-attributes-updated`. Returns `{status: ok}` only. See the
+        `/group` SECURITY note: membership confers the group name as a role
+        at the next password login.
+      responses:
+        "200": {description: Added, content: {application/json: {schema: {type: object, required: [status], properties: {status: {const: ok}}}}}}
+        "400": {description: "invalid user", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "404": {description: "group not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+    delete:
+      operationId: removeUserFromGroup
+      x-source: alerta/views/groups.py:156-175; alerta/database/backends/postgres/base.py:1196-1203
+      x-scope: admin:groups
+      description: |
+        The same 404 and 400 checks as PUT. Removing a user who is not a
+        member still returns 200. Removing the last member stores NULL
+        (`array_agg` over no rows), which counts as 0. **A deleted user's
+        stale id cannot be removed here**, because the user lookup gives
+        400 first; it stays in the array (and in `count`) until the group is
+        deleted. Removal does not revoke a token already issued.
+      responses:
+        "200": {description: Removed, content: {application/json: {schema: {type: object, required: [status], properties: {status: {const: ok}}}}}}
+        "400": {description: "invalid user", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "404": {description: "group not found", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+  /groups:
+    get:
+      operationId: listGroups
+      x-source: alerta/views/groups.py:78-108; alerta/database/backends/postgres/utils.py:394-415, :28-104; alerta/database/backends/postgres/base.py:1144-1159
+      x-scope: read:groups
+      description: |
+        Paged list of all groups (no customer filtering). Empty gives
+        `message: not found` and total 0.
+        - Filters: `name`, `text`, `count`; `id` is ignored
+          (EXCLUDE_FROM_QUERY). **`count` is not a column**: it is a SELECT
+          alias, which PostgreSQL does not resolve in WHERE, so a `count`
+          filter is an inferred SQL error (500), raised by the count query
+          first. NOT_RUN.
+        - Sorts: `name`, `text`, `count` (`sort-by=id` gives 400). A `count`
+          sort resolves to the output alias in ORDER BY (inferred to work,
+          NOT_RUN).
+        - No `sort-by` emits `ORDER BY (select 1)`, so there is no
+          meaningful row order.
+      parameters:
+        - {$ref: '#/components/parameters/Page'}
+        - {name: page-size, in: query, schema: {type: integer}}
+      responses:
+        "200": {description: "`{status, page, pageSize, pages, more, groups, total}`", content: {application/json: {schema: {type: object, additionalProperties: true}}}}
         "400": {description: "invalid filter or sort name", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         "416": {description: "page out of range", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         "401": {$ref: '#/components/responses/Unauthorized'}
