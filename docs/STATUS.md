@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-09-30T18:39Z by claude-alrust, the sole writer of this
+_Last updated: 2026-09-30T18:48Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -36,7 +36,7 @@ review.
 | `claude/spec-lifecycle-actions` (on receive) | claude | `cedfcdff5afb8198bfb3588836156ca8510d076c` | Codex: **APPROVE** for its source-derived scope (A0–A6) |
 | `claude/spec-lifecycle-housekeeping` (on actions) | claude | `c6aecf66d55d476c2ff936588e2f68d9a9ed9648` | Codex: **APPROVE** for its source-derived scope (K0–K5). Deletion semantics preserved |
 | `claude/spec-lifecycle-heartbeats` (on housekeeping) | claude | `84b2ed5de5b15d0baac5b24a423f8f1c23cb4ad1` | Codex: **APPROVE** for the source-derived cumulative lifecycle (OA-1 through OA-6 closed). R1.3 and OA-5/A5.2 are corroborated at runtime by the metadata run (`678f1996`, window released `0f72c944`). The other exception, custom-plugin and receive-status-change edges are runtime NOT_RUN |
-| `claude/charter-sync` | claude | this head | Latest Codex review: **APPROVE_EXACT_SOURCE** at `a83ae89d` (`73678f6a`; no open comment). Earlier: `6660315b` (`e325e836`), `812a3b8a` (`fd8f459b`), `0e74a247` (`2f2ae4cc`), `f70c9640` (`854f909c`), `38084c4a` (`14836275`), `999c1a5a` (`7adbbc6c`), `090233cf` (`a8e348a1`), `0313d437` (`20a101a0`), `48b11e3c` (`136ef825`), `10bed7e8` (`c7c629aa`; ST29-C1: checking production exposure is the owner's, under the production-access gate, not an agent task). This head needs its own review |
+| `claude/charter-sync` | claude | this head | Latest Codex review: **APPROVE_EXACT_SOURCE** at `5b398dee` (`79eedab2`; no open comment). Earlier: `a83ae89d` (`73678f6a`), `6660315b` (`e325e836`), `812a3b8a` (`fd8f459b`), `0e74a247` (`2f2ae4cc`), `f70c9640` (`854f909c`), `38084c4a` (`14836275`), `999c1a5a` (`7adbbc6c`), `090233cf` (`a8e348a1`), `0313d437` (`20a101a0`), `48b11e3c` (`136ef825`), `10bed7e8` (`c7c629aa`; ST29-C1: checking production exposure is the owner's, under the production-access gate, not an agent task). This head needs its own review |
 | `claude/spec-openapi` (on `e839ceaf`) | claude | `55057e9ba3f378133039fd4962df34251b9d2836` | All slices through the **generic webhook dispatcher** approved: Codex **APPROVE_EXACT_SOURCE** at `55057e9b` (`3e18a5b6`; UW-R1: every API-key-authenticated request, reads included, runs one `keys` usage UPDATE before the scope check), on `469fda22` (`84551f7c`; W-N2 closed; `x-runtime` for `/` and `/_` cite their reference runs), on `c5dcd979` (`1eaa191c`; W-C1 and W-N1 closed), after REQUEST_CHANGES at `c6bb61e9` (`74bfab71`, W-C1: the legacy retry reaches the registered error handlers). The dispatcher records W-SEC-1 and W-DL-1 (see Owner); the twelve provider payload mappings are not specified yet. Root wording: `21a8c70d` (`1ad97bdf`; ROOT-C1..C3, then ROOT-C4 on `c6bb61e9`: links are absolute only with an empty or absolute `BASE_URL`, and the `/` rule's own href doubles its slash when the base already ends in `/`). Earlier: root routes `84c9cf96` (`721cd72a`), on `6066d413` (`6ade954c`), after REQUEST_CHANGES at `24aab639` (`c640040e`, MG-R1..R3). `/` returns the full route map without credentials (source-derived). Earlier: `/config` `773d5c27` (`efcd64f7`, CF-R1) and `f667fd4f` (`10e0fac5`, CF-R2); customers `d1fdb7a8` (`702587fc`, CU-R1..R3); groups and permissions `08d751a9`, `12631144`, `593f511e`. 65 paths, 87 operations. `/config` cites the config window and management health the health window, each for exactly what it checked. Records G-SEC-1, P-SEC-1, C-SEC-1, M-SEC-1, G-DEF-1 and GR-R1 (see Owner). SQL, other HTTP, auth and validator NOT_RUN |
 | `codex/harness-integration` (on `e839ceaf`) | codex | `061d2a969d8fc4bd876f54885758727c5643c896` | Claude **APPROVE** for the source/offline scope: provenance verified, guard PASS, 50 offline tests, 16 collected. HTTP NOT_RUN at this head |
 | `codex/heartbeat-input-query` (on `061d2a96`) | codex | `60d2e021eeb9c1040cfa3bdb373cfe949e9b5db0` | Claude **APPROVE** for the source/offline scope (`ab47f0a4`): 4 vectors (present-null containers, unknown-only status, pre-filter total and paging). Runner `48e3f654` approved (`99738ba0`). Window `alrust-heartbeat-input-query-reference-20260930-01`: REQUEST `586679fb`, ACK `d8afb6df`, START `ff2b9fac`, **RELEASED** `ef919f45`. Runtime: **LOCAL_PASS**, 4 HTTP tests in 0.42 s plus config and stored-key attestations, frozen `60d2e021`. Cleanup and key-free capture verified by both agents (`312fdb6f`). Reference only |
@@ -70,12 +70,13 @@ not Rust behavioral parity.
 
 | Check | Result |
 |---|---|
-| Hosted CI | Published PR #1 `e839ceaf`: **CI_BLOCKED_BILLING** (run 36632329142; jobs never started). Unpushed review heads: hosted **NOT_RUN**, not evidence of a hosted result either way |
+| Hosted CI | Published PR #1 `e839ceaf`: **CI_BLOCKED_BILLING** (run 36632329142; jobs never started). The owner authorized pushing review branches (2026-09-30): eight `claude/*` branches pushed at their reviewed heads with stacked PRs #3-#10 (18:42Z). `ci.yml` runs on every pull request, so their hosted runs are billing-refused too: **CI_BLOCKED_BILLING**, not a code result either way. Unpushed heads: hosted **NOT_RUN** |
 | reference-guard regression, local | LOCAL_PASS 12/12 (both agents) |
 | fmt / clippy / test, local | LOCAL_PASS. The crates are empty, so this proves no behavior |
 | Harness offline tests | LOCAL_PASS, reproduced by Claude on Python 3.12.14: `9d70dc2e` 12/12; `db06ce44` 33/33; `e91dcabe` 40/40; `a7426411` 20/20. Offline infrastructure only |
 | Harness findings | Closed: HF-1, HF-2 (controlled receive fixture only), HF-3, HF-4 (`130145ea`), HF-5 (differential CLI), HF-6, HF-7 (`4f808c9d`; HTTP LOCAL_PASS in window scaffold-hf7-01, whose original aggregate result stays FAIL), HF-8 (`130145ea`), HF-9 (`a5ce0e12`), CO-1. Open: none |
 | Reference HTTP smoke (Python 3.12 / Postgres 16, one reference) | **LOCAL_PASS**: 2 cases (health; create/dedup/detail/delete), window `alrust-ref-smoke-20260929-03`, harness `9d70dc2e`, reference `f4312727`. Cleanup confirmed by Codex and independently verified by Claude. This is **reference behavior only**: not conformance of alrust, not Rust parity. Windows 01 and 02 were released NOT_RUN before start |
+| API-key usage writes (UW-R1) | Source-derived (Codex audit `548f643b`, nothing re-run): a valid key on a `permission()`-decorated route runs one `UPDATE keys` (count, last_used_time) before the scope check (`models/key.py:162-166`, `postgres/base.py:1002-1008`, `auth/decorators.py:42-54`). Of the 19 audited reference windows (the earlier smoke windows were not in the audit), 14 sent the synthetic key to decorated routes and so are **not database read-only**: groups and permissions (read endpoints plus the usage write) and 12 mixed-scenario windows (alert notes, alert queries, API keys, blackouts, customer, heartbeat input/query, heartbeat vectors, metadata mutations 01 and 02, metadata edges, operator actions, scaffold HF7). The 5 others (`/config`, `/management/healthcheck`, `/management/gtg`, `/_`, `/`) hit undecorated routes. Usage counts NOT_RUN; every original result, including the FAILs, stands; the historical `READONLY` task names are identity labels |
 | Two-server differential | **NOT_RUN**, and not yet approved |
 | Reference customer vectors (window `alrust-customer-reference-20260930-01`) | **LOCAL_PASS**: 4 HTTP tests plus the stored-key attestation, at suite `a7426411`, reference `f4312727`, runner `4ba51ed9`. Synthetic config (AUTH_REQUIRED False, CUSTOMER_VIEWS False). It corroborates C7–C10, C14 and C16–C17 at runtime; it does not cover C1–C19 in full or other auth modes. Cleanup was verified by both agents. Reference behavior only. UW-R1 (source-derived, not counted): its authenticated requests to permission-decorated routes each carried one API-key usage UPDATE on `keys`, so it is not database read-only; the result stands. |
 | Operator status/action vectors (`codex/action-conformance` `a4d75716`) | Claude **APPROVE** as source-derived expectations (5 tests). Runner `4afb1260` approved (`8faec59d`). Window `alrust-operator-actions-reference-20260930-01`: ACK `d5fe3fc1`, START `82bcad86`, **RELEASED** `8e300281`. Runtime: **LOCAL_PASS**, 5 HTTP tests plus the effective-config and stored-key attestations, under the synthetic default config. Cleanup verified by both agents. Reference only |
@@ -115,8 +116,12 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
 
 ## Next actions
 
-- **codex-alrust:** review this STATUS head; further bounded vectors as
-  separate reviewed heads.
+- **codex-alrust:** review this STATUS head; author the unknown-webhook
+  harness under plan02; push `codex/*` branches on the same cadence.
+- **GitHub cadence (owner-authorized):** push reviewed branches after every
+  4-5 mailbox cycles or right after an approving verdict; one stacked PR per
+  branch, draft until its exact head is approved; no force-push or rebase of
+  pushed branches; merging stays with the owner.
 - **claude-alrust:** review the unknown-webhook harness when it arrives;
   qualify further windows as Codex's UW-R1 inventory lists them; then the
   provider webhook mappings. The auth confirm/forgot/reset endpoints wait
