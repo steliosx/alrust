@@ -110,9 +110,9 @@ Parity otherwise, including:
 ## SF-USERS: one role ceiling for every way of setting roles
 
 Status: Proposed. The group, permission and customer-mapping paths to the
-same privileges (G-SEC-1, P-SEC-1, C-SEC-1) get their own entries under the
-same principle: every edit that can widen a caller's or another user's scopes
-is held to the caller's own scopes. Until then they remain unresolved.
+same privileges are specified in SF-GROUPS, SF-PERMS and SF-CUSTOMERS under
+the same principle: every edit that can widen a caller's or another user's
+scopes or customers is held to the caller's own.
 
 Create and update are specified separately: the reference treats them
 differently, and this entry changes only what it names.
@@ -208,11 +208,155 @@ suppressed until it is qualified.
 | `POST` with a non-basic provider | 400 before parsing | 400, same message | parity |
 | `POST` whose insert fails before writing (fixture: an `id` equal to an existing user's id), `EMAIL_VERIFICATION=False`, default audit handlers | 201 with the unsaved user | 500, no new row, no audit event | divergence |
 
+## SF-GROUPS: group names that grant privileges are held to the caller's scopes
+
+Status: Proposed. Covers G-SEC-1, GR-R1 and G-DEF-1.
+
+Define `group_grants(name)` as `Permission.lookup(login='', roles=[name])`:
+the scopes a group of that name gives its members at login. Like any role,
+that is `ADMIN_SCOPES` for a name in `ADMIN_ROLES`, the default scopes for
+the built-in user and guest roles, or the stored permission rows matching the
+name (`database/backends/postgres/base.py:1277-1293`).
+
+**Reference.**
+1. G-SEC-1: at password login and sign-up, a user's group names are passed to
+   the role lookup together with the user's roles (`auth/basic.py:52-53`,
+   `:93-94`). No group endpoint applies a role ceiling: `POST /group`
+   (`views/groups.py:17-38`), `PUT /group/{group_id}` (`:111-131`) and
+   `PUT /group/{group_id}/user/{user_id}` (`:134-153`) need only
+   `admin:groups`. So a holder of `admin:groups` can create a group named
+   `admin` (in the default `ADMIN_ROLES`), add any user, including
+   themselves, and that user gets `ADMIN_SCOPES` at the next password login.
+2. GR-R1: `PUT /group/{group_id}` with `{"name": ""}` writes the empty name,
+   because the store writes any non-null `name` (`postgres/base.py:1170-1185`),
+   and then fails while rebuilding the model, whose constructor rejects an
+   empty name (`models/group.py:72-73`). The response is a 500 after the
+   write (source-derived; NOT_RUN).
+3. G-DEF-1: in the auth-proxy branch, the customer lookup receives `Group`
+   objects instead of group names (`auth/decorators.py:116`, against the
+   names used at password login, `auth/basic.py:52-54`). With
+   `CUSTOMER_VIEWS` on, for a login not in `ADMIN_USERS` and a user in at
+   least one group, this is expected to fail when the objects are bound as SQL
+   parameters (inferred; NOT_RUN).
+
+**alrust.**
+1. `POST /group`: every scope in `group_grants(name)` must pass `in_scope`
+   against the caller's scopes, else 403 `Requested scope '<scope>' not in
+   existing scopes: <scopes>` (the reference's ceiling message), with no side
+   effect.
+2. `PUT /group/{group_id}` with `name`:
+   - `name` must be a non-empty string, else 400 `Missing mandatory value for
+     name` (the model's own message), with no change (GR-R1);
+   - every scope in `group_grants(<new name>)` must pass the ceiling, else
+     403 as above, with no change. A rename re-labels every member's role,
+     so it is held to the same ceiling as creating a group.
+3. `PUT /group/{group_id}/user/{user_id}`: every scope in
+   `group_grants(<the group's current name>)` must pass the ceiling, else 403
+   as above, with no change.
+4. G-DEF-1: the auth-proxy branch passes group names to the customer lookup,
+   as password login does.
+Group names still act as roles at login, as in the reference. This entry
+only stops an `admin:groups` holder from granting through them more than
+they hold. A token already issued keeps its scopes until it expires, as in
+the reference; that is not changed here.
+
+**Vectors.** Caller scopes and permission rows are fixtures.
+
+| Case | Reference | alrust | Kind |
+|---|---|---|---|
+| caller with only `admin:groups`, `POST /group` named `admin` | 201 | 403, no group | divergence |
+| same caller, `POST /group` named `ops` (no permission row, not a built-in role) | 201 | 201 | parity |
+| caller with `admin`, `POST /group` named `admin` | 201 | 201 | parity |
+| caller with only `admin:groups`, rename `ops` to `admin` | 200 | 403, no change | divergence |
+| caller with only `admin:groups`, add a user to a group named `admin` | 200 | 403, no change | divergence |
+| caller with only `admin:groups`, add a user to `ops` | 200 | 200 | parity |
+| `PUT /group/{id}` with `{"name": ""}` | 500 after writing the empty name (reference pending) | 400 `Missing mandatory value for name`, no change | divergence |
+| `PUT /group/{id}` with `text` only | 200 | 200 | parity |
+| auth-proxy login, `CUSTOMER_VIEWS` on, user in a group mapped to a customer | 500 (reference pending) | customers resolved from group names | divergence |
+
+## SF-PERMS: permission edits hold the same checks as permission creation
+
+Status: Proposed. Covers P-SEC-1.
+
+**Reference.** `POST /perm` (`views/permissions.py:16-49`) refuses the three
+reserved role names with 409 `<match> role already exists` (`:26-31`), and
+holds each requested scope to the caller's scopes with the ceiling message
+(`:33-36`). It does not validate scope names, and `in_scope` accepts an
+empty string (`models/permission.py:96-97`), so `""` passes the ceiling.
+`PUT /perm/{perm_id}` (`:132-156`) validates scope names (400 `'<s>' is not a
+valid Scope`, `:140-142`) but applies neither the reserved-name check nor
+the ceiling. So a holder of `admin:perms` can give any role any scope,
+including `admin`, or rename a row onto another role name.
+
+**alrust.**
+1. `POST /perm` and `PUT /perm/{perm_id}` validate every submitted scope name
+   against the known scopes, with `PUT`'s message and status: 400 `'<s>' is
+   not a valid Scope`. This rejects `""` on `POST` too.
+2. `PUT /perm/{perm_id}` with `match` applies `POST`'s reserved-name check:
+   409 `<match> role already exists`.
+3. `PUT /perm/{perm_id}` with `scopes` or `match`: every scope the row will
+   grant after the edit (the new `scopes` when present, otherwise the
+   existing ones) must pass the ceiling, else 403 with the ceiling message.
+   Renaming a row moves its scopes to another role, so a rename is held to
+   the same ceiling.
+Each refusal has no side effect, and the checks run in the order listed.
+
+**Vectors.**
+
+| Case | Reference | alrust | Kind |
+|---|---|---|---|
+| caller with only `admin:perms`, `PUT` adding `admin` to a row's scopes | 200 | 403, no change | divergence |
+| same caller, `PUT` renaming a row to `user` | 200 | 409, no change | divergence |
+| same caller, `PUT` renaming a row whose scopes include `admin` | 200 | 403, no change | divergence |
+| same caller, `PUT` with scopes within its own | 200 | 200 | parity |
+| `POST /perm` with `scopes: [""]` | 201 | 400 `'' is not a valid Scope` | divergence |
+| `POST /perm` with an unknown scope name | 403 (the ceiling refuses it) | 400 `'<s>' is not a valid Scope` (validation runs first) | divergence (both refuse) |
+| `POST /perm` above the ceiling | 403 | 403 | parity |
+| `POST /perm` with a reserved name | 409 | 409 | parity |
+| `PUT /perm` with an unknown scope name | 400 | 400 | parity |
+
+## SF-CUSTOMERS: a customer-scoped caller can only map to its own customers
+
+Status: Proposed. Covers C-SEC-1.
+
+**Reference.** `POST /customer` (`views/customers.py:16-37`) and
+`PUT /customer/{customer_id}` (`:89-109`) need only `admin:customers`, and
+nothing compares the mapped customer with the caller's own customers. With
+`CUSTOMER_VIEWS` on, a customer-scoped holder of `admin:customers` can map
+a name that a later lookup will match for them (their login, a group name or
+their e-mail domain) to another customer, or to `*`, which removes customer
+filtering (`postgres/base.py:1351-1367`; `models/customer.py:85-87`). It
+takes effect at the next lookup. The caller's customers are `g.customers`,
+where an empty list means no customer restriction.
+
+**alrust.** For a customer-scoped caller (a non-empty `g.customers`):
+1. `POST /customer`: the mapping's `customer` must be one of the caller's
+   customers and must not be `*`, else 400 `not allowed to set customer to
+   '<customer>'` (the reference's own message in `utils/api.py:20`).
+2. `PUT /customer/{customer_id}`: the same rule for the new `customer` when
+   present. Also, the existing mapping's customer must be one of the
+   caller's customers, else 403 `not allowed to change a mapping for
+   customer '<customer>'`. The caller may not re-point another customer's
+   mapping, even to itself.
+Callers without a customer restriction, and every caller when
+`CUSTOMER_VIEWS` is off, are unchanged. Each refusal has no side effect.
+
+**Vectors.**
+
+| Case | Reference | alrust | Kind |
+|---|---|---|---|
+| scoped caller (customers `[A]`), `POST` mapping to `B` | 201 | 400, no mapping | divergence |
+| scoped caller, `POST` mapping to `*` | 201 | 400, no mapping | divergence |
+| scoped caller, `POST` mapping to `A` | 201 | 201 | parity |
+| scoped caller, `PUT` changing a mapping for `A` to `B` | 200 | 400, no change | divergence |
+| scoped caller, `PUT` on a mapping for `B` | 200 | 403, no change | divergence |
+| unscoped caller (`admin`), `POST` mapping to `B` | 201 | 201 | parity |
+| `CUSTOMER_VIEWS` off, any caller | unchanged | unchanged | parity |
+
 ## Not yet specified
 
 The other Y3 items get entries in this file before their phases need them:
-the string-formatted SQL constructions; G-SEC-1, P-SEC-1, C-SEC-1, GR-R1 and
-G-DEF-1; M-SEC-1; WUI-SEC-1 and WP-SEC-1; W-SEC-1 and W-DL-1; the API-key
+the string-formatted SQL constructions; M-SEC-1; WUI-SEC-1 and WP-SEC-1; W-SEC-1 and W-DL-1; the API-key
 items; C21–C23; and the `q=` search. Until an item has an entry here, its
 reference behavior in `spec/openapi.yaml` stands as the description of the
 defect, not as a requirement for alrust.
