@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-01T19:02Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-01T19:32Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -452,8 +452,8 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
       (`webhooks/telegram.py:87-95`);
     - WS-AUTH-1: Slack and Telegram status actions (open, ack, close) change
       alert status with only `write:webhooks`, not `write:alerts`; PagerDuty
-      does the same through its status updates. **Owner question (auth
-      contract): should these require the normal scopes?**;
+      does the same through its status updates. DECIDED (owner decision
+      Y13): they require the normal scopes;
     - PagerDuty, Slack and Telegram find the alert by a **regular-expression
       id prefix**, so a key such as `.` matches whichever alert comes first
       within the caller's customers;
@@ -467,7 +467,7 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
       PagerDuty history text, and Stackdriver `moreInfo`. Stackdriver also
       logs invalid documentation content whole (the W-SEC-1 pattern).
     Under Y3 each gets a `spec/security-fixes.md` entry; WS-AUTH-1 and the
-    scope part of WT-SEC-1 wait for the owner's answer;
+    scope part of WT-SEC-1 follow owner decision Y13;
   - **new, SECURITY (API keys; source-level, nothing executed):**
     - an edit that omits `expireTime` stores NULL, and every read rebuilds
       it as now + `API_KEY_EXPIRE_DAYS` (default 365), so with a positive
