@@ -278,42 +278,77 @@ the reference; that is not changed here.
 
 Status: Proposed. Covers P-SEC-1.
 
-**Reference.** `POST /perm` (`views/permissions.py:16-49`) refuses the three
-reserved role names with 409 `<match> role already exists` (`:26-31`), and
-holds each requested scope to the caller's scopes with the ceiling message
-(`:33-36`). It does not validate scope names, and `in_scope` accepts an
-empty string (`models/permission.py:96-97`), so `""` passes the ceiling.
-`PUT /perm/{perm_id}` (`:132-156`) validates scope names (400 `'<s>' is not a
-valid Scope`, `:140-142`) but applies neither the reserved-name check nor
-the ceiling. So a holder of `admin:perms` can give any role any scope,
-including `admin`, or rename a row onto another role name.
+"Known scopes" means `Scope.find_all()` (`models/enums.py:104-105`), which
+includes the built-in scopes and every `CUSTOM_SCOPES` entry registered at
+start-up (`:90-91`; `settings.py:73`).
 
-**alrust.**
-1. `POST /perm` and `PUT /perm/{perm_id}` validate every submitted scope name
-   against the known scopes, with `PUT`'s message and status: 400 `'<s>' is
-   not a valid Scope`. This rejects `""` on `POST` too.
-2. `PUT /perm/{perm_id}` with `match` applies `POST`'s reserved-name check:
-   409 `<match> role already exists`.
-3. `PUT /perm/{perm_id}` with `scopes` or `match`: every scope the row will
-   grant after the edit (the new `scopes` when present, otherwise the
-   existing ones) must pass the ceiling, else 403 with the ceiling message.
-   Renaming a row moves its scopes to another role, so a rename is held to
-   the same ceiling.
-Each refusal has no side effect, and the checks run in the order listed.
+**Reference.**
+- `POST /perm` (`views/permissions.py:16-49`): `Permission.parse` requires
+  `scopes`, when present, to be a list (else 400 `scopes must be a list`) and
+  wraps each element as a `Scope` string without checking it is known
+  (`models/permission.py:22-31`). The handler then refuses the three reserved
+  role names with 409 `<match> role already exists` (`views/permissions.py:26-31`),
+  and holds each submitted scope to the caller's scopes with the ceiling
+  message (`:33-36`). `in_scope` accepts `""` (`models/permission.py:96-97`)
+  and any scope whose exact text or prefix before `:` the caller holds
+  (`:98-110`), known or not. A missing `match` fails at insert as a caught
+  500 (`spec/openapi.yaml`, PermInput).
+- `PUT /perm/{perm_id}` (`:132-156`): an empty body is 400. Each element of
+  `scopes` (default `[]`) must be a known scope, else 400 `'<s>' is not a
+  valid Scope` (`:140-142`). There is no reserved-name check and no ceiling.
+  The store writes `match` and `scopes` whenever the members are present, even
+  when null (`postgres/base.py:1252-1267`).
+So a holder of `admin:perms` can give any role any scope, including `admin`,
+or rename a row onto another role name.
 
-**Vectors.**
+**alrust input contract** (both endpoints):
+- `scopes`: on `POST`, absent means `[]`. On `PUT`, absent means
+  "unchanged". When present, it must be a JSON array of strings: `null` or
+  any other type is 400 `scopes must be a list` (`POST`'s existing message),
+  and a non-string element is 400 `'<value>' is not a valid Scope`. An
+  explicit `[]` is a valid value: no scopes.
+- `match`: `POST` is unchanged from the reference. On `PUT`, absent means
+  "unchanged"; when present it must be a non-empty string, else 400 `match
+  must be a non-empty string`.
+
+**alrust order of checks** (both endpoints), the first failure deciding the
+response, with no side effect:
+1. the input contract above;
+2. every submitted scope must be known, else 400 `'<s>' is not a valid
+   Scope`;
+3. reserved names: on `POST`, the row's `match`; on `PUT`, the new `match`
+   when present. 409 `<match> role already exists`;
+4. the ceiling, applied to the scopes the row will grant after the request:
+   on `POST`, the submitted scopes; on `PUT`, the new `scopes` when present,
+   otherwise the row's existing scopes when `match` changes. Every one must
+   pass `in_scope` against the caller's scopes, else 403 with the ceiling
+   message. A `PUT` that changes neither `scopes` nor `match` needs no
+   ceiling, and an explicit `[]` has nothing to check.
+`POST` keeps its reserved-name and ceiling checks, now after validation.
+`PUT` gains them.
+
+**Vectors.** "Caller" is the authenticated key's scopes; all `POST` cases
+use an otherwise valid, unused, non-reserved `match` unless stated.
 
 | Case | Reference | alrust | Kind |
 |---|---|---|---|
-| caller with only `admin:perms`, `PUT` adding `admin` to a row's scopes | 200 | 403, no change | divergence |
-| same caller, `PUT` renaming a row to `user` | 200 | 409, no change | divergence |
-| same caller, `PUT` renaming a row whose scopes include `admin` | 200 | 403, no change | divergence |
-| same caller, `PUT` with scopes within its own | 200 | 200 | parity |
-| `POST /perm` with `scopes: [""]` | 201 | 400 `'' is not a valid Scope` | divergence |
-| `POST /perm` with an unknown scope name | 403 (the ceiling refuses it) | 400 `'<s>' is not a valid Scope` (validation runs first) | divergence (both refuse) |
-| `POST /perm` above the ceiling | 403 | 403 | parity |
-| `POST /perm` with a reserved name | 409 | 409 | parity |
-| `PUT /perm` with an unknown scope name | 400 | 400 | parity |
+| `PUT` by a caller with only `admin:perms`, adding `admin` to a row's scopes | 200 | 403, no change | divergence |
+| same caller, `PUT` renaming a row to `user` (valid scopes) | 200 | 409, no change | divergence |
+| same caller, `PUT` renaming a row whose existing scopes include `admin`, `scopes` omitted | 200 | 403, no change | divergence |
+| same caller, `PUT` renaming that row with `scopes: []` | 200 | 200, row grants nothing | parity |
+| same caller, `PUT` with known scopes within its own | 200 | 200 | parity |
+| `POST` with `scopes: [""]` | 201 | 400 `'' is not a valid Scope` | divergence |
+| caller `['admin:perms', 'read']`, `POST` with `scopes: ['read:synthetic_unknown']` | 201 (the `read` prefix passes the ceiling) | 400 `'read:synthetic_unknown' is not a valid Scope` | divergence |
+| caller `['admin:perms']`, `POST` with `scopes: ['read:synthetic_unknown']` | 403 (ceiling) | 400 (validation runs first) | divergence (both refuse) |
+| caller with the scope, `POST` with a scope registered through `CUSTOM_SCOPES` | 201 | 201 | parity |
+| `POST` above the ceiling with known scopes | 403 | 403 | parity |
+| `POST` with `match: 'user'` and known scopes within the ceiling | 409 | 409 | parity |
+| `POST` with `match: 'user'` and `scopes: ['']` | 409 (reserved name first) | 400 (validation first) | divergence (both refuse) |
+| `POST` with `scopes: null` or `scopes: 'admin'` | 400 `scopes must be a list` | 400, same message | parity |
+| `PUT` with `scopes: 'admin'` | 400 `'a' is not a valid Scope` (the string is iterated by character, `views/permissions.py:140-142`) | 400 `scopes must be a list` | divergence in the message only; status and envelope must match |
+| `PUT` with `scopes: null` | 500 (iterating `null` raises outside any handler; reference pending) | 400 `scopes must be a list` | divergence |
+| `PUT` with `match: null` or `match: ""` | reference pending (the store writes the member as given) | 400 `match must be a non-empty string` | divergence |
+| `PUT` with an unknown scope name | 400 | 400 | parity |
 
 ## SF-CUSTOMERS: a customer-scoped caller can only map to its own customers
 
@@ -326,32 +361,39 @@ nothing compares the mapped customer with the caller's own customers. With
 a name that a later lookup will match for them (their login, a group name or
 their e-mail domain) to another customer, or to `*`, which removes customer
 filtering (`postgres/base.py:1351-1367`; `models/customer.py:85-87`). It
-takes effect at the next lookup. The caller's customers are `g.customers`,
-where an empty list means no customer restriction.
+takes effect at the next lookup. The caller's customers are `g.customers`;
+note that API-key authentication sets it from the key's customer even when
+`CUSTOMER_VIEWS` is off (`auth/decorators.py:48`).
 
-**alrust.** For a customer-scoped caller (a non-empty `g.customers`):
-1. `POST /customer`: the mapping's `customer` must be one of the caller's
-   customers and must not be `*`, else 400 `not allowed to set customer to
-   '<customer>'` (the reference's own message in `utils/api.py:20`).
-2. `PUT /customer/{customer_id}`: the same rule for the new `customer` when
-   present. Also, the existing mapping's customer must be one of the
-   caller's customers, else 403 `not allowed to change a mapping for
-   customer '<customer>'`. The caller may not re-point another customer's
-   mapping, even to itself.
-Callers without a customer restriction, and every caller when
-`CUSTOMER_VIEWS` is off, are unchanged. Each refusal has no side effect.
+**alrust.** The rule applies only when `CUSTOMER_VIEWS` is on **and** the
+caller's `g.customers` is a non-empty list (a customer-scoped caller).
+`CUSTOMER_VIEWS` off takes precedence: then nothing changes, whatever
+`g.customers` holds. A caller with an empty `g.customers` is unchanged,
+whatever its scopes. For a customer-scoped caller, in this order, the first
+failure deciding the response, with no side effect:
+1. `PUT /customer/{customer_id}` (any body, including a `match`-only change):
+   the existing mapping's customer must be one of the caller's customers,
+   else 403 `not allowed to change a mapping for customer '<existing>'`.
+2. `POST /customer`, and `PUT` when `customer` is present: the new
+   `customer` must be one of the caller's customers and not `*`, else 400
+   `not allowed to set customer to '<customer>'` (the reference's own message
+   in `utils/api.py:20`).
 
-**Vectors.**
+**Vectors.** All scoped cases have `CUSTOMER_VIEWS=True` and a caller whose
+key carries customer `A`, so `g.customers` is `[A]`.
 
 | Case | Reference | alrust | Kind |
 |---|---|---|---|
-| scoped caller (customers `[A]`), `POST` mapping to `B` | 201 | 400, no mapping | divergence |
+| scoped caller, `POST` mapping to `B` | 201 | 400, no mapping | divergence |
 | scoped caller, `POST` mapping to `*` | 201 | 400, no mapping | divergence |
 | scoped caller, `POST` mapping to `A` | 201 | 201 | parity |
-| scoped caller, `PUT` changing a mapping for `A` to `B` | 200 | 400, no change | divergence |
+| scoped caller, `PUT` changing its own mapping for `A` to `B` | 200 | 400, no change | divergence |
 | scoped caller, `PUT` on a mapping for `B` | 200 | 403, no change | divergence |
-| unscoped caller (`admin`), `POST` mapping to `B` | 201 | 201 | parity |
-| `CUSTOMER_VIEWS` off, any caller | unchanged | unchanged | parity |
+| scoped caller, `PUT` on a mapping for `B` with `customer: C` | 200 | 403 (ownership is checked first), no change | divergence |
+| scoped caller, `PUT` on its own mapping for `A`, `match` only | 200 | 200 | parity |
+| scoped caller, `PUT` on a mapping for `B`, `match` only | 200 | 403, no change | divergence |
+| caller with empty `g.customers` (for example an `admin` key with no customer), `POST` mapping to `B` | 201 | 201 | parity |
+| `CUSTOMER_VIEWS=False`, key with customer `A`, `POST` mapping to `B` | 201 | 201 | parity |
 
 ## Not yet specified
 
