@@ -90,15 +90,79 @@ Codex retrieves the logs for the exact run, as for every CI result so far.
 
 ## Gate rule
 
-The gate is **met** when, for one exact commit on `main`:
-- every module the manifest marks as gate-counting passed in an executed
-  hosted (or X5 self-hosted) run;
-- Codex has accepted the run evidence.
+Green CI is **necessary but not sufficient**. The Phase 0 gate is met only
+when all three of these hold:
+1. **Coverage closure.** A reviewed coverage inventory maps every Phase 0
+   requirement to vectors or a recorded gap: the KICKOFF list, the
+   lifecycle spec, the customer mapping, the OpenAPI surface, and the auth,
+   query, heartbeat, timeout and stateful (shrinking) coverage that the
+   conformance README lists as incomplete. Every required case is
+   implemented and gate-counting.
+2. **Executed evidence.** On one exact commit on `main`, every
+   gate-counting module passed in an executed hosted (or, once Phase B is
+   qualified, X5 self-hosted) run, and Codex accepted the evidence.
+3. **Lifecycle review.** Codex's adversarial review of the lifecycle spec
+   against the source (the KICKOFF condition).
 
-The lifecycle-spec review condition in KICKOFF is tracked separately in
-STATUS. Modules marked NOT_RUN keep the gate **open** until they run or
-Codex and Claude jointly agree, in a reviewed manifest change, that a
-module is out of the gate's scope.
+Rules for the inventory:
+- **No silent removal.** No manifest or inventory change may remove a
+  required case from the gate because it is unimplemented, difficult or
+  NOT_RUN.
+- **Reclassification needs a basis.** A reviewed reclassification must
+  cite its basis (a scope decision, an ADR or an owner decision) and keep
+  the gap's history.
+- **Requirements stay intact.** A reclassification may not weaken
+  functional, security, recovery or evidence requirements.
+- **Reference assertions stay.** Reference assertions are never replaced
+  by assertions about alrust's intended fixes; the fixes are tested as
+  divergences.
+
+## Execution boundary
+
+**Basis.** Owner decision X5 (free hosted CI counts for the gate) is the
+execution basis on hosted runners. No new owner approval is needed only
+because the host differs.
+
+**Review before any run.** Within that basis, nothing new runs until it has
+been reviewed:
+- The exact source, runner profile and vector set must have Codex's
+  exact-head approval before a new HTTP or heavy path starts.
+- This includes a run triggered by publishing a branch or pull request, and
+  changes to `run-reference.sh` that the existing scaffold job executes.
+- Until approved, a new path is **inert**: the workflow reports NOT_RUN for
+  it and sends no requests.
+- A source head needing pre-review CI evidence is sent by mailbox (bundle)
+  first and published only after approval, or published in a form whose
+  changed path is inert.
+
+**Explicit selection.** Each profile names the exact test files and node
+ids it runs. It inherits no `addopts`, `PYTEST_ADDOPTS` or plugin
+autoloading, and never sweeps in reference-pending security vectors or
+fault-injection vectors.
+
+**Finite time budgets.** Each phase has a budget (step `timeout-minutes`
+plus in-script limits): reference build, server startup (60 s, as
+today), the test run, and cleanup. Exceeding a budget is a recorded failure.
+
+**Failure and cancellation evidence.** A failed, timed-out or cancelled
+profile still uploads what it has, with its state recorded as FAIL or
+CANCELLED, never as PASS or NOT_RUN. Cleanup (stopping the server,
+dropping the database) runs on every outcome, and its result is recorded.
+
+**Concurrency and exclusion scope.**
+- Each job runs on its own fresh GitHub-hosted machine. Its PostgreSQL
+  service and reference server are local to that machine, so jobs share no
+  state.
+- The workflow's existing `concurrency` group cancels superseded runs of
+  the same ref; a cancelled run earns no credit.
+- These jobs never touch the shared x64 VM, the laptop window or the lab
+  lock, and never reroute to them.
+- The X5 self-hosted fallback stays disabled until Phase B is approved
+  and qualified, under its own shared exclusion.
+- An ambiguous hosted state (queued, refused or of unclear outcome) never
+  triggers an automatic reroute.
+
+**Spend.** The repository's $0 spending limit stays; no paid usage.
 
 ## Cost
 
@@ -109,7 +173,9 @@ minutes, which are then recorded so the free allowance can be planned.
 ## Steps
 
 1. Claude: bring the two reference lockfiles to `main`, and switch
-   `run-reference.sh` to a hashed install (one reviewable head).
+   `run-reference.sh` to a hashed install (one reviewable head; under the
+   execution boundary, its changed build path runs in CI only after
+   Codex's exact approval).
 2. Codex: the profile manifest and, if needed, a CI entry point (Codex's
    heads).
 3. Claude: the workflow matrix with per-profile database, server restart,
@@ -117,6 +183,17 @@ minutes, which are then recorded so the free allowance can be planned.
    under Y5 after Codex's exact approval).
 4. Both: the first executed run; Codex retrieves and audits the evidence.
 
-Open questions for Codex: which modules are CI-runnable as they stand, and
-whether the served-process instrumentation used in earlier reference runs
-can be made a reviewed, CI-safe option of `run-reference.sh`.
+Codex's answers (`be626f47`):
+- **Standard vectors** can be ported without changing their assertions.
+  But `run-reference.sh` as it stands supplies neither the four-role
+  fixture nor live config and key observations.
+- **Specialized modules** also need their exact served-process provenance,
+  count and registry producers.
+- **Served-process instrumentation** may become a separately reviewed,
+  CI-only launcher option: immutable reference files, observations after
+  readiness, checks at request time, no oracle derived from responses and
+  no patching of HTTP semantics. Until its exact producer and runner are
+  reviewed, it stays NOT_RUN.
+
+Codex is preparing the inert, machine-readable module and profile
+inventory.
