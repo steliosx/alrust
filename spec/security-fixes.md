@@ -704,14 +704,27 @@ both 2026-10-01.
      `LDAP_CONFIG`) and every list that is not a list of strings, is
      `[REDACTED]`. Nested names are not inspected. A setting the schema does
      not classify is secret.
-   **Secret-value check.** The secret values are every non-empty string held
-   by a secret setting (each list element and map value, recursively) and
-   every non-empty user-information string and password of a connection
-   setting. They are taken from every configured source of that setting
-   (environment variable, configuration file, and for `SECRET_KEY` the
-   generated key), not only the effective one. A public value whose JSON
-   rendering contains any secret value as a substring is shown as
-   `[REDACTED]`. Empty strings are never secret values.
+   **Secret-value check.** The secret values are:
+   - every non-empty string held by a secret setting (each list element and
+     map key and value, recursively);
+   - every non-empty user-information string and password of a connection
+     setting, both as written (percent-encoded) and percent-decoded.
+
+   They are taken from every configured source of that setting (environment
+   variable, configuration file, and for `SECRET_KEY` the generated key), not
+   only the effective one. The check runs on decoded string values **before**
+   serialization. Every string that would be emitted is compared as raw text
+   with each secret value, by substring:
+   - each public string;
+   - each element of a public list;
+   - the textual form of a public number;
+   - for a connection setting, its scheme, host (as written and
+     percent-decoded) and port.
+
+   On any hit, the whole value of that setting is `[REDACTED]`. Only then is
+   the remaining value serialized to JSON. Empty strings are never secret
+   values. Only configured settings are sources; the process environment is
+   never read for this purpose.
 2. Signing key at startup (Y9). The effective `SECRET_KEY` follows the
    reference precedence: the environment variable if present (even empty),
    else the configuration-file value. If there is no effective value, or it
@@ -735,9 +748,17 @@ both 2026-10-01.
 - Properties profile `MP`: `AUTH_REQUIRED = True`; distinct synthetic
   sentinels (each at least 16 characters, unique, and not a substring of
   any other setting) for `SECRET_KEY`, `OAUTH2_CLIENT_SECRET`,
-  `LDAP_BIND_PASSWORD` and `SMTP_PASSWORD`;
-  `DATABASE_URL = postgres://u:<db-sentinel>@db.test:5432/alrust`;
-  `CELERY_RESULT_BACKEND = redis://:<celery-sentinel>@cache.test:6379/0`;
+  `LDAP_BIND_PASSWORD` and `SMTP_PASSWORD`; `DATABASE_URL` is the
+  authorized disposable database's URL, whose role password is the
+  synthetic `<db-sentinel>`; its scheme, host, port and database name are
+  taken from the fixture attestation, not assumed. `CELERY_BROKER_URL` is
+  unset, so no background task runs; the reference reads the Celery
+  settings only inside the bulk handlers (`views/bulk.py:24`, `:76`;
+  `app.py:102-110`), which these rows never call.
+  `CELERY_RESULT_BACKEND = redis://:<celery-sentinel>@cache.test:6379/0`
+  is therefore display-only. The rows below treat `TOKEN_EXPIRE_DAYS`,
+  `AUTH_REQUIRED`, `ALLOWED_ENVIRONMENTS`, `DEFAULT_ENVIRONMENT` and
+  `CLIPBOARD_TEMPLATE` (`settings.py:240`; no startup invariant) as public;
   `LDAP_CONFIG = {'BindPassWord': <ldap-map-sentinel>, 'Uri':
   'ldap://u:<ldap-url-sentinel>@ldap.test'}`; process environment variable
   `SYNTHETIC_ENV_SECRET = <env-sentinel>` (not a setting). Callers: `M1`,
@@ -775,11 +796,14 @@ alrust cells are NOT_RUN until an implementation exists.
 | # | Case | Reference | alrust | Kind |
 |---|---|---|---|---|
 | 1 | `MP`, `M1` `GET /management/properties` | 200 `text/plain` containing every sentinel, `SYNTHETIC_ENV_SECRET` and `M1`'s key | 200 `text/plain`; no sentinel, environment variable or request header anywhere in the body; one line per setting, sorted; `SECRET_KEY: [REDACTED]` | divergence (Y8) |
-| 2 | same; the connection lines | full URLs with passwords | `DATABASE_URL: "postgres://[REDACTED]@db.test:5432/[REDACTED]"`; `CELERY_RESULT_BACKEND: "redis://[REDACTED]@cache.test:6379/[REDACTED]"` | divergence (Y8) |
+| 2 | same; the connection lines | full URLs with passwords | `DATABASE_URL: "<attested scheme>://[REDACTED]@<attested host>:<attested port>/[REDACTED]"`; `CELERY_RESULT_BACKEND: "redis://[REDACTED]@cache.test:6379/[REDACTED]"` | divergence (Y8) |
 | 3 | same; `LDAP_CONFIG` (mixed-case nested secret name and nested URL) | the map, with both sentinels | `LDAP_CONFIG: [REDACTED]` | divergence (Y8) |
-| 4 | `MP` with `DATABASE_URL = 'not a url'`; then `'postgres://'` | shown as given | `DATABASE_URL: [REDACTED]` both times | divergence (Y8) |
-| 5 | `MP` with the public `DEFAULT_ENVIRONMENT` set to the `SMTP_PASSWORD` sentinel | shown | `DEFAULT_ENVIRONMENT: [REDACTED]` | divergence (Y8, secret-value check) |
-| 6 | `MP` with a public string setting set to `"x\nSECRET_KEY: leaked"` | two lines | one line; the value is a JSON string with `\n` escaped | divergence (Y8, escaping) |
+| 4 | `MP` with `CELERY_RESULT_BACKEND = 'not a url'`; then `'redis://'` (no host) | shown as given | `CELERY_RESULT_BACKEND: [REDACTED]` both times | divergence (Y8) |
+| 5 | `MP` with `ALLOWED_ENVIRONMENTS = ['Production', <smtp-sentinel>]` and `DEFAULT_ENVIRONMENT = <smtp-sentinel>` (the startup check at `utils/config.py:123-124` passes) | both shown | `ALLOWED_ENVIRONMENTS: [REDACTED]`; `DEFAULT_ENVIRONMENT: [REDACTED]` | divergence (Y8, secret-value check) |
+| 5b | `MP` with `SMTP_PASSWORD = 'SYNTHETIC"pass\\word\tX'` (Python string-literal notation: one double quote, one backslash and one tab character) and `CLIPBOARD_TEMPLATE` containing that exact string | both shown | `CLIPBOARD_TEMPLATE: [REDACTED]` (compared before JSON escaping) | divergence (Y8) |
+| 5c | `MP` with `CELERY_RESULT_BACKEND = 'redis://:p%40ss-SYNTHETIC-0001@cache.test:6379/0'` and `CLIPBOARD_TEMPLATE` containing `p@ss-SYNTHETIC-0001` | both shown | `CLIPBOARD_TEMPLATE: [REDACTED]` (decoded alias) | divergence (Y8) |
+| 5d | `MP` with `SMTP_PASSWORD = 'secret-host-SYNTHETIC.test'` and `CELERY_RESULT_BACKEND = 'redis://secret-host-SYNTHETIC.test:6379/0'` | both shown | `CELERY_RESULT_BACKEND: [REDACTED]` (host equals a secret) | divergence (Y8) |
+| 6 | `MP` with `CLIPBOARD_TEMPLATE = "x\nSECRET_KEY: leaked"` | two lines | one line: `CLIPBOARD_TEMPLATE: "x\nSECRET_KEY: leaked"` with the newline escaped | divergence (Y8, escaping) |
 | 7 | `MP` with `SMTP_PASSWORD = ''` | — | other values unaffected; `SMTP_PASSWORD: [REDACTED]` | alrust control (empty is not a secret value) |
 | 8 | `MP`; positive controls | `TOKEN_EXPIRE_DAYS: 14`, `ALLOWED_ENVIRONMENTS` listed | `TOKEN_EXPIRE_DAYS: 14`; `ALLOWED_ENVIRONMENTS: ["Production","Development"]`; `AUTH_REQUIRED: true` | parity of values (format differs) |
 | 9 | `MP`, `M2` `GET /management/properties` | 403 `Missing required scope: admin:management` | same | parity |
