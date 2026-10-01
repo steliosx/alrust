@@ -9,43 +9,78 @@ file specifies each fix. For every entry:
   (`reference/alerta/alerta/<path>:<line>`). These are source-derived; none of
   the defects was exploited or executed.
 - **alrust** states the required behavior. It is normative for Phases 2 and 3.
-- **Conformance** states how the suite and the differential fuzzer treat the
-  difference: each entry is an intended divergence, so a vector that exercises
-  it must expect the alrust behavior from alrust and must not report the
-  reference's behavior as a regression.
+- **Vectors** list the cases the conformance suite and the differential fuzzer
+  use. A **parity** vector expects alrust to behave exactly as the reference.
+  A **divergence** vector states the predicate under which the difference is
+  intended and what each side must do; outside that predicate the reference
+  behavior stands, so a difference there is a regression.
 
 Entries keep their identifiers from `docs/STATUS.md` and `spec/openapi.yaml`.
-The status of each entry is **Proposed** until Codex approves it at an exact
-commit.
+Each entry is **Proposed** until Codex approves it at an exact commit. The
+fixtures here are not executed by this spec; reference HTTP runs stay gated
+by the heavy-window rules.
+
+## Common definitions
+
+- **Error envelope.** Every refusal below uses the reference's `ApiError`
+  envelope (`exceptions.py:98-107`): HTTP status `code`, JSON
+  `{"status": "error", "message": <text>, "code": <code>, "errors": <list or
+  null>, "requestId": <id>}`. Where a message text is given, it is exact.
+- **No side effect.** A refused request writes nothing: no row created,
+  updated or deleted; no audit event (`admin_audit_trail`); no confirmation
+  e-mail; and no API-key usage update beyond what the reference itself performs
+  for the same credential before the refusal.
+- **Scope check.** `in_scope(want, have)` is `Permission.is_in_scope`
+  (`models/permission.py:90-110`): `want` empty or `None` is always
+  satisfied; otherwise `want` or its prefix before `:` must be in `have`, with
+  inheritance `read` → `write` → `admin`, and `delete` → `admin` when listed in
+  `DELETE_SCOPES` (default `[]`, `settings.py:75`), otherwise `delete` →
+  `write`.
+- **Settings.** `AUTH_REQUIRED` (`settings.py:62`, default `False`),
+  `ALLOW_READONLY` (`:78`, default `False`), `READONLY_SCOPES` (`:79`, default
+  `['read']`), `EMAIL_VERIFICATION` (`:215`, default `False`).
 
 ## SF-AN1: read-only anonymous access must still enforce scopes
 
 Status: Proposed.
 
-**Reference.** With `AUTH_REQUIRED` and `ALLOW_READONLY` both true
-(`settings.py:78-79`; defaults `False` and `['read']`), a request that
-carries no credential reaches precedence branch 4 of `permission()`
-(`auth/decorators.py:163-169`). The branch sets `g.scopes` to
-`READONLY_SCOPES` and calls the view **without checking the route's
-required scope**. Every authenticated branch does check it
-(`:51-52`, `:88-89`, `:119-120`, `:150-151`). So an anonymous caller reaches
-write and delete routes such as `POST /alert`, `DELETE /alert/{id}`,
-`PUT /user/{id}` and `DELETE /key/{key}`.
+**Reference.** The `permission(scope)` decorator (`auth/decorators.py:25`)
+tries credentials in order. Four branches check the route's scope with
+`in_scope` before dispatch: API key (`:30-54`), Bearer token (`:69-91`), auth
+proxy (`:93-122`) and HTTP Basic (`:124-153`). The Hawk branch (`:55-67`)
+sets `ADMIN_SCOPES` and dispatches without a scope check; it needs a valid
+HMAC signature and is not changed here. With `AUTH_REQUIRED` and
+`ALLOW_READONLY` both true, a request with no credential reaches the
+read-only branch (`:163-169`), which sets `READONLY_SCOPES` and dispatches
+**without** the scope check, so an anonymous caller reaches write and delete
+routes.
 
-**alrust.** In that configuration, an anonymous request is admitted only if
-the route's required scope is satisfied by `READONLY_SCOPES`, using the same
-scope check as the authenticated branches. Otherwise alrust responds exactly
-as the reference does when no branch admits a request: HTTP 401 with
-`Missing authorization API Key or Bearer Token` (`auth/decorators.py:175`).
-Admitted anonymous requests keep the reference's context: no user id, no
-login, no customers, and `READONLY_SCOPES` as scopes. The other branches
-and `AUTH_REQUIRED` false are unchanged.
+**alrust.** In the read-only branch, alrust dispatches only if
+`in_scope(route_scope, READONLY_SCOPES)`; otherwise it raises the
+reference's fall-through refusal: 401, message `Missing authorization API Key
+or Bearer Token` (`:175`), with no side effect. An admitted request keeps the
+reference's context: no user id, no login, no customers, and
+`READONLY_SCOPES` as scopes. Every other branch, and `AUTH_REQUIRED` false,
+are unchanged.
 
-**Conformance.** The intended divergence is only in the configuration
-`AUTH_REQUIRED=True, ALLOW_READONLY=True`, for an anonymous request to a
-route whose scope `READONLY_SCOPES` does not satisfy. The reference
-dispatches; alrust returns 401 and must cause no side effect. Vectors for
-read routes in that configuration must match the reference.
+**Vectors.** The divergence predicate is exactly: `AUTH_REQUIRED=True`,
+`ALLOW_READONLY=True`, no credential, and `in_scope(route_scope,
+READONLY_SCOPES)` false. The reference dispatches; alrust returns the 401
+above with no side effect. Parity otherwise:
+
+| Configuration | Request | Expected |
+|---|---|---|
+| default `READONLY_SCOPES=['read']` | anonymous `GET /alerts` (`read:alerts`) | parity: dispatched |
+| default | anonymous `POST /alert` (`write:alerts`) | divergence: alrust 401, nothing stored |
+| default | anonymous `DELETE /alert/{id}` (`delete:alerts`, `views/alerts.py:278`; with the default empty `DELETE_SCOPES` it needs `write`) | divergence: alrust 401, nothing deleted |
+| `READONLY_SCOPES=[]` | anonymous `GET /alerts` | divergence: alrust 401 |
+| `READONLY_SCOPES=['read:alerts']` | anonymous `GET /heartbeats` (`read:heartbeats`) | divergence: alrust 401 |
+| `READONLY_SCOPES=['read:alerts']` | anonymous `GET /alerts` | parity: dispatched |
+| `READONLY_SCOPES=['write']` | anonymous `GET /alerts` (`read` inherits from `write`) | parity: dispatched |
+| default | anonymous `GET /user/me` (no required scope, `views/users.py:104`) | parity: dispatched |
+| default | valid API key with `write:alerts`, `POST /alert` | parity: success |
+| default | valid API key with `read`, `POST /alert` | parity: 403 `Missing required scope: write:alerts` |
+| `AUTH_REQUIRED=False` | anonymous `POST /alert` | parity: dispatched |
 
 ## SF-CRON: no unauthenticated App Engine cron branch
 
@@ -57,57 +92,88 @@ credential, a request whose `X-Appengine-Cron` header is non-empty and whose
 and no auth context set** (`auth/decorators.py:171-173`). Both headers are
 ordinary client-controlled headers unless a proxy strips them.
 
-**alrust.** No such branch exists. The request falls through to the 401
-above. Scheduled housekeeping is triggered with an ordinary credential that
-carries the required scope.
+**alrust.** No such branch exists; the request falls through to the 401 of
+SF-AN1, with no side effect. Scheduled housekeeping uses an ordinary
+credential that carries the required scope.
 
-**Conformance.** An intended divergence in that configuration only: the
-reference dispatches, alrust returns 401 and causes no side effect.
+**Vectors.** The divergence predicate is exactly: `AUTH_REQUIRED=True`,
+`ALLOW_READONLY=False`, no credential, `X-Appengine-Cron` non-empty and
+`X-Forwarded-For: 0.1.0.1`. The reference dispatches; alrust returns 401.
+Parity otherwise, including:
+- the same cron headers together with a valid credential: the credential's
+  branch decides, as in the reference (credentials are tried first,
+  `:30-152`);
+- the same cron headers with `ALLOW_READONLY=True`: SF-AN1 applies, since that
+  branch comes first (`:163-169`);
+- the same cron headers with `AUTH_REQUIRED=False`: dispatched in both.
 
 ## SF-USERS: one role ceiling for every way of setting roles
 
-Status: Proposed.
+Status: Proposed. The group, permission and customer-mapping paths to the
+same privileges (G-SEC-1, P-SEC-1, C-SEC-1) get their own entries under the
+same principle: every edit that can widen a caller's or another user's scopes
+is held to the caller's own scopes. Until then they remain unresolved.
 
 **Reference.**
 
-1. `PUT /user/{user_id}` runs the role ceiling only when the body's `roles`
-   member is truthy (`views/users.py:181-186`). The model also accepts a
-   legacy singular `role` and turns it into `roles: [role]`
-   (`models/user.py:180-181`), so `{"role": "admin"}` grants any role
-   without the ceiling check. A holder of `admin:users` can therefore create
-   full administrators under the default role mapping.
-2. `POST /user` hashes a missing password as the empty string
-   (`models/user.py:67`, `generate_password_hash(json.get('password', ''))`).
-3. `POST /user` builds `ApiError(str(e), 500)` when the insert fails but never
-   raises it (`views/users.py:45-48`), so a failed insert still returns 201
-   with the unsaved user (`:57-58`).
+1. `PUT /user/{user_id}` (`views/users.py:162-199`): if the body's `roles` is
+   truthy, every scope those roles grant (`Permission.lookup(login='',
+   roles=...)`) must pass `in_scope` against the caller's scopes, else 403
+   `Requested scope '<scope>' not in existing scopes: <scopes>`
+   (`:181-186`). The update then runs, and the model turns a legacy `role`
+   member into `roles: [role]` (`models/user.py:180-181`) **after** that
+   check. So `{"role": "admin"}` grants any role without the ceiling. With
+   both members, the plural check runs first on `roles`, then `role`
+   replaces it.
+2. `POST /user` (`views/users.py:20-60`) refuses a non-basic provider with
+   400 before parsing (`:23-25`). It hashes a missing password as the empty
+   string (`models/user.py:67`). Any parse error is a 400 with the
+   exception text (`views/users.py:27-30`).
+3. When the insert raises, the handler builds `ApiError(str(e), 500)` but
+   never raises it (`:45-48`). The confirmation e-mail (when
+   `EMAIL_VERIFICATION` is on) and the audit event then run (`:50-55`), and
+   the response is 201 with the unsaved user (`:57-58`).
 
-**alrust.**
+**alrust input contract** (`PUT /user/{user_id}` and `POST /user`):
+- `roles`: absent, `null` (treated as absent), or a JSON array of strings;
+  anything else is 400 `roles must be a list of strings`.
+- `role`: absent, or a non-empty string; `null`, an empty string or any other
+  type is 400 `role must be a non-empty string`.
+- `role` and a non-null `roles` together: 400 `role and roles are mutually
+  exclusive`, with no side effect.
+- `password` on `POST /user` with the basic provider: a non-empty string;
+  absent, `null`, `""` or any other type is 400 `Missing mandatory value for
+  "password"`, with no side effect.
 
-1. The effective new roles of `PUT /user/{user_id}` are `[role]` when the
-   body has a `role` member, otherwise `roles` when present. If the body has
-   both members, the request is rejected with 400 as ambiguous. Whenever the
-   effective roles are present and non-empty, the same ceiling as `roles`
-   applies: every scope those roles grant (`Permission.lookup`) must be within
-   the caller's scopes, else 403 with the reference's message
-   (`Requested scope '<scope>' not in existing scopes: <scopes>`).
-   An empty list removes roles and needs no ceiling, as in the reference.
-2. `POST /user` with the basic auth provider requires a non-empty `password`;
-   a missing or empty password is rejected with 400 before anything is
-   stored.
-3. A failed user insert returns 500 and creates nothing. Nothing that
-   follows the insert (confirmation e-mail, audit event, 201 response) runs.
+**alrust behavior.**
+1. Effective new roles are `[role]` when `role` is present, else `roles`.
+   When they are non-empty, the reference's plural ceiling applies to them,
+   with the reference's 403 message and no side effect. An empty array
+   removes all roles and needs no ceiling, as in the reference.
+2. A failed user insert returns 500 with the database error text, as an
+   `ApiError(str(e), 500)` would, and nothing after the insert runs: no
+   confirmation e-mail, no audit event, no 201. alrust claims only that no
+   success response or post-insert side effect follows a refused insert; it
+   makes no claim about a write whose commit outcome is unknown.
 
-**Conformance.** Intended divergences:
-- `PUT /user/{id}` with `role` (alone) above the caller's scopes: reference
-  200, alrust 403 with no change;
-- `PUT /user/{id}` with both `role` and `roles`: reference applies `role`,
-  alrust 400 with no change;
-- `POST /user` without a password: reference 201 with an empty-password
-  hash, alrust 400;
-- a failing user insert: reference 201, alrust 500.
+**Vectors.** Caller scopes and roles are fixtures; "above the ceiling" means
+some scope the roles grant fails `in_scope` against the caller's scopes.
 
-All other `PUT /user` and `POST /user` vectors must match the reference.
+| Case | Reference | alrust | Kind |
+|---|---|---|---|
+| `PUT` with `role` (alone) above the ceiling | 200, role stored | 403, no change | divergence |
+| `PUT` with `role` (alone) within the ceiling | 200 | 200 | parity |
+| `PUT` with `roles` above the ceiling | 403 | 403 | parity |
+| `PUT` with `roles` within the ceiling | 200 | 200 | parity |
+| `PUT` with `roles: []` | 200, roles removed | 200, roles removed | parity |
+| `PUT` without `role` or `roles` (for example `text` only) | 200 | 200 | parity |
+| `PUT` with `roles` above the ceiling and any `role` | 403 (plural check first) | 400 mutually exclusive | divergence (both refuse) |
+| `PUT` with `roles` within the ceiling or `[]`, and `role` above it | 200, `role` stored | 400 mutually exclusive | divergence |
+| `PUT` with `role: null`, `role: 5` or `roles: "admin"` | reference-specific | 400 per the input contract | divergence |
+| `POST /user`, basic provider, caller with `admin:users`, otherwise valid input that passes the domain, uniqueness and role checks, `password` absent or `""` | 201 with the empty-password hash | 400, no user | divergence |
+| same, non-empty string `password` | 201 | 201 | parity |
+| `POST /user` with a non-basic provider | 400 before parsing | 400, same message | parity |
+| `POST /user` whose insert fails before writing (fixture: an `id` equal to an existing user's id), `EMAIL_VERIFICATION=False`, default audit handlers | 201 with the unsaved user | 500, no new row, no audit event | divergence |
 
 ## Not yet specified
 
