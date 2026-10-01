@@ -22,6 +22,12 @@ fixture modules. Reads are bounded regular-file reads through directory descript
 without following symlinks. The preflight ignores inherited pytest/ALRUST settings.
 It does not interpret or serialize them.
 
+The repository root comes from the loaded `alrust_conformance.ci` module's own
+checkout, rather than the caller's working directory. `--manifest` selects a path
+relative to that root; it cannot select another checkout or an external file.
+Absolute paths, parent traversal and symlink components are rejected. All profile
+modules, pytest configuration and contract files are read within the same checkout.
+
 ## Proposed producer and workflow interface
 
 Claude owns the workflow, isolated per-profile PostgreSQL database, reviewed
