@@ -641,10 +641,96 @@ The pinned web UI always sends `customer` when editing a blackout
 | scoped caller (`[A]`), `PUT` without `customer` on its blackout | 200, customer `A` | 200, customer `A` | parity |
 | `PUT` with `customer` | reference rules | same | parity |
 
+## SF-MGMT: no secrets from the management endpoint, no default signing key
+
+Status: Proposed. Covers M-SEC-1. Owner decisions Y8 (properties: redacted
+settings) and Y9 (an unset `SECRET_KEY` becomes a random key at each start),
+both 2026-10-01.
+
+**Fixtures.** Distinct synthetic sentinel values for `SECRET_KEY`, the
+`DATABASE_URL` password, `OAUTH2_CLIENT_SECRET`, `LDAP_BIND_PASSWORD` and
+`SMTP_PASSWORD`, plus a process environment variable `SYNTHETIC_ENV_SECRET`
+that is not a setting. Caller `M1` holds an API key with scopes
+`[admin:management]`; caller `M2` holds one with `[read]`.
+
+**Reference.**
+1. `GET /management/properties` requires `admin:management`
+   (`management/views.py:82-84`) and returns `text/plain` with one
+   `key: value` line for every entry of the request's WSGI environ, the
+   process environment, the app object's attributes and the whole app config
+   (`:87-99`). The dump therefore contains `SECRET_KEY`, the `DATABASE_URL`
+   password, the OAuth, LDAP and SMTP secrets, every environment variable,
+   and the caller's own `Authorization` header (`HTTP_AUTHORIZATION` in the
+   environ). With `AUTH_REQUIRED` false any caller can read it
+   (`auth/decorators.py:155-161`).
+2. `SECRET_KEY` defaults to `changeme` (`settings.py:15`). `get_config` takes
+   the environment variable, else the configuration file's value, else that
+   default (`utils/config.py:29`, `:129-148`); nothing at startup checks it.
+3. Bearer tokens are HS256 JWTs verified with `SECRET_KEY`
+   (`models/token.py:43-51`), and their `scope` claim becomes the caller's
+   scopes (`:71`; `auth/decorators.py:69-91`). Anyone who knows the key, from
+   the dump or because it is still `changeme`, can therefore create a token
+   with any scopes, including `admin`.
+4. `SECRET_KEY` also signs e-mail confirmation and password-reset tokens
+   (`auth/utils.py:106-112`) and is the HMAC key used to derive new API-key
+   secrets from random bytes (`utils/key.py:20-28`).
+
+**alrust.**
+1. `GET /management/properties` keeps its path, method, scope and
+   credential rules, and returns 200 `text/plain` with one `NAME: value` line
+   per alrust setting, sorted by name. It never includes the process
+   environment, request data (headers, cookies, query) or internal objects.
+   Values are shown with these redactions (Y8), which fail closed:
+   - a setting whose name contains `SECRET`, `PASSWORD`, `PASSWD`, `TOKEN`,
+     `CREDENTIAL` or `PRIVATE`, or ends with `_KEY` or `_KEYS`, shows
+     `[REDACTED]`. The only reviewed exception is `TOKEN_EXPIRE_DAYS`;
+   - a setting whose name ends with `_URL` or `_URI` shows only its scheme,
+     host and port. Any user information is replaced by `[REDACTED]@`, and
+     any path, query or fragment beyond `/` by `/[REDACTED]`. A value that
+     does not parse as a URL shows `[REDACTED]`;
+   - a list or map value is shown as `[REDACTED]` if any element or key
+     inside it would be redacted by the two rules above.
+   No configured secret value may appear anywhere in the body, whole or as
+   a substring of a line.
+2. Signing key at startup (Y9). If `SECRET_KEY` is not set (no environment
+   variable and no configuration-file value), is empty, or equals the
+   reference default `changeme`, alrust generates a random key of at least
+   256 bits from the operating system's secure random source at each start.
+   It logs a warning that sessions, e-mail confirmation and password-reset
+   links will not survive a restart and that every instance behind one
+   address needs the same configured key. The generated key is never logged
+   or shown. An explicitly configured key shorter than 32 characters is used
+   as configured, with a startup warning. A configured key is used unchanged.
+3. HS256 Bearer tokens signed with the effective key keep the reference
+   behavior: the `scope` claim becomes the caller's scopes, with the same
+   audience, expiry and error rules (`Token is invalid`, `Token has
+   expired`, `Invalid audience`, all 401). Only HS256 is accepted, as in the
+   reference.
+4. alrust generates API-key secrets from the secure random source directly;
+   they do not depend on `SECRET_KEY`.
+
+**Vectors.** Reference cells are source-derived. Before execution they are
+NOT_RUN, and their known predicates are asserted on the first authorized
+run. Only cells marked **reference pending** skip, and only that predicate.
+
+| # | Case | Reference | alrust | Kind |
+|---|---|---|---|---|
+| 1 | `M1` `GET /management/properties` | 200 `text/plain` containing every sentinel, `SYNTHETIC_ENV_SECRET` and `M1`'s own key | 200 `text/plain`; no sentinel, no environment variable and no request header in the body; `SECRET_KEY: [REDACTED]`; `DATABASE_URL` shows `scheme://[REDACTED]@host:port/[REDACTED]` | divergence (Y8) |
+| 2 | `M2` `GET /management/properties` | 403 `Missing required scope: admin:management` | same | parity |
+| 3 | `AUTH_REQUIRED` false, no credentials, `GET /management/properties` | 200, the full dump | 200, redacted as in row 1 | divergence (Y8) |
+| 4 | `M1` `GET /management/properties`; a non-secret setting such as `TOKEN_EXPIRE_DAYS` | present with its value | present with its value | parity of that line |
+| 5 | `SECRET_KEY` not set; a Bearer token signed with `changeme`, scope `admin`, the expected audience and a valid expiry, on an `admin`-scoped request | accepted with scopes `[admin]` | 401 `Token is invalid`, handler not run | divergence (Y9) |
+| 6 | `SECRET_KEY` set to `changeme` explicitly; same token | accepted | 401 `Token is invalid` | divergence (Y9) |
+| 7 | `SECRET_KEY` empty (`SECRET_KEY=` in the environment); a token signed with the empty key | reference pending | 401 `Token is invalid` | divergence (Y9) |
+| 8 | `SECRET_KEY` not set; log in, restart the server, reuse the token | the token stays valid | 401 `Token is invalid` after the restart | divergence (Y9) |
+| 9 | `SECRET_KEY` set to a 40-character value; log in, restart, reuse the token | valid | valid | parity |
+| 10 | `SECRET_KEY` set to a 40-character value; a token signed with it, scope `admin` | accepted with scopes `[admin]` | same | parity (HS256 claim trust kept) |
+| 11 | `SECRET_KEY` set to a 10-character value | starts | starts, with a startup warning; tokens signed with that key accepted | parity (warning only) |
+
 ## Not yet specified
 
 The other Y3 items get entries in this file before their phases need them:
-the string-formatted SQL constructions; M-SEC-1; WUI-SEC-1 and WP-SEC-1; W-SEC-1 and W-DL-1;
+the string-formatted SQL constructions; WUI-SEC-1 and WP-SEC-1; W-SEC-1 and W-DL-1;
 and the `q=` search. Until an item has an entry here, its
 reference behavior in `spec/openapi.yaml` stands as the description of the
 defect, not as a requirement for alrust.
