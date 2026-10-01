@@ -19,6 +19,15 @@
 | X7 | Merging the x64 workflow to `main` | The owner merges after Codex approves the workflow at its exact commit (PR #1, its base, merges first). Until the Alrust runner exists, jobs routed to it wait in the queue, and a queued job is not validation |
 | X8 | `codex/*` push cadence | Same rules as `claude/*`: push reviewed branches after an approving verdict or every 4 to 5 mailbox cycles; one pull request per branch, draft until its exact commit is approved; no force-push or rebase; merging stays with the owner. The owner gave this instruction to Codex directly on 2026-10-01, so it is **in effect** (ST46-C1 satisfied) |
 
+## Owner decisions: merges, protection and reference defects (2026-10-01, given in Claude's session)
+
+| # | Question | Decision |
+|---|---|---|
+| Y1 | Merging the approved pull requests | **Merge.** The owner instructed Claude to merge PR #2 and the approved PRs. Done for PRs #1–#10 (merge commits listed in `docs/STATUS.md`): each was retargeted to `main` only after its base had merged, and its diff was confirmed unchanged against the reviewed diff (patch-id) before a merge pinned to the approved head. PR #2's README conflict with PR #1 was resolved to PR #2's reviewed README byte for byte. Codex's PRs are not merged yet: PR #14 conflicts with the merged ADR-0002 text and needs a reviewed successor from Codex, and Codex is to name the merge set and the fate of its historical PRs. Merge authority here was exercised by Claude on the owner's explicit instruction, for these PRs only |
+| Y2 | Repository protection (`docs/repo-protection-recommendation.md`) | **Approved.** Not applied: GitHub refuses branch protection and rulesets on this private repository without GitHub Pro or making it public (HTTP 403). The owner's choice between those is pending. Required reviews cannot be satisfied while both agents use the owner's login |
+| Y3 | Reference security and behavior defects (the owner items in `docs/STATUS.md`) | **alrust fixes them; it does not reproduce them.** This covers the four string-formatted SQL constructions; AN1 (`ALLOW_READONLY` dispatching without a scope check); the users role-ceiling bypass and the related user-creation defects; G-SEC-1, P-SEC-1 and C-SEC-1 with GR-R1 and G-DEF-1; M-SEC-1 (`/management/properties` secrets); WUI-SEC-1 and WP-SEC-1; W-SEC-1 (credentials in webhook logs) and W-DL-1 (multi-alert webhook data loss); the API-key expiry, scope and secret-exposure items; C21–C23; the `q=` search dropping operands; and the App Engine cron branch. The exact behavior of each fix is specified per item in `spec/`, under Codex review, and every deliberate divergence from the reference is recorded so that the conformance suite and the differential fuzzer expect it |
+| Y4 | Checking production exposure (version and settings in production) | **Deferred** by the owner |
+
 ## Pinned versions (quick reference)
 
 | Component | Pin | Commit | Released | Recorded |

@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-01T11:47Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-01T12:02Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -16,6 +16,32 @@ file and DECISIONS.md. Codex sends corrections through the mailbox._
 | 4 Receivers | blocked on 3 (see PIN inputs) | — |
 | 5 Ops | blocked on 4 (see PIN inputs) | — |
 | 6 Tauri desktop | blocked on 2 (see PIN inputs) | — |
+
+## Merged into `main` (2026-10-01, owner instruction, Y1)
+
+Each PR was merged with a merge commit pinned to its approved head, after a
+retarget to `main` whose diff matched the reviewed diff (patch-id). Branches
+are kept.
+
+| PR | Branch | Approved head | Merge commit |
+|---|---|---|---|
+| #1 | `claude/scaffold` | `e839ceaf` | `dc5e09c6` |
+| #2 | `claude/docs-landing` | `fcc06d73` | `bae71b7b` (local merge; README conflict resolved to PR #2's reviewed README, blob `9b87a366`) |
+| #3 | `claude/spec-lifecycle-receive` | `47e59dd8` | `507c4dab` |
+| #7 | `claude/spec-customer-mapping` | `decbb78a` | `4fbccd59` |
+| #8 | `claude/spec-openapi` | `56dd7c5e` | `6a2e6c03` |
+| #9 | `claude/charter-sync` | `77c44f9f` | `cb740883` |
+| #4 | `claude/spec-lifecycle-actions` | `cedfcdff` | `ce48b5ba` |
+| #5 | `claude/spec-lifecycle-housekeeping` | `c6aecf66` | `b793b4db` |
+| #6 | `claude/spec-lifecycle-heartbeats` | `84b2ed5d` | `e0b0d412` |
+| #10 | `claude/adr-0004-webui` | `96268854` | `bcd60ea3` |
+
+`main` is at `bcd60ea3`. Checks on the result: README, STATUS, OpenAPI and
+the customer mapping are byte-identical to their reviewed versions;
+DECISIONS is charter-sync's plus only the ADR-0004 row; `spec/lifecycle.md`
+is the heartbeats version plus exactly the R1.2 clarification from PR #3's
+later approved head. Not merged: Codex's PRs (#11–#36); PR #14 conflicts with
+the merged ADR-0002 and awaits a reviewed successor from Codex.
 
 ## Work in flight
 
@@ -189,9 +215,11 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
   confirm/forgot/reset endpoints wait for the owner's auth-contract
   decision. Keep STATUS current.
 - **Owner:**
-  - PR #2 merge (approved, ready);
-  - Actions billing;
-  - the repository-protection plan;
+  - repository protection: approved (Y2) but not applicable without GitHub
+    Pro or a public repository; that choice is pending;
+  - production-exposure checks: deferred (Y4);
+  - the security and behavior items below are DECIDED (Y3): alrust fixes
+    each one; the per-item behavior is specified in `spec/` under review.
   - **new, SECURITY (reference defects, source-level only, no exploit built
     or run; independently confirmed by Codex):** the pinned Alerta server
     builds SQL by string formatting from request or stored text in **four**
