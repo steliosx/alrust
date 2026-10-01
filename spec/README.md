@@ -8,3 +8,6 @@ Planned:
 - `lifecycle.md`: dedup, correlate, severity/status transitions, timeout,
   heartbeats, as prose plus a state machine.
 - `customer-mapping.md`: how API-key metadata maps inbound alerts to `customer`.
+- `security-fixes.md`: where alrust deliberately fixes a reference defect
+  instead of reproducing it (owner decision Y3), with the conformance impact
+  of each fix.
