@@ -1,0 +1,14 @@
+extends:
+  - minimal
+
+rules:
+  operation-summary: off
+  info-license: off
+  operation-4xx-response: off
+  no-required-schema-properties-undefined: error
+  operation-operationId: error
+  operation-operationId-unique: error
+  path-parameters-defined: error
+  no-unresolved-refs: error
+  no-identical-paths: error
+  no-ambiguous-paths: error

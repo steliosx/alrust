@@ -13,6 +13,27 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  openapi:
+    name: OpenAPI structure
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.19.0"
+          cache: npm
+          cache-dependency-path: .github/openapi/package-lock.json
+      - name: Install OpenAPI validator
+        run: npm ci --ignore-scripts --prefix .github/openapi
+      - name: Validate OpenAPI
+        run: >-
+          .github/openapi/node_modules/.bin/redocly
+          lint spec/openapi.yaml
+          --config redocly.yaml
+          --format github-actions
+
   reference-guard:
     name: reference/ is read-only
     runs-on: ubuntu-24.04

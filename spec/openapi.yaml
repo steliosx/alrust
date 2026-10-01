@@ -4872,6 +4872,16 @@ paths:
             schema:
               type: object
               required: [fixed, item_name, alert_type, item_type, alert_section, configured_trigger_value, item_cloud, alert_id, item_id]
+              properties:
+                fixed: {}
+                item_name: {}
+                alert_type: {}
+                item_type: {}
+                alert_section: {}
+                configured_trigger_value: {}
+                item_cloud: {}
+                alert_id: {}
+                item_id: {}
               additionalProperties: true
       responses: *webhookResponses
       x-runtime: "NOT_RUN"
@@ -4998,6 +5008,17 @@ paths:
                 incident:
                   type: object
                   required: [state, policy_name, resource_name, condition_name, summary, incident_id, resource_id, url, started_at, ended_at]
+                  properties:
+                    state: {}
+                    policy_name: {}
+                    resource_name: {}
+                    condition_name: {}
+                    summary: {}
+                    incident_id: {}
+                    resource_id: {}
+                    url: {}
+                    started_at: {}
+                    ended_at: {}
                   additionalProperties: true
               additionalProperties: true
       responses: *webhookResponses
