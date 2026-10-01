@@ -4463,8 +4463,9 @@ paths:
           payload` is a substring test, and a text containing `version` then
           fails at indexing with `TypeError`: the dispatcher's legacy retry,
           then an unhandled **500**.
-        - Status and severity from `current_state` (lower-cased) and
-          `severity` (lower-cased):
+        - Status and severity from `current_state` (lower-cased) and, except
+          on the `closed` branch, `severity` (lower-cased); `severity` is not
+          read when the state is `closed`, so it may be absent there:
           - `open`: the given severity, status `open`;
           - `acknowledged`: the given severity, status `ack`;
           - `closed`: severity `ok`, status `closed`;
@@ -4478,7 +4479,8 @@ paths:
           `DEFAULT_ENVIRONMENT`; `service` `[account_name]`; `group` =
           `targets[0].type`; `text` = `details`; `tags` = `key:value` for each
           of `targets[0].labels`; `attributes` holds `incident_url` and
-          `runbook_url` when present and not null (plain strings); `origin`
+          `runbook_url` when present and not null, copied as supplied (no
+          type check or conversion); `origin`
           `New Relic/v<version>`; `type` = `event_type` lower-cased; `rawData`
           the payload.
         - A missing key, an empty `targets` list or a non-string where
@@ -4491,7 +4493,8 @@ paths:
           application/json:
             schema:
               type: object
-              required: [version, current_state, severity, targets, condition_name, account_name, details, event_type]
+              required: [version, current_state, targets, condition_name, account_name, details, event_type]
+              description: "severity is read on every branch except current_state closed (case-insensitive). The string types below describe the expected input; the reference does not enforce them for incident_url or runbook_url."
               properties:
                 version: {}
                 current_state: {type: string}
@@ -4532,18 +4535,24 @@ paths:
         - Without `messages`: 400 `no messages in PagerDuty data payload`.
         - For each message in order: `parse_pagerduty` (`:13-57`) reads
           `data.incident.incident_key`, `incident_number` and `html_url`, and
-          maps `type`:
+          maps `type` by these exact literals (`:21-53`):
           - `incident.trigger` gives status `open`;
-          - `acknowledge` gives `ack`;
-          - `unacknowledge` gives `open`;
-          - `resolve` gives `closed`;
-          - `assign` gives `assign`;
-          - `escalate` and `delegate` give `open`;
-          - anything else gives `unknown`, with the type as text.
-          The text embeds `<a href="<html_url>">#<incident_number></a>`,
-          built **without escaping** (the WUI-SEC-1 pattern), and the
-          assigned or resolving user's name. Any exception there becomes 400
-          with its text. An empty `incident_key` gives 400 `no incident key in
+          - `incident.acknowledge` gives `ack`;
+          - `incident.unacknowledge` gives `open`;
+          - `incident.resolve` gives `closed`;
+          - `incident.assign` gives `assign`;
+          - `incident.escalate` and `incident.delegate` give `open`;
+          - any other value, including a bare `acknowledge` without the
+            prefix, gives `unknown`, with the type itself as the text.
+          For the seven recognized types the text embeds `<a
+          href="<html_url>">#<incident_number></a>`, built **without
+          escaping** (the WUI-SEC-1 pattern). The trigger, acknowledge,
+          assign, escalate and delegate texts add
+          `assigned_to_user.name`; the resolve text adds
+          `resolved_by_user.name`, or `n/a` when that is falsy; the
+          unacknowledge text has no user. The three incident fields are
+          read for every type, including unknown ones. Any exception there
+          becomes 400 with its text. An empty `incident_key` gives 400 `no incident key in
           PagerDuty data payload`.
         - The alert is looked up with `Alert.find_by_id(incident_key,
           caller's customers)`. That query is `id ~* ('^' || key) OR
@@ -4559,10 +4568,18 @@ paths:
         - Messages are applied one by one. A failure on a later message
           leaves the earlier messages' status changes in place, and later
           messages are not applied (the W-DL-1 pattern).
-        - On success: 200 `{status: ok}` (a JSON response passed through by
-          the dispatcher, with a `webhook-received` audit event of type
-          `user-defined`). An empty `messages` list gives 400 `update
-          PagerDuty incident status failed`.
+        - Completion (`:68-97`): an exception stops processing at that
+          message (400, as above). A falsy `set_status` result does **not**
+          stop the loop: `updated` is overwritten for each message, and only
+          the **last** message's result decides the response. A no-row
+          update can return null (`postgres/base.py:1568-1576`,
+          `Alert.from_db`, `set_status`). So a falsy earlier result followed
+          by a truthy last result gives 200, and a falsy last result gives
+          400 `update PagerDuty incident status failed` even when earlier
+          changes succeeded. An empty `messages` list gives that same 400.
+          200 `{status: ok}` is a JSON response passed through by the
+          dispatcher, with a `webhook-received` audit event of type
+          `user-defined`.
 
         The SF-WEBUI renderer (Y11) applies to the history text; the
         server-side text change and the handling of partial application
@@ -4599,7 +4616,7 @@ paths:
               additionalProperties: true
       responses:
         "200":
-          description: All messages applied
+          description: "The last message's status update returned a truthy result (earlier messages may not have been applied)"
           content:
             application/json:
               schema: {type: object, required: [status], properties: {status: {const: ok}}}
@@ -4882,10 +4899,13 @@ paths:
           customers)`, a case-insensitive **regular-expression prefix**
           match (as for PagerDuty).
         - **Reference defect:** when no alert is found, the `jsonify(...)`
-          error is built but not returned (`:84-85`). Processing continues
-          with `None`, and the next call raises `AttributeError`, which the
-          dispatcher turns into 400 `'NoneType' object has no attribute
-          '<method>'`.
+          error is built but not returned (`:84-85`), and processing
+          continues with `None`. For a recognized action (`open`, `ack`,
+          `close`, `watch`, `unwatch`) the next call raises
+          `AttributeError`, which the dispatcher turns into 400 `'NoneType'
+          object has no attribute '<method>'`. For any other non-empty
+          action the result is 400 `Unsupported #slack action`, whether or
+          not the alert was found.
         - Actions `open`, `ack`, `close`: `alert.from_action(action, text
           'status change via #slack by <user>')`. A `write:webhooks` caller
           therefore changes alert status without `write:alerts`.
@@ -4936,11 +4956,19 @@ paths:
         only.
 
         One alert per request (`incoming`, `:19-70`), from `incident`:
+        - `state` is read **first** (`:22`), so a missing `state` gives 400,
+          and documentation cannot set or change it.
         - If `documentation` is present, its `content` is parsed as JSON and
-          merged into the incident, so it can set or override any field read
-          below, including `environment`, `group`, `customer`, `origin` and
-          `severity`. Invalid content is logged at WARNING **with the whole
-          documentation object** (the W-SEC-1 pattern) and otherwise ignored.
+          merged into the incident with `dict.update` (`:26-31`). The merge
+          can set or override every other field read below, including
+          `environment`, `group`, `customer`, `origin` and `severity`.
+          `update` also accepts a list of key-value pairs and is not atomic:
+          for example `[["severity", "warning"], ["bad"]]` writes `severity`
+          and then raises. Any exception, whether parsing or a partial update,
+          is logged at WARNING **with the whole documentation object** (the
+          W-SEC-1 pattern), and processing continues. After a parse failure
+          the incident is unchanged; after an update failure the pairs
+          written before it stay. `rawData` holds the payload as mutated.
         - `severity` = `severity`, else `critical`. `state` `open` leaves
           status unset; `acknowledged` sets status `ack`; `closed` sets
           severity `ok`; any other state sets severity `indeterminate`.
