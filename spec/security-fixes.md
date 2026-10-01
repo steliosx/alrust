@@ -397,8 +397,9 @@ key carries customer `A`, so `g.customers` is `[A]`.
 
 ## SF-KEYS: API-key expiry, scopes, secret exposure and customer
 
-Status: Proposed. Covers the API-key items, C23 and the use of a key's
-public id as a credential (KEYS-R4). The secret-exposure fix
+Status: Proposed. Covers the API-key items, C23, the use of a key's
+public id as a credential (KEYS-R4) and the edit ceiling on a key's
+existing scopes (owner decision Y7, 2026-10-01). The secret-exposure fix
 follows owner decision Y6 (2026-10-01): the secret is shown only once, at
 creation, and alrust's vendored web UI shows it once after creation.
 
@@ -517,9 +518,16 @@ the API.
       arrays, objects and malformed strings. `expireTime` absent: the stored
       expiry is unchanged;
    5. `scopes` present and an empty list: 400 `scopes must not be empty`;
-   6. the reference's ceiling on the scopes in the body: 403 with the
-      reference message (`views/keys.py:139-140`). As in the reference, a
-      body without `scopes` does not recheck the stored scopes;
+   6. the ceiling on the key's resulting scopes: the scopes in the body when
+      present, otherwise the stored scopes (owner decision Y7). Each scope is
+      checked in order with `in_scope` against the caller's scopes; the first
+      that fails gives 403 `Requested scope '<scope>' not in existing scopes:
+      <caller scopes joined by ','>`, the reference message
+      (`views/keys.py:139-140`). So a caller cannot change any field of a key
+      whose permissions exceed the caller's own, including moving its expiry.
+      The pinned web UI always sends `scopes` when it edits a key
+      (`ApiKeyList.vue:503-511`), so for UI edits the reference already
+      applies this check and the behavior is unchanged;
    7. the audit signal, then the update.
 3. `POST /key` keeps the reference's order (parse, final user, customer,
    missing user, ceiling). Within parse, after the reference's own checks, a
@@ -559,7 +567,9 @@ asserted.
 | 9 | `C1` `PUT` `K0` with `scopes: []` | 200; stored `[]`; the response and later reads show `[read, write]` | 400 `scopes must not be empty`, no change | divergence |
 | 10 | `C1` `PUT` `K0` with `scopes: [read]` | 200 | 200 | operation parity |
 | 11 | `C1` `PUT` `K0` with `scopes: [write]` | 403 ceiling message | same | parity |
-| 12 | `C2` creates `K0` for `alice@example.test` with scopes `[admin]`; then `C1` `PUT` it with `{text: 't1', expireTime: E}` | 200; stored scopes not rechecked | same | operation parity |
+| 12 | `C2` creates `K0` for `alice@example.test` with scopes `[admin]`; then `C1` `PUT` it with `{text: 't1', expireTime: E2}` (`E2` later than `E`) | 200; stored scopes not rechecked; text and expiry changed | 403 `Requested scope 'admin' not in existing scopes: read,write:keys`, no change | divergence (Y7) |
+| 12b | same key; `C2` `PUT` it with `{text: 't1', expireTime: E2}` | 200 | same | operation parity (Y7 positive control) |
+| 12c | same key; `C1` `PUT` it with `{scopes: [admin], text: 't1', expireTime: E}` (as the web UI sends) | 403, same message | same | parity |
 | 13 | `C1` `POST` `{type: 'bogus'}` | 201; stored scopes `[]`; the 201 object (built by `ApiKey.from_db`) and later reads show `[read, write]`; user `alice@example.test` | 400 `unknown key type`, no key | divergence |
 | 14 | `C2` `POST` `{type: 'bogus'}` | 201; stored scopes `[]`; the 201 object and later reads show `[read, write]` | 400 `unknown key type`, no key | divergence |
 | 15 | `C2` `POST` `{type: 'bogus', user: 'root@example.test'}` | 201; scopes `ADMIN_SCOPES` | 400 `unknown key type`, no key | divergence |
@@ -638,8 +648,3 @@ the string-formatted SQL constructions; M-SEC-1; WUI-SEC-1 and WP-SEC-1; W-SEC-1
 and the `q=` search. Until an item has an entry here, its
 reference behavior in `spec/openapi.yaml` stands as the description of the
 defect, not as a requirement for alrust.
-
-Open question, not yet decided: whether `PUT /key` should also recheck the
-scopes a key already has when the body has no `scopes` (SF-KEYS vector 12),
-so that an owner cannot extend the expiry of a key granted above their own
-scopes. Until it is decided, alrust keeps the reference behavior.
