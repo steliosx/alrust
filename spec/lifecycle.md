@@ -13,10 +13,11 @@
   `PLUGINS=[remote_ip, reject, heartbeat, blackout, forwarder]`
   (`settings.py:29`, `:32-33`, `:203-204`, `:272`, `:282`).
   ISA 18.2 is out of scope.
-- **Slice status:** this file covers the **receive path** (`POST /alert`)
-  only. Operator actions (`/status`, `/action`), timeout and expiry
-  housekeeping, heartbeats, and the ISA model are **not yet written**. The
-  Phase 0 item 2 contract stays open until they are.
+- **Slice status:** this file covers the **receive path** (`POST /alert`,
+  R0–R7) and **operator status and actions** (`PUT /alert/<id>/status` and
+  `/action`, A0–A6). Timeout and expiry housekeeping, heartbeats, and the ISA
+  model are **not yet written**. The Phase 0 item 2 contract stays open until
+  they are.
 
 ## Severity and status vocabulary (`sm.py:7-58`)
 
@@ -294,6 +295,189 @@ Assumptions:
 
 If any `createTime` is not later than the previous one, R7.3a/R7.4 apply
 instead and the vector does not hold.
+
+## A. Operator status and actions
+
+`views/alerts.py` is cited as `views.py`. Both endpoints need `write:alerts`,
+look the alert up with the customer filter and the id-prefix regex
+(customer-mapping C16–C18), and return **404** when it is missing. The
+receive-path vector preconditions (R1) apply to the alert being acted on.
+
+### A0. Receive entries and action entries in the same history
+
+- **A0.1** Receive-path history entries take `updateTime` from the
+  client-supplied `createTime` (R4.2, R5.4, R6.4). Action and status entries
+  take the **server's** `now` (`alert.py:628`, `:682`). Both are ordered
+  together by `update_time DESC` (R7.2).
+- **A0.2 [V]** So when a source's clock lags the server, an alert received
+  *after* an operator `ack` can sort *below* that ack entry. The history then
+  still reports `ack` as the current status, and it drives the next
+  transition. The reverse holds when the source clock leads. Vectors must fix
+  their `createTime` values relative to the server clock and record both.
+  This is the same class of problem as L2.
+
+### A1. `PUT /alert/<id>/status` (`views.py:104-141`, `alert.py:616-642`)
+
+- **A1.1 [V]** A missing or empty `status` gives **400** "must supply
+  'status' as json data" (`views.py:115`). `text` defaults to `""`
+  (`views.py:111`).
+- **A1.2 [V]** **No state machine and no validation.** `from_status` does
+  not call `transition()`. Any non-empty string is stored as the status,
+  including ones outside the Status enum, such as `"foo"`. Severity and
+  `previousSeverity` are unchanged. The default plugins' `status_change`
+  returns nothing (`plugins/reject.py:45-46` and peers), so it does not
+  rewrite the status.
+- **A1.3 [V]** **The `timeout` column is overwritten with the raw request
+  value.** The history entry gets `timeout or ALERT_TIMEOUT`
+  (`alert.py:619`), but the row UPDATE passes the original `timeout`
+  argument (`alert.py:638`, `pg.py:279-291`). A request without a timeout
+  therefore stores **database NULL** in the nullable `alerts.timeout` column
+  (`sql/schema.sql:49`).
+- **A1.3a [V]** **The API never shows that NULL.** Every read hydrates the
+  row through `from_record` → `Alert.__init__`, which maps a `None` timeout
+  to `ALERT_TIMEOUT` (`alert.py:41`, `:203-231`). The serialized alert
+  therefore shows `"timeout": 86400` under the defaults, not `null`. The raw
+  NULL is visible only to SQL, which means to housekeeping (K2.2).
+- **A1.4 [V]** The row update sets `status`, `update_time = now` and
+  `attributes` = the loaded alert's attributes (a full replace, which is a
+  no-op unless a plugin changed them). `tags` becomes the union. One `status`
+  history entry is prepended: `{status, severity, value, text, updateTime:
+  now, user: login, timeout: timeout or ALERT_TIMEOUT}`.
+- **A1.5 [V]** Success returns **200** `{"status": "ok"}`, without the alert
+  (`views.py:139`). A plugin RejectException gives 400. An AlertaException
+  gives its own code. Anything else gives 500 (`views.py:126-134`).
+
+### A2. `PUT /alert/<id>/action` (`views.py:145-190`, `alert.py:644-697`)
+
+- **A2.1 [V]** A missing `action` gives **400** (`views.py:156`). `text`
+  defaults to `"<action> operator action"` (`views.py:152`).
+- **A2.2** The order of steps is:
+  1. pre-action plugins (`take_action`);
+  2. `from_action`;
+  3. post-action plugins (`post_action`) (`views.py:166-170`).
+
+  With the default plugins, `take_action` and `post_action` raise
+  NotImplementedError, which is ignored (`utils/api.py:108-110`,
+  `plugins/__init__.py:44-48`). The exception is `forwarder.take_action`,
+  which raises ForwardingLoop when the request carries this server in its
+  loop header, answered with **202** `{"status": "ok", "message": ...}`
+  (`views.py:178-179`).
+- **A2.3 [V]** An invalid or redundant action raises `InvalidAction`, which
+  gives **409** (`views.py:176-177`). An unknown severity on the stored
+  alert gives 500.
+- **A2.4** The current status, the previous status and the previous timeout
+  come from history (`alert.py:647`, R7). For `unack` and `unshelve`, the
+  history is scanned for the most recent `ack` or `shelve` entry, and the
+  entry *after* it supplies the previous status and timeout
+  (`alert.py:266-276`). If that entry was evicted by `HISTORY_LIMIT`, the
+  previous status falls back to **`open`** with timeout `None`
+  (`alert.py:277-280`).
+- **A2.5** `transition(alert, current, previous, action)` runs. **Here the
+  returned severity is applied**, unlike on receive (R3). The row's
+  `previousSeverity` becomes the old severity only when the severity changed
+  (`alert.py:659-694`).
+
+### A3. Action transitions (`sm.py:141-253`, `action` set)
+
+The first matching rule wins. "Current" means the history-derived current
+status (A2.4).
+
+| Current | Action | Result (severity, status) | Rule |
+|---|---|---|---|
+| any | not in {open, assign, ack, unack, shelve, unshelve, close, expired, timeout} | unchanged, **row** status | ACT-1 |
+| any | `unack` | current severity, previous status if the current status is `ack`; else **409** | UNACK-1 |
+| any | `unshelve` | current severity, previous status if the current status is `shelved`; else **409** | UNSHL-1 |
+| any | `expired` | current severity, `expired` | EXP-0 |
+| any | `timeout` | current severity, `ack` if the previous status is `ack`, else `open` | ACK-0 / OPEN-0 |
+| open | open | **409** | — |
+| open | ack / shelve | current severity, `ack` / `shelved` | OPEN-1/2 |
+| open | close | **`normal`**, `closed` | OPEN-3 |
+| ack | open / shelve | current severity, `open` / `shelved` | ACK-1/2 |
+| ack | ack | **409** | — |
+| ack | close | **`normal`**, `closed` | ACK-3 |
+| ack | assign | `open` if the row's `previousSeverity` is not `indeterminate` and trend(`previousSeverity`, severity) = moreSevere; otherwise the fall-through | ACK-4 |
+| shelved | open / close | `open` with current severity / **`normal`** `closed` | SHL-1/2 |
+| shelved | ack / shelve | **409** | — |
+| blackout | close | **`normal`**, `closed` | BLK-1 |
+| blackout | *any other* | previous status (BLK-2), or unchanged when the previous status is `blackout` (BLK-*) | BLK-2 / BLK-* |
+| closed | open | **the stored `previousSeverity`** (or `indeterminate`), `open` | CLS-1 |
+| closed | ack / shelve / close | **409** | — |
+| closed (non-normal severity) | assign | `shelved` if the previous status is `shelved`, else `open`, **with the stored `previousSeverity`** | CLS-2 / CLS-3 |
+| expired (non-normal severity) | anything except `open` | **409** | — |
+| expired (non-normal severity) | open | current severity, `open` | EXP-1 |
+
+A status of `assign`, or any string outside the enum stored through A1.2,
+has **no action rules of its own**. Only the global rows (ACT-1, UNACK,
+UNSHL, EXP-0, timeout) and the fall-through apply to it.
+
+Fall-through, when no row above matched:
+- a severity at the normal level → `normal`, `closed` (CLS-*);
+- otherwise the status is unchanged (ALL-*).
+
+- **A3.1 [V]** `assign` has **no transition of its own**. An `assign`
+  action on an `open` alert leaves the status `open` (ALL-*), and the
+  history records `type: assign`. **Among the operator endpoints**, only
+  `/status` (A1) can store the status `assign`. A receive with an explicit
+  `status: "assign"` stores it too (R3 SET-*). For example, an incoming
+  `major` with `status: "assign"` produces `major`/`assign`.
+- **A3.2 [V]** On a `blackout` alert, `ack` (for example) does *not* ack. It
+  returns the previous status (BLK-2).
+- **A3.3 [V]** When `close` **matches a closing rule** (OPEN-3, ACK-3,
+  SHL-2, BLK-1), it stores severity **`normal`** (not `ok`) and sets
+  `previousSeverity` to the old severity. A later `open` (CLS-1) restores
+  that stored `previousSeverity`. From an **unsupported state** (`assign`,
+  or any non-enum status) with a non-normal severity, `close` falls through
+  to ALL-*. The action then **succeeds (200) with no severity or status
+  change**: for example, `assign`/`major` stays `assign`/`major`. A history
+  entry of type `close` is still written (A5.1).
+
+### A4. Action timeouts (`alert.py:649-657`)
+
+1. For `unack`, `unshelve` and `timeout`: timeout = request timeout, **or**
+   the previous timeout from history (A2.4).
+2. Then:
+   - for `ack` and `unack`: `timeout or ACK_TIMEOUT` (default **0**, which
+     means no auto-unack; `settings.py:207`);
+   - for `shelve` and `unshelve`: `timeout or SHELVE_TIMEOUT` (default
+     **7200**; `settings.py:208`);
+   - otherwise: `timeout or <row timeout> or ALERT_TIMEOUT`.
+- **A4.1 [V]** The computed timeout is written **only to the history
+  entry**. The row's `timeout` column is written from the **loaded model's**
+  `self.timeout` (`alert.py:693`), which is unchanged at the model level.
+  This is not necessarily the raw database value: when the column was NULL
+  (A1.3), the hydrated model holds `ALERT_TIMEOUT` (A1.3a), so **any action
+  writes `ALERT_TIMEOUT` back and clears the NULL**.
+- **A4.2** Timeout `0` is falsy, so an explicit request timeout of 0 falls
+  through to the next default.
+
+### A5. Action writes (`alert.py:674-697`, `pg.py:279-291`)
+
+- **A5.1 [V]** One history entry is added:
+  - `type`: the action name when it is a ChangeType (`open`, `assign`, `ack`,
+    `unack`, `shelve`, `unshelve`, `close`, `timeout`, `expired`); otherwise
+    `action` (`alert.py:669-672`);
+  - `severity` and `status` are the post-transition values;
+  - `text` comes from the hook;
+  - `updateTime` is now; `timeout` is the A4 value; `user` is the login.
+- **A5.2** The status-change hook runs on **every** action, even when the
+  status did not change (`alert.py:666-667`). Unlike receive (R5.5), it is
+  not guarded by a status change.
+- **A5.3 [V]** The row update sets `severity`, `status`, `previousSeverity`
+  (A2.5) and `update_time = now`, even when nothing changed. `tags` becomes
+  the union, `attributes` are replaced with the loaded ones, and `timeout` is
+  the loaded model's value (A4.1: NULL becomes `ALERT_TIMEOUT`).
+- **A5.4 [V]** Success returns **200** `{"status": "ok"}`, without the alert
+  (`views.py:187-188`).
+
+### A6. Items for Codex's review
+
+- **A6.1** A1.2 (any status string is accepted) and A1.3 (the NULL timeout)
+  look unintended upstream, but they are the reference contract. alrust
+  reproduces them unless the owner approves an ADR divergence. alert-behavior
+  contract changes go to the owner.
+- **A6.2** A0.2 makes action/receive interleaving depend on the source
+  clocks. The conformance vectors need a controlled `createTime` relative to
+  the reference server's clock (see ALRUST-P0-CLOCK-01 CK-3).
 
 ## Open questions
 
