@@ -521,7 +521,7 @@ components:
     PermInput:
       type: object
       additionalProperties: true
-      description: "Read by Permission.parse (models/permission.py:22-31) for POST /perm. `scopes` must be a list, else 400; scope names are NOT validated here. `match` is not validated: a missing one violates NOT NULL at insert, the generic 500 (views/permissions.py:38-41). A reserved role name gives 409 and the scope ceiling 403 (:26-36)."
+      description: "Read by Permission.parse (models/permission.py:22-31) for POST /perm. `scopes` must be a list, else 400; scope names are NOT validated here. `match` is not validated: a missing one violates NOT NULL at insert, which the handler catches and returns as `ApiError(str(e), 500)`, a 500 whose message is the database error text, not the generic `An internal error has occurred!` (views/permissions.py:38-41; source-derived, SQL NOT_RUN). A reserved role name gives 409 and the scope ceiling 403 (:26-36)."
       properties:
         match: {type: string, description: "the role name"}
         scopes: {type: array, items: {type: string}}
@@ -537,19 +537,19 @@ components:
     CustomerInput:
       type: object
       additionalProperties: true
-      description: "Read by Customer.parse (models/customer.py:19-24) for POST /customer. Nothing is validated; a missing `match` violates NOT NULL at insert, the generic 500 (views/customers.py:26-29)."
+      description: "Read by Customer.parse (models/customer.py:19-24) for POST /customer. Nothing is validated; a missing `match` violates NOT NULL at insert, which the handler catches and returns as `ApiError(str(e), 500)`, a 500 whose message is the database error text, not the generic `An internal error has occurred!` (views/customers.py:26-29; source-derived, SQL NOT_RUN). `customer` may be null: the column is nullable (sql/schema.sql)."
       properties:
         match: {type: string}
-        customer: {type: string}
+        customer: {type: [string, "null"]}
         id: {type: [string, "null"]}
     CustomerUpdate:
       type: object
       additionalProperties: true
       minProperties: 1
-      description: "PUT /customer/{customer_id} (views/customers.py:89-110, postgres/base.py:1326-1341). An empty body gives 400; `match` and `customer` are written when present."
+      description: "PUT /customer/{customer_id} (views/customers.py:89-110, postgres/base.py:1326-1341). An empty body gives 400. Each of `match` and `customer` is written when the member is present, whatever its value: an explicit `customer: null` clears the stored customer, while an absent `customer` leaves it unchanged."
       properties:
         match: {type: string}
-        customer: {type: string}
+        customer: {type: [string, "null"]}
     Error:
       type: object
       x-source: alerta/exceptions.py:98-107
