@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1474" viewBox="0 0 1200 1474" role="img" aria-labelledby="diagram-title diagram-desc">
+<title id="diagram-title">Alrust planned architecture — no working alrust runtime yet</title>
+<desc id="diagram-desc">Planned architecture for an internal NOC. Zabbix version 7.0.25 or newer uses a native webhook. Veeam ONE and other sources use a generic webhook mapper. Both feed alrust-receivers, which feeds alrust-api. The API uses axum and tokio and owns orchestration and I/O. It separately calls alrust-engine, a pure Rust library for deduplication, correlation and lifecycle with no I/O, and reads and writes alrust-store-pg, using SQLx and PostgreSQL only. There is no engine-to-store edge. The vendored Alerta web UI calls the API using the consumed Alerta HTTP contract. Tauri on Windows and macOS wraps the same UI and receives API SSE for native notifications. The API also sends outbound webhooks to notification targets. Customer grouping and routing are not a tenant security boundary. All components and flows shown are planned.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M0 0L10 5L0 10Z" fill="#20211E"/></marker></defs>
+<rect width="1200" height="1474" fill="#FAF9F5"/>
+<g font-family="Arial, Helvetica, sans-serif" fill="#20211E">
+<g transform="translate(48 36) scale(0.145)" aria-hidden="true">
+<ns0:g xmlns:ns0="http://www.w3.org/2000/svg" fill="#C74327"><ns0:path d="M6 0H114C166 0 187 25 213 65C232 94 249 114 301 114H377Q384 114 384 121V192Q384 199 377 199H290C246 199 226 218 204 245C180 278 159 294 109 294H6Q0 294 0 288V222Q0 215 6 215H101C139 215 158 205 181 182C198 165 212 156 228 151C207 144 190 133 173 113C151 85 133 74 101 74H6Q0 74 0 68V6Q0 0 6 0Z" /><ns0:path d="M6 103H109C132 103 149 113 160 130C167 140 167 145 161 155C148 173 131 180 109 180H6Q0 180 0 174V109Q0 103 6 103Z" /></ns0:g>
+
+<ns0:g xmlns:ns0="http://www.w3.org/2000/svg" transform="translate(434 45)" fill="#20211E" fill-rule="evenodd"><ns0:path d="M71 70C90 70 104 77 116 89V73H158V221H116V207C104 219 89 224 70 224C29 224 0 193 0 148C0 104 29 70 71 70ZM80 109C59 109 43 125 43 148C43 171 59 185 80 185C102 185 117 170 117 148C117 125 102 109 80 109Z" /><ns0:path d="M183 0H226V221H183Z" /><ns0:path d="M255 73H298V94C308 78 321 70 339 70C344 70 348 71 352 72V113C346 111 340 111 335 111C311 111 298 125 298 149V221H255Z" /><ns0:path d="M369 73H412V156C412 174 422 185 440 185C457 185 467 174 467 156V73H509V157C509 199 482 224 440 224C396 224 369 198 369 157Z" /><ns0:path d="M588 70C612 70 631 77 644 90L622 118C611 109 599 104 587 104C576 104 571 109 571 115C571 123 581 127 598 132C630 142 647 152 647 177C647 207 622 224 588 224C561 224 540 215 523 201L545 173C558 185 574 190 587 190C598 190 604 186 604 179C604 171 594 167 577 162C546 152 529 142 529 117C529 89 553 70 588 70Z" /><ns0:path d="M665 25H708V73H747V112H708V163C708 179 716 186 731 186C737 186 742 185 747 184V221C740 223 732 224 724 224C684 224 665 202 665 162Z" /></ns0:g>
+
+<ns0:circle xmlns:ns0="http://www.w3.org/2000/svg" cx="1214" cy="245" r="26" fill="#C74327" />
+
+</g>
+<text x="48" y="154" font-size="52" font-weight="700" fill="#20211E">Planned architecture</text>
+<text x="48" y="201" font-size="28" font-weight="600" fill="#C74327">No working alrust runtime yet</text>
+<text x="48" y="251" font-size="24" font-weight="600" fill="#20211E">Internal NOC only</text>
+<text x="48" y="283" font-size="24" font-weight="400" fill="#20211E">Customer grouping / routing, not a tenant security boundary.</text>
+<path d="M48 312H1152" fill="none" stroke="#DDDCD4" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+<path d="M308 435H348" fill="none" stroke="#20211E" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<path d="M308 635H348" fill="none" stroke="#20211E" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<path d="M590 546H630" fill="none" stroke="#20211E" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<path d="M874 455H914" fill="none" stroke="#20211E" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<path d="M874 647H914" fill="none" stroke="#20211E" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<path d="M428 970V874H692V682" fill="none" stroke="#20211E" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<path d="M785 682V970" fill="none" stroke="#20211E" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<path d="M846 682V808H1174V1345H1152" fill="none" stroke="#20211E" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<path d="M658 1075H598" fill="none" stroke="#20211E" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="48" y="365" width="260" height="138" rx="8" fill="#FAF9F5" stroke="#DDDCD4" stroke-width="1.5"/>
+<text x="70" y="407" font-size="26" font-weight="700" fill="#20211E">Zabbix ≥7.0.25</text>
+<text x="70" y="453" font-size="23" font-weight="400" fill="#20211E">Native webhook</text>
+<rect x="48" y="541" width="260" height="188" rx="8" fill="#FAF9F5" stroke="#DDDCD4" stroke-width="1.5"/>
+<text x="70" y="583" font-size="26" font-weight="700" fill="#20211E">Veeam ONE</text>
+<text x="70" y="616" font-size="23" font-weight="400" fill="#20211E">+ other sources</text>
+<text x="70" y="667" font-size="22" font-weight="400" fill="#20211E">Generic webhook</text>
+<text x="70" y="697" font-size="22" font-weight="400" fill="#20211E">mapper</text>
+<rect x="348" y="410" width="242" height="272" rx="8" fill="#FAF9F5" stroke="#DDDCD4" stroke-width="1.5"/>
+<text x="370" y="452" font-size="20" font-weight="700" fill="#20211E" letter-spacing="1.4">RECEIVE</text>
+<text x="370" y="503" font-size="24" font-weight="700" fill="#20211E">alrust-receivers</text>
+<text x="370" y="563" font-size="22" font-weight="400" fill="#20211E">Native + mapped</text>
+<text x="370" y="595" font-size="22" font-weight="400" fill="#20211E">webhooks</text>
+<rect x="630" y="410" width="244" height="272" rx="8" fill="#FAF9F5" stroke="#C74327" stroke-width="2.4"/>
+<text x="652" y="452" font-size="20" font-weight="700" fill="#C74327" letter-spacing="0.5">ORCHESTRATE</text>
+<text x="652" y="503" font-size="28" font-weight="700" fill="#20211E">alrust-api</text>
+<text x="652" y="553" font-size="24" font-weight="400" fill="#20211E">axum / tokio</text>
+<text x="652" y="592" font-size="23" font-weight="400" fill="#20211E">Orchestration</text>
+<text x="652" y="625" font-size="22" font-weight="400" fill="#20211E">I/O ownership</text>
+<rect x="914" y="341" width="238" height="223" rx="8" fill="#FAF9F5" stroke="#DDDCD4" stroke-width="1.5"/>
+<text x="936" y="381" font-size="20" font-weight="700" fill="#20211E" letter-spacing="1.2">API CALLS</text>
+<text x="936" y="424" font-size="25" font-weight="700" fill="#20211E">alrust-engine</text>
+<text x="936" y="461" font-size="22" font-weight="400" fill="#20211E">Pure Rust library</text>
+<text x="936" y="502" font-size="21" font-weight="400" fill="#20211E">Dedup / correlation</text>
+<text x="936" y="533" font-size="21" font-weight="600" fill="#20211E">Lifecycle · NO I/O</text>
+<rect x="914" y="596" width="238" height="174" rx="8" fill="#FAF9F5" stroke="#DDDCD4" stroke-width="1.5"/>
+<text x="936" y="634" font-size="20" font-weight="700" fill="#20211E" letter-spacing="0.3">READS / WRITES</text>
+<text x="936" y="675" font-size="24" font-weight="700" fill="#20211E">alrust-store-pg</text>
+<text x="936" y="713" font-size="23" font-weight="400" fill="#20211E">SQLx</text>
+<text x="936" y="746" font-size="22" font-weight="400" fill="#20211E">PostgreSQL only</text>
+<text x="48" y="841" font-size="23" font-weight="400" fill="#20211E">Calls the consumed</text>
+<text x="48" y="873" font-size="23" font-weight="600" fill="#20211E">Alerta HTTP contract</text>
+<text x="805" y="900" font-size="24" font-weight="700" fill="#20211E">SSE</text>
+<text x="805" y="932" font-size="22" font-weight="400" fill="#20211E">notifications</text>
+<text x="917" y="849" font-size="22" font-weight="400" fill="#20211E">Outbound webhooks</text>
+<rect x="48" y="970" width="550" height="214" rx="8" fill="#FAF9F5" stroke="#DDDCD4" stroke-width="1.5"/>
+<text x="72" y="1010" font-size="20" font-weight="700" fill="#20211E" letter-spacing="1.2">WEB INTERFACE</text>
+<text x="72" y="1056" font-size="31" font-weight="700" fill="#20211E">Alerta web UI</text>
+<text x="72" y="1102" font-size="24" font-weight="400" fill="#20211E">Vendored</text>
+<text x="72" y="1143" font-size="22" font-weight="400" fill="#20211E">Uses the consumed Alerta HTTP contract</text>
+<rect x="658" y="970" width="494" height="214" rx="8" fill="#FAF9F5" stroke="#DDDCD4" stroke-width="1.5"/>
+<text x="682" y="1010" font-size="20" font-weight="700" fill="#20211E" letter-spacing="1.2">DESKTOP WRAPPER</text>
+<text x="682" y="1056" font-size="29" font-weight="700" fill="#20211E">Tauri · Windows / macOS</text>
+<text x="682" y="1102" font-size="24" font-weight="400" fill="#20211E">Wraps the same UI</text>
+<text x="682" y="1143" font-size="22" font-weight="400" fill="#20211E">Native notifications from API SSE</text>
+<text x="48" y="1314" font-size="26" font-weight="700" fill="#20211E">I/O stays in the API</text>
+<text x="48" y="1358" font-size="23" font-weight="400" fill="#20211E">The engine is a pure Rust library.</text>
+<text x="48" y="1392" font-size="23" font-weight="400" fill="#20211E">The API calls it and accesses storage.</text>
+<rect x="658" y="1274" width="494" height="142" rx="8" fill="#FAF9F5" stroke="#DDDCD4" stroke-width="1.5"/>
+<text x="682" y="1328" font-size="29" font-weight="700" fill="#20211E">Notification targets</text>
+<text x="682" y="1375" font-size="23" font-weight="400" fill="#20211E">Receive outbound webhooks</text>
+<path d="M48 1452H1152" fill="none" stroke="#DDDCD4" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+</g>
+</svg>

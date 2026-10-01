@@ -1,5 +1,9 @@
 # alrust
 
+<p align="center">
+  <img src="docs/assets/readme-hero.png" alt="alrust — Many signals. One clear view. Planned, Phase 0." width="1280">
+</p>
+
 **A planned alert aggregation and deduplication server for an MSP network
 operations centre: a Rust rewrite of [Alerta](https://github.com/alerta/alerta).
 Its goal is to be API-compatible with the Alerta API as the existing Alerta
@@ -9,6 +13,7 @@ web UI and our scripts use it.**
 > harness).** There is no working alrust server, API or desktop app yet. The
 > status table below separates what exists from what is planned.
 
+[Project website](https://alrust.stel.chatgpt.site/) ·
 [What it is](#what-it-is) ·
 [Status](#status) ·
 [Architecture](#architecture-planned) ·
@@ -40,12 +45,18 @@ These are the planned design decisions, fixed in the kickoff:
 
 The full plan and its fixed decisions are in the
 [project kickoff](https://github.com/steliosx/alrust/blob/e839ceaf8cb43d6ed996c8fe12f884d0bb141743/docs/KICKOFF.md)
-(on the open scaffold PR; not yet on `main`).
+(pinned to the reviewed scaffold revision).
 
 ## Status
 
-As of 2026-09-29. "Unpublished" means the work exists and has been
-independently reviewed, but is not yet pushed to this repository.
+**Historical snapshot: 2026-09-29.** This table preserves the original
+checkpoint. The scaffold, specifications and conformance tooling have since
+landed on `main`; consult [the current status record](docs/STATUS.md) for
+subsequent merges, scoped results and the Phase 0 gate. The illustrations
+describe the planned system and do not establish implementation or test results.
+
+In the snapshot below, "unpublished" means the work existed and had been
+independently reviewed, but had not yet been pushed to this repository.
 
 | Area | State | Evidence |
 |---|---|---|
@@ -65,6 +76,13 @@ library with no I/O: it computes lifecycle decisions, and the surrounding
 server code (orchestration) does the database reads and writes through
 `alrust-store-pg`.
 
+<p align="center">
+  <img src="docs/assets/architecture-planned.svg" alt="Planned Alrust architecture. Receivers feed API orchestration, which separately calls the pure engine and reads or writes PostgreSQL. The Alerta UI and Tauri desktop consume the API; SSE and outbound webhooks deliver notifications. All runtime components are planned." width="1280">
+</p>
+
+<details>
+<summary>Editable Mermaid architecture</summary>
+
 ```mermaid
 flowchart LR
     Z[Zabbix 7.0 per tenant] -->|webhook| R
@@ -81,6 +99,8 @@ flowchart LR
     A -->|outbound webhooks| F[Notification targets]
 ```
 
+</details>
+
 Compatibility is judged against pinned upstream releases:
 [alerta v9.1.0](https://github.com/alerta/alerta/tree/f4312727783dad64198b62ed778bbca98a5144a3)
 and
@@ -88,16 +108,17 @@ and
 
 ## Getting started
 
-**What `main` offers today is documentation only.** It contains this README
-and nothing to build or run.
+**The repository now contains the scaffold, specifications and conformance
+tooling. There is no working alrust server to start.** See
+[the current status record](docs/STATUS.md) for the latest development state.
 
 ```sh
 git clone https://github.com/steliosx/alrust.git   # private repository: needs access
 cd alrust
 ```
 
-**Optional: inspect the scaffold** from open draft PR #1, pinned to its
-reviewed commit:
+**Optional: inspect the original scaffold snapshot** from PR #1, pinned to
+its reviewed commit:
 
 ```sh
 git fetch origin pull/1/head
@@ -125,6 +146,10 @@ step was not run as part of validating this README.
 Each phase is **planned** and has a gate that must pass before dependent work
 starts. The details are in the
 [kickoff](https://github.com/steliosx/alrust/blob/e839ceaf8cb43d6ed996c8fe12f884d0bb141743/docs/KICKOFF.md).
+
+<p align="center">
+  <img src="docs/assets/roadmap-planned.svg" alt="Planned roadmap: Phase 0 specify and prove; phases 1–2 build and compare; phases 3–5 connect and qualify; phase 6 desktop. Phase 0 is in progress and its gate remains open." width="1280">
+</p>
 
 | Phase | Scope | Gate |
 |---|---|---|
