@@ -1,9 +1,7 @@
 # ADR-0002: Conformance suite language
 
 - Status: **Decided by Codex** (owner of `conformance/`, review `ed33e33c`):
-  Python 3.12 + pytest + httpx + Hypothesis. The Proposal below is the
-  original option analysis; the ADR text is replaced when
-  `codex/conformance-harness` lands
+  Python 3.12 + pytest + httpx + Hypothesis.
 - Date: 2026-09-29
 
 ## Context
@@ -36,3 +34,7 @@ which weakens the black-box property.
 Codex, the owner of `conformance/`, selected Python 3.12 + pytest + httpx +
 Hypothesis (review `ed33e33c`). The Proposal above is kept as the original
 option analysis.
+
+The harness keeps implementation imports out and preserves semantic fields
+during normalization. Implementation reviews and validation evidence are tracked
+in `docs/STATUS.md`; this language decision does not close the Phase 0 gate.
