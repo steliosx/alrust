@@ -1053,19 +1053,26 @@ decision Y11), all 2026-10-01.
 2. W-DL-1, batches:
    - The Prometheus webhook maps every item of `alerts` before any
      processing (`webhooks/prometheus.py:110-114`). One malformed item
-     fails the whole request with 400 and the exception's text
-     (`webhooks/custom.py:38-39`), and nothing is processed.
+     fails the whole request, and nothing is processed. A `KeyError`,
+     `AttributeError` or `ValueError` from mapping gives 400 with the
+     exception's text (`webhooks/custom.py:38-39`). A `TypeError` (for
+     example `labels.timeout = []` reaching `int([])`,
+     `webhooks/prometheus.py:60`, where only `ValueError` is caught) takes
+     the dispatcher's legacy retry without `path` and ends in the generic
+     500.
    - The envelope check tests only that `alerts` is present (`:112`). A
      missing `alerts` gives 400 `no alerts in Prometheus notification
      payload`. An empty list, `{}` or `''` maps to no alerts, and the
-     request returns 201 `{status, ids: []}` (`custom.py:81-84`). A `null`,
-     a number, a non-empty string or a non-empty object makes mapping raise
-     `TypeError`. `custom.py:31-35` then retries the call without its
-     required `path` argument, which raises again, and the generic handler
-     returns 500 `An internal error has occurred!`
-     (`exceptions.py:120-136`). Codex's bounded source probe (`3154abb3`),
-     replayed byte-identically by Claude, shows the `{}`, `''` and `null`
-     mappings.
+     request returns 201 `{status, ids: []}` (`custom.py:81-84`). A `null`
+     or a number is not iterable: `TypeError`, so `custom.py:31-35` retries
+     the call without its required `path` argument, which raises again, and
+     the generic handler returns 500 `An internal error has occurred!`
+     (`exceptions.py:120-136`). A non-empty string or object is iterated,
+     and `parse_prometheus` fails at its first `alert.get` (`:18`) with
+     `AttributeError`: 400 `'str' object has no attribute 'get'`. Codex's
+     source-only probes (`3154abb3`, `a534124f`, both replayed
+     byte-identically by Claude) show these mappings and exception
+     classes.
    - `custom` then processes the mapped alerts one by one (`:41-84`).
      `process_alert` runs the pre-receive plugins, then stores the alert by
      deduplication, correlation or creation, then runs the post-receive
@@ -1136,14 +1143,19 @@ decision Y11), all 2026-10-01.
      Prometheus notification payload`, as in the reference. An empty list
      gives 201 `{status, ids: []}`, as in the reference. Any other
      non-list `alerts` (`null`, a number, a string or an object, empty or
-     not) gives the same 400, with nothing processed. These are
-     divergences from the reference's 201 (`{}`, `''`) and 500 (the rest).
+     not) gives the same 400, with nothing processed. Against the
+     reference that is: a divergence for `{}` and `''` (201); a divergence
+     for `null` and numbers (500); status parity with a different message
+     for a non-empty string or object (400 `'str' object has no attribute
+     'get'`).
    - **Items.** A malformed item (one whose mapping fails) becomes an
      `invalid` result for that item, and every other item is still mapped
      and processed. A batch of exactly one malformed item gives 400
      `Invalid alert at index 0 in webhook payload.` with no `results`. Its
-     status matches the reference; its message deliberately differs from
-     the reference's exception text. This takes precedence over the
+     status matches the reference when the reference's mapping failure is a
+     `KeyError`, `AttributeError` or `ValueError` (400 with the exception
+     text, a deliberate message divergence). It diverges when the failure
+     is a `TypeError` (the reference's 500). This takes precedence over the
      single-item parity rule below.
    - **Processing.** Every mapped alert is processed in order, each
      independently, with the reference's per-alert handling and audit
@@ -1253,10 +1265,12 @@ rows in the store; "audit" means the events of the write category.
 | 8 | payload `{"foo": 1}` (no `alerts`) | 400 `no alerts in Prometheus notification payload`; no rows | same; no rows | parity |
 | 8b | `{"alerts": []}` | 201 `{status, ids: []}` | same | parity |
 | 8c | `{"alerts": {}}`; separately `{"alerts": ""}` | 201 `{status, ids: []}` each | 400 `no alerts in Prometheus notification payload` each; no rows | divergence |
-| 8d | `{"alerts": null}`; separately `{"alerts": 5}`; separately `{"alerts": "ab"}` | 500 `An internal error has occurred!` each | 400 `no alerts in Prometheus notification payload` each; no rows | divergence |
+| 8d | `{"alerts": null}`; separately `{"alerts": 5}` | 500 `An internal error has occurred!` each | 400 `no alerts in Prometheus notification payload` each; no rows | divergence |
+| 8d2 | `{"alerts": "ab"}`; separately `{"alerts": {"x": 1}}` | 400 `'str' object has no attribute 'get'` each; no rows | 400 `no alerts in Prometheus notification payload` each; no rows | parity of status; divergence of message |
 | 8e | one item lacking `labels` | 400 with the exception text (`'labels'`); no rows | 400 `Invalid alert at index 0 in webhook payload.`, no `results`; no rows | divergence (message only) |
+| 8f | one item with `labels.timeout = []` | 500 `An internal error has occurred!` (`TypeError` at `prometheus.py:60`, legacy retry); no rows | 400 `Invalid alert at index 0 in webhook payload.`, no `results`; no rows | divergence |
 | 9 | three items, no blackout | 201 `{status, ids}`; three rows; audit `webhook-received` (3) | same; no `results` | parity |
-| 9b | three items; item 2's post-receive plugin fails after its store step (a reviewed fault-injection fixture is required; NOT_RUN until one exists) | 500 `Error while running post-receive plugin '<name>': <error>` (`utils/api.py:81`; `custom.py:72-73`); rows for `h-9b-1` and `h-9b-2`; `h-9b-3` never processed; audit `webhook-received` (1) | 500, same message plus `results`: processed, error (`resourceId` the stored `h-9b-2` alert), processed; rows for all three; audit `webhook-received` (2) | divergence (Y10) |
+| 9b | three items, `PLUGINS_RAISE_ON_ERROR = True`; a test-only post-receive plugin named `synthetic-fail` raises `RuntimeError('synthetic failure')` for item 2 only, after its store step (a reviewed fault-injection fixture is required; NOT_RUN until one exists). An `AlertaException` would instead be re-raised (`utils/api.py:77-78`) and is not this vector | 500 `Error while running post-receive plugin 'synthetic-fail': synthetic failure` (`utils/api.py:79-81`; `custom.py:72-73`); rows for `h-9b-1` and `h-9b-2`; `h-9b-3` never processed; audit `webhook-received` (1) | 500, same message plus `results`: processed, error (`resourceId` the stored `h-9b-2` alert), processed; rows for all three; audit `webhook-received` (2) | divergence (Y10) |
 | 10 | one item, no blackout; separately, one item blacked out | 201 `{status, id, alert}`; separately, 202 with the blackout message | same, no `results` | parity |
 | 11 | annotation `runbook 'https://wiki.test/{instance}/{alertname}'` | `attributes.runbook` `https://wiki.test/h-11-1/A-11-1` | same | parity |
 | 12 | annotation `note '{{literal}} {alertname}'` | `{literal} A-12-1` | same | parity |
