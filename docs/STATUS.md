@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-01T18:53Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-01T19:02Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -75,6 +75,9 @@ are kept.
 | #58 | `claude/charter-sync` (STATUS) | `26abf88b` (approved `f0c40881`) | `60ab0210` |
 | #59 | `claude/spec-security-fixes-query` (Y3: SF-QUERY) | `9b07f71a` (approved `39e98779`) | `01bc294c` |
 | #60 | `claude/charter-sync` (DECISIONS Y10-Y12; STATUS) | `e44e9b20` (approved `98825e74`) | `3aded5a7` |
+| #61 | `claude/charter-sync` (DECISIONS Y10 clarified; STATUS) | `9de6095e` (approved `a534124f`) | `1ece49da` |
+| #62 | `claude/spec-security-fixes-webhooks` (Y3: SF-WEBHOOKS, SF-WEBUI; the last Y3 entries) | `41df7b84` (approved `590fab93`) | `3211f855` |
+| #63 | `claude/readme-sync` (README: X5 gate, Y5 merges) | `beb25b86` (approved `590fab93`) | `22630d7d` |
 
 After PR #10, `main` was at `bcd60ea3`; its hosted CI run [36859021523](https://github.com/steliosx/alrust/actions/runs/36859021523) completed successfully at scaffold scope (retrieved by Codex), and Codex independently verified every merge's parents and trees (`5bd706c0`). Checks then: README, STATUS, OpenAPI and the customer mapping are byte-identical to their reviewed versions; DECISIONS is charter-sync's plus only the ADR-0004 row; `spec/lifecycle.md` is the heartbeats version plus exactly the R1.2 clarification from PR #3's later approved head.
 
@@ -277,9 +280,10 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
     PR #51), SF-MGMT (M-SEC-1; owner decisions Y8 and Y9; PR #54) and
     SF-QUERY (the four string-formatted SQL constructions and the `q=`
     operand dropping; PR #59). Owner decisions Y10 (W-DL-1), Y11
-    (WUI-SEC-1) and Y12 (WP-SEC-1) are recorded; in review: SF-WEBHOOKS
-    (W-SEC-1, W-DL-1, WP-SEC-1) and SF-WEBUI (WUI-SEC-1), the last Y3
-    entries.
+    (WUI-SEC-1) and Y12 (WP-SEC-1) are recorded; SF-WEBHOOKS (W-SEC-1,
+    W-DL-1, WP-SEC-1) and SF-WEBUI (WUI-SEC-1) are merged (PR #62). **Every
+    Y3 item now has an approved specification.** The provider-webhook
+    findings below come later under the same rule.
     Codex is building the
     harness cases from the approved entries (plan, PR #41); its offline
     evidence, transport and refusal-predicate components are merged
@@ -436,6 +440,34 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
       keeps this (a data-loss contract decision). This is handler control
       flow from source and mocks (Codex WB-S5), not executed database or
       rollback evidence;
+  - **new, SECURITY and behavior (provider webhooks; source-level, found
+    while mapping the remaining eleven providers in OpenAPI, nothing
+    executed; awaiting Codex's review of that head):**
+    - WG-SEC-1: Grafana `ok` notifications close up to 1,000 alerts by
+      `attributes.ruleId` inside the parsing stage with **no customer
+      filter**, so a customer-scoped caller can close other customers'
+      alerts (`webhooks/grafana.py:114-133`);
+    - WT-SEC-1: Telegram's `blackout` action creates a blackout with **no
+      customer** using only `write:webhooks`, not `write:blackouts`
+      (`webhooks/telegram.py:87-95`);
+    - WS-AUTH-1: Slack and Telegram status actions (open, ack, close) change
+      alert status with only `write:webhooks`, not `write:alerts`; PagerDuty
+      does the same through its status updates. **Owner question (auth
+      contract): should these require the normal scopes?**;
+    - PagerDuty, Slack and Telegram find the alert by a **regular-expression
+      id prefix**, so a key such as `.` matches whichever alert comes first
+      within the caller's customers;
+    - behavior defects: Slack drops its "not found" response and fails with
+      a 400 `AttributeError`; `watch` and `unwatch` both untag in Slack and
+      Telegram; Telegram `blackout` without an alert raises
+      `UnboundLocalError`; PagerDuty applies messages partly (the W-DL-1
+      pattern);
+    - more stored HTML (the WUI-SEC-1 pattern, covered by Y11): Grafana
+      `ruleUrl` and `imageUrl`, the CloudWatch subscription text, the
+      PagerDuty history text, and Stackdriver `moreInfo`. Stackdriver also
+      logs invalid documentation content whole (the W-SEC-1 pattern).
+    Under Y3 each gets a `spec/security-fixes.md` entry; WS-AUTH-1 and the
+    scope part of WT-SEC-1 wait for the owner's answer;
   - **new, SECURITY (API keys; source-level, nothing executed):**
     - an edit that omits `expireTime` stores NULL, and every read rebuilds
       it as now + `API_KEY_EXPIRE_DAYS` (default 365), so with a positive
