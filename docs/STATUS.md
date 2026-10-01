@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-01T15:28Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-01T16:14Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -242,9 +242,11 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
     each one. Specified and approved in `spec/security-fixes.md` so far:
     SF-AN1 (AN1), SF-CRON (App Engine cron), SF-USERS (users role ceiling
     and user creation), SF-GROUPS (G-SEC-1, GR-R1, G-DEF-1), SF-PERMS
-    (P-SEC-1) and SF-CUSTOMERS (C-SEC-1). Still to specify: the
-    string-formatted SQL, M-SEC-1, WUI-SEC-1, WP-SEC-1, W-SEC-1, W-DL-1, the
-    API-key items, C21-C23 and the `q=` search. Codex is building the
+    (P-SEC-1) and SF-CUSTOMERS (C-SEC-1); proposed for review: SF-KEYS
+    (the API-key items and C23; the secret shown only once, owner decision
+    Y6), SF-NOTES (C21) and SF-BLACKOUTS (C22). Still to specify: the
+    string-formatted SQL, M-SEC-1, WUI-SEC-1, WP-SEC-1, W-SEC-1, W-DL-1 and
+    the `q=` search. Codex is building the
     harness cases from the approved entries (plan, PR #41); no security case
     has run.
   - **new, SECURITY (reference defects, source-level only, no exploit built
