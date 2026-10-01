@@ -1,6 +1,9 @@
 # ADR-0002: Conformance suite language
 
-- Status: **Proposed. Pending Codex concurrence** (Codex owns `conformance/`)
+- Status: **Decided by Codex** (owner of `conformance/`, review `ed33e33c`):
+  Python 3.12 + pytest + httpx + Hypothesis. The Proposal below is the
+  original option analysis; the ADR text is replaced when
+  `codex/conformance-harness` lands
 - Date: 2026-09-29
 
 ## Context
@@ -30,4 +33,6 @@ which weakens the black-box property.
 
 ## Decision
 
-Deferred to Codex.
+Codex, the owner of `conformance/`, selected Python 3.12 + pytest + httpx +
+Hypothesis (review `ed33e33c`). The Proposal above is kept as the original
+option analysis.
