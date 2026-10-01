@@ -49,6 +49,27 @@ The full plan and its fixed decisions are in the
 
 ## Status
 
+**Current checkpoint: 1 October 2026**, inspected at main
+[`d87e25c`](https://github.com/steliosx/alrust/tree/d87e25cca414b4d26e7fd0e26f252f853ad45db0).
+The scaffold, extracted specifications and conformance tooling are merged.
+**Phase 0 remains open; no Rust server or two-server conformance result is claimed.**
+
+| Area | Current evidence | What it does not establish |
+|---|---|---|
+| CI bootstrap and scaffold | [Run 36939336761](https://github.com/steliosx/alrust/actions/runs/36939336761) passed all four jobs at `d87e25c`: reference guard, Rust formatting/lint/build checks, inert profile preflight and reference-server bootstrap. | Rust targets still contain zero tests; the reference job ends with a healthcheck, not the HTTP conformance suite. |
+| Reference build | [PR #68](https://github.com/steliosx/alrust/pull/68) adds a fresh, hash-locked Python environment and readiness tied to the launched reference process. | A healthy Python reference server is not an implemented Alrust server. |
+| Profile inventory and entrypoint | [PR #76](https://github.com/steliosx/alrust/pull/76) and [PR #77](https://github.com/steliosx/alrust/pull/77) are merged. The current job checks all **19 profiles return `NOT_RUN`**, with execution disabled. | A green preflight gives no Phase 0 execution credit. Reviewed runnable profiles and the complete reference suite remain required. |
+| Local reference and offline checks | Scoped results and independent dispositions are recorded in [STATUS](docs/STATUS.md). | Local passes are separate from CI qualification and from cross-implementation parity. |
+| Open proposals | [PR #71](https://github.com/steliosx/alrust/pull/71) proposes structural OpenAPI validation; draft [PR #70](https://github.com/steliosx/alrust/pull/70) addresses batch retry safety. | Neither proposal is part of this main checkpoint. The retry contract needs an owner decision. |
+
+Hosted jobs are now executing; earlier billing-refused runs remain historical
+failures to execute. The cost policy is **no paid CI**: free hosted allowance
+and the authorised self-hosted x64 path, subject to its own qualification.
+See [DECISIONS](docs/DECISIONS.md) for the current policy and merge authority.
+
+<details>
+<summary>Historical checkpoint — 29 September 2026</summary>
+
 **Historical snapshot: 2026-09-29.** This table preserves the original
 checkpoint. The scaffold, specifications and conformance tooling have since
 landed on `main`; consult [the current status record](docs/STATUS.md) for
@@ -68,6 +89,8 @@ independently reviewed, but had not yet been pushed to this repository.
 | Reference smoke test (2 HTTP cases against the upstream Python server) | Passed locally | This checks the upstream **reference** server only. It is not alrust behaviour. |
 | Customer, lifecycle and two-server conformance runs | Not run | — |
 | alrust HTTP API, receivers, auth, desktop app | Not started | Planned phases 1–6 below |
+
+</details>
 
 ## Architecture (planned)
 
