@@ -97,7 +97,7 @@ def svg(title: str, viewbox: str, width: int, height: int, body: str) -> str:
 
 
 def write_mark(name: str, fill: str, title: str) -> None:
-    (ROOT / name).write_text(svg(title, "0 0 384 294", 384, 294, paths(fill)))
+    (ROOT / name).write_text(svg(title, "0 0 384 294", 384, 294, paths(fill)), encoding="utf-8")
 
 
 def write_logo(name: str, mark_fill: str, type_fill: str, dot_fill: str, title: str) -> None:
@@ -109,7 +109,7 @@ def write_logo(name: str, mark_fill: str, type_fill: str, dot_fill: str, title: 
         + '</g>\n'
         + f'<circle cx="1214" cy="245" r="26" fill="{dot_fill}"/>'
     )
-    (ROOT / name).write_text(svg(title, "0 0 1240 294", 1240, 294, body))
+    (ROOT / name).write_text(svg(title, "0 0 1240 294", 1240, 294, body), encoding="utf-8")
 
 
 def write_assets() -> None:
@@ -124,13 +124,13 @@ def write_assets() -> None:
         '<g transform="translate(8 13.625) scale(.125)">'
         + paths(IVORY) + '</g>'
     )
-    (ROOT / "favicon.svg").write_text(svg("Alrust", "0 0 64 64", 64, 64, favicon))
+    (ROOT / "favicon.svg").write_text(svg("Alrust", "0 0 64 64", 64, 64, favicon), encoding="utf-8")
     icon = (
         f'<rect width="512" height="512" rx="112" fill="{RUST}"/>'
         '<g transform="translate(64 109)">'
         + paths(IVORY) + '</g>'
     )
-    (ROOT / "alrust-app-icon.svg").write_text(svg("Alrust application icon", "0 0 512 512", 512, 512, icon))
+    (ROOT / "alrust-app-icon.svg").write_text(svg("Alrust application icon", "0 0 512 512", 512, 512, icon), encoding="utf-8")
 
     spec = {
         "name": "alrust",
@@ -182,7 +182,7 @@ def write_assets() -> None:
         ],
         "project_note": "Brand assets do not imply a released or working alrust server."
     }
-    (ROOT / "brand-spec.json").write_text(json.dumps(spec, indent=2, ensure_ascii=False) + "\n")
+    (ROOT / "brand-spec.json").write_text(json.dumps(spec, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def render() -> None:
@@ -211,10 +211,17 @@ def render() -> None:
 
     sheet = Image.new("RGB", (1600, 1120), IVORY)
     draw = ImageDraw.Draw(sheet)
-    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    title = ImageFont.truetype(font_path, 25)
-    label = ImageFont.truetype(font_path, 17)
-    small = ImageFont.truetype(font_path, 14)
+    def preview_font(size: int):
+        for candidate in ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "DejaVuSans.ttf", "Arial.ttf"):
+            try:
+                return ImageFont.truetype(candidate, size)
+            except OSError:
+                continue
+        return ImageFont.load_default()
+
+    title = preview_font(25)
+    label = preview_font(17)
+    small = preview_font(14)
     draw.text((58, 37), "ALRUST  /  01 CONVERGENCE", fill=CHARCOAL, font=title)
     draw.text((58, 76), "Final vector system · 2026-10-01", fill="#62635D", font=label)
     light = Image.open(previews / "alrust-logo-light-1240.png").convert("RGBA")
@@ -248,10 +255,10 @@ def render() -> None:
 
 def validate() -> None:
     for path in ROOT.glob("*.svg"):
-        root = ET.fromstring(path.read_text())
+        root = ET.fromstring(path.read_text(encoding="utf-8"))
         tags = {node.tag.rsplit("}", 1)[-1] for node in root.iter()}
         assert not tags & {"image", "script", "foreignObject", "text", "style"}, (path, tags)
-        assert "href=" not in path.read_text(), path
+        assert "href=" not in path.read_text(encoding="utf-8"), path
         assert root.attrib["viewBox"], path
     print("8 SVG assets written; XML and path-only checks passed.")
 
