@@ -24,13 +24,19 @@ def redact_secrets(value, secrets):
 
 
 class Client:
-    def __init__(self, base_url: str, api_key: str | None = None, *, transport=None):
+    def __init__(self, base_url: str, api_key: str | None = None, *, transport=None, request_id=None):
         url = urlsplit(base_url)
         if (url.scheme not in ('http', 'https') or not url.hostname or url.username
                 or url.password or url.query or url.fragment):
             raise ValueError('target must be an HTTP(S) base URL without credentials/query/fragment')
+        # Only this fixed non-secret trace input is admitted; no arbitrary headers.
+        if request_id is not None and (type(request_id) is not str
+                or request_id != 'alrust-synthetic-unknown-01'):
+            raise ValueError('request ID must be the fixed synthetic unknown-webhook trace')
         self.base_url = base_url.rstrip('/')
         headers = {'Authorization': f'Key {api_key}'} if api_key else {}
+        if request_id is not None:
+            headers['X-Request-ID'] = request_id
         self.http = httpx.Client(headers=headers, timeout=10, follow_redirects=False,
                                  trust_env=False, transport=transport)
 
