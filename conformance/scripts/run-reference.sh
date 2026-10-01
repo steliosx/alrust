@@ -88,9 +88,15 @@ group_state() {  # PRESENT, EMPTY or UNKNOWN for process group $1, asked of the 
     *) echo UNKNOWN ;;
   esac
 }
-reap_leader_if_exited() {  # wait only for a leader that has already exited (zombie); never block
+leader_gone() {  # true only on positive evidence that PID $1 no longer exists (ESRCH)
+  local out
+  out=$(LC_ALL=C kill -0 "$1" 2>&1) && return 1
+  [[ $out == *"No such process"* ]]
+}
+reap_leader_if_exited() {  # wait only on positive exit evidence; an unknown state never blocks
   local st state
-  { read -r st <"/proc/$1/stat"; } 2>/dev/null || { wait "$1" 2>/dev/null || true; return 0; }
+  if leader_gone "$1"; then wait "$1" 2>/dev/null || true; return 0; fi
+  { read -r st <"/proc/$1/stat"; } 2>/dev/null || return 0
   state=${st##*) }; state=${state%% *}
   [[ $state == Z ]] && { wait "$1" 2>/dev/null || true; }
   return 0
@@ -190,7 +196,7 @@ while :; do
     echo "reference server did not become healthy within ${READY_TIMEOUT}s" >&2
     exit 1
   fi
-  if ! kill -0 "$pid" 2>/dev/null; then
+  if leader_gone "$pid"; then
     rc=0; wait "$pid" 2>/dev/null || rc=$?
     echo "reference server exited during startup (status $rc)" >&2
     exit 1
