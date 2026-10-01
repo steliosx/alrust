@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-01T16:32Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-01T16:52Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -61,6 +61,9 @@ are kept.
 | #44 | `claude/charter-sync` (STATUS, DECISIONS) | `2ccdbdb8` (approved `dc31a4ab`) | `6f6f57fc` |
 | #45 | `codex/security-transport` (Codex's offline security transport; reviewed by Claude) | `c36eba87` (approved `d497ad4f`) | `b5012d5c` |
 | #46 | `claude/charter-sync` (DECISIONS Y6) | `23ad33ae` (approved `acd04922`) | `0fde1e86` |
+| #47 | `codex/security-journal-durability` (journal directory fsync, Claude's note N4; reviewed by Claude) | `ed1b515d` (approved `0b3cf13c`) | `9a36a19e` |
+| #48 | `codex/security-path-boundary` (transport dot-segment refusal, Claude's note N5; reviewed by Claude) | `06b7c404` (approved `0b3cf13c`) | `f4fe5335` |
+| #49 | `claude/charter-sync` (DECISIONS Y6 amendment; STATUS) | `89ab81e0` (approved `26020446`) | `8b62d7bb` |
 
 After PR #10, `main` was at `bcd60ea3`; its hosted CI run [36859021523](https://github.com/steliosx/alrust/actions/runs/36859021523) completed successfully at scaffold scope (retrieved by Codex), and Codex independently verified every merge's parents and trees (`5bd706c0`). Checks then: README, STATUS, OpenAPI and the customer mapping are byte-identical to their reviewed versions; DECISIONS is charter-sync's plus only the ADR-0004 row; `spec/lifecycle.md` is the heartbeats version plus exactly the R1.2 clarification from PR #3's later approved head.
 
@@ -168,6 +171,13 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
     is held by the broker with no lending, and Zabalack's C6 removes the
     in-job lock (the cutover). A job that is queued, never starts, or fails
     because the VM was busy is **not validation**.
+  - **Phase A installed (2026-10-01T16:12Z):** the v7 install completed on
+    the shared VM; runner 22 runs under the gated shared-ci unit. codex-omarchy
+    confirmed it (`20261001T161937Z-codex-omarchy-cacbd979`,
+    PHASE_A_V7_INSTALLATION_CONFIRMED), as relayed by the Zabalack session;
+    Claude has not read that Zabalack-channel message. Still untested under
+    Phase A: an operator or upgrade window, a CI job, a reboot and a live
+    rollback.
   - Alrust's x64 beta path is blocked on Phase B: C6 and its r13 lab run,
     the Codex reviews of the broker and adapter, and the owner decisions
     below.
@@ -248,8 +258,8 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
     and user creation), SF-GROUPS (G-SEC-1, GR-R1, G-DEF-1), SF-PERMS
     (P-SEC-1) and SF-CUSTOMERS (C-SEC-1); SF-NOTES (C21) and SF-BLACKOUTS
     (C22) approved as components; SF-KEYS (the API-key items and C23; the
-    secret shown only once, owner decision Y6 as amended) revised for
-    KEYS-R1..R3 and in review. Open owner question: whether `PUT /key`
+    secret shown only once, owner decision Y6 as amended; a key's public id
+    no longer works as a credential, KEYS-R4) in review. Open owner question: whether `PUT /key`
     rechecks a key's existing scopes. Still to specify: the
     string-formatted SQL, M-SEC-1, WUI-SEC-1, WP-SEC-1, W-SEC-1, W-DL-1 and
     the `q=` search. Codex is building the
