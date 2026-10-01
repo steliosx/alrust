@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-01T18:00Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-01T18:07Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -70,6 +70,7 @@ are kept.
 | #53 | `claude/charter-sync` (DECISIONS Y8, Y9; STATUS) | `72473188` (approved `0d2c692f`) | `3a60dbee` |
 | #54 | `claude/spec-security-fixes-mgmt` (Y3: SF-MGMT, M-SEC-1; Y8, Y9) | `655f1958` (approved `99fe8f17`) | `cc346e5f` |
 | #55 | `codex/security-refusal-assertions` (Codex's offline refusal predicates for SF-AN1/SF-CRON; reviewed by Claude) | `b43001d3` (approved `8d092494`) | `6ee6f364` |
+| #56 | `claude/charter-sync` (STATUS) | `41718b7e` (approved `01c183e3`) | `00438236` |
 
 After PR #10, `main` was at `bcd60ea3`; its hosted CI run [36859021523](https://github.com/steliosx/alrust/actions/runs/36859021523) completed successfully at scaffold scope (retrieved by Codex), and Codex independently verified every merge's parents and trees (`5bd706c0`). Checks then: README, STATUS, OpenAPI and the customer mapping are byte-identical to their reviewed versions; DECISIONS is charter-sync's plus only the ADR-0004 row; `spec/lifecycle.md` is the heartbeats version plus exactly the R1.2 clarification from PR #3's later approved head.
 
@@ -445,13 +446,11 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
     server` searches only `disk` OR `full`; `a AND b AND c` ignores `c`
     (`queryparser.py:20-26`; confirmed by both agents' parser probes).
     DECIDED under Y3: alrust searches every operand (SF-QUERY, in review);
-  - **new, not blocking:** whether alrust keeps the reference's App Engine
-    cron auth branch. With `AUTH_REQUIRED` on, no credentials and
+  - **App Engine cron auth branch (DECIDED under Y3, SF-CRON, PR #40):**
+    alrust has no unauthenticated cron branch. In the reference, with `AUTH_REQUIRED` on, no credentials and
     `ALLOW_READONLY` off, a request with a truthy (non-empty)
     `X-Appengine-Cron` header and `X-Forwarded-For: 0.1.0.1` passes the
     decorator with no scope check (`auth/decorators.py:171-173`). The
     branch sets none of the usual auth fields (`g.login`, `g.scopes`,
     `g.customers`), so what the handlers then return is NOT established
-    (source-derived, NOT_RUN). It is an open question about the consumed
-    API's auth contract. The spec records it without deciding, and it does
-    not block Phase 0 work.
+    (source-derived, NOT_RUN).
