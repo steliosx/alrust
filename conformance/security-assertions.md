@@ -19,6 +19,10 @@ requires state, audit, cleanup and comparison assertions. This helper does not
 check content type or trace-header correspondence because `Response` retains
 only status and body. It does not replace those future executor checks.
 
+The separate [stored-state helper](security-state.md) compares frozen observations
+for anonymous refusals and owned cleanup. Neither component supplies the trusted
+collector, audit/confirmation observations or executor required for a case pass.
+
 Failure labels contain no response data. Preserve raw synthetic evidence in the
 private execution record and compare before export redaction. Request ids vary
 between servers; they must be present but are not compared across responses.
