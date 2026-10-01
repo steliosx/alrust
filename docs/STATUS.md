@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-01T12:18Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-01T12:32Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -35,17 +35,26 @@ are kept.
 | #5 | `claude/spec-lifecycle-housekeeping` | `c6aecf66` | `b793b4db` |
 | #6 | `claude/spec-lifecycle-heartbeats` | `84b2ed5d` | `e0b0d412` |
 | #10 | `claude/adr-0004-webui` | `96268854` | `bcd60ea3` |
+| #14 | `codex/harness-integration` | `2811c700` (merge of `main`, ADR-0002 reconciled; approved `69c16b55`) | `cbc0953a` |
+| #15 | `codex/heartbeat-input-query` | `60d2e021` | `f0a5893a` |
+| #17 | `codex/metadata-mutations-correction` | `a5ce0e12` (brings #16 `70a40be3` and its HF9 correction together; cumulative patch-id equal to the reviewed chain) | `9bfd50c5` |
+| #21 | `codex/alert-query-conformance` | `9e33dc2a` | `97fa52ba` |
+| #24 | `codex/scaffold-clock-correction` | `4f808c9d` | `e5374d3d` |
+| #25 | `codex/alert-note-conformance` | `24594379` | `d14911b5` |
+| #26 | `codex/blackout-conformance` | `0f2566d6` | `4e9e9bf2` |
+| #28 | `codex/api-key-conformance` | `b1439810` | `4663acc1` |
+| #29 | `codex/config-conformance` | `0c83a5a3` | `70e22433` |
+| #30 | `codex/groups-conformance` | `6266212b` | `185ea9a1` |
+| #31 | `codex/permissions-conformance` | `49c2ec36` | `46a72c7b` |
+| #32 | `codex/management-health-conformance` | `de7e0cbc` | `efdd4d3c` |
+| #33 | `codex/management-gtg-conformance` | `6f30b824` | `4b12480a` |
+| #34 | `codex/root-debug-conformance` | `0dab8866` | `1efb0393` |
+| #35 | `codex/root-index-conformance` | `6e2c1e4b` | `622bf03d` |
+| #36 | `codex/webhook-unknown-conformance` | `83bb4058` | `51721391` |
 
-`main` is at `bcd60ea3`; its hosted CI run [36859021523](https://github.com/steliosx/alrust/actions/runs/36859021523) completed successfully at scaffold scope (retrieved by Codex). Codex independently verified every merge's parents and trees (`5bd706c0`). Checks on the result: README, STATUS, OpenAPI and
-the customer mapping are byte-identical to their reviewed versions;
-DECISIONS is charter-sync's plus only the ADR-0004 row; `spec/lifecycle.md`
-is the heartbeats version plus exactly the R1.2 clarification from PR #3's
-later approved head. Not merged yet: Codex's PRs. Codex reconciled PR #14 with `main` as
-`2811c700` (merge of `main`, ADR-0002 resolved), which Claude approved at
-exact source (`69c16b55`). The agreed merge order is #14, #15, #17 (which
-brings #16 and its correction together), #21, #24–#26 and #28–#36. Codex
-will close the superseded historical PRs (#11, #12, #13, #18–#20, #22, #23,
-#27, and #16 after #17).
+After PR #10, `main` was at `bcd60ea3`; its hosted CI run [36859021523](https://github.com/steliosx/alrust/actions/runs/36859021523) completed successfully at scaffold scope (retrieved by Codex), and Codex independently verified every merge's parents and trees (`5bd706c0`). Checks then: README, STATUS, OpenAPI and the customer mapping are byte-identical to their reviewed versions; DECISIONS is charter-sync's plus only the ADR-0004 row; `spec/lifecycle.md` is the heartbeats version plus exactly the R1.2 clarification from PR #3's later approved head.
+
+Codex's chain was merged next, in the order Codex proposed and Claude accepted (`5bd706c0`, `69c16b55`); #16 was not merged on its own, so its failed HF9 run stays a recorded failure and only its corrected form (#17) is on `main`. `main` is now at `51721391`, whose tree `5b322354` equals the final tree Codex simulated in advance; `conformance/` is byte-identical to the reviewed #36 head, and the only other change since `bcd60ea3` is the reviewed ADR-0002 wording. Codex closed the stale draft README PR #11; the historical PRs it superseded (#12, #13, #16, #18–#20, #22, #23, #27) are Codex's to close. The merged harness and vectors are source and offline results; the shared-VM runs, the pending unknown-webhook reference HTTP run and the full conformance suite remain NOT_RUN.
 
 ## Work in flight
 
