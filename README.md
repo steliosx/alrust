@@ -44,18 +44,18 @@ The full plan and its fixed decisions are in the
 
 ## Status
 
-As of 2026-09-29. "Unpublished" means the work exists and has been
-independently reviewed, but is not yet pushed to this repository.
+As of 2026-09-30. Published specifications and local reference runs are
+evidence about the pinned Python reference, not proof of a working alrust server.
 
 | Area | State | Evidence |
 |---|---|---|
 | Repository scaffold (Rust workspace, CI, pinned upstream references) | Open draft [PR #1](https://github.com/steliosx/alrust/pull/1) at [`e839ceaf`](https://github.com/steliosx/alrust/commit/e839ceaf8cb43d6ed996c8fe12f884d0bb141743) | The five Rust crates are **empty libraries with zero tests**. That is scaffold only, not a working server. |
 | Guard keeping `reference/` read-only | Implemented at `e839ceaf`; independently reviewed | Local checks pass. **Not enforced by GitHub**: the repository has no branch protection. |
-| Hosted CI | **Blocked by account billing** | [Run 36632329142](https://github.com/steliosx/alrust/actions/runs/36632329142): jobs were never started, so no step executed. This is not a code test result. |
-| Phase 0 specifications (alert lifecycle, customer mapping) | Unpublished; independently reviewed | Derived from the pinned upstream source. They are not yet checked against a running server. |
+| Hosted CI | **Blocked by account billing** | [Run 36632329142](https://github.com/steliosx/alrust/actions/runs/36632329142): all three jobs failed before any step executed. Later PR runs have the same allocation failure. This is not a code test result. |
+| Phase 0 lifecycle and customer specifications | Published in [PRs #3–#7](https://github.com/steliosx/alrust/pulls); independently reviewed at their listed heads | Source-derived from the pinned upstream tree. Only separately scoped reference HTTP cases have run; this is not a full-suite or alrust result. |
+| Phase 0 OpenAPI extraction | Published in [PR #8](https://github.com/steliosx/alrust/pull/8) | Source-derived. Twelve provider/auth areas remain, the validator is not run, and three automated P2 review threads remain open. |
 | Conformance harness (black-box Python test suite) | Unpublished; independently reviewed | 40 offline self-tests pass locally. |
-| Reference smoke test (2 HTTP cases against the upstream Python server) | Passed locally | This checks the upstream **reference** server only. It is not alrust behaviour. |
-| Customer, lifecycle and two-server conformance runs | Not run | — |
+| Reference-server execution | Separate local scopes passed; no full-suite pass | The current [STATUS PR](https://github.com/steliosx/alrust/pull/9) records smoke, customer, operator, metadata, heartbeat, query and other small windows. These exercise the upstream **Python reference only**; hosted CI and two-server differential testing have not run. |
 | alrust HTTP API, receivers, auth, desktop app | Not started | Planned phases 1–6 below |
 
 ## Architecture (planned)
@@ -88,8 +88,9 @@ and
 
 ## Getting started
 
-**What `main` offers today is documentation only.** It contains this README
-and nothing to build or run.
+**Current `main` contains only the original two-line README.** This open
+documentation PR proposes the landing page; the buildable empty scaffold remains
+in PR #1. There is no alrust server to run.
 
 ```sh
 git clone https://github.com/steliosx/alrust.git   # private repository: needs access
