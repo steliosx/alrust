@@ -17,7 +17,7 @@
 | X5 | Phase 0 CI gate | Use the free monthly GitHub-hosted allowance, then the self-hosted x64 VM; runs on either count, but only for the exact commit, a job that actually ran (queued or refused jobs do not count), with logs and evidence kept and the `reference/` guard included. **No paid usage.** Routing is an automatic check: a first job reads billing usage with a fine-grained, read-only token (billing "Plan" read only) stored as a repository secret, created by the owner; if the check fails or is ambiguous, jobs go to the self-hosted VM; the spending limit stays at $0 |
 | X6 | Alrust beta | The Linux x64 server, built in CI from an exact commit, passing the Phase 0 to 5 gates. The desktop application (Phase 6) and ARM64 are excluded |
 | X7 | Merging the x64 workflow to `main` | The owner merges after Codex approves the workflow at its exact commit (PR #1, its base, merges first). Until the Alrust runner exists, jobs routed to it wait in the queue, and a queued job is not validation |
-| X8 | `codex/*` push cadence | Same rules as `claude/*`: push reviewed branches after an approving verdict or every 4 to 5 mailbox cycles; one pull request per branch, draft until its exact commit is approved; no force-push or rebase; merging stays with the owner. **Takes effect when the owner gives this instruction to Codex directly** (ST46-C1) |
+| X8 | `codex/*` push cadence | Same rules as `claude/*`: push reviewed branches after an approving verdict or every 4 to 5 mailbox cycles; one pull request per branch, draft until its exact commit is approved; no force-push or rebase; merging stays with the owner. The owner gave this instruction to Codex directly on 2026-10-01, so it is **in effect** (ST46-C1 satisfied) |
 
 ## Pinned versions (quick reference)
 
