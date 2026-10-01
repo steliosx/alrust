@@ -194,3 +194,7 @@ review and reviewed runner/window.
 The new [unknown custom-webhook vector](webhook-unknown.md) has an exact error
 envelope and source-bound logger/registry prerequisites. It expects an API-key
 usage write; HTTP execution and its producer/runner/window remain unapproved.
+
+The [security evidence component](security-evidence.md) checks fixture identity
+and tracks incomplete, skipped and failed case evidence offline. It does not
+implement a security HTTP runner or grant execution permission.
