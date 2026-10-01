@@ -5,6 +5,7 @@
 | [0001](adr/0001-reference-version-pins.md) | Reference version pins (Alerta server + webui) | Accepted; guard correction approved by Codex at `e839ceaf`; **not enforced** (no repo protection, HTTP 403) | 2026-09-29 |
 | [0002](adr/0002-conformance-suite-language.md) | Conformance suite language | Selected by Codex: Python 3.12 + pytest + httpx + Hypothesis (ADR text lands with `codex/conformance-harness`) | 2026-09-29 |
 | [0003](adr/0003-agent-collaboration.md) | Agent collaboration channel | Accepted; agreed rules `abad4f68…`, signed round trip complete | 2026-09-29 |
+| [0004](adr/0004-webui-vendoring-source.md) | Which alerta-webui source to vendor (v8.7.1 plus #575 vs `e6eb99e`) | Proposed; pending Codex review and build evidence; a re-pin would be the owner's call | 2026-09-29 |
 
 ## Owner decisions: Linux x64 CI and beta (2026-10-01, given in Claude's session)
 
