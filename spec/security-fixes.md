@@ -936,8 +936,19 @@ paths). They are emitted quoted.
 **Fixtures.** Each fixture is the only data in its own disposable store.
 `AUTH_REQUIRED = True`, `CUSTOMER_VIEWS = False`; the caller is a synthetic
 API key with scopes `[read]` and no customer. Requests use the default page
-size, which exceeds every fixture's size.
-- **`QF`** (query store): six alerts, all `environment = 'Production'`,
+size, which exceeds every fixture's size. `T0` is a fixed fixture time at
+least two hours before the first request: alert lists include only alerts
+with `last_receive_time` at or before the request time
+(`views/alerts.py:315-316`; `postgres/utils.py:165-175`). Every alert is
+seeded directly and completely, with no ingestion defaults: a stable `id`
+(given below), `severity 'major'`, `status 'open'`, `previous_severity
+'indeterminate'`, `trend_indication 'moreSevere'`, `type 'exceptionAlert'`,
+`origin 'fixture'`, `value NULL`, `repeat false`, `timeout 86400`,
+`correlate []`, `tags []`, `last_receive_id` equal to its `id`,
+`create_time = receive_time = T0`, `update_time = T0`, and
+`last_receive_time` and `duplicate_count` as stated (otherwise `T0` and 0).
+- **`QF`** (query store): six alerts with ids `q1` … `q6` in table order,
+  all `environment = 'Production'`,
   `service = ['svc']`, `customer = NULL`, empty history, distinct events
   `ev-1` … `ev-6`:
 
@@ -986,7 +997,7 @@ most one invalid input unless it says otherwise.
 | 5 | `sort-by=attributes.reg'ion` (QF) | the key ends the SQL literal; reference pending | 200; `res-charlie` first, then the rest | divergence |
 | 6 | `GET /alerts/top10/count` (TN) | `ev-a` (count 2, `duplicateCount` 2, resources `t1`, `t2`), then `ev-b` (1, 5, `t3`) | same | parity |
 | 7 | `GET /alerts/top10/flapping` (TN) | `ev-a` (count 3, `duplicateCount` 2), then `ev-b` (1, 5) | same | parity |
-| 8 | `GET /alerts/top10/standing` (TN) | `ev-a` (summed lifetime 130 min: count 3, `duplicateCount` 2), then `ev-b` (30 min: 1, 5) | same | parity |
+| 8 | `GET /alerts/top10/standing` (TN) | `ev-a` (count 3, `duplicateCount` 2), then `ev-b` (1, 5). The order follows the summed lifetimes derived from the fixture (130 min and 30 min), which the response does not contain (`base.py:625-632`) | same | parity |
 | 9 | `GET /alerts/topn/flapping?group-by=resource` (TN) | `res-2` (count 2) first, then `res-1` and `res-3` (count 1 each) in any order; key `resource` | same | parity |
 | 10 | `GET /alerts/top10/count?group-by=group` (TN) | SQL error (`group` is reserved); reference pending | 200: `grp-x` (count 2), then `grp-y` (1); key `group` | divergence |
 | 11 | `GET /alerts/top10/standing?group-by=event,resource` (TN) | the text becomes SQL; reference pending | 400 `Grouping by 'event,resource' field not supported.` | divergence |
