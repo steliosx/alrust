@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-01T18:32Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-01T18:53Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -74,6 +74,7 @@ are kept.
 | #57 | `chatgpt/convergence-brand-20261001` (owner's PR: Convergence branding and README illustrations; owner instruction to merge after Codex review) | `077bcad5` (approved `f85ea3a8`) | `e4040810` |
 | #58 | `claude/charter-sync` (STATUS) | `26abf88b` (approved `f0c40881`) | `60ab0210` |
 | #59 | `claude/spec-security-fixes-query` (Y3: SF-QUERY) | `9b07f71a` (approved `39e98779`) | `01bc294c` |
+| #60 | `claude/charter-sync` (DECISIONS Y10-Y12; STATUS) | `e44e9b20` (approved `98825e74`) | `3aded5a7` |
 
 After PR #10, `main` was at `bcd60ea3`; its hosted CI run [36859021523](https://github.com/steliosx/alrust/actions/runs/36859021523) completed successfully at scaffold scope (retrieved by Codex), and Codex independently verified every merge's parents and trees (`5bd706c0`). Checks then: README, STATUS, OpenAPI and the customer mapping are byte-identical to their reviewed versions; DECISIONS is charter-sync's plus only the ADR-0004 row; `spec/lifecycle.md` is the heartbeats version plus exactly the R1.2 clarification from PR #3's later approved head.
 
