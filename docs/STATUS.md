@@ -126,7 +126,8 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
     review of the exact scripts; Phase B approved in principle only, with a
     separate final approval of the complete package; the Alrust runner is
     registered only at the Phase B installation; the owner alone clears
-    quarantines; the CI gate uses the free GitHub allowance and then the
+    quarantines (clearance only; approved, reviewed scripts still run through
+    `zabadmin`); the CI gate uses the free GitHub allowance and then the
     self-hosted VM, routed by an automatic read-only billing check, with no
     paid usage; beta is the Linux x64 server after Phase 5; the owner merges
     the x64 workflow after Codex approval; `codex/*` follows the `claude/*`
