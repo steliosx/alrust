@@ -4766,6 +4766,275 @@ paths:
               additionalProperties: true
       responses: *webhookResponses
       x-runtime: "NOT_RUN"
+  /webhooks/riemann:
+    post:
+      operationId: receiveWebhookRiemann
+      x-source: alerta/webhooks/riemann.py:12-32; alerta/webhooks/custom.py:17-91
+      x-scope: write:webhooks
+      summary: Riemann HTTP client (provider mapping)
+      description: |
+        A concrete instance of `/webhooks/{webhook}`: the dispatcher order,
+        auth, logging (W-SEC-1), batch handling (W-DL-1), error mapping and
+        responses there all apply. Present only while the `riemann` entry
+        point loaded successfully. This entry documents the mapping only.
+
+        One alert per request (`incoming`, `:18-32`): `resource`
+        `<host>-<service>`; `event` = `event`, else `service`; `environment`
+        = `environment`, else `DEFAULT_ENVIRONMENT`; `severity` = `state`,
+        else `unknown`; `service` `[service]`; `group` = `group`, else
+        `Performance`; `text` = `description`; `value` = `metric` (as given,
+        possibly a number); `tags` = `tags` (possibly null); `origin`
+        `Riemann`; `rawData` the payload. A missing `host` or `service` gives
+        400 with the key; a text body gives `TypeError`, so the legacy retry,
+        then an unhandled **500**.
+
+        Source-derived; runtime NOT_RUN.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [host, service]
+              properties:
+                host: {type: string}
+                service: {type: string}
+                event: {type: string}
+                environment: {type: string}
+                state: {type: string}
+                group: {type: string}
+                description: {type: string}
+                metric: {}
+                tags: {type: [array, "null"], items: {type: string}}
+              additionalProperties: true
+      responses: *webhookResponses
+      x-runtime: "NOT_RUN"
+  /webhooks/serverdensity:
+    post:
+      operationId: receiveWebhookServerdensity
+      x-source: alerta/webhooks/serverdensity.py:12-42; alerta/webhooks/custom.py:17-91
+      x-scope: write:webhooks
+      summary: Server Density notification (provider mapping)
+      description: |
+        A concrete instance of `/webhooks/{webhook}`: the dispatcher order,
+        auth, logging (W-SEC-1), batch handling (W-DL-1), error mapping and
+        responses there all apply. Present only while the `serverdensity`
+        entry point loaded successfully. This entry documents the mapping
+        only.
+
+        One alert per request (`incoming`, `:18-42`): `severity` `ok` when
+        `fixed` is truthy, else `critical`; `resource` = `item_name`;
+        `event` = `alert_type`; `environment` = `DEFAULT_ENVIRONMENT`;
+        `service` `[item_type]`; `group` = `alert_section`; `value` =
+        `configured_trigger_value`; `text` `Alert created for
+        <item_type>:<item_name>`; `tags` `['cloud']` when `item_cloud` is
+        truthy, else `[]`; `attributes` `{alertId, itemId}`; `origin`
+        `ServerDensity`; `type` `serverDensityAlert`; `rawData` the payload.
+        Every listed key is required (a missing one gives 400 with the key);
+        a text body gives `TypeError`, so the legacy retry, then an unhandled
+        **500**.
+
+        Source-derived; runtime NOT_RUN.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fixed, item_name, alert_type, item_type, alert_section, configured_trigger_value, item_cloud, alert_id, item_id]
+              additionalProperties: true
+      responses: *webhookResponses
+      x-runtime: "NOT_RUN"
+  /webhooks/slack:
+    post:
+      operationId: receiveWebhookSlack
+      x-source: alerta/webhooks/slack.py:17-100; alerta/webhooks/custom.py:17-91; alerta/database/backends/postgres/base.py:293-299
+      x-scope: write:webhooks
+      summary: Slack interactive-message actions (status and watch changes, no new alerts)
+      description: |
+        A concrete instance of `/webhooks/{webhook}`: the dispatcher order,
+        auth, logging (W-SEC-1), error mapping and responses there all
+        apply. Present only while the `slack` entry point loaded
+        successfully. This entry documents the mapping only.
+
+        **No alert is created**; all work happens inside `incoming`
+        (`:78-100`), in the parsing stage. Slack sends a form field
+        `payload` holding JSON (`parse_slack`, `:17-31`):
+        - `callback_id` is the alert id, `user.name` the acting user,
+          `actions[0].value` the action. A missing `payload` field, invalid
+          JSON, or an empty id, user or action gives 400 with the exception
+          text (for example `Alert None not match`). The request carries no
+          Slack signature check; the API key is the only authentication.
+        - The alert is found with `Alert.find_by_id(callback_id, caller's
+          customers)`, a case-insensitive **regular-expression prefix**
+          match (as for PagerDuty).
+        - **Reference defect:** when no alert is found, the `jsonify(...)`
+          error is built but not returned (`:84-85`). Processing continues
+          with `None`, and the next call raises `AttributeError`, which the
+          dispatcher turns into 400 `'NoneType' object has no attribute
+          '<method>'`.
+        - Actions `open`, `ack`, `close`: `alert.from_action(action, text
+          'status change via #slack by <user>')`. A `write:webhooks` caller
+          therefore changes alert status without `write:alerts`.
+        - Actions `watch` and `unwatch`: **both untag** `<action>:<user>`
+          (`:89-90`), so `watch` never adds a watch tag (reference defect).
+        - Any other action: 400 `Unsupported #slack action`.
+        - Then a `webhook-updated` audit event, and 201 with the Slack
+          message to show: the payload's `original_message` with its
+          attachments changed (`build_slack_response`, `:34-69`). For a
+          status action, every attachment's buttons are removed and one
+          attachment is added with the title `The status of alert <short id>
+          is <Status> now!` and a link to `absolute_url('/alert/<id>')`. For
+          watch actions, the matching button is relabelled with the next
+          action.
+
+        Source-derived; runtime NOT_RUN.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [payload]
+              properties:
+                payload: {type: string, description: "JSON with callback_id, user.name, actions[0].value and original_message"}
+      responses:
+        "201":
+          description: The Slack message to display (provider-defined)
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+        "400": {description: "any refusal inside incoming, including an alert not found (via AttributeError)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {description: "missing write:webhooks", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "500": {description: "a failed legacy retry, or a non-UTF-8 body in before_request", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+      x-runtime: "NOT_RUN"
+  /webhooks/stackdriver:
+    post:
+      operationId: receiveWebhookStackdriver
+      x-source: alerta/webhooks/stackdriver.py:13-70; alerta/webhooks/custom.py:17-91
+      x-scope: write:webhooks
+      summary: Google Cloud Monitoring (Stackdriver) notification (provider mapping)
+      description: |
+        A concrete instance of `/webhooks/{webhook}`: the dispatcher order,
+        auth, logging (W-SEC-1), batch handling (W-DL-1), error mapping and
+        responses there all apply. Present only while the `stackdriver`
+        entry point loaded successfully. This entry documents the mapping
+        only.
+
+        One alert per request (`incoming`, `:19-70`), from `incident`:
+        - If `documentation` is present, its `content` is parsed as JSON and
+          merged into the incident, so it can set or override any field read
+          below, including `environment`, `group`, `customer`, `origin` and
+          `severity`. Invalid content is logged at WARNING **with the whole
+          documentation object** (the W-SEC-1 pattern) and otherwise ignored.
+        - `severity` = `severity`, else `critical`. `state` `open` leaves
+          status unset; `acknowledged` sets status `ack`; `closed` sets
+          severity `ok`; any other state sets severity `indeterminate`.
+        - `resource` = `resource_name`; `event` = `condition_name`;
+          `environment` = `environment`, else `DEFAULT_ENVIRONMENT`;
+          `service` `[policy_name]` when truthy, else `[]`; `group` = `group`,
+          else `Cloud`; `text` = `summary`; `customer` = `customer`; `origin`
+          = `origin`, else `Stackdriver`; `type` `stackdriverAlert`; `rawData`
+          the whole payload.
+        - `attributes` `{incidentId, resourceId, startedAt, endedAt}` and
+          `moreInfo`, an HTML anchor (`Stackdriver Console`) to `url` built
+          **without escaping** (the WUI-SEC-1 pattern; alrust follows owner
+          decision Y11).
+        - A missing key gives 400 with the key; a text body gives
+          `TypeError`, so the legacy retry, then an unhandled **500**.
+
+        Source-derived; runtime NOT_RUN.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [incident]
+              properties:
+                incident:
+                  type: object
+                  required: [state, policy_name, resource_name, condition_name, summary, incident_id, resource_id, url, started_at, ended_at]
+                  additionalProperties: true
+              additionalProperties: true
+      responses: *webhookResponses
+      x-runtime: "NOT_RUN"
+  /webhooks/telegram:
+    post:
+      operationId: receiveWebhookTelegram
+      x-source: alerta/webhooks/telegram.py:15-106; alerta/webhooks/custom.py:17-91; alerta/models/blackout.py:25-45
+      x-scope: write:webhooks
+      summary: Telegram bot callback actions (status, watch and blackout; no new alerts)
+      description: |
+        A concrete instance of `/webhooks/{webhook}`: the dispatcher order,
+        auth, logging (W-SEC-1), error mapping and responses there all
+        apply. Present only while the `telegram` entry point loaded
+        successfully. This entry documents the mapping only.
+
+        **No alert is created**; all work happens inside `incoming`
+        (`:70-106`), in the parsing stage:
+        - Without `callback_query`: 200 `{status: ok, message: no
+          callback_query in Telegram message}`. With a text body, `in` is a
+          substring test, and a text containing `callback_query` fails at
+          indexing (`TypeError`, so the legacy retry, then an unhandled
+          **500**).
+        - `user` = `<from.first_name> <from.last_name>`; `data` is split once
+          on a space into a command and an alert id (no space gives 400
+          from the unpacking `ValueError`). The alert is found with
+          `Alert.find_by_id(id, caller's customers)`, a case-insensitive
+          **regular-expression prefix** match. The action is the command
+          without its leading `/`.
+        - No alert and an action other than `blackout`: 200 `{status: error,
+          message: alert not found for Telegram message}`.
+        - `open`, `ack`, `close`: `alert.from_action(action, text 'status
+          change via Telegram')`, without `write:alerts`.
+        - `watch`, `unwatch`: **both untag** `<action>:<user>` (reference
+          defect, as for Slack).
+        - `blackout` with an alert: **creates a blackout** for that alert's
+          environment, resource and event, starting now for
+          `BLACKOUT_DURATION` (default 3600 s), with **no customer**. This
+          needs only `write:webhooks`, not `write:blackouts`. Reference
+          defect, source-level only: a customer-scoped caller can create an
+          unscoped blackout that also matches other customers' alerts with
+          the same environment, resource and event (see SF-BLACKOUTS for
+          customer matching). `blackout` without an alert raises
+          `UnboundLocalError` (a reference defect), so 400 with Python's
+          message.
+        - Any other action: no change.
+        - Then a reply is sent to Telegram (`send_message_reply`, `:15-61`)
+          when the `telepot` client is installed. It uses `TELEGRAM_TOKEN`,
+          `TELEGRAM_CHAT_ID` and `DASHBOARD_URL`, from the environment or
+          config, and logs any failure at WARNING with a traceback. Then a
+          `webhook-updated` audit event, and 200 `{status: ok}`.
+
+        Source-derived; runtime NOT_RUN.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                callback_query:
+                  type: object
+                  required: [from, data]
+                  properties:
+                    from: {type: object, properties: {first_name: {type: string}, last_name: {type: string}}}
+                    data: {type: string, description: "/<action> <alert id>"}
+                    message: {type: object}
+              additionalProperties: true
+      responses:
+        "200":
+          description: "{status: ok}, {status: ok, message} without a callback, or {status: error, message} when the alert is not found"
+          content:
+            application/json:
+              schema: {type: object, required: [status], properties: {status: {enum: [ok, error]}, message: {type: string}}}
+        "400": {description: "any refusal inside incoming", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {description: "missing write:webhooks", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "500": {description: "a failed legacy retry, or a non-UTF-8 body in before_request", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+      x-runtime: "NOT_RUN"
   /:
     get:
       operationId: apiIndex
