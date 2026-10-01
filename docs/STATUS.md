@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-01T17:01Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-01T17:11Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -65,6 +65,8 @@ are kept.
 | #48 | `codex/security-path-boundary` (transport dot-segment refusal, Claude's note N5; reviewed by Claude) | `06b7c404` (approved `0b3cf13c`) | `f4fe5335` |
 | #49 | `claude/charter-sync` (DECISIONS Y6 amendment; STATUS) | `89ab81e0` (approved `26020446`) | `8b62d7bb` |
 | #50 | `claude/spec-security-fixes-keys` (Y3: SF-KEYS, SF-NOTES, SF-BLACKOUTS) | `018ea7b7` (approved `0111ce30`) | `6fe2954b` |
+| #51 | `claude/spec-keys-retained-scopes` (Y3: SF-KEYS edit ceiling, Y7) | `0b39ece7` (approved `79f4413c`) | `e048c01a` |
+| #52 | `claude/charter-sync` (DECISIONS Y7; STATUS) | `135b7787` (approved `79f4413c`) | `56f303e3` |
 
 After PR #10, `main` was at `bcd60ea3`; its hosted CI run [36859021523](https://github.com/steliosx/alrust/actions/runs/36859021523) completed successfully at scaffold scope (retrieved by Codex), and Codex independently verified every merge's parents and trees (`5bd706c0`). Checks then: README, STATUS, OpenAPI and the customer mapping are byte-identical to their reviewed versions; DECISIONS is charter-sync's plus only the ADR-0004 row; `spec/lifecycle.md` is the heartbeats version plus exactly the R1.2 clarification from PR #3's later approved head.
 
@@ -179,7 +181,9 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
     PHASE_A_V7_INSTALLATION_CONFIRMED); the original packet and evidence
     have not been independently verified by the Alrust reviewers. Still
     untested under Phase A: an operator or upgrade window, a CI job, a
-    reboot and a live rollback.
+    reboot and a live rollback. Opus relayed the binding hashes only
+    (envelope `ea90116d…`, disposition `86f4da27…`); the original captures
+    are private evidence under the owner's rule.
   - Alrust's x64 beta path is blocked on Phase B: C6 and its r13 lab run,
     the Codex reviews of the broker and adapter, and the owner decisions
     below.
@@ -261,9 +265,9 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
     (P-SEC-1), SF-CUSTOMERS (C-SEC-1), SF-KEYS (the API-key items and C23; the
     secret shown only once, owner decision Y6 as amended; a key's public id
     no longer works as a credential), SF-NOTES (C21) and SF-BLACKOUTS (C22)
-    (PR #50); in review: the SF-KEYS edit ceiling on existing scopes (owner
-    decision Y7). Still to specify: the
-    string-formatted SQL, M-SEC-1, WUI-SEC-1, WP-SEC-1, W-SEC-1, W-DL-1 and
+    (PR #50) with its edit ceiling on existing scopes (owner decision Y7,
+    PR #51); in review: SF-MGMT (M-SEC-1; owner decisions Y8 and Y9). Still
+    to specify: the string-formatted SQL, WUI-SEC-1, WP-SEC-1, W-SEC-1, W-DL-1 and
     the `q=` search. Codex is building the
     harness cases from the approved entries (plan, PR #41); its offline
     evidence and transport components are merged (PRs #43, #45); no security
