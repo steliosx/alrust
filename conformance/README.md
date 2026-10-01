@@ -171,3 +171,15 @@ negation. They reuse the existing owned-alert fixture without changing the
 library, dependencies or reference pins. This query head requires fresh
 independent review and its own bounded runner/window. Its HTTP is NOT_RUN;
 parent metadata approval and historical reference passes do not carry forward.
+
+Two new [ordinary note cases](alert-notes.md) cover owned note lifecycle and
+missing-text/fallback behavior. They reuse the existing synthetic fixture
+and retain raw history, timestamps and note attributes in comparisons.
+Historical query HTTP passed at frozen `9e33dc2a`; corrected metadata HTTP
+passed at frozen `a5ce0e12`. HF7 source `4f808c9d` is approved offline, with
+its separate smoke runner still pending execution review. The preceding
+paragraphs describe earlier source handoffs; none establishes a runtime
+pass or review approval at this new note head. These two cases are
+SOURCE_DERIVED / HTTP NOT_RUN and need fresh source and execution review
+plus their own signed window. No library, lock, reference pin, repository
+STATUS or DECISIONS file changes here.
