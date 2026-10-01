@@ -395,10 +395,134 @@ key carries customer `A`, so `g.customers` is `[A]`.
 | caller with empty `g.customers` (for example an `admin` key with no customer), `POST` mapping to `B` | 201 | 201 | parity |
 | `CUSTOMER_VIEWS=False`, key with customer `A`, `POST` mapping to `B` | 201 | 201 | parity |
 
+## SF-KEYS: API-key expiry, scopes, secret exposure and customer
+
+Status: Proposed. Covers the API-key items and C23. The secret-exposure fix
+follows owner decision Y6 (2026-10-01): the secret is shown only once, at
+creation.
+
+**Reference.**
+1. Expiry: `ApiKey.update` sets `expireTime` to `None` whenever the body
+   omits it (`models/key.py:152`), and the store then writes it
+   (`postgres/base.py:990-991`). Every later read rebuilds a missing expiry as
+   now plus `API_KEY_EXPIRE_DAYS` (`models/key.py:31`), so the key never
+   expires: `verify_key` compares with the current time (`:162-167`). An
+   explicit `expireTime: null` does the same. A malformed `expireTime` on
+   `PUT` raises outside any handler: the generic 500.
+2. Scopes: a key read back with an empty scope list gets the user default
+   scopes, read and write (`models/key.py:29`). `PUT` with `scopes: []`
+   passes the ceiling, which has nothing to check (`views/keys.py:137-140`),
+   and stores `[]`. `POST` with a `type` other than `read-only` or
+   `read-write`, for a user not in `ADMIN_USERS`, sets the scopes to `[]`
+   after construction (`models/key.py:58-59`; `utils/key.py:36-43`). Both
+   keys then act with read and write. An explicit `scopes: []` on `POST`
+   without `type` is already safe: the defaults are applied before the
+   ceiling.
+3. Secret exposure: every serialized key carries the secret (`key`) and an
+   `href` built from it (`models/key.py:64-78`), on create, get, list and
+   update. Keys can be fetched, updated and deleted by secret as well as by id
+   (`postgres/base.py:947-953`, `:996`).
+4. C23: `PUT /key/{key}` always rewrites `customer`
+   (`views/keys.py:135`): when the body omits it, `assign_customer` returns
+   the caller's single customer or `None`, so an unscoped caller clears it and
+   the key loses customer filtering.
+
+**alrust.**
+1. `PUT /key/{key}`: an absent `expireTime` leaves the stored expiry
+   unchanged. A present one must be a time in the reference's format, else
+   400 `dates must be ISO 8601 date format YYYY-MM-DDThh:mm:ss.sssZ`
+   (the reference's own parse message, `utils/format.py:61`). `null` is
+   refused the same way. Stored expiry times are never rebuilt on read.
+2. Scopes are stored and read literally; no defaults are substituted on read.
+   `PUT` with `scopes: []` is 400 `scopes must not be empty`. `POST` with a
+   `type` other than `read-only` or `read-write` is 400 `unknown key type`
+   (an `ADMIN_USERS` user keeps the reference's `type` handling). `POST` and
+   `PUT` keep the reference's ceiling on the resulting scopes.
+3. Secret: the 201 response to `POST /key` is the only response that contains
+   the secret. Every other key response omits the `key` member. Every `href`
+   uses the key's `id`. A key is addressed in paths by `id` only: a secret in
+   the path is treated as an unknown id (404). The key list in the pinned web
+   UI shows and copies `key` (`ApiKeyList.vue:215-224`); against alrust that
+   column is empty for existing keys. That is the accepted cost of Y6. The
+   UI's own update and delete calls use `id` and are unaffected
+   (`ApiKeyList.vue:491`, `:503-504`).
+4. C23: `PUT /key/{key}` without `customer` leaves the stored customer
+   unchanged. With `customer`, the reference's `assign_customer` rules apply.
+Each refusal has no side effect.
+
+**Vectors.**
+
+| Case | Reference | alrust | Kind |
+|---|---|---|---|
+| `PUT` without `expireTime` on a key that expires tomorrow | 200, expiry rebuilt to now plus `API_KEY_EXPIRE_DAYS` on every read | 200, expiry unchanged | divergence |
+| `PUT` with `expireTime: null` | 200, never expires | 400, no change | divergence |
+| `PUT` with a malformed `expireTime` | 500 | 400 with the parse message | divergence |
+| `PUT` with a valid `expireTime` | 200 | 200 | parity |
+| `PUT` with `scopes: []` | 200, reads back read and write | 400, no change | divergence |
+| `PUT` with scopes within the ceiling | 200 | 200 | parity |
+| `POST` with `type: 'bogus'` for a non-admin user | 201, acts with read and write | 400, no key | divergence |
+| `POST` with `type: 'read-only'` | 201 | 201 | parity |
+| `POST` with `scopes: []` and no `type` | 201 with the default scopes | 201 with the default scopes | parity |
+| `POST` (any valid) | 201 with `key` and an `href` using the secret | 201 with `key`, `href` using the `id` | divergence (`href` only) |
+| `GET /key/{id}`, `GET /keys`, `PUT` response | contain `key` | omit `key`; `href` uses the `id` | divergence |
+| `GET`, `PUT` or `DELETE /key/{secret}` | the key | 404 | divergence |
+| `GET`, `PUT` or `DELETE /key/{id}` | the key | the key | parity (apart from the omitted `key`) |
+| unscoped caller, `PUT` without `customer` on a key for customer `A` | 200, customer cleared | 200, customer `A` kept | divergence |
+| `PUT` with `customer` (the web UI always sends it) | reference rules | same | parity |
+
+## SF-NOTES: a note is changed only through its own alert
+
+Status: Proposed. Covers C21.
+
+**Reference.** `PUT` and `DELETE /alert/{alert_id}/note/{note_id}` look up
+the alert with the caller's customer filter, but then look up the note by id
+alone (`views/alerts.py:666-697`, `:701-723`; `postgres/base.py:1381-1386`)
+and update or delete it (`:1411-1436`), without checking that the note
+belongs to that alert. A caller who can write one alert can therefore change
+or delete any note, including notes on another customer's alerts, by naming
+an alert they can see and the other note's id.
+
+**alrust.** The note must belong to the path's alert (the note's `alert` is
+that alert's id), else the handler's own not-found refusal: 404 `not found`
+for `PUT`, 404 `note not found` for `DELETE`. There is no side effect.
+
+**Vectors.**
+
+| Case | Reference | alrust | Kind |
+|---|---|---|---|
+| `PUT` with an alert the caller can see and a note of another alert (same customer) | 200 | 404 `not found`, no change | divergence |
+| same, the note's alert belongs to another customer | 200 | 404, no change | divergence |
+| `DELETE` with a note of another alert | 200 | 404 `note not found`, nothing deleted | divergence |
+| `PUT` or `DELETE` with the alert's own note | 200 | 200 | parity |
+| an alert the caller cannot see | 404 | 404 | parity |
+
+## SF-BLACKOUTS: an edit keeps the blackout's customer unless it sets one
+
+Status: Proposed. Covers C22.
+
+**Reference.** `PUT /blackout/{blackout_id}` always sets `customer` from
+`assign_customer` (`views/blackouts.py`, `update_blackout`), and the store
+writes it whenever present (`postgres/base.py:822-823`). When the body omits
+`customer`, an unscoped caller clears it to `NULL`, which widens the
+blackout's matching under `CUSTOMER_VIEWS` to every customer's alerts.
+
+**alrust.** Without `customer` in the body, the stored customer is
+unchanged. With `customer`, the reference's `assign_customer` rules apply.
+The pinned web UI always sends `customer` when editing a blackout
+(`BlackoutList.vue:728-731`), so its behavior is unchanged.
+
+**Vectors.**
+
+| Case | Reference | alrust | Kind |
+|---|---|---|---|
+| unscoped caller, `PUT` without `customer` on a blackout for customer `A` | 200, customer cleared | 200, customer `A` kept | divergence |
+| scoped caller (`[A]`), `PUT` without `customer` on its blackout | 200, customer `A` | 200, customer `A` | parity |
+| `PUT` with `customer` | reference rules | same | parity |
+
 ## Not yet specified
 
 The other Y3 items get entries in this file before their phases need them:
-the string-formatted SQL constructions; M-SEC-1; WUI-SEC-1 and WP-SEC-1; W-SEC-1 and W-DL-1; the API-key
-items; C21–C23; and the `q=` search. Until an item has an entry here, its
+the string-formatted SQL constructions; M-SEC-1; WUI-SEC-1 and WP-SEC-1; W-SEC-1 and W-DL-1;
+and the `q=` search. Until an item has an entry here, its
 reference behavior in `spec/openapi.yaml` stands as the description of the
 defect, not as a requirement for alrust.
