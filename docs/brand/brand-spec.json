@@ -1,0 +1,67 @@
+{
+  "name": "alrust",
+  "concept": "01 / Convergence",
+  "version": "1.0",
+  "date": "2026-10-01",
+  "source": "User-selected 01 / Convergence concept image; manually reconstructed clean vector geometry.",
+  "palette": {
+    "rust": "#C74327",
+    "charcoal": "#20211E",
+    "ivory": "#FAF9F5"
+  },
+  "canonical_mark_viewbox": [
+    0,
+    0,
+    384,
+    294
+  ],
+  "canonical_logo_viewbox": [
+    0,
+    0,
+    1240,
+    294
+  ],
+  "construction": {
+    "mark": "Two filled paths: joined upper/lower routes and a detached rounded central input.",
+    "wordmark": "Six custom outlined lowercase letterforms and a circular period; no font dependency.",
+    "logo_wordmark_origin": [
+      434,
+      45
+    ],
+    "logo_gap_units": 50,
+    "backgrounds": "Mark and logo variants have transparent backgrounds; favicon and app icon have opaque rust backgrounds."
+  },
+  "clear_space": {
+    "minimum": "74 mark units on every side outside the asset bounding box (one incoming channel thickness).",
+    "compact_ui_exception": "At 16–32 px, use the padded favicon/app icon composition supplied."
+  },
+  "minimum_sizes": {
+    "standalone_mark_width_px": 24,
+    "full_wordmark_width_px": 132,
+    "favicon_px": 16,
+    "recommended_header_wordmark_width_px": 156
+  },
+  "variants": {
+    "alrust-mark.svg": "Rust mark on light backgrounds.",
+    "alrust-mark-dark.svg": "Ivory mark on dark backgrounds.",
+    "alrust-mark-mono.svg": "Charcoal mark on light backgrounds.",
+    "alrust-logo-light.svg": "Rust mark and period, charcoal letters.",
+    "alrust-logo-dark.svg": "Rust mark and period, ivory letters.",
+    "alrust-logo-mono.svg": "All charcoal, including period.",
+    "favicon.svg": "Ivory mark on a rust rounded square, optimized composition for 16–32 px.",
+    "alrust-app-icon.svg": "512 px master with the same padded icon composition."
+  },
+  "usage": [
+    "Keep all proportions, channels and the negative-space convergence point intact.",
+    "Use the light wordmark on ivory/white and the dark wordmark on charcoal.",
+    "Use one mark consistently across website, README, repository avatar and application assets.",
+    "Do not add gradients, shadows, outlines or textures to the canonical logo.",
+    "The period is part of the supplied primary wordmark; the product name remains alrust."
+  ],
+  "checks": [
+    "All glyphs are paths, not SVG text.",
+    "No embedded raster images, scripts, external resources, filters or fonts.",
+    "All mark variants share the exact same two canonical paths."
+  ],
+  "project_note": "Brand assets do not imply a released or working alrust server."
+}
