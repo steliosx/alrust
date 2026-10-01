@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-01T19:42Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-01T20:52Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -80,6 +80,9 @@ are kept.
 | #63 | `claude/readme-sync` (README: X5 gate, Y5 merges) | `beb25b86` (approved `590fab93`) | `22630d7d` |
 | #64 | `claude/spec-openapi-webhooks-1` (OpenAPI: the eleven remaining provider webhooks) | `abfcc823` (approved `46a69454`) | `213f661c` |
 | #65 | `claude/charter-sync` (DECISIONS Y13; STATUS) | `0eaef294` (approved `46a69454`) | `867a24c9` |
+| #66 | `codex/security-state-assertions` (Codex's offline stored-state assertions; reviewed by Claude) | `53b257d2` (approved `09982f31`) | `8425271b` |
+| #67 | `claude/charter-sync` (STATUS) | `e71d37ef` (approved `23d295cc`) | `b046c6b0` |
+| #69 | `claude/spec-security-fixes-providers` (SF-PROVIDERS) | `dcee6bd4` (approved `b122d7c2`) | `424df8a5` |
 
 After PR #10, `main` was at `bcd60ea3`; its hosted CI run [36859021523](https://github.com/steliosx/alrust/actions/runs/36859021523) completed successfully at scaffold scope (retrieved by Codex), and Codex independently verified every merge's parents and trees (`5bd706c0`). Checks then: README, STATUS, OpenAPI and the customer mapping are byte-identical to their reviewed versions; DECISIONS is charter-sync's plus only the ADR-0004 row; `spec/lifecycle.md` is the heartbeats version plus exactly the R1.2 clarification from PR #3's later approved head.
 
@@ -211,6 +214,22 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
     amended; no billing token) and no paid usage; beta is the Linux x64 server after Phase 5; the owner merges
     the x64 workflow after Codex approval; `codex/*` follows the `claude/*`
     cadence (the owner told Codex directly on 2026-10-01).
+  - **r13 (2026-10-01):** ended in shared-CI HOLD `r13-phase-failed`
+    (19:49Z), not a qualification. Cause: Opus's evaluator raised a false
+    STOP on a bootstrap that had succeeded. Codex chose the reviewed
+    recovery path, and runner 22 is stopped until the hold is cleared. Next:
+    the r14 fresh-run package for codex-omarchy's review, then the clearance
+    (now possible under Y14), then the run; then the Phase B draft. Peer-
+    reported by Opus.
+  - **Owner decisions Y14-Y16 (2026-10-01):** two-agent clearance of holds
+    (quarantines stay with the owner); after Phase B, broker-gated
+    shared-runner jobs announced beforehand, without per-run windows; and
+    per-repository runners for now (no organization move).
+  - **Phase 0 in hosted CI:** a plan (`docs/ci-phase0-conformance-plan.md`)
+    and step 1 (the hashed reference build) are in review with Codex. A
+    publication of step 1 as draft PR #68 ran the changed build path before
+    review (scaffold only, no vectors); it is recorded as a boundary breach,
+    and CI-affecting heads now go by bundle until approved.
   - **Still open for the owner:** the final Phase B approval; registering
     the runner (X3).
   - Codex's current task is the continuation thread `01a0f3d9` (`77acafe0`);
@@ -471,7 +490,7 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
       PagerDuty history text, and Stackdriver `moreInfo`. Stackdriver also
       logs invalid documentation content whole (the W-SEC-1 pattern).
     The OpenAPI mappings are merged (PR #64). The fixes are specified in
-    `spec/security-fixes.md` SF-PROVIDERS, in review; WS-AUTH-1 and the
+    `spec/security-fixes.md` SF-PROVIDERS (PR #69); WS-AUTH-1 and the
     scope part of WT-SEC-1 follow owner decision Y13;
   - **new, SECURITY (API keys; source-level, nothing executed):**
     - an edit that omits `expireTime` stores NULL, and every read rebuilds
