@@ -138,3 +138,30 @@ def test_transport_error_propagates_and_closes():
     with pytest.raises(httpx.ReadTimeout):
         invoke(transport)
     assert transport.closed
+
+
+@pytest.mark.parametrize('path', ['/../escape', '/./alerts', '/x/../../escape',
+                                '/%2e%2e/escape', '/%2E/alerts', '/.%2e/escape',
+                                '/%2e./escape', '/x%2f..%2f..%2fescape',
+                                '/x%5c..%5cescape'])
+def test_dot_segments_and_encoded_separators_refused_before_transport(path):
+    with pytest.raises(ValueError):
+        invoke(httpx.MockTransport(lambda request: pytest.fail('unexpected request')), path=path)
+
+
+@pytest.mark.parametrize('suffix', ['/api/..', '/api/.', '/api/%2e%2e', '/api%2f..'])
+def test_base_dot_segments_refused_before_transport(suffix):
+    with pytest.raises(ValueError):
+        security_request('http://fixture.invalid' + suffix, identity=Identity.ANONYMOUS,
+                         method='GET', path='/alerts',
+                         transport=httpx.MockTransport(lambda request: pytest.fail('unexpected request')))
+
+
+def test_query_dots_and_ordinary_dotted_segments_keep_base_prefix():
+    seen = []
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={'status': 'ok'})
+    invoke(httpx.MockTransport(handler), path='/alerts.v1?...=../escape')
+    assert seen[0].url.path == '/api/alerts.v1'
+    assert seen[0].url.query == b'...=../escape'

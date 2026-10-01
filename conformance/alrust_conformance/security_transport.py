@@ -6,7 +6,7 @@ before calling this function. Transport selection is not execution permission.
 from dataclasses import dataclass, field
 from enum import Enum
 import re
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 import httpx
 
@@ -53,6 +53,12 @@ def security_request(base_url: str, *, identity: Identity | SyntheticKey,
             or url.username is not None or url.password is not None
             or url.query or url.fragment or '\\' in base_url):
         raise ValueError('target must be a credential-free HTTP(S) base URL')
+    # Inspect decoded path segments as well as literal ones. Query values do
+    # not change the request path and must not be mistaken for path traversal.
+    for candidate_path in (url.path, path.split('?', 1)[0] if type(path) is str else ''):
+        decoded = unquote(candidate_path)
+        if '\\' in decoded or any(part in ('.', '..') for part in decoded.split('/')):
+            raise ValueError('dot segments may not escape or rewrite the target path')
     # Accessing port also validates nonnumeric/out-of-range ports before I/O.
     _ = url.port
     if (type(path) is not str or not path.startswith('/') or path.startswith('//')
