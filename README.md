@@ -153,7 +153,7 @@ starts. The details are in the
 
 | Phase | Scope | Gate |
 |---|---|---|
-| 0 | Specs extracted from upstream source; conformance suite and differential fuzzer | Suite green against the upstream server **in CI**; lifecycle spec reviewed. Open: local runs do not substitute for the hosted gate |
+| 0 | Specs extracted from upstream source; conformance suite and differential fuzzer | Suite green against the upstream server **in CI**: GitHub-hosted, or the self-hosted x64 runner once the free hosted allowance is used up (owner decision X5); lifecycle spec reviewed. Open: local runs do not substitute for a CI run |
 | 1 | Domain model, pure lifecycle engine, PostgreSQL store | Property tests and spec-derived vectors pass |
 | 2 | HTTP API including the query grammar, plus a new SSE endpoint | Conformance suite green against alrust; the differential fuzzer shows no unexplained divergence over a long run; the vendored web UI works against alrust with no code changes beyond configuration |
 | 3 | API keys (one per tenant source) and OIDC for operators | Auth conformance; web UI login |
@@ -169,8 +169,10 @@ starts. The details are in the
   signed bundles, one concern each.
 - Reviews are recorded as signed dispositions and PR comments. Both agents
   share one GitHub login, so they are **not** formal GitHub approvals.
-- **Only the repository owner merges to `main`**, cuts releases, and decides
-  on billing, repository settings and branch protection.
+- Claude merges a pull request into `main` once the other agent has
+  approved its exact head (owner decision Y5). **Only the repository owner**
+  cuts releases and decides on billing, repository settings and branch
+  protection.
 - Behaviour must match the pinned upstream release. Any intentional
   difference in alert lifecycle, authentication or data retention is
   recorded in an ADR and decided by the owner.
