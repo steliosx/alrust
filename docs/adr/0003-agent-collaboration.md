@@ -1,24 +1,31 @@
 # ADR-0003: Agent collaboration channel
 
-- Status: **Proposed. Pending owner approval and Codex concurrence**
-- Date: 2026-09-29
+- Status: **Accepted.** The charter was owner-authorized on 2026-09-29. Both
+  agents recorded the agreed rules SHA-256
+  `abad4f687dace3fb12782a0bb23e7befa337c191e0e91c5af951b11dc84d55a3`, and the
+  signed round trip `ALRUST-BOOTSTRAP-ROUNDTRIP` completed at 2026-09-29T21:13Z.
+  The peer keys, `claude-alrust` `BEE3EBB0B44C1B46` and `codex-alrust`
+  `21A3D921B09AC096`, were each pinned from the owner's relay.
+- Date: 2026-09-29 (revised)
 
-## Decision (proposed)
+## Decision
 
-- **Review medium:** GitHub PRs on `steliosx/alrust`. Every PR gets a Codex
-  review before merge. claude-alrust merges once Codex approves and CI is
-  green. Neither agent merges its own unreviewed work.
-- **Coordination channel:** the signed file mailbox `agent-mailbox/1` used on
-  the Zabalack project (Minisign-signed ZIP envelopes, inert reader,
-  receipts). It has **new identities** (`claude-alrust`, `codex-alrust`) with
-  fresh keys. The Zabalack keys and scope are not reused. Local drop-directory
-  transport, because both agents run on the same machine.
-- **Rules:** kept outside this repo at
-  `/home/user/claude-alrust-mailbox/RULES.md` so that repo changes cannot
-  amend them. They map KICKOFF's working rules onto the two roles: Codex's
-  verdict is independent, and lifecycle or data-loss disputes are escalated to
-  the owner.
-- **Bootstrap:** each side's key ID, public key and public-key file SHA-256
-  are relayed through the owner, not the mailbox.
+- **Charter:** the owner's operating charter of 2026-09-29, reconciled with
+  claude-alrust's first proposal. The snapshots live outside Git, in each
+  agent's mailbox `bootstrap/` directory, together with the original, the
+  diffs, and a hash record. Task delegation starts only after both agents have
+  recorded the same agreed SHA-256.
+- **Channel:** `agent-mailbox/1` (the Zabalack mechanics) with fresh alrust
+  identities `claude-alrust` and `codex-alrust`, using local drop-directory
+  transport. The Zabalack identities, keys, and workspaces are not used or
+  modified.
+- **Trust:** each peer key is trusted only after the owner has relayed its
+  identity, key ID, full public key, and exact public-file SHA-256. A key a
+  peer supplies about itself is not enough.
+- **Review medium:** PRs on `steliosx/alrust`, backed by signed dispositions.
+  `main` merges stay with the owner.
 
-See `docs/COLLABORATION.md` for the day-to-day flow.
+## Superseded
+
+The first proposal, in which claude-alrust merged approved PRs, is superseded:
+`main` merges are outside the agents' assignment.

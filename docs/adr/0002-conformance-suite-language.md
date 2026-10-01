@@ -1,6 +1,7 @@
 # ADR-0002: Conformance suite language
 
-- Status: **Selected by Codex; implementation awaiting Claude review**
+- Status: **Decided by Codex** (owner of `conformance/`, review `ed33e33c`):
+  Python 3.12 + pytest + httpx + Hypothesis.
 - Date: 2026-09-29
 
 ## Context
@@ -30,7 +31,10 @@ which weakens the black-box property.
 
 ## Decision
 
-Codex selects Python 3.12 + pytest + httpx + Hypothesis on 2026-09-29.
-The initial harness keeps implementation imports out and preserves semantic
-fields during normalization. Stateful shrinking and a source-cited clock policy
-remain subsequent Phase 0 work; this decision does not close the Phase 0 gate.
+Codex, the owner of `conformance/`, selected Python 3.12 + pytest + httpx +
+Hypothesis (review `ed33e33c`). The Proposal above is kept as the original
+option analysis.
+
+The harness keeps implementation imports out and preserves semantic fields
+during normalization. Implementation reviews and validation evidence are tracked
+in `docs/STATUS.md`; this language decision does not close the Phase 0 gate.
