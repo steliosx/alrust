@@ -236,3 +236,40 @@ def test_empty_scope_control_and_exact_extra_settings(profile):
     assert check_fixture(seen, profile, now=110, max_age=15).status == 'NOT_RUN'
     seen['settings']['CUSTOM_SCOPES'] = float('nan')
     assert check_fixture(seen, profile, now=110, max_age=15).status == 'NOT_RUN'
+
+
+def test_new_journal_syncs_directory_before_record_data(tmp_path, monkeypatch):
+    sync_kinds = []
+    real_sync = os.fsync
+    def track(fd):
+        sync_kinds.append('directory' if stat.S_ISDIR(os.fstat(fd).st_mode) else 'file')
+        real_sync(fd)
+    monkeypatch.setattr(os, 'fsync', track)
+    with PrivateJournal(tmp_path / 'durable') as journal:
+        assert sync_kinds == ['directory']
+        journal.append({'status': 'NOT_RUN'})
+        assert sync_kinds == ['directory', 'file']
+
+
+def test_directory_sync_failure_aborts_and_closes_both_descriptors(tmp_path, monkeypatch):
+    opened = []
+    real_open = os.open
+    def track(*args, **kwargs):
+        fd = real_open(*args, **kwargs)
+        opened.append(fd)
+        return fd
+    def fail(fd):
+        assert stat.S_ISDIR(os.fstat(fd).st_mode)
+        raise OSError('synthetic directory sync failure')
+    monkeypatch.setattr(os, 'open', track)
+    monkeypatch.setattr(os, 'fsync', fail)
+    path = tmp_path / 'failed-create'
+    with pytest.raises(OSError):
+        PrivateJournal(path)
+    assert path.read_bytes() == b''
+    assert len(opened) == 2
+    for fd in opened:
+        with pytest.raises(OSError):
+            os.fstat(fd)
+    with pytest.raises(FileExistsError):
+        PrivateJournal(path)
