@@ -38,7 +38,9 @@ per-side NOT_RUN/INCOMPLETE states remain visible and no pass is awarded.
 Known assertions for partially qualified outcomes must still be evaluated.
 
 `PrivateJournal` reserves a new 0600 JSONL file in an existing caller-owned
-private directory and fsyncs every incremental record. Existing paths and
+private directory, fsyncs the parent directory after creation, and fsyncs every
+incremental record. A parent-sync failure closes the new file and aborts
+construction before any case can use it; the empty file remains as evidence. Existing paths and
 symlinks are refused. Records are monotonically numbered. An I/O error closes
 the journal; retained partial evidence cannot be followed by a success record.
 A later reader must reject partial trailing records and incomplete sequences.

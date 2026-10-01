@@ -190,6 +190,7 @@ class PrivateJournal:
     """
     def __init__(self, path):
         path = Path(path)
+        self._fd = None
         parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             info = os.fstat(parent)
@@ -197,6 +198,11 @@ class PrivateJournal:
                 raise ValueError('journal parent must be private and owned by the caller')
             self._fd = os.open(path.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL
                                | os.O_NOFOLLOW, 0o600, dir_fd=parent)
+            # Persist the new directory entry before admitting any records.
+            os.fsync(parent)
+        except BaseException:
+            self.close()
+            raise
         finally:
             os.close(parent)
         self._sequence = 0
