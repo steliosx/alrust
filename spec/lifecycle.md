@@ -16,7 +16,9 @@
 - **Slice status:** this file covers the **receive path** (`POST /alert`,
   R0–R7) and **operator status and actions** (`PUT /alert/<id>/status` and
   `/action`, A0–A6) and **housekeeping** (`/management/housekeeping`,
-  K0–K5). Heartbeats and the ISA model are **not yet written**. The Phase 0 item 2 contract stays open until
+  K0–K5) and **heartbeats** (HB0–HB6). The ISA 18.2 model is out of scope.
+  After Codex's review of these slices, item 2's remaining open points are
+  live verification and the listed questions. The Phase 0 item 2 contract stays open until
   they are.
 
 ## Severity and status vocabulary (`sm.py:7-58`)
@@ -99,11 +101,38 @@ Statuses: `open`, `assign`, `ack`, `shelved`, `blackout`, `closed`,
    dropped with **202** and never stored (`plugins/blackout.py`).
 4. `is_duplicate` is checked first, then `is_correlated`, else `create`
    (`:55-63`).
-5. **R1.1 [V]** Any exception raised during step 4 is re-raised as
-   `ApiError(str(e))` with the **default code 500** (`:64-65`,
+5. **R1.1 [V]** Any exception raised during step 4 (duplicate, correlate
+   or create only, `:54-63`) is re-raised as `ApiError(str(e))` with the
+   **default code 500** (`:64-65`,
    `exceptions.py:10`). This includes the 400 that `transition()` raises for
    an unknown severity (`sm.py:121-122`). **An alert with an unknown severity
    that gets past steps 1–3 therefore returns 500, not 400.**
+6. **Post-receive** (`utils/api.py:67-90`) is outside the step-4 wrap. It is
+   skipped entirely when `skip_plugins` was set during pre-receive (an
+   alert that was already `blackout` when the pre-receive loop started,
+   `:35-39`, `:70-72`). The final `is_suppressed` is **not** re-checked.
+   Otherwise:
+   - `forwarder.post_receive` **returns the alert** (`plugins/forwarder.py:43-67`).
+     That marks the alert as updated, so the stored row is rewritten through
+     two helpers (**R1.3**).
+   - An `AlertaException` from a post-receive plugin propagates as itself,
+     with its own code (`:75-76`); it is not wrapped as a 500. Other
+     exceptions become `ApiError` 500 when `PLUGINS_RAISE_ON_ERROR`, which is
+     the default.
+   - With the default empty `FWD_DESTINATIONS`, the forwarder raises no error.
+7. **R1.3 [V] The tag and attribute rewrite** (receive R1 step 6; actions A2.2):
+   - `Alert.update_tags` stores `list(set(tags))` (`alert.py:460-461`): tags
+     are de-duplicated, and their **order may change**.
+   - `update_attributes` merges the model's attributes into the stored ones
+     and then **drops every key whose value is `null`** (`pg.py:339-349`).
+     So an alert received with `attributes: {"x": null}` is stored with `x`,
+     and `x` is then removed by this rewrite. The same happens on any
+     unsuppressed action.
+   - Neither helper writes `update_time`.
+   - With the current vector setup (a single tag, no null attributes),
+     nothing observable changes. With several unique tags, their stored
+     order may still change. Conformance evidence keeps raw tag order and
+     does not normalize it.
 
 **Vector preconditions.** These are the default setup for an ordinary
 stored-alert vector in R1.1 and R2–R7:
@@ -219,6 +248,17 @@ Rules in evaluation order (no action):
 - **R5.5** When the status changes, the status-change hook runs **plugin
   `status_change`** on the *stored* alert, and it may rewrite the new status
   and text (`alert.py:301-302`, `utils/hooks.py:34-45`).
+- **R5.6 [V] Hook helper writes (OA-5).** After `process_status`,
+  `HookTrigger.process_status_change` **always** runs two helpers on the
+  alert it was given (`hooks.py:43-44`), even when `process_status` skipped
+  every plugin because the alert is suppressed (`utils/api.py:173-175`):
+  - `alert.tag(alert.tags)`, a SQL `DISTINCT UNNEST` union that
+    de-duplicates the stored tags; their order may change (`pg.py:312-319`);
+  - `update_attributes`, which drops null-valued keys (R1.3).
+
+  On receive, the hook fires only on a status change (dedup R5.5,
+  correlate `alert.py:358-360`), and it runs on the *stored* matched alert
+  (`duplicate_of`/`correlate_with`).
 
 ## R6. Correlate (`Alert.update`, `alert.py:338-379`, `pg.py:242-262`)
 
@@ -271,6 +311,11 @@ Rules in evaluation order (no action):
   Ordinary lifecycle vectors use strictly increasing `createTime`. Tie probes
   and older-time probes (R7.4) deliberately do not, and they assert only what
   stays defined.
+- **R7.3b [V]** **API order differs from storage order.** Storage
+  prepends, so newest is first in the DB array. `Alert.serialize` returns
+  `history` **sorted ascending** by `update_time` (`alert.py:149`), so the
+  newest entry is last. `sorted()` is stable, so entries with equal
+  timestamps keep their storage order (newest first) among themselves.
 - **R7.4 [V]** Because of R7.2, an alert sent with an older `createTime` than
   earlier entries does not become the "current" entry for later transitions.
   Clock skew between monitoring sources can therefore change the transitions
@@ -356,12 +401,29 @@ receive-path vector preconditions (R1) apply to the alert being acted on.
   2. `from_action`;
   3. post-action plugins (`post_action`) (`views.py:166-170`).
 
-  With the default plugins, `take_action` and `post_action` raise
-  NotImplementedError, which is ignored (`utils/api.py:108-110`,
-  `plugins/__init__.py:44-48`). The exception is `forwarder.take_action`,
-  which raises ForwardingLoop when the request carries this server in its
-  loop header, answered with **202** `{"status": "ok", "message": ...}`
-  (`views.py:178-179`).
+  With the default plugins:
+  - `remote_ip`, `reject`, `heartbeat` and `blackout` raise
+    NotImplementedError for `take_action`, which is ignored
+    (`utils/api.py:108-110`).
+  - **`forwarder.take_action` returns the alert** (`plugins/forwarder.py:72-100`).
+    `FWD_DESTINATIONS` is empty by default, so nothing is forwarded. Because
+    the return value is truthy, `process_action` treats the alert as
+    updated and **rewrites tags and attributes** (R1.3: tags are
+    de-duplicated and may be reordered, null-valued attributes are dropped,
+    `update_time` is not touched).
+  - This applies **only when the alert is not suppressed**: `process_action`
+    stops the plugin loop when `alert.is_suppressed`, meaning the status is
+    `blackout` (`utils/api.py:102-103`). For a `blackout` alert, no plugin
+    hook runs, so there is no rewrite and no ForwardingLoop 202 from this
+    path.
+  - `forwarder.take_action` raises ForwardingLoop when the request carries
+    this server in its loop header. That is answered with **202**
+    `{"status": "ok", "message": ...}` (`views.py:178-179`).
+  - No default plugin implements `post_action`. The PluginBase
+    NotImplementedError is ignored (`plugins/__init__.py:44-48`).
+
+  (Corrected: an earlier head said every default `take_action` is ignored.
+  Codex raised this as OA-1.)
 - **A2.3 [V]** An invalid or redundant action raises `InvalidAction`, which
   gives **409** (`views.py:176-177`). An unknown severity on the stored
   alert gives 500.
@@ -461,7 +523,27 @@ Fall-through, when no row above matched:
   - `updateTime` is now; `timeout` is the A4 value; `user` is the login.
 - **A5.2** The status-change hook runs on **every** action, even when the
   status did not change (`alert.py:666-667`). Unlike receive (R5.5), it is
-  not guarded by a status change.
+  not guarded by a status change. It is also not skipped for suppressed
+  (`blackout`) alerts, even though the pre-action plugin loop is (A2.2). So
+  **every action** applies the R5.6 helper writes. The three layers must
+  be kept apart (OA-6):
+  - **Loaded model:** `Alert.tag` returns the `db.tag_alert` result without
+    assigning `self.tags` (`alert.py:452-453`), so the model **keeps its
+    duplicate tags**. `process_status_change` does assign
+    `alert.attributes` (`hooks.py:44`), so the model's attributes are
+    null-free.
+  - **Helper DB write:** `tag_alert` de-duplicates the stored tags, and
+    `update_attributes` drops the null keys in the stored row.
+  - **Final row and response:** `set_alert` writes
+    `tags = DISTINCT UNNEST(stored tags || self.tags)` (`pg.py:279-291`),
+    which de-duplicates again, together with the null-free
+    `self.attributes`. The alert returned (`from_db`) and any later GET
+    therefore show de-duplicated tags and no null keys.
+
+  Example: a `blackout` alert with a null attribute and a duplicated tag,
+  given an unknown action, keeps `major`/`blackout` (ACT-1), and its stored
+  and returned state loses the null and the duplicate.
+  (Added after Codex raised it as OA-5 on `678f1996`.)
 - **A5.3 [V]** The row update sets `severity`, `status`, `previousSeverity`
   (A2.5) and `update_time = now`, even when nothing changed. `tags` becomes
   the union, `attributes` are replaced with the loaded ones, and `timeout` is
@@ -603,6 +685,118 @@ and goes to the owner.
 
   Any such run needs its own granted window. The design choice is the
   harness owner's.
+
+## HB. Heartbeats
+
+`models/heartbeat.py` is cited as `hb.py`, and `views/heartbeats.py` as
+`hbv.py`.
+
+### HB0. Identity and upsert (`pg.py:851-861`)
+
+- **HB0.1 [V]** A heartbeat's identity is **`(origin, customer)`**
+  (`ON CONFLICT (origin, COALESCE(customer, ''))`). A repeat from the same
+  origin and customer updates `tags`, `attributes`, `create_time`, `timeout`
+  and `receive_time`. The stored **`id` is kept**; an `id` in the request is
+  ignored on conflict. `type` is not updated on conflict.
+- **HB0.2 [V]** `POST /heartbeat` needs `write:heartbeats`. Customer
+  assignment uses `admin:heartbeats` (customer-mapping C11). It returns
+  **201** `{status, id, heartbeat}` (`hbv.py:17-40`).
+
+### HB1. Parsing and defaults (`hb.py:27-92`)
+
+- **HB1.1 [V]** `timeout`:
+  - it defaults to `HEARTBEAT_TIMEOUT` (= `ALERT_TIMEOUT`, 86400;
+    `settings.py:205`);
+  - it must be an int and non-negative, as in R0.4, and booleans behave the
+    same way;
+  - an empty `customer` gives 400; attribute keys containing `.` or `$` give
+    400.
+- **HB1.2** `origin` defaults to the server's `<argv0>/<hostname>`,
+  `createTime` defaults to server now, and `type` defaults to `Heartbeat`.
+  `maxLatency` is the config `HEARTBEAT_MAX_LATENCY` (2000 ms;
+  `settings.py:206`). It is not stored.
+
+### HB2. Derived fields: recomputed on every read (`hb.py:62-72`)
+
+The model ignores the `latency` and `since` columns the SQL returns
+(`from_record`, `hb.py:133-146`), and **recomputes both on the server clock**:
+- `latency` = `int((receiveTime - createTime) ms)`;
+- `since` = `utcnow - receiveTime`, serialized as **integer seconds**
+  (`format.py:41-42`);
+- `status`, in order:
+  - `expired` when `since > timeout`;
+  - otherwise `slow` when `latency > maxLatency`;
+  - otherwise `ok`.
+- **HB2.1** Because `createTime` comes from the client, a skewed source clock
+  shows up as latency and can make a heartbeat `slow` (or give a negative
+  latency).
+
+### HB3. Heartbeats sent as alerts (`plugins/heartbeat.py`)
+
+- **HB3.1 [V]** An alert whose event is in `HEARTBEAT_EVENTS` (default
+  `Heartbeat`) becomes a heartbeat. This happens after it passes the reject
+  policy (R1.2).
+  - It copies `origin`, `tags`, `timeout` and the assigned `customer`.
+  - Its `attributes` are `{environment, severity, service, group}`.
+  - The **alert's `createTime` is not passed**, so the heartbeat's
+    `createTime` is server now and its latency is about 0.
+  - The response is **202** `{status: "ok", message, id}`, where `id` is the
+    heartbeat id. No alert is stored.
+
+### HB4. Reads, deletes and customer scope (`hbv.py:43-110`)
+
+- **HB4.1 [V]** `GET /heartbeats` filters by `customers=g.customers` (as
+  C16) and accepts repeated `status=ok|slow|expired`. That status filter is
+  evaluated **in SQL** against `NOW() at time zone 'utc'` (`pg.py:886-918`).
+  Its boundaries are **not identical** to the serialized `status` (HB2):
+  - **Latency:** SQL compares the untruncated
+    `EXTRACT(EPOCH …) * 1000 > maxLatency`, while the model truncates
+    (`int(ms)`). At a latency of 2000.5 ms with `maxLatency` 2000, the SQL
+    `slow` filter selects the heartbeat, but it serializes as
+    `latency: 2000`, `status: "ok"`.
+  - **Time:** the SQL `since` uses the query's `NOW()`, and the model
+    recomputes `utcnow()` later on the app clock. A heartbeat near the
+    `timeout` boundary can be filtered as one status and serialized as
+    another.
+- **HB4.1a [V]** `total` and paging are computed from
+  `Heartbeat.count(query)` **before** the status filter is applied
+  (`hbv.py:62-66`).
+  - When the status-filtered page is **non-empty**, the response `total`
+    (and `pages`/`more`) counts every heartbeat the customer/query selects,
+    **not** the status-filtered subset.
+  - When it is **empty**, the else-branch returns `total: 0` explicitly, with
+    `message: "not found"` and `heartbeats: []` (`hbv.py:78-87`).
+  - Candidate vector: two heartbeats, one `ok` and one `expired`, then
+    `?status=expired` → one heartbeat with `total: 2`.
+- **HB4.2 [V]** **Per-id `GET` and `DELETE /heartbeat/<id>` apply no
+  customer filter.** They read `g.get('customer')` (singular), which
+  `permission()` never sets (`hbv.py:48`, `:96`; compare
+  `auth/decorators.py`, which sets `g.customers`). So a customer-scoped key
+  can read or delete **any** heartbeat by id or id prefix (`id LIKE
+  '<id>%'`, `pg.py:863-872`). This differs from alerts (C17). The same
+  pattern appears in `views/blackouts.py:132`. **Follow-up:**
+  `spec/customer-mapping.md` should gain a rule for this in its next head.
+
+### HB5. Health check and staleness (`mgmt.py:137-154`)
+
+- **HB5.1 [V]** `GET /management/healthcheck` returns **503**
+  `HEARTBEAT_STALE: <origin>` when any heartbeat's `delta.seconds >
+  4 × timeout`. It returns 503 `HEALTH_CHECK_FAILED` on any exception, and
+  otherwise `OK`.
+- **HB5.2 [V]** It uses `timedelta.seconds`, the 0–86399 seconds
+  *component*, not `total_seconds()`. A heartbeat stale for **more than a
+  day** can therefore read as fresh, depending on the remainder. For
+  example, a stale age of 1 day plus 10 s gives `.seconds` = 10.
+- **HB5.3** The healthcheck reads **every** heartbeat with no customer
+  filter. Any tenant's stale heartbeat makes the whole server unhealthy.
+
+### HB6. What the reference does *not* do
+
+- **HB6.1** The reference server **never turns a stale heartbeat into an
+  alert.** Staleness only shows in `status` and in the healthcheck. The
+  per-tenant "source went quiet raises an alert" behavior in KICKOFF Phase 5
+  is a **new alrust feature**, not a compatibility requirement. Its design
+  must not change the HB0–HB5 contract.
 
 ## Open questions
 
