@@ -19,7 +19,9 @@ discarded with that client. Environment API keys, netrc and proxy credentials
 are not used. Response parsing retains the existing `Response` representation:
 JSON for declared JSON media types, original text otherwise. JSON and transport
 errors propagate; neither becomes a successful observation. The client closes
-even when parsing or transport fails. Raw response bodies remain unredacted
+even when parsing or transport fails. Literal or percent-encoded dot segments (including encoded separators) in the
+base or request path are refused before I/O; query values are not path segments.
+Raw response bodies remain unredacted
 for assertions and comparison; later evidence export must redact them.
 
 The only header switch is the boolean `cron_headers=True`, sending exactly
