@@ -1339,6 +1339,133 @@ UI behavior changes.
 | 10 | the number `5` in a custom attribute; `true`; `null` | `5`; `true`; the empty text |
 | 11 | vector 1's content in each of the nine sites (alert value, text, a custom attribute column, history text, group member name, email, name and login); at the string-attribute site, `see https://x.test/ <img src=x onerror=alert(1)>`, which contains an http(s) substring and so reaches the former raw-HTML branch (`AlertDetail.vue:728-739`) | no element is created from the content at any site; at the string-attribute site, one anchor to `https://x.test/` and the rest as literal text |
 
+## SF-PROVIDERS: provider webhook fixes
+
+Status: Proposed. Covers the provider-webhook findings recorded in
+`docs/STATUS.md` after the Y3 list (WG-SEC-1, WT-SEC-1, WS-AUTH-1, the
+regex-prefix lookup, the Slack and Telegram behavior defects, PagerDuty
+partial application, and the remaining stored HTML), under owner decisions
+Y3, Y10, Y11 and Y13 (2026-10-01). The reference behavior of each provider
+is in `spec/openapi.yaml` (`/webhooks/<provider>`). SF-WEBHOOKS (logging,
+batches, placeholders) still applies to every provider.
+
+**alrust.**
+1. **Plain text instead of stored HTML (Y11).** Text the server builds
+   holds no markup:
+   - Grafana: `attributes.ruleUrl` and `attributes.imageUrl` are the plain
+     `ruleUrl` and `imageUrl` values;
+   - CloudWatch `SubscriptionConfirmation`: `text` is `<Message>
+     <SubscribeURL>` (one space between them);
+   - Stackdriver: `attributes.moreInfo` is the plain `url`;
+   - PagerDuty: the history text uses `#<incident_number> (<html_url>)`
+     where the reference has the anchor. For example: `Incident #42
+     (https://pd.test/i/42) assigned to Ana`.
+   The SF-WEBUI renderer then links the URLs.
+2. **Normal scopes for webhook actions (Y13).** When `AUTH_REQUIRED` is
+   true, in addition to `write:webhooks`:
+   - Slack and Telegram `open`, `ack` and `close`, and every PagerDuty
+     message, need `in_scope('write:alerts', caller scopes)`. Otherwise:
+     403 `Missing required scope: write:alerts`.
+   - Telegram `blackout` needs `in_scope('write:blackouts', caller
+     scopes)`. Otherwise: 403 `Missing required scope: write:blackouts`.
+     The blackout's customer is set by the same rule as `POST /blackout`:
+     `assign_customer` with `admin:blackouts` (`views/blackouts.py:32`),
+     so a caller with one customer gets that customer, an unscoped caller
+     none, and a caller with several customers gets the reference's 400.
+   - `watch` and `unwatch` keep needing only `write:webhooks`.
+   The check runs before any lookup or change. A refusal has no side
+   effect. With `AUTH_REQUIRED` false, nothing is added, as for every other
+   scope.
+3. **Grafana `ok` (WG-SEC-1).** The `ruleId` lookup is limited to the
+   caller's customers, exactly as alert lists are (no limit for an
+   unscoped caller). The found alerts are not processed inside the parsing
+   stage. They are returned to the dispatcher, which processes each one
+   once (severity normal, status `closed`), with the SF-WEBHOOKS batch
+   rules (Y10). The reference processes them twice; alrust does not, so
+   counts that the second pass would change (such as `duplicateCount`)
+   differ.
+4. **Alert lookup by id (PagerDuty, Slack, Telegram).** The key matches
+   `id` or `last_receive_id` as a **literal**, case-insensitive prefix: no
+   regular-expression metacharacter has a special meaning. If no alert or
+   more than one alert of the caller's customers matches, the result is the
+   provider's not-found response (item 6).
+5. **Slack and Telegram actions.** In order: parse; then an unknown action
+   gives 400 `Unsupported #slack action` (Slack), or no change (Telegram,
+   as in the reference); then the scope check (item 2); then the lookup.
+   - `watch` adds the tag `watch:<user>`, and `unwatch` removes
+     `watch:<user>`: the tag the web UI uses for watching
+     (`App.vue:782`, `AlertList.vue:652`). The reference untags
+     `watch:<user>` and `unwatch:<user>` respectively.
+   - Here `<user>` is each provider's reference user string (Slack
+     `user.name`; Telegram `<first_name> <last_name>`).
+6. **Not found.** Slack returns 200 `{status: error, message: alert not
+   found for #slack message}` (the response the reference builds but does
+   not return). Telegram returns its reference not-found response for every
+   action, `blackout` included: 200 `{status: error, message: alert not
+   found for Telegram message}`. Neither makes any change.
+7. **PagerDuty messages (Y10).**
+   - Every message is processed in order, each independently. A failure on
+     one (an invalid message, no incident key, not found, a missing scope,
+     an update that changes nothing, an error) never stops the others.
+   - The response is 200 `{status: ok}` only when every message's status
+     update was applied. Otherwise it is the reference's code for the first
+     message not applied, which is 400 for every in-handler refusal (the
+     reference's parsing-stage rule), with that message's text. It also
+     carries `results`, in message order: `{index, incidentKey, alertId,
+     outcome, code, message}`. `outcome` is one of `applied`, `invalid`,
+     `not-found`, `forbidden` or `failed`. `alertId` is the matched alert
+     or null. For `forbidden` the code is 403.
+   - Applied changes stay; nothing is rolled back.
+   - An empty `messages` list is 400 `update PagerDuty incident status
+     failed`, as in the reference.
+
+**Fixtures.** A fresh store per vector. Settings `AUTH_REQUIRED = True` and
+`CUSTOMER_VIEWS = True`, with `ADMIN_USERS` set so the startup check passes.
+Customers `A` and `B`. Keys:
+- `KW` (`write:webhooks`, customer `A`);
+- `KWA` (`write:webhooks`, `write:alerts`, customer `A`);
+- `KWB` (`write:webhooks`, `write:blackouts`, customer `A`).
+
+Seeded alerts:
+- `a1`: id `aaaa1111-…`, customer `A`, environment `Production`,
+  resource `web`, event `cpu`, `attributes.ruleId '7'`, no tags;
+- `b1`: id `aaaa2222-…`, customer `B`, same environment, resource and
+  event, `attributes.ruleId '7'`.
+
+Payload shapes are those of `spec/openapi.yaml`. Alert reads are made by an
+admin observer.
+
+**Vectors.** Reference cells are source-derived. Before execution they are
+NOT_RUN, and their known predicates are asserted on the first authorized
+run. Only cells marked **reference pending** skip, and only that predicate.
+alrust cells are NOT_RUN until an implementation exists.
+
+| # | Case | Reference | alrust | Kind |
+|---|---|---|---|---|
+| 1 | Grafana `alerting` with `ruleUrl` and `imageUrl`, key `KWA` | both attributes are HTML anchors | both are the plain URLs | divergence (Y11) |
+| 2 | CloudWatch `SubscriptionConfirmation` (text body), key `KWA` | `text` holds an HTML anchor | `text` is `<Message> <SubscribeURL>` | divergence (Y11) |
+| 3 | Stackdriver incident with `url`, key `KWA` | `moreInfo` is an HTML anchor | `moreInfo` is the plain `url` | divergence (Y11) |
+| 4 | PagerDuty `incident.trigger` for `a1`, key `KWA` | 200; history text holds the anchor | 200; history text `Incident #<n> (<html_url>) assigned to <user>` | divergence (Y11) |
+| 5 | Slack `close` for `a1`, key `KW` | 201; `a1` closed | 403 `Missing required scope: write:alerts`; `a1` unchanged | divergence (Y13) |
+| 6 | the same with key `KWA` | 201; `a1` closed | same | parity (status and change) |
+| 7 | Telegram `/ack <a1 id>`, key `KW`; separately with `KWA` | 200; `a1` acknowledged; separately the same | 403, no change; separately 200, `a1` acknowledged | divergence (Y13); parity |
+| 8 | Telegram `/blackout <a1 id>`, key `KW` | 200; a blackout with no customer, which also matches `b1`'s alerts | 403 `Missing required scope: write:blackouts`; no blackout | divergence (Y13) |
+| 9 | the same with key `KWB` | as row 8 | 200; one blackout for `Production`/`web`/`cpu` with customer `A`; `b1`'s alerts unaffected | divergence (Y13, customer) |
+| 10 | PagerDuty one message for `a1`, key `KW` | 200; `a1` updated | 403 `Missing required scope: write:alerts`; no change | divergence (Y13) |
+| 11 | Grafana `ok` with `ruleId 7`, key `KWA` | `a1` **and `b1`** closed (no customer filter); then the dispatcher's second pass (reference pending) | only `a1` closed, processed once; `b1` unchanged | divergence (WG-SEC-1) |
+| 12 | Slack `ack` with `callback_id` `.`, key `KWA` | the first alert the regex matches within customer `A` is acknowledged | 200 `{status: error, message: alert not found for #slack message}`; no change | divergence (literal lookup) |
+| 13 | Slack `ack` with `callback_id` `AAAA1111` (upper-case prefix of `a1`), key `KWA` | `a1` acknowledged | same | parity (case-insensitive prefix) |
+| 14 | Slack `ack` for an id matching nothing, key `KWA` | 400 `'NoneType' object has no attribute 'from_action'` | 200 `{status: error, message: alert not found for #slack message}` | divergence |
+| 15 | Slack `bogus` action for a missing id, key `KW` | 400 `Unsupported #slack action` | same; no lookup | parity |
+| 16 | Slack `watch` for `a1` by user `ana`, key `KW`; then `unwatch` | `a1` tags unchanged (untags `watch:ana`, then `unwatch:ana`) | `a1` gets `watch:ana`, then loses it | divergence |
+| 17 | Telegram `/blackout <missing id>`, key `KWB` | 400 with Python's `UnboundLocalError` text | 200 `{status: error, message: alert not found for Telegram message}`; no blackout | divergence |
+| 18 | PagerDuty three messages (`a1` trigger, a missing key, `a1` acknowledge), key `KWA` | 400 `not found` at message 2; message 1 applied; message 3 not applied | 400 `not found` with `results`: applied, not-found, applied; `a1` ends acknowledged | divergence (Y10) |
+| 19 | PagerDuty two messages, both valid for `a1`, key `KWA` | 200 `{status: ok}` | same; no `results` | parity |
+| 20 | Telegram `/watch <a1 id>` with `AUTH_REQUIRED = False` and `CUSTOMER_VIEWS = False` (customer views require authentication, `utils/config.py:117-118`) | 200; untags `watch:<user>` | 200; tags `watch:<user>`; no scope check added | divergence (watch fix only) |
+
+These vectors authorize no execution. Webhook payloads and keys are
+synthetic.
+
 ## Later findings
 
 Every Y3 item now has an entry above. A defect found later gets its own
