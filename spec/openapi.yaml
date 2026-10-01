@@ -4236,6 +4236,203 @@ paths:
       description: *webhookDispatch
       responses: *webhookResponses
       x-runtime: "NOT_RUN"
+  /webhooks/cloudwatch:
+    post:
+      operationId: receiveWebhookCloudwatch
+      x-source: alerta/webhooks/cloudwatch.py:15-82; alerta/webhooks/custom.py:17-91
+      x-scope: write:webhooks
+      summary: Amazon CloudWatch via SNS (provider mapping)
+      description: |
+        A concrete instance of `/webhooks/{webhook}`: the dispatcher order,
+        auth, logging (W-SEC-1), batch handling (W-DL-1), error mapping and
+        responses there all apply. Present only while the `cloudwatch` entry
+        point loaded successfully. This entry documents the mapping only.
+
+        Payload: `incoming` calls `json.loads(payload)` (`:33`). That works
+        only when the dispatcher handed it **text**, that is when the body
+        is not valid JSON under a JSON content type and not a form. SNS
+        sends `text/plain`, so this is its normal path. A body the dispatcher
+        already parsed as JSON (a dict) makes `json.loads` raise
+        `TypeError`, which triggers the dispatcher's legacy retry and then an
+        unhandled **500**. Invalid JSON text gives 400 with the decoder's
+        message. A missing key gives 400 with the key (`KeyError`).
+
+        By `Type` (`:35-82`):
+        - `SubscriptionConfirmation`: one alert with `resource` = `TopicArn`,
+          `event` = `SubscriptionConfirmation`, `environment` =
+          `DEFAULT_ENVIRONMENT`, `severity` `informational`, `service`
+          `['Unknown']`, `group` `AWS/CloudWatch`, `origin` = `TopicArn`,
+          `type` `cloudwatchAlarm`, `createTime` from `Timestamp`
+          (`%Y-%m-%dT%H:%M:%S.%fZ`; another format gives 400), `rawData` the
+          notification. `text` is `<Message> <a href="<SubscribeURL>"
+          target="_blank">SubscribeURL</a>`, an HTML anchor built **without
+          escaping** (the WUI-SEC-1 pattern; alrust's handling follows owner
+          decision Y11 and is specified in `spec/security-fixes.md`). The
+          subscription itself is not confirmed by the server.
+        - `Notification`: `Message` is parsed as JSON. Without a `Trigger`
+          key: 400 `SNS message is not a Cloudwatch notification`.
+          Otherwise `resource` = `<name>:<value>` of the first trigger
+          dimension, else the last `:`-separated part of `TopicArn`;
+          `event` = `AlarmName`; `environment` **always** `Production` (the
+          configured default is not used); `severity` from `NewStateValue`
+          (`ALARM` major, `INSUFFICIENT_DATA` warning, `OK` the alarm model's
+          normal severity, anything else `unknown`); `service`
+          `[AWSAccountId]`; `group` = `Trigger.Namespace`; `value` =
+          `NewStateValue`; `text` = `AlarmDescription`; `tags` `[Region]`;
+          `attributes` `{incidentKey: AlarmName, thresholdInfo: Trigger}`;
+          `origin` = `TopicArn`; `type` `cloudwatchAlarm`; `createTime` from
+          `Timestamp`; `rawData` the parsed alarm.
+        - any other `Type`: 400 `No SNS notification in payload`.
+
+        One alert per request, so W-DL-1 does not arise. Source-derived;
+        runtime NOT_RUN.
+      requestBody:
+        required: true
+        content:
+          text/plain:
+            schema: {type: string, description: "An SNS HTTP(S) notification document, as JSON text"}
+      responses: *webhookResponses
+      x-runtime: "NOT_RUN"
+  /webhooks/grafana:
+    post:
+      operationId: receiveWebhookGrafana
+      x-source: alerta/webhooks/grafana.py:18-135; alerta/webhooks/custom.py:17-91
+      x-scope: write:webhooks
+      summary: Grafana legacy alert notification (provider mapping)
+      description: |
+        A concrete instance of `/webhooks/{webhook}`: the dispatcher order,
+        auth, logging (W-SEC-1), batch handling (W-DL-1), error mapping and
+        responses there all apply. Present only while the `grafana` entry
+        point loaded successfully. This entry documents the mapping only.
+
+        By `state` (`incoming`, `:109-135`). A falsy payload gives 400 `no
+        alerts in Grafana notification payload`; a JSON object without
+        `state` gives 400 `'state'` (`KeyError`); a text body makes the
+        indexing raise `TypeError`, so the dispatcher's legacy retry and then
+        an unhandled **500**:
+        - `alerting`: one alert per item of `evalMatches` (default `[]`, so
+          no items gives 201 `{status: ok, ids: []}`). Several matches form a
+          batch, so W-DL-1 applies.
+        - `ok` with a truthy `ruleId`: **inside the parsing stage**, the
+          handler loads up to 1,000 stored alerts whose `attributes.ruleId`
+          equals `str(ruleId)` (`Alert.find_all`, first page), **with no
+          customer filter**. It sets each one's severity to the alarm model's
+          normal severity and its status to `closed`, and runs
+          `process_alert` on it (`:114-133`). A rejection or other failure
+          there is raised as an ApiError, which the dispatcher's parsing-stage
+          rule then turns into **400** with its message (403 and 500 do not
+          survive). The processed alerts are then returned to the dispatcher,
+          which processes each of them a second time (`assign_customer`, then
+          `process_alert`); the effect of that second pass is NOT
+          established. New reference defect, source-level only: a
+          `write:webhooks` caller scoped to one customer can close alerts of
+          every customer that share a `ruleId`, before the dispatcher's
+          customer assignment runs. Recorded for the owner's Y3 list
+          (STATUS); not yet specified.
+        - `ok` without a truthy `ruleId`, or any other `state`: 400 `no alerts
+          in Grafana notification payload`.
+
+        Per match (`parse_grafana`, `:18-100`), in order:
+        1. From the query string: `environment` (default
+           `DEFAULT_ENVIRONMENT`), `severity` (default `major`), every
+           `service` value (default `['Grafana']`), `group` (default
+           `Performance`), `customer`, `origin` (default `Grafana`),
+           `timeout` (integer, else null).
+        2. From the match's `tags`, then from the alert's `tags`:
+           `environment`,
+           `severity`, `group`, `customer` and `origin` replace the values so
+           far; a `service` tag is **appended** to `service`. The alert's
+           tags are copied first, but the match's are popped in place, so
+           the stored `rawData` (step 6) lacks the popped match tags.
+        3. Leftover tags: as attributes with every `.` in the key replaced by
+           `_` while `GRAFANA_TAGS_AS_ATTRIBUTES` (default true), and as `k=v`
+           tags while `GRAFANA_TAGS_AS_TAGS` (default false). Rule tags
+           override match tags of the same attribute key.
+        4. `severity`: the value from steps 1-2 for `alerting`; the alarm
+           model's normal severity for `ok`; else `indeterminate`.
+        5. `attributes.ruleId` = `str(ruleId)` (missing gives 400 `'ruleId'`).
+           With `ruleUrl` or `imageUrl` present, `attributes.ruleUrl` and
+           `attributes.imageUrl` are HTML anchors (`Rule`, `Image`) built
+           **without escaping** (the WUI-SEC-1 pattern; alrust follows owner
+           decision Y11).
+        6. `resource` = the match's `metric`; `event` = `ruleName` (any of
+           `metric`, `ruleName` or the match's `value` missing gives 400); `value` = the match's `value` as a string;
+           `text` = `message`, else `title`, else `state`; `type`
+           `grafanaAlert`; `rawData` the alert, JSON-encoded.
+
+        Source-derived; runtime NOT_RUN.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [state]
+              properties:
+                state: {type: string, description: "alerting, ok, or other"}
+                ruleId: {}
+                ruleName: {type: string}
+                ruleUrl: {type: string}
+                imageUrl: {type: string}
+                message: {type: string}
+                title: {type: string}
+                tags: {type: object, additionalProperties: true}
+                evalMatches:
+                  type: array
+                  items:
+                    type: object
+                    required: [metric, value]
+                    properties:
+                      metric: {type: string}
+                      value: {}
+                      tags: {type: [object, "null"], additionalProperties: true}
+              additionalProperties: true
+      responses: *webhookResponses
+      x-runtime: "NOT_RUN"
+  /webhooks/graylog:
+    post:
+      operationId: receiveWebhookGraylog
+      x-source: alerta/webhooks/graylog.py:12-31; alerta/webhooks/custom.py:17-91
+      x-scope: write:webhooks
+      summary: Graylog HTTP alert notification (provider mapping)
+      description: |
+        A concrete instance of `/webhooks/{webhook}`: the dispatcher order,
+        auth, logging (W-SEC-1), batch handling (W-DL-1), error mapping and
+        responses there all apply. Present only while the `graylog` entry
+        point loaded successfully. This entry documents the mapping only.
+
+        One alert per request (`incoming`, `:18-31`):
+        - `resource` = `stream.title`; `text` =
+          `check_result.result_description`; `attributes` `{checkId:
+          check_result.triggered_condition.id}`. A missing key gives 400 with
+          the key. A text (non-JSON, non-form) body makes the indexing raise
+          `TypeError`, so the dispatcher's legacy retry and then an unhandled
+          **500**.
+        - From the query string: `event` (default `Alert`), `environment`
+          (default `DEFAULT_ENVIRONMENT`), `service` split on `,` (default
+          `test`), `severity` (default `critical`), `event_type` as `type`
+          (default `performanceAlert`).
+        - `value` `n/a`; `origin` `Graylog`; `rawData` the payload.
+
+        Source-derived; runtime NOT_RUN.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stream, check_result]
+              properties:
+                stream: {type: object, required: [title], properties: {title: {type: string}}}
+                check_result:
+                  type: object
+                  required: [result_description, triggered_condition]
+                  properties:
+                    result_description: {type: string}
+                    triggered_condition: {type: object, required: [id], properties: {id: {}}}
+              additionalProperties: true
+      responses: *webhookResponses
+      x-runtime: "NOT_RUN"
   /webhooks/prometheus:
     post:
       operationId: receiveWebhookPrometheus
