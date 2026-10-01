@@ -62,6 +62,51 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 
+  hosted-profiles-preflight:
+    # Phase 0 hosted conformance, INERT stage (docs/ci-phase0-conformance-plan.md).
+    # Runs only Codex's offline preflight (conformance/alrust_conformance/ci.py) for every
+    # profile of the reviewed inventory. Every profile is disabled, so each must answer
+    # NOT_RUN (exit 2). No PostgreSQL service, no reference server, no HTTP, no pytest and
+    # no artifact upload. Any other answer, or a profile list or manifest that differs from
+    # the reviewed one, fails the job. NOT_RUN gives no Phase 0 gate credit.
+    name: hosted profiles (inert preflight, all NOT_RUN)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      MANIFEST_SHA256: b50ab8fc325416b4e91e8bed5da28c42845d8910f86264c6517cac27dfb1c113
+      PROFILES: >-
+        scaffold customer-mapping operator-actions metadata-edges metadata-mutations alert-queries alert-notes heartbeats heartbeat-input-query blackouts api-keys config groups permissions management-health management-gtg root-debug root-index webhook-unknown
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Preflight every profile (expects NOT_RUN for all)
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          py="$pythonLocation/bin/python3"
+          listed=$(env -i PATH=/usr/bin:/bin "$py" -E -s -B -c 'import json,sys; print(" ".join(p["id"] for p in json.load(open(sys.argv[1]))["profiles"]))' conformance/hosted-profiles.json)
+          [[ "$listed" == "$PROFILES" ]] || { echo "profile list differs from the reviewed list" >&2; exit 1; }
+          { echo "| profile | status | reason |"; echo "|---|---|---|"; } >> "$GITHUB_STEP_SUMMARY"
+          fail=0
+          for p in $PROFILES; do
+            rc=0
+            out=$(cd conformance && env -i PATH=/usr/bin:/bin timeout 20 "$py" -E -s -B -m alrust_conformance.ci \
+                    --profile "$p" --manifest-sha256 "$MANIFEST_SHA256") || rc=$?
+            status=$(printf '%s' "$out" | env -i "$py" -E -s -B -c 'import json,sys; d=json.load(sys.stdin); print(d["status"], d["reason"], d["execution_started"], len(d["artifact_allowlist"]))' 2>/dev/null || echo "UNPARSEABLE - - -")
+            read -r st reason started allow <<<"$status"
+            echo "$p rc=$rc $st $reason started=$started allowlist=$allow"
+            echo "| $p | $st | $reason |" >> "$GITHUB_STEP_SUMMARY"
+            if [[ $rc != 2 || $st != NOT_RUN || $started != False || $allow != 0 ]]; then fail=1; fi
+          done
+          (( fail == 0 )) || { echo "a profile did not answer NOT_RUN; enabling needs its own reviewed head" >&2; exit 1; }
+
   conformance-reference:
     name: conformance vs reference alerta
     runs-on: ubuntu-24.04
