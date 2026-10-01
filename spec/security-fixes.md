@@ -1367,20 +1367,31 @@ apply.
    admission and its credential precedence are unchanged. The added check
    uses the same effective context as that admission:
    - **Authenticated requests.** When the request was authenticated by any
-     credential branch (API key, Bearer token, auth proxy or Basic), with
-     `AUTH_REQUIRED` true or false, its effective scopes must also satisfy:
+     credential branch (API key, Bearer token, Hawk, auth proxy or Basic),
+     with `AUTH_REQUIRED` true or false, its effective scopes must also
+     satisfy the conditions below. Hawk's `ADMIN_SCOPES` satisfy them.
+     Conditions:
      - `in_scope('write:alerts')` for Slack and Telegram `open`, `ack` and
        `close`, and for PagerDuty (once per request, before any message);
      - `in_scope('write:blackouts')` for Telegram `blackout`.
-   - **Anonymous requests.** A request that reached the credential-free
-     fallback with `AUTH_REQUIRED` false (`auth/decorators.py:155-161`)
-     gets no added check, as for every other scope. Anonymous requests
-     under `ALLOW_READONLY` follow SF-AN1 and fail the outer
-     `write:webhooks` check.
-   - **Refusal.** 403 `Missing required scope: write:alerts` or
-     `…: write:blackouts`, in the common error envelope. It is raised
-     outside the parsing-stage translation (`custom.py:38-39`), so it stays
-     403. It comes before any change, reply or action audit event.
+   - **Anonymous, authentication disabled.** A request that reached the
+     credential-free fallback with `AUTH_REQUIRED` false
+     (`auth/decorators.py:155-161`) gets no added check, as for every other
+     scope.
+   - **Anonymous read-only.** With `AUTH_REQUIRED` and `ALLOW_READONLY`
+     true, an anonymous request admitted under SF-AN1 has
+     `READONLY_SCOPES` as its effective scopes, and the same conditions
+     apply to them. If `READONLY_SCOPES` lacks `write:webhooks`, the outer
+     check already refuses. If it has `write:webhooks` but not the action's
+     scope, the action is refused with SF-AN1's 401 `Missing authorization
+     API Key or Bearer Token`. If it covers both (for example `['write']`),
+     the action proceeds.
+   - **Refusal.** For a credential branch: 403 `Missing required scope:
+     write:alerts` or `…: write:blackouts`. For the anonymous read-only
+     context: the 401 above. Both use the common error envelope and are
+     raised outside the parsing-stage translation (`custom.py:38-39`), so
+     their codes stay. Both come before any change, reply or action audit
+     event.
    - `watch`, `unwatch` and unknown actions need only `write:webhooks`.
 3. **Grafana `ok` (WG-SEC-1).** The `ruleId` lookup is limited to the
    caller's customers, exactly as alert lists are (no limit for an
@@ -1445,8 +1456,14 @@ apply.
    - `results` holds one entry per message, in order:
      `{index, incidentKey, alertId, outcome, code, message}`:
      - `index` counts from 0;
-     - `incidentKey` is the key string when parsing succeeded and it is
-       non-empty, else null;
+     - `incidentKey` is the key when parsing succeeded and the key is a
+       non-empty string, else null. The checks per message run in this
+       order: parse (any failure is `invalid`); a falsy key (`invalid`, the
+       reference's text); a key that is not a string, such as `42` or
+       `true` (`invalid`); then the lookup. The reference instead passes a
+       truthy non-string key on to its lookup, which fails on `'^' + id`
+       (`postgres/base.py:299`) inside the caught lookup branch, so a
+       400;
      - `alertId` is the matched alert's id, or null.
    - The `outcome` values:
 
@@ -1455,7 +1472,9 @@ apply.
      | `applied` | the status update returned a truthy result | 200 | null |
      | `invalid` | parsing failed | 400 | `Invalid PagerDuty message at index <index>.` |
      | `invalid` | the key is empty or falsy | 400 | `no incident key in PagerDuty data payload` (the reference's text) |
+     | `invalid` | the key is truthy but not a string | 400 | `Invalid PagerDuty message at index <index>.` |
      | `not-found` | zero or several matches | 400 | `not found` |
+     | `failed` | the lookup raised (for example a database error); `alertId` null | 400 | `update PagerDuty incident status failed` |
      | `failed` | the update raised, or returned a falsy result | 400 | `update PagerDuty incident status failed` |
 
      A truthy update to the same status is `applied`. The reference's 404
@@ -1514,6 +1533,7 @@ alrust cells are NOT_RUN until an implementation exists.
 | 11 | the same with `KWB0` (unscoped) | 200; no customer | 200; blackout with no customer | parity |
 | 12 | Telegram `/blackout <a1>` with the Bearer token `TAB` (customers `A` and `B`) | 200; a blackout with no customer | 400 `must define customer as more than one possibility`; no blackout, reply or action audit event | divergence |
 | 13 | `AUTH_REQUIRED = False`, `CUSTOMER_VIEWS = False`: Telegram `/blackout <a1>` with `KW`; separately with no credential | 200 and a blackout, both | 403 and no blackout; 200 and a blackout with no customer | divergence (Y13, key); parity |
+| 13b | `AUTH_REQUIRED = True`, `ALLOW_READONLY = True`, `CUSTOMER_VIEWS = False`, no credential: Slack `close` for `a1` and Telegram `/blackout <a1>`, each with `READONLY_SCOPES` `['read']`; `['write:webhooks']`; `['write']`; `['write:webhooks', 'write:alerts']` | every action dispatched (SF-AN1's defect) | `['read']`: both 401 (outer check). `['write:webhooks']`: both 401 (action scope). `['write']`: close 201, blackout 200 with no customer. `['write:webhooks', 'write:alerts']`: close 201, blackout 401 | divergence (SF-AN1, Y13) except `['write']` (parity) |
 | 14 | PagerDuty one message for `a1`, key `KW` | 200; `a1` updated | 403, no `results`; no change | divergence (Y13) |
 | 15 | Grafana `ok` with `ruleId 7`, key `KWA` | first pass closes `a1` **and `b1`** (no customer filter); the dispatcher's second pass and the final response are reference pending | `a1` closed, processed once; `b1` unchanged | divergence (WG-SEC-1) |
 | 16 | Slack `ack` with `callback_id` `11AA0000` (upper case), key `KWA` | `a1` acknowledged | same | parity (case-insensitive prefix) |
@@ -1529,6 +1549,8 @@ alrust cells are NOT_RUN until an implementation exists.
 | 26 | Telegram `/blackout <missing>`, key `KWB` | 400 with Python's `UnboundLocalError` text | 200 Telegram not-found JSON; no blackout | divergence |
 | 27 | PagerDuty three messages: `a1` trigger, key `zzzz-no-such-alert`, `a1` acknowledge; key `KWA` | 400 `not found` at message 2; message 1 applied; message 3 not applied | 400 `not found` with `results`: applied (`incidentKey` `11aa…0001`, `alertId` `a1`), not-found (`zzzz-no-such-alert`, null), applied; `a1` ends acknowledged | divergence (Y10) |
 | 28 | PagerDuty one message without `incident_key`; separately with `incident_key ''` | 400 with the exception text (`'incident_key'`); separately 400 `no incident key in PagerDuty data payload` | 400 `Invalid PagerDuty message at index 0.`, `results` (invalid, `incidentKey` null); separately 400 `no incident key in PagerDuty data payload`, `results` (invalid, null) | divergence (message, `results`); divergence (`results`) |
+| 28b | PagerDuty one message with `incident_key 42` (a number), key `KWA` | 400 from the caught lookup failure (`'^' + 42` raises) | 400 `Invalid PagerDuty message at index 0.` with `results` (invalid, `incidentKey` null); no lookup | divergence (message, `results`) |
+| 28c | PagerDuty two messages, both for `a1`, where the lookup for message 1 raises (needs a reviewed fault-injection fixture; NOT_RUN until one exists) | 400 at message 1; message 2 not applied | 400 `update PagerDuty incident status failed` with `results`: failed (`alertId` null), applied | divergence (Y10) |
 | 29 | PagerDuty two valid messages for `a1`, key `KWA` | 200 `{status: ok}` | same; no `results` | parity |
 | 30 | PagerDuty three messages where message 2's update returns a falsy result and message 3 applies (needs a reviewed fault-injection fixture; NOT_RUN until one exists) | 200 (only the last result decides) | 400 `update PagerDuty incident status failed` with `results`: applied, failed, applied | divergence (Y10) |
 
