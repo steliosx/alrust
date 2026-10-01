@@ -114,50 +114,78 @@ same privileges (G-SEC-1, P-SEC-1, C-SEC-1) get their own entries under the
 same principle: every edit that can widen a caller's or another user's scopes
 is held to the caller's own scopes. Until then they remain unresolved.
 
-**Reference.**
+Create and update are specified separately: the reference treats them
+differently, and this entry changes only what it names.
 
-1. `PUT /user/{user_id}` (`views/users.py:162-199`): if the body's `roles` is
-   truthy, every scope those roles grant (`Permission.lookup(login='',
-   roles=...)`) must pass `in_scope` against the caller's scopes, else 403
-   `Requested scope '<scope>' not in existing scopes: <scopes>`
-   (`:181-186`). The update then runs, and the model turns a legacy `role`
-   member into `roles: [role]` (`models/user.py:180-181`) **after** that
-   check. So `{"role": "admin"}` grants any role without the ceiling. With
-   both members, the plural check runs first on `roles`, then `role`
-   replaces it.
-2. `POST /user` (`views/users.py:20-60`) refuses a non-basic provider with
-   400 before parsing (`:23-25`). It hashes a missing password as the empty
-   string (`models/user.py:67`). Any parse error is a 400 with the
-   exception text (`views/users.py:27-30`).
-3. When the insert raises, the handler builds `ApiError(str(e), 500)` but
-   never raises it (`:45-48`). The confirmation e-mail (when
-   `EMAIL_VERIFICATION` is on) and the audit event then run (`:50-55`), and
-   the response is 201 with the unsaved user (`:57-58`).
+### Update: `PUT /user/{user_id}`
 
-**alrust input contract** (`PUT /user/{user_id}` and `POST /user`):
-- `roles`: absent, `null` (treated as absent), or a JSON array of strings;
-  anything else is 400 `roles must be a list of strings`.
-- `role`: absent, or a non-empty string; `null`, an empty string or any other
-  type is 400 `role must be a non-empty string`.
-- `role` and a non-null `roles` together: 400 `role and roles are mutually
-  exclusive`, with no side effect.
-- `password` on `POST /user` with the basic provider: a non-empty string;
-  absent, `null`, `""` or any other type is 400 `Missing mandatory value for
-  "password"`, with no side effect.
+**Reference.** If the body's `roles` is truthy, every scope those roles grant
+(`Permission.lookup(login='', roles=<roles>)`) must pass `in_scope` against
+the caller's scopes, else 403 `Requested scope '<scope>' not in existing
+scopes: <scopes>` (`views/users.py:181-186`). The update then runs, and the
+model turns a legacy `role` member into `roles: [role]`
+(`models/user.py:180-181`) **after** that check. So `{"role": "admin"}`
+grants any role without the ceiling. With both members, the plural check runs
+first on `roles`, then `role` replaces it.
 
-**alrust behavior.**
-1. Effective new roles are `[role]` when `role` is present, else `roles`.
-   When they are non-empty, the reference's plural ceiling applies to them,
-   with the reference's 403 message and no side effect. An empty array
-   removes all roles and needs no ceiling, as in the reference.
+**alrust.** Checks run in this order, the first failure deciding the
+response, with no side effect:
+1. `roles` must be absent, `null` (treated as absent) or a JSON array of
+   strings, else 400 `roles must be a list of strings`.
+2. `role` must be absent or a non-empty string, else 400 `role must be a
+   non-empty string`.
+3. `role` together with a non-null `roles`: 400 `role and roles are mutually
+   exclusive`.
+4. The effective new roles are `[role]` when `role` is present, else `roles`.
+   When they are non-empty, the reference's ceiling applies to them with
+   `login=''` and its 403 message. An empty array removes all roles and needs
+   no ceiling, as in the reference.
+Then the update runs as in the reference.
+
+### Create: `POST /user`
+
+**Reference.** A non-basic provider is refused with 400 before parsing
+(`views/users.py:23-25`). `User.parse` (`models/user.py:62-74`) reads
+`roles` only (a `null` value is kept as given) and ignores `role`. The
+constructor replaces the roles with `ADMIN_ROLES` when the e-mail is in
+`ADMIN_USERS` (`:39`). The ceiling runs after construction on the effective
+privileges: `Permission.lookup(login=user.email, roles=user.roles)`
+(`views/users.py:39-43`), which grants `ADMIN_SCOPES` for an `ADMIN_USERS`
+login or an `ADMIN_ROLES` role (`database/backends/postgres/base.py:1277-1284`).
+The password is hashed with bcrypt (`auth/utils.py:21-25`):
+- absent: hashed as the empty string (`models/user.py:67`), then stored;
+- `""`: hashed and stored;
+- `null` or a non-string (for example `5`): the hash raises inside `parse`,
+  which the handler turns into 400 with the exception text
+  (`views/users.py:27-30`).
+When the insert raises, the handler builds `ApiError(str(e), 500)` but never
+raises it (`:45-48`). The confirmation e-mail (when `EMAIL_VERIFICATION` is on)
+and the audit event then run (`:50-55`), and the response is 201 with the
+unsaved user (`:57-58`).
+
+**alrust.** Unchanged from the reference except:
+1. With the basic provider, `password` must be a non-empty string. Absent,
+   `null`, `""` or any other type gives 400 `Missing mandatory value for
+   "password"`, with no side effect. This check belongs to parsing, so it
+   follows the provider check and precedes the domain, uniqueness and
+   ceiling checks.
 2. A failed user insert returns 500 with the database error text, as an
    `ApiError(str(e), 500)` would, and nothing after the insert runs: no
    confirmation e-mail, no audit event, no 201. alrust claims only that no
    success response or post-insert side effect follows a refused insert; it
    makes no claim about a write whose commit outcome is unknown.
+`role` stays ignored on create, `roles` is handled as given (including
+`null`), and the create ceiling stays the reference's post-construction check
+of effective privileges.
 
-**Vectors.** Caller scopes and roles are fixtures; "above the ceiling" means
-some scope the roles grant fails `in_scope` against the caller's scopes.
+### Vectors
+
+Caller scopes, roles and settings are fixtures. "Above the ceiling" means some
+scope the roles grant fails `in_scope` against the caller's scopes.
+"Reference pending" marks a reference outcome that is source-derived but not
+yet qualified. Such a vector asserts the alrust expectation only, and the
+differential comparison skips that exact vector. Nothing broader is
+suppressed until it is qualified.
 
 | Case | Reference | alrust | Kind |
 |---|---|---|---|
@@ -167,13 +195,18 @@ some scope the roles grant fails `in_scope` against the caller's scopes.
 | `PUT` with `roles` within the ceiling | 200 | 200 | parity |
 | `PUT` with `roles: []` | 200, roles removed | 200, roles removed | parity |
 | `PUT` without `role` or `roles` (for example `text` only) | 200 | 200 | parity |
-| `PUT` with `roles` above the ceiling and any `role` | 403 (plural check first) | 400 mutually exclusive | divergence (both refuse) |
-| `PUT` with `roles` within the ceiling or `[]`, and `role` above it | 200, `role` stored | 400 mutually exclusive | divergence |
-| `PUT` with `role: null`, `role: 5` or `roles: "admin"` | reference-specific | 400 per the input contract | divergence |
-| `POST /user`, basic provider, caller with `admin:users`, otherwise valid input that passes the domain, uniqueness and role checks, `password` absent or `""` | 201 with the empty-password hash | 400, no user | divergence |
+| `PUT` with valid `roles` above the ceiling and a valid `role` | 403 (plural check first) | 400 mutually exclusive | divergence (both refuse) |
+| `PUT` with valid `roles` within the ceiling or `[]`, and a valid `role` above it | 200, `role` stored | 400 mutually exclusive | divergence |
+| `PUT` with `roles: "admin"` (with or without `role`) | reference pending | 400 `roles must be a list of strings` | divergence |
+| `PUT` with `role: null` or `role: 5` (no `roles`) | reference pending (the rewrite stores `[null]` or `[5]`) | 400 `role must be a non-empty string` | divergence |
+| `PUT` with `role: 5` and valid `roles: ["admin"]` | reference pending | 400 `role must be a non-empty string` (step 2 precedes step 3) | divergence |
+| `POST`, basic provider, caller with `admin:users`, otherwise valid input that passes the domain, uniqueness and ceiling checks, `password` absent or `""` | 201 with the hash of the empty string | 400 `Missing mandatory value for "password"`, no user | divergence |
+| same, `password: null` or `password: 5` | 400 with the exception text (reference pending) | 400 `Missing mandatory value for "password"` | divergence in the message only; status and envelope must match |
 | same, non-empty string `password` | 201 | 201 | parity |
-| `POST /user` with a non-basic provider | 400 before parsing | 400, same message | parity |
-| `POST /user` whose insert fails before writing (fixture: an `id` equal to an existing user's id), `EMAIL_VERIFICATION=False`, default audit handlers | 201 with the unsaved user | 500, no new row, no audit event | divergence |
+| `POST` with `role: "admin"` and no `roles`, otherwise valid | 201, `role` ignored | 201, `role` ignored | parity |
+| `POST` with an e-mail in `ADMIN_USERS`, caller with only `admin:users` | 403 (effective `ADMIN_SCOPES`) | 403 | parity |
+| `POST` with a non-basic provider | 400 before parsing | 400, same message | parity |
+| `POST` whose insert fails before writing (fixture: an `id` equal to an existing user's id), `EMAIL_VERIFICATION=False`, default audit handlers | 201 with the unsaved user | 500, no new row, no audit event | divergence |
 
 ## Not yet specified
 
