@@ -397,7 +397,8 @@ key carries customer `A`, so `g.customers` is `[A]`.
 
 ## SF-KEYS: API-key expiry, scopes, secret exposure and customer
 
-Status: Proposed. Covers the API-key items and C23. The secret-exposure fix
+Status: Proposed. Covers the API-key items, C23 and the use of a key's
+public id as a credential (KEYS-R4). The secret-exposure fix
 follows owner decision Y6 (2026-10-01): the secret is shown only once, at
 creation, and alrust's vendored web UI shows it once after creation.
 
@@ -434,6 +435,17 @@ the API.
    Every key object holds the secret as `key` and `href` =
    `absolute_url('/key/' + <secret>)` (`models/key.py:64-78`). Paths accept
    the id or the secret (`postgres/base.py:947-953`, `:996`, `:1013`).
+   Authentication uses the same lookup. The `permission` decorator takes a
+   token from `Authorization: Key <token>`, else `X-API-Key`, else the
+   `api-key` query parameter (`auth/decorators.py:30-40`), and passes it to
+   `ApiKey.verify_key` (`:42-43`). That calls `db.get_key(token)`, which
+   matches `id` or `key` (`models/key.py:162-166`; `postgres/base.py:947-953`),
+   and then counts the use with the same raw token (`update_key_last_used`,
+   `:1002-1008`). A key's id is therefore a working credential with that
+   key's scopes. A token that matches no key, or an expired key, gives 401
+   `API key parameter '<token>' is invalid` (`auth/decorators.py:44-45`).
+   In the store, `id` is the primary key and `key` is a separate unique
+   column (`sql/schema.sql:123-133`).
 2. Expiry on `PUT`: `ApiKey.update` replaces `expireTime` with
    `DateTime.parse(expireTime)` when present, else with `None`
    (`models/key.py:152`), and the store then writes it
@@ -478,8 +490,19 @@ the API.
      `POST` (`data.href`), `GET`, `GET /keys` and `PUT`.
    - **S3:** `GET`, `PUT` and `DELETE /key/{key}` match on `id` only. A
      secret in the path is an unknown id: 404 `not found`, no side effect.
-   The authentication header still takes the secret (`verify_key`
-   unchanged). A response is in **operation parity** when it has the
+   - **S4:** authentication matches the token against the `key` (secret)
+     column only, never against `id`. Carriers and their precedence are the
+     reference's (`Authorization: Key`, then `X-API-Key`, then `api-key`).
+     A token that equals a key's id but no key's secret is an unknown key:
+     401 `API key parameter '<token>' is invalid`, the reference's message
+     and envelope. That 401 has no side effect: no use is counted and the
+     handler does not run. Credential resolution comes before the scope
+     check and the handler, as in the reference. On success, the use is
+     counted on the one resolved key's row, by its id. Expired keys are
+     refused as in the reference.
+
+   Management and authentication are therefore separate: paths take the id
+   only (S3), and credentials take the secret only (S4). A response is in **operation parity** when it has the
    reference's status, envelope members and stored state, and its key
    objects equal the reference's after S1 and S2 are applied to them.
 2. `PUT /key/{id}` checks in this order, each refusal without side effect:
@@ -506,31 +529,39 @@ the API.
    including the `ADMIN_USERS` case. Expiry handling on `POST` is unchanged.
 4. Stored expiry and scopes are read literally; nothing is rebuilt or
    substituted on read.
-5. Web UI (Y6, amended 2026-10-01). The pinned UI never shows a new key's
-   secret: `createKey` discards the creation response and reloads the list
-   (`store/modules/keys.store.ts:35-38`), and the list shows `key` from
-   `GET /keys` (`ApiKeyList.vue:215-224`). alrust's vendored web UI
+5. Web UI (Y6, amended 2026-10-01). Against the reference, the pinned UI
+   shows a new key's secret only through the reloaded list: `createKey`
+   discards the creation response and reloads the list
+   (`store/modules/keys.store.ts:35-38`), which shows `key` from `GET /keys`
+   (`ApiKeyList.vue:215-224`). Against the S1 responses it would never show
+   the secret. alrust's vendored web UI
    therefore carries one change: after a successful create, it shows the
    secret from the 201 response once, with a copy control, and the list
    no longer has a key column. Update and delete already use `id`
    (`ApiKeyList.vue:491`, `:503-504`). This is a vendored-UI change under
    ADR-0004 and has its own review.
 
-**Vectors.** Reference columns are source-derived. Their runtime predicates
-stay **reference pending** (an explicit skip) until a qualified reference run.
+**Vectors.** Reference columns are source-derived expectations. Before
+execution each is NOT_RUN; on the first authorized reference run, every
+status, envelope and state predicate in them is asserted, and none is
+skipped for lack of an earlier run. Only a cell marked **reference pending**
+has an unresolved expectation: that predicate alone is an explicit skip
+(`SKIPPED_REFERENCE_UNQUALIFIED`), while the known predicates of the same
+row, including the alrust side and its no-side-effect checks, are still
+asserted.
 
 | # | Case | Reference | alrust | Kind |
 |---|---|---|---|---|
 | 1 | `C1` `PUT` `K0` with body `{text: 't1'}` (no `expireTime`) | 200; stored expiry `NULL`; each read shows read time + 365 days; `verify_key` accepts after `E` | 200; stored expiry `E` | divergence (expiry) + S1/S2 |
 | 2-6 | `C1` `PUT` `K0` with `expireTime` = `null`, `5`, `false`, `[]`, `{}` | 200, as row 1 | 400 parse message, no change | divergence |
-| 7 | `C1` `PUT` `K0` with `expireTime: 'tomorrow'` | 500 generic | 400 parse message, no change | divergence |
+| 7 | `C1` `PUT` `K0` with `expireTime: 'tomorrow'` | 500 (body reference pending) | 400 parse message, no change | divergence |
 | 8 | `C1` `PUT` `K0` with a valid `expireTime` `E2` | 200, expiry `E2` | same | operation parity |
-| 9 | `C1` `PUT` `K0` with `scopes: []` | 200; stored `[]`; reads back `[read, write]` | 400 `scopes must not be empty`, no change | divergence |
+| 9 | `C1` `PUT` `K0` with `scopes: []` | 200; stored `[]`; the response and later reads show `[read, write]` | 400 `scopes must not be empty`, no change | divergence |
 | 10 | `C1` `PUT` `K0` with `scopes: [read]` | 200 | 200 | operation parity |
 | 11 | `C1` `PUT` `K0` with `scopes: [write]` | 403 ceiling message | same | parity |
 | 12 | `C2` creates `K0` for `alice@example.test` with scopes `[admin]`; then `C1` `PUT` it with `{text: 't1', expireTime: E}` | 200; stored scopes not rechecked | same | operation parity |
-| 13 | `C1` `POST` `{type: 'bogus'}` | 201; scopes `[]`, reads back `[read, write]`; user `alice@example.test` | 400 `unknown key type`, no key | divergence |
-| 14 | `C2` `POST` `{type: 'bogus'}` | 201; scopes `[]` | 400 `unknown key type`, no key | divergence |
+| 13 | `C1` `POST` `{type: 'bogus'}` | 201; stored scopes `[]`; the 201 object (built by `ApiKey.from_db`) and later reads show `[read, write]`; user `alice@example.test` | 400 `unknown key type`, no key | divergence |
+| 14 | `C2` `POST` `{type: 'bogus'}` | 201; stored scopes `[]`; the 201 object and later reads show `[read, write]` | 400 `unknown key type`, no key | divergence |
 | 15 | `C2` `POST` `{type: 'bogus', user: 'root@example.test'}` | 201; scopes `ADMIN_SCOPES` | 400 `unknown key type`, no key | divergence |
 | 16 | `C2` `POST` `{type: 'read-only', user: 'root@example.test'}` | 201; scopes `ADMIN_SCOPES`; user `root@example.test` | same | operation parity (`ADMIN_USERS` positive control) |
 | 17 | `C1` `POST` `{type: 'read-only', user: 'root@example.test'}` | 403 ceiling message (`ADMIN_SCOPES` from the body user; final user `alice@example.test`) | same | parity |
@@ -544,7 +575,12 @@ stay **reference pending** (an explicit skip) until a qualified reference run.
 | 25 | `C1` `PUT` `KA` without `customer` | 200; customer cleared to `NULL` | 200; customer `A` kept | divergence (C23) + S1/S2 |
 | 26 | `C3` `PUT` `KA` without `customer` | 200; customer `A` | same | operation parity |
 | 27 | `C4` `PUT` `KA` without `customer` | 400 `must define customer as more than one possibility` | 200; customer `A` kept | divergence (C23) |
-| 28 | `C3` `PUT` `KA` with `customer: 'A'`; with `customer: 'B'` | 200; 400 `not allowed to set customer to 'B'` | same | parity |
+| 28a | `C3` `PUT` `KA` with `customer: 'A'` | 200; customer `A` | same | operation parity |
+| 28b | `C3` `PUT` `KA` with `customer: 'B'` | 400 `not allowed to set customer to 'B'` | same | parity |
+| 29-31 | `GET /key/{id of K0}` with the token = `K0`'s **id**, sent as `Authorization: Key`, as `X-API-Key`, and as `?api-key=` | 200, authenticated as `K0` (`alice@example.test`, scopes `[read]`); `K0` use count +1 | 401 `API key parameter '<id>' is invalid`; count and last-used time unchanged | divergence (S4) |
+| 32-34 | same request with the token = `K0`'s **secret**, on each of the three carriers | 200; `K0` use count +1 | 200 (S1/S2 apply to the body); `K0` use count +1 | operation parity (positive control) |
+| 35 | same request with an unknown token | 401 `API key parameter '<token>' is invalid` | same | parity |
+| 36 | same request with the secret of a key stored with an expiry in the past | 401, as row 35 | same | parity |
 
 ## SF-NOTES: a note is changed only through its own alert
 
