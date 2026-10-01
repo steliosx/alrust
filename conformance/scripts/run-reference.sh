@@ -16,9 +16,11 @@
 # alive, and the listening socket must belong to a process of that group, both
 # before and after the health response. Acceptance and cleanup share that one
 # scope: on any failure, unexpected exit or TERM/INT, the whole group is
-# stopped (TERM, then KILL), bounded, and verified empty; the primary failure
-# status is kept and the cleanup outcome reported. Success hands the server off
-# only once readiness is proven.
+# stopped (TERM, then KILL), bounded, and its emptiness checked with the kernel
+# (kill -0 on the group: PRESENT, EMPTY or UNKNOWN); only EMPTY is reported as
+# complete, and the primary failure status is kept. Success hands the server
+# off only after readiness is proven AND the success line has been written; a
+# closed output pipe is a failure that still triggers cleanup.
 # The deadline is measured on the monotonic clock (/proc/uptime), and every
 # health request is capped by timeout(1) and curl's own limits to the time
 # left. The caller's own group is never signalled. The .reference.pid file is
@@ -64,7 +66,7 @@ port_state() {  # FREE/BUSY only on a successful observation, else UNKNOWN
 }
 pgid_of() {  # process group of PID $1 from /proc/<pid>/stat (field after the command), or fail
   local st rest
-  st=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+  { read -r st <"/proc/$1/stat"; } 2>/dev/null || return 1
   rest=${st##*) }
   set -- $rest
   [[ $3 =~ ^[0-9]+$ ]] || return 1
@@ -78,12 +80,20 @@ owns_port() {  # true only when ss succeeds and a listener on :$PORT is in proce
   done
   return 1
 }
-group_alive() {  # true when any process of group $1 remains
-  local d
-  for d in /proc/[0-9]*; do
-    [[ $(pgid_of "${d#/proc/}") == "$1" ]] && return 0
-  done
-  return 1
+group_state() {  # PRESENT, EMPTY or UNKNOWN for process group $1, asked of the kernel
+  local out
+  if out=$(LC_ALL=C kill -0 -- "-$1" 2>&1); then echo PRESENT; return; fi
+  case $out in
+    *"No such process"*) echo EMPTY ;;
+    *) echo UNKNOWN ;;
+  esac
+}
+reap_leader_if_exited() {  # wait only for a leader that has already exited (zombie); never block
+  local st state
+  { read -r st <"/proc/$1/stat"; } 2>/dev/null || { wait "$1" 2>/dev/null || true; return 0; }
+  state=${st##*) }; state=${state%% *}
+  [[ $state == Z ]] && { wait "$1" 2>/dev/null || true; }
+  return 0
 }
 
 case $(port_state) in
@@ -123,6 +133,7 @@ export DATABASE_URL
 export AUTH_REQUIRED="${AUTH_REQUIRED:-False}"
 export SECRET_KEY="${SECRET_KEY:-conformance-not-secret}"
 
+read -r version <"$ref/VERSION" || { echo "run-reference: cannot read reference VERSION" >&2; exit 1; }
 start=$(now_ms) || { echo "run-reference: cannot read the monotonic clock" >&2; exit 1; }
 deadline=$(( start + READY_TIMEOUT * 1000 ))
 own_pgid=$(pgid_of $$) || { echo "run-reference: cannot read its own process group" >&2; exit 1; }
@@ -130,20 +141,27 @@ own_pgid=$(pgid_of $$) || { echo "run-reference: cannot read its own process gro
 pid=''
 handed_off=0
 stop_owned_group() {  # bounded stop of the launched group; never the caller's group
-  local i
+  local i state
   [[ -n $pid && $pid != "$own_pgid" ]] || return 0
   kill -TERM -- "-$pid" 2>/dev/null || true
-  for i in $(seq 1 20); do group_alive "$pid" || break; sleep 0.5; done
-  if group_alive "$pid"; then
+  for i in $(seq 1 20); do
+    reap_leader_if_exited "$pid"
+    state=$(group_state "$pid"); [[ $state == EMPTY ]] && break
+    sleep 0.5
+  done
+  if [[ $state != EMPTY ]]; then
     kill -KILL -- "-$pid" 2>/dev/null || true
-    for i in $(seq 1 10); do group_alive "$pid" || break; sleep 0.5; done
+    for i in $(seq 1 10); do
+      reap_leader_if_exited "$pid"
+      state=$(group_state "$pid"); [[ $state == EMPTY ]] && break
+      sleep 0.5
+    done
   fi
-  wait "$pid" 2>/dev/null || true
-  if group_alive "$pid"; then
-    echo "run-reference: cleanup FAILED: process group $pid still has members" >&2
-    return 1
-  fi
-  echo "run-reference: cleanup complete: process group $pid is empty" >&2
+  case $state in
+    EMPTY) echo "run-reference: cleanup complete: process group $pid is empty" >&2 ;;
+    PRESENT) echo "run-reference: cleanup FAILED: process group $pid still has members" >&2; return 1 ;;
+    *) echo "run-reference: cleanup UNPROVEN: the state of process group $pid is unknown" >&2; return 1 ;;
+  esac
 }
 on_exit() {
   local rc=$?
@@ -182,9 +200,13 @@ while :; do
     if timeout "$cap" curl -fsS --connect-timeout "$cap" --max-time "$cap" \
         "http://127.0.0.1:$PORT/management/healthcheck" >/dev/null 2>&1 \
         && kill -0 "$pid" 2>/dev/null && owns_port "$pid"; then
+      trap '' PIPE  # a closed output pipe becomes a write error, handled below, not a fatal signal
+      if ! printf 'reference alerta %s up on :%s (pid %s, process group %s)\n' "$version" "$PORT" "$pid" "$pid"; then
+        echo "run-reference: could not report readiness; treating as failure" >&2
+        exit 1
+      fi
       handed_off=1
       trap - EXIT INT TERM
-      echo "reference alerta $(cat "$ref/VERSION") up on :$PORT (pid $pid, process group $pid)"
       exit 0
     fi
   fi
