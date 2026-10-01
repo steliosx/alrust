@@ -1026,9 +1026,322 @@ Row 15's value is a fixed synthetic string, run only against the
 disposable fixture; it reads and writes nothing. These vectors authorize no
 provisioning and no SQL or HTTP execution.
 
-## Not yet specified
+## SF-WEBHOOKS: no credentials in logs, whole batches, plain placeholders
 
-The other Y3 items get entries in this file before their phases need them:
-WUI-SEC-1 and WP-SEC-1; W-SEC-1 and W-DL-1. Until an item has an entry here, its
-reference behavior in `spec/openapi.yaml` stands as the description of the
-defect, not as a requirement for alrust.
+Status: Proposed. Covers W-SEC-1, W-DL-1 (owner decision Y10), WP-SEC-1
+(owner decision Y12) and the Prometheus `moreInfo` part of WUI-SEC-1 (owner
+decision Y11), all 2026-10-01.
+
+**Reference.**
+1. W-SEC-1, logs and audit:
+   - The webhooks blueprint's `before_request` (`webhooks/__init__.py:17-24`)
+     runs before authentication on every method. At INFO it logs the
+     method, the full URL (including any `?api-key=`), all request headers
+     (including `Authorization`, `X-API-Key` and `Cookie`) and the whole
+     body.
+   - Audit records (`utils/audit.py:79-118`) carry the full `request.url`,
+     all query `args` and the JSON body (only a top-level `password` is
+     redacted), and their `message` can be the alert text. They go to the
+     application log (`AUDIT_LOG`) and to `AUDIT_URL`, for the categories in
+     `AUDIT_TRAIL`, default `['admin']` (`settings.py:178-182`).
+   - The request id is client-controlled (`X-Request-ID`,
+     `utils/tracing.py:18-25`). It is returned as the `X-Request-ID`
+     response header (`:28-31`), and in the JSON body only in error
+     envelopes (`exceptions.py:98-107`).
+   - An invalid API key is echoed in the 401 message
+     (`auth/decorators.py:44-45`).
+2. W-DL-1, batches:
+   - The Prometheus webhook maps every item of `alerts` before any
+     processing (`webhooks/prometheus.py:110-114`). One malformed item
+     fails the whole request, and nothing is processed. A `KeyError`,
+     `AttributeError` or `ValueError` from mapping gives 400 with the
+     exception's text (`webhooks/custom.py:38-39`). A `TypeError` (for
+     example `labels.timeout = []` reaching `int([])`,
+     `webhooks/prometheus.py:60`, where only `ValueError` is caught) takes
+     the dispatcher's legacy retry without `path` and ends in the generic
+     500.
+   - The envelope check tests only that `alerts` is present (`:112`). A
+     missing `alerts` gives 400 `no alerts in Prometheus notification
+     payload`. An empty list, `{}` or `''` maps to no alerts, and the
+     request returns 201 `{status, ids: []}` (`custom.py:81-84`). A `null`
+     or a number is not iterable: `TypeError`, so `custom.py:31-35` retries
+     the call without its required `path` argument, which raises again, and
+     the generic handler returns 500 `An internal error has occurred!`
+     (`exceptions.py:120-136`). A non-empty string or object is iterated,
+     and `parse_prometheus` fails at its first `alert.get` (`:18`) with
+     `AttributeError`: 400 `'str' object has no attribute 'get'`. Codex's
+     source-only probes (`3154abb3`, `a534124f`, both replayed
+     byte-identically by Claude) show these mappings and exception
+     classes.
+   - `custom` then processes the mapped alerts one by one (`:41-84`).
+     `process_alert` runs the pre-receive plugins, then stores the alert by
+     deduplication, correlation or creation, then runs the post-receive
+     plugins (`utils/api.py:40-92`). A post-receive failure therefore
+     follows a durable store change.
+   - The heartbeat plugin creates a heartbeat record before signalling
+     (`plugins/heartbeat.py:20-33`), and the response carries that
+     heartbeat's id (`custom.py:62-64`).
+   - The first alert whose processing does not complete ends the request
+     with that alert's response: rejected (403), rate-limited (429),
+     heartbeat (202), blackout (202), forwarding loop (202), or an error
+     (the `AlertaException` code, else 500). Alerts before it are processed;
+     alerts after it are never processed.
+   - When all complete, the response is 201 `{status, id, alert}` for one
+     alert, or `{status, ids}` for several, with the ids of the stored
+     alerts after deduplication (`:81-84`).
+3. WP-SEC-1: each label value is run through `str.format(**labels)`, and
+   each annotation through `str.format(**expanded labels)`; any exception
+   keeps the original value (`webhooks/prometheus.py:20-34`). The full
+   format language applies. A non-string value raises and is kept as is. A
+   referenced non-string label is inserted as Python's `str()` of it: `5`,
+   `True`, `None`, `[1]`, `{'k': 'v'}` (Codex's probe, replayed).
+4. `moreInfo`: with a `generatorURL`, the mapping stores the HTML string
+   `<a href="<generatorURL>" target="_blank">Prometheus Graph</a>` as an
+   annotation, which becomes `attributes.moreInfo` (`:74-75`, `:82`).
+
+**alrust.**
+1. Sinks (W-SEC-1). The sinks are: the application log at every level,
+   error and exception logs, debug output, and audit records in every
+   destination (log and `AUDIT_URL`). Rules for all of them:
+   - **No credential value**, anywhere in a sink. The protected values of
+     a request are, whether valid or not:
+     - the `Authorization` header value and the token after its `Key ` or
+       `Bearer ` prefix;
+     - the `X-API-Key` value;
+     - the `api-key` query value;
+     - the `Cookie` header value and each cookie value.
+
+     Before any field is encoded for a sink (JSON, log line or URL), every
+     occurrence of a non-empty protected value in every retained text
+     field is replaced by `[REDACTED]`, in its raw, percent-encoded (upper-
+     or lower-case hex) and `+`-for-space forms. The retained text fields
+     are: the request id, user agent, path, URL, query names and values,
+     audit data and message, and every log message. The name-based rules
+     below apply as well. The 401 response itself keeps the reference's
+     message (SF-KEYS S4).
+   - **No query string or request body** in the application, error or
+     debug logs. Webhook request logging records only the method, the route
+     template (`/webhooks/<webhook>/<path>`), the webhook name if it is
+     registered (else `<unknown>`), the body length and the request id.
+   - **Audit records** keep the reference's event, category, user,
+     resource, endpoint, method, remote IP and user-agent fields, with:
+     - `request.url` without its query string;
+     - `request.args` keeping names, with the value of `api-key` and of every
+       name matching the SF-MGMT secret-name patterns replaced by
+       `[REDACTED]`;
+     - `request.data` null for webhook routes. Elsewhere, the JSON body with
+       every member, at any depth, whose name matches those patterns
+       replaced by `[REDACTED]`;
+     - for webhook alert events, `message` is the fixed text `alert
+       received via <webhook> webhook`, never the alert text.
+   - **Logged identifiers are safe:** after the credential-value rule, the
+     request id written to any sink has every character outside
+     `[A-Za-z0-9._:-]` replaced by `_` and is cut to 128 characters.
+     Responses keep the reference's request id (header, and error body).
+2. Batches (Y10).
+   - **Envelope (Prometheus).** A missing `alerts` gives 400 `no alerts in
+     Prometheus notification payload`, as in the reference. An empty list
+     gives 201 `{status, ids: []}`, as in the reference. Any other
+     non-list `alerts` (`null`, a number, a string or an object, empty or
+     not) gives the same 400, with nothing processed. Against the
+     reference that is: a divergence for `{}` and `''` (201); a divergence
+     for `null` and numbers (500); status parity with a different message
+     for a non-empty string or object (400 `'str' object has no attribute
+     'get'`).
+   - **Items.** A malformed item (one whose mapping fails) becomes an
+     `invalid` result for that item, and every other item is still mapped
+     and processed. A batch of exactly one malformed item gives 400
+     `Invalid alert at index 0 in webhook payload.` with no `results`. Its
+     status matches the reference when the reference's mapping failure is a
+     `KeyError`, `AttributeError` or `ValueError` (400 with the exception
+     text, a deliberate message divergence). It diverges when the failure
+     is a `TypeError` (the reference's 500). This takes precedence over the
+     single-item parity rule below.
+   - **Processing.** Every mapped alert is processed in order, each
+     independently, with the reference's per-alert handling and audit
+     events (sanitized as above). There is no rollback: a store change made
+     before a later failure in the same alert's processing stays, as in the
+     reference.
+   - **`results`** is a list in batch order of `{index, inputId,
+     resourceId, outcome, code, message}`:
+     - `index` counts from 0;
+     - `inputId` is the id of the mapped input alert (null for an `invalid`
+       item);
+     - `resourceId` is the id of what the processing produced: the stored
+       alert after deduplication or correlation, the created heartbeat, or
+       null when nothing was produced;
+     - `outcome` is one of `processed`, `invalid`, `rejected`,
+       `rate-limited`, `heartbeat`, `blackout`, `forwarding-loop` or
+       `error`. An `error` whose failure came after the store step has its
+       store change kept;
+     - `code` is the status the reference would return for that alert alone
+       (201 when processed, 400 when invalid);
+     - `message` is null when processed, else that response's message (for
+       `invalid`: `Invalid alert at index <index> in webhook payload.`).
+   - **Response.**
+     - If every item is `processed`, the response is the reference's (201,
+       `{status, id, alert}` for one, `{status, ids}` with the
+       `resourceId`s for several).
+     - A batch of exactly one item that maps successfully gets the
+       reference's response in every case.
+     - Otherwise, the status and members are those of the reference's
+       response for the **first** item whose outcome is not `processed`,
+       plus `results`. This is the one stated exception to the common error
+       envelope.
+   - **Side effects.** The common "no side effect" rule does not apply to a
+     batch that was admitted and partly processed. It still applies to
+     every refusal before dispatch: authentication, scope, unknown webhook,
+     malformed envelope.
+3. Placeholders (Y12). Each label value is expanded against the original
+   labels, and each annotation against the expanded labels, in the
+   reference's order. The full Python format language is never invoked.
+   1. A non-string label or annotation value is kept as is.
+   2. The value is read left to right as literal text, `{{`, `}}` and brace
+      groups `{…}` (from a `{` to the next `}`).
+   3. The value is kept unchanged if it has any of: an unmatched `{` or a
+      lone `}`; an empty or all-digit group; a plain-name group (one with
+      none of `:`, `!`, `.`, `[`) whose name is missing from the map. This
+      matches the reference, which keeps the value on error. The value is
+      also kept unchanged when a plain-name group refers to a list or an
+      object. That is a deliberate divergence: the reference inserts
+      Python's representation of it.
+   4. Otherwise the output is built left to right: literal text as is, `{{`
+      as `{`, `}}` as `}`, a plain-name group as the referenced value (a
+      string as is; an integer, boolean or null as Python's `str()`: for
+      example `5`, `True`, `None`; a float as Python's `str()`), and every
+      other group exactly as written, braces included.
+   5. The output's size is counted in UTF-8 bytes, with overflow-safe
+      arithmetic, **before** each append. If an append would make it larger
+      than 65,536 bytes, building stops at once and the original value is
+      kept. No longer string is ever allocated.
+4. `moreInfo` (Y11): with a `generatorURL`, the Prometheus mapping stores the
+   plain URL string as `attributes.moreInfo`. The rest of the mapping is
+   unchanged.
+
+**Fixtures.** Each vector runs on its own fresh store; each sub-case marked
+"separately" gets a fresh store too. Settings:
+- `PLUGINS` the default list (`settings.py:272`);
+- `ALLOWED_ENVIRONMENTS = ['Production', 'Development']`,
+  `DEFAULT_ENVIRONMENT = 'Production'`;
+- `NOTIFICATION_BLACKOUT = False`, `FWD_DESTINATIONS = []`,
+  `HEARTBEAT_EVENTS = ['Heartbeat']`;
+- `AUTH_REQUIRED = True`, `CUSTOMER_VIEWS = False`;
+- `AUDIT_TRAIL = ['admin', 'write', 'auth']`, `AUDIT_LOG = True`;
+- the log level DEBUG for alrust and INFO for the reference.
+
+The caller holds a synthetic key with `write:webhooks` and no customer.
+Every sink is captured for the request: the application log, the error log
+and the audit records.
+
+Payloads are `POST /webhooks/prometheus` with `{"alerts": [...]}`. Each item
+has:
+- `status 'firing'` and fixed `startsAt` and `endsAt`;
+- labels `alertname 'A-<row>-<n>'`, `instance 'h-<row>-<n>'` and
+  `severity 'major'`, and no `service` label (the reference maps that to
+  `['']`);
+- annotation `summary 'S-<row>-<n>'`;
+- no `generatorURL`, unless a row says otherwise.
+
+Resources therefore differ across vectors. Where a row names a blackout, it
+is `environment 'Production'`, the named resource only, from one hour
+before to one hour after the request.
+
+**Vectors.** Reference cells are source-derived. Before execution they are
+NOT_RUN, and their known predicates are asserted on the first authorized
+run. Only cells marked **reference pending** skip, and only that predicate.
+alrust cells are NOT_RUN until an implementation exists. "Rows" means alert
+rows in the store; "audit" means the events of the write category.
+
+| # | Case | Reference | alrust | Kind |
+|---|---|---|---|---|
+| 1 | one item; `Authorization: Key <valid key>` plus `?api-key=<s2>` (the header wins); body `summary` set to sentinel `<s3>` | the request log contains the key, `<s2>` and `<s3>`; the audit record contains `<s2>` (in `url` and `args`) and `<s3>` (in `data`) | no sink contains the key, `<s2>` or `<s3>`; the alert's stored `text` is `<s3>` | divergence |
+| 2 | `X-API-Key: <invalid sentinel s4>` | 401 echoing `<s4>`; the request log contains `<s4>` | 401 echoing `<s4>` (SF-KEYS S4); no sink contains `<s4>` | divergence (logs) |
+| 3 | valid key, plus `Cookie: session=<s5>` and `X-Request-ID: id<TAB>x"y` | the request log contains `<s5>`; logged request ids hold the tab and the quote | no sink contains `<s5>`; every logged request id is `id_x_y`; the 201 response's `X-Request-ID` header is the value as sent (a success body has no `requestId`) | divergence |
+| 3b | valid key whose token `<t>` is also sent as `X-Request-ID: <t>`, `User-Agent: <t>`, query `?note=<t>` and path `/webhooks/prometheus/<t>` | the request log contains `<t>`; the audit record contains `<t>` in `url`, `args` and `userAgent` | no sink contains `<t>` in raw or percent-encoded form; the `X-Request-ID` response header is `<t>` as sent | divergence |
+| 4 | four items; `h-4-2` is blacked out | 202 `Suppressed alert during blackout period` (`plugins/blackout.py:33`); rows for `h-4-1` only; audit `webhook-received` (1), `alert-blackout` (1) | 202, same members plus `results`: processed, blackout, processed, processed; rows for `h-4-1`, `h-4-3`, `h-4-4`; audit `webhook-received` (3), `alert-blackout` (1) | divergence (Y10) |
+| 5 | four items; `h-5-2` has label `environment 'Bogus'` | 403 with the reject message; rows for `h-5-1` only; audit `alert-rejected` (1) | 403, same envelope plus `results`: processed, rejected, processed, processed; rows for `h-5-1`, `h-5-3`, `h-5-4` | divergence (Y10) |
+| 6 | three items; `h-6-2` has label `event 'Heartbeat'` | 202 with the heartbeat message and the **heartbeat's** id; one heartbeat record; rows for `h-6-1` only | 202, same members plus `results`; `h-6-2` has outcome `heartbeat`, its `inputId` is the mapped alert's id and its `resourceId` the heartbeat's id; rows for `h-6-1` and `h-6-3`; one heartbeat | divergence (Y10) |
+| 7 | three items; the middle item lacks `labels` | 400 for the whole request; nothing processed; no rows | 400 `Invalid alert at index 1 in webhook payload.` plus `results`: processed, invalid, processed; rows for `h-7-1` and `h-7-3` | divergence (Y10) |
+| 8 | payload `{"foo": 1}` (no `alerts`) | 400 `no alerts in Prometheus notification payload`; no rows | same; no rows | parity |
+| 8b | `{"alerts": []}` | 201 `{status, ids: []}` | same | parity |
+| 8c | `{"alerts": {}}`; separately `{"alerts": ""}` | 201 `{status, ids: []}` each | 400 `no alerts in Prometheus notification payload` each; no rows | divergence |
+| 8d | `{"alerts": null}`; separately `{"alerts": 5}` | 500 `An internal error has occurred!` each | 400 `no alerts in Prometheus notification payload` each; no rows | divergence |
+| 8d2 | `{"alerts": "ab"}`; separately `{"alerts": {"x": 1}}` | 400 `'str' object has no attribute 'get'` each; no rows | 400 `no alerts in Prometheus notification payload` each; no rows | parity of status; divergence of message |
+| 8e | one item lacking `labels` | 400 with the exception text (`'labels'`); no rows | 400 `Invalid alert at index 0 in webhook payload.`, no `results`; no rows | divergence (message only) |
+| 8f | one item with `labels.timeout = []` | 500 `An internal error has occurred!` (`TypeError` at `prometheus.py:60`, legacy retry); no rows | 400 `Invalid alert at index 0 in webhook payload.`, no `results`; no rows | divergence |
+| 9 | three items, no blackout | 201 `{status, ids}`; three rows; audit `webhook-received` (3) | same; no `results` | parity |
+| 9b | three items, `PLUGINS_RAISE_ON_ERROR = True`; a test-only post-receive plugin named `synthetic-fail` raises `RuntimeError('synthetic failure')` for item 2 only, after its store step (a reviewed fault-injection fixture is required; NOT_RUN until one exists). An `AlertaException` would instead be re-raised (`utils/api.py:77-78`) and is not this vector | 500 `Error while running post-receive plugin 'synthetic-fail': synthetic failure` (`utils/api.py:79-81`; `custom.py:72-73`); rows for `h-9b-1` and `h-9b-2`; `h-9b-3` never processed; audit `webhook-received` (1) | 500, same message plus `results`: processed, error (`resourceId` the stored `h-9b-2` alert), processed; rows for all three; audit `webhook-received` (2) | divergence (Y10) |
+| 10 | one item, no blackout; separately, one item blacked out | 201 `{status, id, alert}`; separately, 202 with the blackout message | same, no `results` | parity |
+| 11 | annotation `runbook 'https://wiki.test/{instance}/{alertname}'` | `attributes.runbook` `https://wiki.test/h-11-1/A-11-1` | same | parity |
+| 12 | annotation `note '{{literal}} {alertname}'` | `{literal} A-12-1` | same | parity |
+| 13 | annotation `note` set to `'{missing} {alertname}'`; separately `'{0}'`; separately `'{alertname'` | unchanged each time | same | parity |
+| 14 | annotation `note 'x {alertname:>20} {instance}'` | `x`, then `A-14-1` right-aligned in 20 characters, then ` h-14-1` | `x {alertname:>20} h-14-1` | divergence (Y12) |
+| 15 | annotation `note '{alertname.__class__}'` | `<class 'str'>` | `{alertname.__class__}` | divergence (Y12) |
+| 16 | label `big` of 1,000 `a` characters; annotation `note` of 66 `{big}` groups | 66,000 characters | the original 330-character value (66,000 bytes exceed the cap) | divergence (Y12) |
+| 17 | label `big` of 1,024 `a` characters; annotation `note` of 64 `{big}` groups (65,536 bytes); separately, the same plus one trailing `x` (65,537 bytes) | expanded both times | expanded; separately, the original value | parity; divergence (Y12) |
+| 18 | label `u` of 30,000 `ü` (2 bytes each); annotation `note '{u}{u}'` (60,000 characters, 120,000 bytes) | expanded | the original value (bytes, not characters, are counted) | divergence (Y12) |
+| 19 | label `n` the number `5`; annotation `note 'v={n}'`; separately, annotation `note` the number `7` | `v=5`; separately `7`, kept | same | parity |
+| 19b | label `x` the list `[1]`, annotation `note '{x}'`; separately, label `x` the object `{"k": "v"}` | `[1]`; separately `{'k': 'v'}` | `{x}` both times | divergence (Y12) |
+| 20 | `generatorURL 'http://prom.test/graph?g0.expr=up'` | `attributes.moreInfo` is the HTML anchor | `attributes.moreInfo` is `http://prom.test/graph?g0.expr=up` | divergence (Y11) |
+
+Sentinels are synthetic. Captures stay private to the run. The largest
+payload (row 18) is about 60 KB; no stress run is implied. These vectors
+authorize no fault injection and no execution.
+
+## SF-WEBUI: no raw HTML in the web UI
+
+Status: Proposed. Covers WUI-SEC-1. Owner decision Y11 (2026-10-01). This is
+a change to alrust's vendored web UI (ADR-0004) and is tested with the UI's
+own component tests, not the HTTP conformance suite.
+
+**Reference.** The pinned web UI (`2687e4af`) renders nine fields as raw
+HTML with `v-html` and no sanitizer:
+- alert `value`, `text` and custom attribute columns
+  (`AlertList.vue:153`, `:162`, `:180`);
+- history text (`AlertDetail.vue:582`);
+- string attributes containing `http://` or `https://`
+  (`AlertDetail.vue:728-730`);
+- group member name and email, and name and login
+  (`GroupList.vue:53-54`, `:84-85`).
+
+Anyone who can write these fields controls HTML, including script, in
+operators' browsers.
+
+**alrust.** None of the nine places renders HTML. Each one shows its field
+as text, through one shared rendering function:
+- The text is escaped, so any HTML is shown literally.
+- Every substring matching `https?://[^\s<>"']+`, minus any trailing `.`,
+  `,`, `;`, `:`, `!`, `?` or `)`, becomes an anchor whose visible text is
+  that substring, with `href` the same substring, `target="_blank"` and
+  `rel="noopener noreferrer"`.
+- No other scheme is linked.
+- Non-string values are shown as their text form.
+
+The renderer works on the original string. It splits the string into text
+and URL tokens and builds DOM nodes: text nodes for text, and anchors whose
+`href` and text are bound as attributes and text. It never builds an HTML
+string. So `&` and quotes are neither interpreted nor escaped twice. No other
+UI behavior changes.
+
+**Vectors** (vendored UI component tests):
+
+| # | Field content | Rendered |
+|---|---|---|
+| 1 | `<img src=x onerror=alert(1)>` in an alert's `text` | the literal characters; no `img` element; no handler runs |
+| 2 | `see https://wiki.test/x.` in `value` | `see `, an anchor to `https://wiki.test/x` (the period stays text) with `target="_blank"` and `rel="noopener noreferrer"`, then `.` |
+| 3 | `javascript:alert(1)` in a custom attribute | the literal text, no anchor |
+| 4 | `<b>bold</b>` in history text | the literal characters |
+| 5 | a group member email `a@b.test<script>x</script>` | the literal characters; no `script` element |
+| 6 | an attribute value `http://prom.test/graph` (the alrust `moreInfo`) | one anchor to that URL |
+| 7 | `a & b "q" 'x' <i>` in `text` | exactly those characters, once escaped by the DOM, never `&amp;amp;` |
+| 8 | `https://a.test/?x=1&y=2` in `value` | one anchor whose `href` is exactly `https://a.test/?x=1&y=2` |
+| 9 | `(see https://a.test/p), then stop!` in history text | `(see `, an anchor to `https://a.test/p`, then `), then stop!` |
+| 10 | the number `5` in a custom attribute; `true`; `null` | `5`; `true`; the empty text |
+| 11 | vector 1's content in each of the nine sites (alert value, text, a custom attribute column, history text, group member name, email, name and login); at the string-attribute site, `see https://x.test/ <img src=x onerror=alert(1)>`, which contains an http(s) substring and so reaches the former raw-HTML branch (`AlertDetail.vue:728-739`) | no element is created from the content at any site; at the string-attribute site, one anchor to `https://x.test/` and the rest as literal text |
+
+## Later findings
+
+Every Y3 item now has an entry above. A defect found later gets its own
+entry here before alrust relies on its fix; until then its reference
+behavior in `spec/openapi.yaml` stands as the description of the defect, not
+as a requirement for alrust.
