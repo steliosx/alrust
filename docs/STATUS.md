@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-01T19:32Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-01T19:42Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -78,6 +78,8 @@ are kept.
 | #61 | `claude/charter-sync` (DECISIONS Y10 clarified; STATUS) | `9de6095e` (approved `a534124f`) | `1ece49da` |
 | #62 | `claude/spec-security-fixes-webhooks` (Y3: SF-WEBHOOKS, SF-WEBUI; the last Y3 entries) | `41df7b84` (approved `590fab93`) | `3211f855` |
 | #63 | `claude/readme-sync` (README: X5 gate, Y5 merges) | `beb25b86` (approved `590fab93`) | `22630d7d` |
+| #64 | `claude/spec-openapi-webhooks-1` (OpenAPI: the eleven remaining provider webhooks) | `abfcc823` (approved `46a69454`) | `213f661c` |
+| #65 | `claude/charter-sync` (DECISIONS Y13; STATUS) | `0eaef294` (approved `46a69454`) | `867a24c9` |
 
 After PR #10, `main` was at `bcd60ea3`; its hosted CI run [36859021523](https://github.com/steliosx/alrust/actions/runs/36859021523) completed successfully at scaffold scope (retrieved by Codex), and Codex independently verified every merge's parents and trees (`5bd706c0`). Checks then: README, STATUS, OpenAPI and the customer mapping are byte-identical to their reviewed versions; DECISIONS is charter-sync's plus only the ADR-0004 row; `spec/lifecycle.md` is the heartbeats version plus exactly the R1.2 clarification from PR #3's later approved head.
 
@@ -468,7 +470,8 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
       `ruleUrl` and `imageUrl`, the CloudWatch subscription text, the
       PagerDuty history text, and Stackdriver `moreInfo`. Stackdriver also
       logs invalid documentation content whole (the W-SEC-1 pattern).
-    Under Y3 each gets a `spec/security-fixes.md` entry; WS-AUTH-1 and the
+    The OpenAPI mappings are merged (PR #64). The fixes are specified in
+    `spec/security-fixes.md` SF-PROVIDERS, in review; WS-AUTH-1 and the
     scope part of WT-SEC-1 follow owner decision Y13;
   - **new, SECURITY (API keys; source-level, nothing executed):**
     - an edit that omits `expireTime` stores NULL, and every read rebuilds
