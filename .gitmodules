@@ -1,0 +1,6 @@
+[submodule "reference/alerta"]
+	path = reference/alerta
+	url = https://github.com/alerta/alerta.git
+[submodule "reference/alerta-webui"]
+	path = reference/alerta-webui
+	url = https://github.com/alerta/alerta-webui.git

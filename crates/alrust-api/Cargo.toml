@@ -1,0 +1,13 @@
+[package]
+name = "alrust-api"
+description = "HTTP API for alrust (axum), Alerta-compatible surface plus SSE."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true
