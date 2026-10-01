@@ -641,10 +641,193 @@ The pinned web UI always sends `customer` when editing a blackout
 | scoped caller (`[A]`), `PUT` without `customer` on its blackout | 200, customer `A` | 200, customer `A` | parity |
 | `PUT` with `customer` | reference rules | same | parity |
 
+## SF-MGMT: no secrets from the management endpoint, no default signing key
+
+Status: Proposed. Covers M-SEC-1. Owner decisions Y8 (properties: redacted
+settings) and Y9 (an unset `SECRET_KEY` becomes a random key at each start),
+both 2026-10-01.
+
+**Reference.**
+1. `GET /management/properties` requires `admin:management`
+   (`management/views.py:82-84`) and returns `text/plain` with one
+   `key: value` line for every entry of the request's WSGI environ, the
+   process environment, the app object's attributes and the whole app config
+   (`:87-99`). The dump therefore contains `SECRET_KEY`, the `DATABASE_URL`
+   password, the OAuth, LDAP and SMTP secrets, connection strings such as
+   `CELERY_RESULT_BACKEND` (`settings.py:56`), nested maps such as
+   `LDAP_CONFIG` (`:137`), every environment variable, and the caller's own
+   `Authorization` header (`HTTP_AUTHORIZATION` in the environ). With
+   `AUTH_REQUIRED` false any caller can read it (`auth/decorators.py:155-161`).
+2. `SECRET_KEY` defaults to `changeme` (`settings.py:15`). `get_config` takes
+   the environment variable when it is present, even when empty, else the
+   configuration file's value, else that default (`utils/config.py:29`,
+   `:129-148`); nothing at startup checks it.
+3. Bearer tokens are HS256 JWTs verified with `SECRET_KEY` and the audience
+   `OAUTH2_CLIENT_ID`, else `SAML2_ENTITY_ID`, else `absolute_url()`
+   (`models/token.py:43-51`; `utils/response.py:22-27`). Their `scope` claim
+   becomes the caller's scopes (`models/token.py:71`;
+   `auth/decorators.py:69-91`). Refusals are 401 `Token is invalid`, `Token
+   has expired` and `Invalid audience` (`:77-82`). Anyone who knows the key,
+   from the dump or because it is still `changeme`, can therefore create a
+   token with any scopes, including `admin`.
+4. `SECRET_KEY` also signs e-mail confirmation and password-reset tokens
+   (`auth/utils.py:106-112`) and is the HMAC key used to derive new API-key
+   secrets from random bytes (`utils/key.py:20-28`).
+
+**alrust.**
+1. `GET /management/properties` keeps its path, method, scope and
+   credential rules, and returns 200 `text/plain`. The body has exactly one
+   line per alrust setting, sorted by name: `NAME: VALUE`. Names come only
+   from alrust's fixed settings schema (`[A-Z0-9_]+`). It never includes the
+   process environment, request data (headers, cookies, query) or internal
+   objects. `VALUE` is either the bare token `[REDACTED]` or a JSON value
+   (strings quoted, with newlines and control characters escaped), so no
+   value can start a new line. Each setting has one class in the schema
+   (Y8):
+   - **public:** the value is shown, subject to the secret-value check
+     below. Only booleans, numbers, strings and lists of strings may be
+     public, and no setting whose upper-cased name contains `SECRET`,
+     `PASSWORD`, `PASSWD`, `TOKEN`, `CREDENTIAL` or `PRIVATE`, or ends with
+     `_KEY` or `_KEYS`, may be public. The one reviewed exception is
+     `TOKEN_EXPIRE_DAYS`. The public list is part of the schema and is
+     reviewed with the implementation;
+   - **connection:** every setting that holds a URL or connection string,
+     including every name ending in `_URL` or `_URI`, `CELERY_BROKER_URL` and
+     `CELERY_RESULT_BACKEND`. The value is parsed with RFC 3986 generic
+     syntax. With a scheme and a non-empty host, it is shown as
+     `scheme://` + (`[REDACTED]@` if there is user information) + host
+     (IPv6 in brackets) + (`:port` if present) + (`/[REDACTED]` if there is
+     a path other than empty or `/`, a query or a fragment). Without a
+     scheme or host, or when parsing fails, it is `[REDACTED]`. An unset
+     (null) value is `null`;
+   - **secret:** every other setting, including every map (such as
+     `LDAP_CONFIG`) and every list that is not a list of strings, is
+     `[REDACTED]`. Nested names are not inspected. A setting the schema does
+     not classify is secret.
+   **Secret-value check.** The secret values are:
+   - every non-empty string held by a secret setting (each list element and
+     map key and value, recursively);
+   - every non-empty user-information string and password of a connection
+     setting, both as written (percent-encoded) and percent-decoded.
+
+   They are taken from every configured source of that setting (environment
+   variable, configuration file, and for `SECRET_KEY` the generated key), not
+   only the effective one. The check runs on decoded string values **before**
+   serialization. Every string that would be emitted is compared as raw text
+   with each secret value, by substring:
+   - each public string;
+   - each element of a public list;
+   - the textual form of a public number;
+   - for a connection setting, its scheme, host (as written and
+     percent-decoded) and port.
+
+   On any hit, the whole value of that setting is `[REDACTED]`. Only then is
+   the remaining value serialized to JSON. Empty strings are never secret
+   values. Only configured settings are sources; the process environment is
+   never read for this purpose.
+2. Signing key at startup (Y9). The effective `SECRET_KEY` follows the
+   reference precedence: the environment variable if present (even empty),
+   else the configuration-file value. If there is no effective value, or it
+   is empty, or it equals the reference default `changeme`, alrust generates
+   a random key of at least 256 bits from the operating system's secure
+   random source at each start. It logs a warning that sessions, e-mail
+   confirmation and password-reset links will not survive a restart and
+   that every instance behind one address needs the same configured key.
+   The generated key is never logged or shown. An effective key shorter than
+   32 characters is used, with a startup warning. Any other effective key is
+   used unchanged.
+3. HS256 Bearer tokens signed with the effective key keep the reference
+   behavior: the `scope` claim becomes the caller's scopes, with the same
+   audience and expiry rules and the same three 401 messages in the
+   reference error envelope.
+4. alrust generates API-key secrets from the secure random source directly;
+   they do not depend on `SECRET_KEY`. Their length, entropy and encoding are
+   fixed in the implementation's own review.
+
+**Fixtures.**
+- Properties profile `MP`: `AUTH_REQUIRED = True`; distinct synthetic
+  sentinels (each at least 16 characters, unique, and not a substring of
+  any other setting) for `SECRET_KEY`, `OAUTH2_CLIENT_SECRET`,
+  `LDAP_BIND_PASSWORD` and `SMTP_PASSWORD`; `DATABASE_URL` is the
+  authorized disposable database's URL, whose role password is the
+  synthetic `<db-sentinel>`; its scheme, host, port and database name are
+  taken from the fixture attestation, not assumed. `CELERY_BROKER_URL` is
+  unset, so no background task runs; the reference reads the Celery
+  settings only inside the bulk handlers (`views/bulk.py:24`, `:76`;
+  `app.py:102-110`), which these rows never call.
+  `CELERY_RESULT_BACKEND = redis://:<celery-sentinel>@cache.test:6379/0`
+  is therefore display-only. The rows below treat `TOKEN_EXPIRE_DAYS`,
+  `AUTH_REQUIRED`, `ALLOWED_ENVIRONMENTS`, `DEFAULT_ENVIRONMENT` and
+  `CLIPBOARD_TEMPLATE` (`settings.py:240`; no startup invariant) as public;
+  `LDAP_CONFIG = {'BindPassWord': <ldap-map-sentinel>, 'Uri':
+  'ldap://u:<ldap-url-sentinel>@ldap.test'}`; process environment variable
+  `SYNTHETIC_ENV_SECRET = <env-sentinel>` (not a setting). Callers: `M1`,
+  an API key with scopes `[admin:management]`; `M2`, an API key with
+  `[read]`.
+- Token profile `TP`: `AUTH_REQUIRED = True`, `ALLOW_READONLY = False`,
+  `AUTH_PROVIDER = 'basic'`, `AUTH_PROXY = False`,
+  `EMAIL_VERIFICATION = False`, `OAUTH2_CLIENT_ID = ''`,
+  `SAML2_ENTITY_ID = None`, `BASE_URL = 'http://alrust.test'` (so the
+  effective audience is `http://alrust.test`),
+  `ADMIN_USERS = ['admin@example.test']`, `TOKEN_EXPIRE_DAYS = 14`. A
+  seeded active user `admin@example.test` with a synthetic password and
+  `email_verified = true`. Keys `K40` and `K40b` are distinct 40-character
+  synthetic values; `K10` is a 10-character value.
+- Request `RQ`: `GET /management/properties` with `Authorization: Bearer
+  <token>`. Accepted means 200 `text/plain`; refusals use the reference
+  error envelope.
+- Minted token `MT(key, overrides)`: HS256 over the claims `iss
+  'http://alrust.test/'`, `typ 'Bearer'`, `sub 'synthetic-sub'`, `aud`
+  the effective audience, `iat` and `nbf` now, `exp` now + 3600 s, `jti` a
+  fresh UUID, `preferred_username 'mint@example.test'`, `scope 'admin'`,
+  `customers []`, with the overrides applied.
+- Restart procedure `RS`: log in with `POST /auth/login` `{username:
+  'admin@example.test', password}`; confirm `RQ` with that token is
+  accepted; stop the server and start it again with the same database,
+  configuration file, environment and `BASE_URL`, changing only what the
+  row varies; send `RQ` with the same token. The token's expiry (14 days)
+  is beyond both observations.
+
+**Vectors.** Reference cells are source-derived. Before execution they are
+NOT_RUN, and their known predicates are asserted on the first authorized
+run. Only cells marked **reference pending** skip, and only that predicate.
+alrust cells are NOT_RUN until an implementation exists.
+
+| # | Case | Reference | alrust | Kind |
+|---|---|---|---|---|
+| 1 | `MP`, `M1` `GET /management/properties` | 200 `text/plain` containing every sentinel, `SYNTHETIC_ENV_SECRET` and `M1`'s key | 200 `text/plain`; no sentinel, environment variable or request header anywhere in the body; one line per setting, sorted; `SECRET_KEY: [REDACTED]` | divergence (Y8) |
+| 2 | same; the connection lines | full URLs with passwords | `DATABASE_URL: "<attested scheme>://[REDACTED]@<attested host>:<attested port>/[REDACTED]"`; `CELERY_RESULT_BACKEND: "redis://[REDACTED]@cache.test:6379/[REDACTED]"` | divergence (Y8) |
+| 3 | same; `LDAP_CONFIG` (mixed-case nested secret name and nested URL) | the map, with both sentinels | `LDAP_CONFIG: [REDACTED]` | divergence (Y8) |
+| 4 | `MP` with `CELERY_RESULT_BACKEND = 'not a url'`; then `'redis://'` (no host) | shown as given | `CELERY_RESULT_BACKEND: [REDACTED]` both times | divergence (Y8) |
+| 5 | `MP` with `ALLOWED_ENVIRONMENTS = ['Production', <smtp-sentinel>]` and `DEFAULT_ENVIRONMENT = <smtp-sentinel>` (the startup check at `utils/config.py:123-124` passes) | both shown | `ALLOWED_ENVIRONMENTS: [REDACTED]`; `DEFAULT_ENVIRONMENT: [REDACTED]` | divergence (Y8, secret-value check) |
+| 5b | `MP` with `SMTP_PASSWORD = 'SYNTHETIC"pass\\word\tX'` (Python string-literal notation: one double quote, one backslash and one tab character) and `CLIPBOARD_TEMPLATE` containing that exact string | both shown | `CLIPBOARD_TEMPLATE: [REDACTED]` (compared before JSON escaping) | divergence (Y8) |
+| 5c | `MP` with `CELERY_RESULT_BACKEND = 'redis://:p%40ss-SYNTHETIC-0001@cache.test:6379/0'` and `CLIPBOARD_TEMPLATE` containing `p@ss-SYNTHETIC-0001` | both shown | `CLIPBOARD_TEMPLATE: [REDACTED]` (decoded alias) | divergence (Y8) |
+| 5d | `MP` with `SMTP_PASSWORD = 'secret-host-SYNTHETIC.test'` and `CELERY_RESULT_BACKEND = 'redis://secret-host-SYNTHETIC.test:6379/0'` | both shown | `CELERY_RESULT_BACKEND: [REDACTED]` (host equals a secret) | divergence (Y8) |
+| 6 | `MP` with `CLIPBOARD_TEMPLATE = "x\nSECRET_KEY: leaked"` | two lines | one line: `CLIPBOARD_TEMPLATE: "x\nSECRET_KEY: leaked"` with the newline escaped | divergence (Y8, escaping) |
+| 7 | `MP` with `SMTP_PASSWORD = ''` | — | other values unaffected; `SMTP_PASSWORD: [REDACTED]` | alrust control (empty is not a secret value) |
+| 8 | `MP`; positive controls | `TOKEN_EXPIRE_DAYS: 14`, `ALLOWED_ENVIRONMENTS` listed | `TOKEN_EXPIRE_DAYS: 14`; `ALLOWED_ENVIRONMENTS: ["Production","Development"]`; `AUTH_REQUIRED: true` | parity of values (format differs) |
+| 9 | `MP`, `M2` `GET /management/properties` | 403 `Missing required scope: admin:management` | same | parity |
+| 10 | `MP` with `AUTH_REQUIRED = False`, no credentials | 200, the full dump | 200, redacted as in rows 1-3 | divergence (Y8) |
+| 11 | `TP`, `SECRET_KEY` in neither environment nor file; `RQ` with `MT(changeme)` | accepted | 401 `Token is invalid`; handler not run | divergence (Y9) |
+| 12 | `TP`, file `SECRET_KEY = 'changeme'`, no environment variable; `RQ` with `MT(changeme)` | accepted | 401 `Token is invalid` | divergence (Y9) |
+| 13 | `TP`, environment `SECRET_KEY=` (empty), file `K40`; `RQ` with `MT(K40)` | 401 `Token is invalid` (effective key empty); reference pending | 401 `Token is invalid` (random key) | divergence (Y9) |
+| 14 | `TP`, environment `SECRET_KEY=` (empty), no file value; `RQ` with `MT('')` | reference pending | 401 `Token is invalid` | divergence (Y9) |
+| 15 | `TP`, file `K40`, no environment variable; `RQ` with `MT(K40)` | accepted, scopes `[admin]` | same | parity (HS256 claim trust kept) |
+| 16 | `TP`, environment `K40`, file `K40b`; `RQ` with `MT(K40)`; then with `MT(K40b)` | accepted; 401 `Token is invalid` | same | parity (precedence) |
+| 17 | `TP`, file `K40`; `RQ` with `MT(K40b)` | 401 `Token is invalid` | same | parity (wrong key) |
+| 18 | `TP`, file `K40`; `RQ` with `MT(K40, exp = now - 60 s)` | 401 `Token has expired` | same | parity |
+| 19 | `TP`, file `K40`; `RQ` with `MT(K40, aud = 'http://other.test')` | 401 `Invalid audience` | same | parity |
+| 20 | `TP`, no `SECRET_KEY`; `RS` | the token stays accepted after the restart | accepted before; 401 `Token is invalid` after | divergence (Y9) |
+| 21 | `TP`, file `K40`; `RS` | accepted before and after | same | parity |
+| 22 | `TP`, file `K10`; `RQ` with `MT(K10)` | accepted | accepted; a startup warning was logged | parity (warning only) |
+
+Tokens with other algorithms are not covered by these vectors; their
+refusal is left to the implementation review.
+
 ## Not yet specified
 
 The other Y3 items get entries in this file before their phases need them:
-the string-formatted SQL constructions; M-SEC-1; WUI-SEC-1 and WP-SEC-1; W-SEC-1 and W-DL-1;
+the string-formatted SQL constructions; WUI-SEC-1 and WP-SEC-1; W-SEC-1 and W-DL-1;
 and the `q=` search. Until an item has an entry here, its
 reference behavior in `spec/openapi.yaml` stands as the description of the
 defect, not as a requirement for alrust.
