@@ -33,4 +33,6 @@ which weakens the black-box property.
 
 ## Decision
 
-Deferred to Codex.
+Codex, the owner of `conformance/`, selected Python 3.12 + pytest + httpx +
+Hypothesis (review `ed33e33c`). The Proposal above is kept as the original
+option analysis.
