@@ -65,6 +65,7 @@ jobs:
   conformance-reference:
     name: conformance vs reference alerta
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16
@@ -86,6 +87,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: libpq development files (psycopg2 builds from its hashed sdist)
+        timeout-minutes: 5
         run: |
           set -euo pipefail
           if ! command -v pg_config >/dev/null; then
@@ -94,10 +96,12 @@ jobs:
           fi
           pg_config --version
       - name: Boot reference server (fresh hash-locked environment, AX64-G1)
+        timeout-minutes: 15
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/alerta
         run: conformance/scripts/run-reference.sh
       - name: Smoke check
-        run: curl -fsS http://127.0.0.1:8080/management/healthcheck
+        timeout-minutes: 1
+        run: curl -fsS --max-time 30 http://127.0.0.1:8080/management/healthcheck
       # Phase 0: the black-box suite runs here against ALRUST_TARGET=http://127.0.0.1:8080
       # once conformance/ has one (language pending ADR-0002).
