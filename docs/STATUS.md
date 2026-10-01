@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-01T14:28Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-01T15:28Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -53,6 +53,10 @@ are kept.
 | #36 | `codex/webhook-unknown-conformance` | `83bb4058` | `51721391` |
 | #37 | `claude/charter-sync` (STATUS and DECISIONS) | `310c4916` (approved `f3df2a62`) | `c8198d13` |
 | #38 | `claude/charter-sync` (DECISIONS Y5) | `19ed06c2` (approved `7bc0c6bd`) | `4da8e286` |
+| #39 | `claude/charter-sync` (STATUS) | `95b7fd66` (approved `8f1f5925`) | `66bbb0df` |
+| #40 | `claude/spec-security-fixes` (Y3: SF-AN1, SF-CRON, SF-USERS) | `9acc9b41` (approved `654ab8a5`) | `b4cd5aca` |
+| #41 | `codex/security-fixture-plan` (Codex's fixture plan for the security fixes; reviewed by Claude) | `a9479718` (approved `8089916e`) | `5e13cdce` |
+| #42 | `claude/spec-security-fixes-gpc` (Y3: SF-GROUPS, SF-PERMS, SF-CUSTOMERS) | `4d7b5508` (approved `262c80de`) | `2eda00bb` |
 
 After PR #10, `main` was at `bcd60ea3`; its hosted CI run [36859021523](https://github.com/steliosx/alrust/actions/runs/36859021523) completed successfully at scaffold scope (retrieved by Codex), and Codex independently verified every merge's parents and trees (`5bd706c0`). Checks then: README, STATUS, OpenAPI and the customer mapping are byte-identical to their reviewed versions; DECISIONS is charter-sync's plus only the ADR-0004 row; `spec/lifecycle.md` is the heartbeats version plus exactly the R1.2 clarification from PR #3's later approved head.
 
@@ -235,7 +239,14 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
     then `main` is unprotected and the guard is not enforced;
   - production-exposure checks: deferred (Y4);
   - the security and behavior items below are DECIDED (Y3): alrust fixes
-    each one; the per-item behavior is specified in `spec/` under review.
+    each one. Specified and approved in `spec/security-fixes.md` so far:
+    SF-AN1 (AN1), SF-CRON (App Engine cron), SF-USERS (users role ceiling
+    and user creation), SF-GROUPS (G-SEC-1, GR-R1, G-DEF-1), SF-PERMS
+    (P-SEC-1) and SF-CUSTOMERS (C-SEC-1). Still to specify: the
+    string-formatted SQL, M-SEC-1, WUI-SEC-1, WP-SEC-1, W-SEC-1, W-DL-1, the
+    API-key items, C21-C23 and the `q=` search. Codex is building the
+    harness cases from the approved entries (plan, PR #41); no security case
+    has run.
   - **new, SECURITY (reference defects, source-level only, no exploit built
     or run; independently confirmed by Codex):** the pinned Alerta server
     builds SQL by string formatting from request or stored text in **four**
