@@ -44,5 +44,12 @@ class Client:
         body = response.json() if media_type == 'application/json' or media_type.endswith('+json') else response.text
         return Response(response.status_code, body)
 
+    def request_text(self, method: str, path: str, payload=None) -> Response:
+        """Compare original text without JSON parsing or content-type assertions."""
+        if not path.startswith('/') or path.startswith('//'):
+            raise ValueError('request path must be relative to the selected target')
+        response = self.http.request(method, self.base_url + path, json=payload)
+        return Response(response.status_code, response.text)
+
     def close(self):
         self.http.close()
