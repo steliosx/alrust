@@ -4433,6 +4433,213 @@ paths:
               additionalProperties: true
       responses: *webhookResponses
       x-runtime: "NOT_RUN"
+  /webhooks/newrelic:
+    post:
+      operationId: receiveWebhookNewrelic
+      x-source: alerta/webhooks/newrelic.py:14-70; alerta/webhooks/custom.py:17-91
+      x-scope: write:webhooks
+      summary: New Relic alert notification (provider mapping)
+      description: |
+        A concrete instance of `/webhooks/{webhook}`: the dispatcher order,
+        auth, logging (W-SEC-1), batch handling (W-DL-1), error mapping and
+        responses there all apply. Present only while the `newrelic` entry
+        point loaded successfully. This entry documents the mapping only.
+
+        One alert per request (`incoming`, `:21-70`):
+        - Without a `version` key: 400 `New Relic Legacy Alerting is not
+          supported`. With a text (non-JSON, non-form) body, `'version' in
+          payload` is a substring test, and a text containing `version` then
+          fails at indexing with `TypeError`: the dispatcher's legacy retry,
+          then an unhandled **500**.
+        - Status and severity from `current_state` (lower-cased) and
+          `severity` (lower-cased):
+          - `open`: the given severity, status `open`;
+          - `acknowledged`: the given severity, status `ack`;
+          - `closed`: severity `ok`, status `closed`;
+          - otherwise: severity `informational` if the given severity is
+            `info`, else the given severity; status `open`.
+          A severity not in the **ALERTA** model's map (whatever model is
+          configured) becomes `informational` if it is `info`, else
+          `unknown`.
+        - `resource` = `targets[0].name`, `unknown` if falsy; `event` =
+          `condition_name`, `unknown` if falsy; `environment` =
+          `DEFAULT_ENVIRONMENT`; `service` `[account_name]`; `group` =
+          `targets[0].type`; `text` = `details`; `tags` = `key:value` for each
+          of `targets[0].labels`; `attributes` holds `incident_url` and
+          `runbook_url` when present and not null (plain strings); `origin`
+          `New Relic/v<version>`; `type` = `event_type` lower-cased; `rawData`
+          the payload.
+        - A missing key, an empty `targets` list or a non-string where
+          `.lower()` is called gives 400 with the exception text.
+
+        Source-derived; runtime NOT_RUN.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version, current_state, severity, targets, condition_name, account_name, details, event_type]
+              properties:
+                version: {}
+                current_state: {type: string}
+                severity: {type: string}
+                condition_name: {type: [string, "null"]}
+                account_name: {type: string}
+                details: {type: string}
+                event_type: {type: string}
+                incident_url: {type: [string, "null"]}
+                runbook_url: {type: [string, "null"]}
+                targets:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [name, type, labels]
+                    properties:
+                      name: {type: [string, "null"]}
+                      type: {type: string}
+                      labels: {type: object, additionalProperties: true}
+              additionalProperties: true
+      responses: *webhookResponses
+      x-runtime: "NOT_RUN"
+  /webhooks/pagerduty:
+    post:
+      operationId: receiveWebhookPagerduty
+      x-source: alerta/webhooks/pagerduty.py:13-99; alerta/webhooks/custom.py:17-91; alerta/database/backends/postgres/base.py:293-299
+      x-scope: write:webhooks
+      summary: PagerDuty incident webhook v2 (status updates, no new alerts)
+      description: |
+        A concrete instance of `/webhooks/{webhook}`: the dispatcher order,
+        auth, logging (W-SEC-1), error mapping and responses there all apply.
+        Present only while the `pagerduty` entry point loaded successfully.
+        This entry documents the mapping only.
+
+        **No alert is created.** All work happens inside `incoming`
+        (`:66-99`), that is in the dispatcher's parsing stage:
+        - Without `messages`: 400 `no messages in PagerDuty data payload`.
+        - For each message in order: `parse_pagerduty` (`:13-57`) reads
+          `data.incident.incident_key`, `incident_number` and `html_url`, and
+          maps `type`:
+          - `incident.trigger` gives status `open`;
+          - `acknowledge` gives `ack`;
+          - `unacknowledge` gives `open`;
+          - `resolve` gives `closed`;
+          - `assign` gives `assign`;
+          - `escalate` and `delegate` give `open`;
+          - anything else gives `unknown`, with the type as text.
+          The text embeds `<a href="<html_url>">#<incident_number></a>`,
+          built **without escaping** (the WUI-SEC-1 pattern), and the
+          assigned or resolving user's name. Any exception there becomes 400
+          with its text. An empty `incident_key` gives 400 `no incident key in
+          PagerDuty data payload`.
+        - The alert is looked up with `Alert.find_by_id(incident_key,
+          caller's customers)`. That query is `id ~* ('^' || key) OR
+          last_receive_id ~* ('^' || key)`, so **the key is a
+          case-insensitive regular-expression prefix**, not an exact id. A
+          short or regex key (such as `.`) matches whichever alert the query
+          returns first, within the caller's customers. Not found gives
+          `not found`; otherwise `set_status(status, text)` adds a status
+          history entry.
+        - Every ApiError raised inside `incoming` (404 `not found`, the 500s)
+          passes through the dispatcher's parsing-stage rule and reaches the
+          client as **400** with its message.
+        - Messages are applied one by one. A failure on a later message
+          leaves the earlier messages' status changes in place, and later
+          messages are not applied (the W-DL-1 pattern).
+        - On success: 200 `{status: ok}` (a JSON response passed through by
+          the dispatcher, with a `webhook-received` audit event of type
+          `user-defined`). An empty `messages` list gives 400 `update
+          PagerDuty incident status failed`.
+
+        alrust's handling of the unescaped text and of partial application
+        follows owner decisions Y11 and Y10 and is to be added to
+        `spec/security-fixes.md`. Source-derived; runtime NOT_RUN.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [messages]
+              properties:
+                messages:
+                  type: array
+                  items:
+                    type: object
+                    required: [type, data]
+                    properties:
+                      type: {type: string}
+                      data:
+                        type: object
+                        required: [incident]
+                        properties:
+                          incident:
+                            type: object
+                            required: [incident_key, incident_number, html_url]
+                            properties:
+                              incident_key: {type: string}
+                              incident_number: {}
+                              html_url: {type: string}
+                              assigned_to_user: {type: object, properties: {name: {type: string}}}
+                              resolved_by_user: {type: [object, "null"], properties: {name: {type: string}}}
+              additionalProperties: true
+      responses:
+        "200":
+          description: All messages applied
+          content:
+            application/json:
+              schema: {type: object, required: [status], properties: {status: {const: ok}}}
+        "400": {description: "any refusal inside incoming, including not found and the 500s (parsing-stage rule)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {description: "missing write:webhooks", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "500": {description: "a failed legacy retry, or a non-UTF-8 body in before_request", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+      x-runtime: "NOT_RUN"
+  /webhooks/pingdom:
+    post:
+      operationId: receiveWebhookPingdom
+      x-source: alerta/webhooks/pingdom.py:13-44; alerta/webhooks/custom.py:17-91
+      x-scope: write:webhooks
+      summary: Pingdom state-change webhook (provider mapping)
+      description: |
+        A concrete instance of `/webhooks/{webhook}`: the dispatcher order,
+        auth, logging (W-SEC-1), batch handling (W-DL-1), error mapping and
+        responses there all apply. Present only while the `pingdom` entry
+        point loaded successfully. This entry documents the mapping only.
+
+        One alert per request (`incoming`, `:19-44`):
+        - `severity` `critical` when `importance_level` is `HIGH`, else
+          `warning`; `current_state` `UP` overrides it with the alarm model's
+          normal severity.
+        - `resource` = `check_name`; `event` = `current_state`; `correlate`
+          `['UP', 'DOWN']`; `environment` = `DEFAULT_ENVIRONMENT`; `service`
+          `[check_type]`; `group` `Network`; `value` = `description`; `text`
+          `<importance_level>: <long_description>`; `tags` = `tags` as given;
+          `attributes` `{checkId: check_id}`; `origin` `Pingdom`; `type`
+          `availabilityAlert`; `rawData` the payload.
+        - A missing key gives 400 with the key. A text body makes indexing
+          raise `TypeError`: the legacy retry, then an unhandled **500**.
+
+        Source-derived; runtime NOT_RUN.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [importance_level, current_state, check_name, check_type, description, long_description, tags, check_id]
+              properties:
+                importance_level: {type: string}
+                current_state: {type: string}
+                check_name: {type: string}
+                check_type: {type: string}
+                description: {type: string}
+                long_description: {type: string}
+                tags: {type: array, items: {type: string}}
+                check_id: {}
+              additionalProperties: true
+      responses: *webhookResponses
+      x-runtime: "NOT_RUN"
   /webhooks/prometheus:
     post:
       operationId: receiveWebhookPrometheus
