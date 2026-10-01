@@ -82,10 +82,17 @@ them.
   `VENV`, `REFERENCE_PYTHON` and `READY_TIMEOUT`. No Sentry, Flask, proxy
   or other inherited variable passes.
 - **Variables that `get_config` reads.** Of these, only `DATABASE_URL`,
-  `SECRET_KEY` and `AUTH_REQUIRED` are set, because the launcher exports
-  them. `AUTH_REQUIRED` is encoded as `True` or `False`, which `get_config`
-  maps back exactly. Every other `get_config` variable is **unset**, so the
-  file's typed value applies.
+  `SECRET_KEY` and `AUTH_REQUIRED` are set, because the launcher always
+  exports them, and the environment overrides the file. Every other
+  `get_config` variable is **unset**, so the file's typed value applies.
+  The three are handled so that the file stays the single source:
+  - `DATABASE_URL` and `SECRET_KEY` are secrets. The file is rendered
+    **without** them, and the renderer refuses a manifest that sets them.
+  - `AUTH_REQUIRED` stays in the file (the manifest baseline sets it). The
+    workflow **derives** its environment value from the file's typed value:
+    the bool `True` or `False` becomes the string `True` or `False`, which
+    `get_config` maps back exactly. A non-bool value fails the job before
+    launch.
 - **No list or None values through the environment.** No list or None
   value is ever passed through the environment: `get_config` splits on
   `,`, so `''` would become `['']`, `'[]'` would become `['[]']`, and
@@ -100,16 +107,22 @@ them.
 ## 5. Launch receipt and owned generation (LC-R1)
 
 The launcher (`run-reference.sh`, needing a new reviewed head) gains a
-**launch receipt**. Immediately after `alertad` starts, before readiness,
-it records into a receipt file:
-- P and G (`P == G` required);
-- the leader's `start_ticks` (field 22 of `/proc/P/stat`), `boot_id` and
-  `uid`;
-- the resolved interpreter identity: the realpath, device and inode of
-  `/proc/P/exe`, compared with the realpath, device and inode of
-  `$VENV/bin/python3`, never the literal path text;
-- the `VENV` path, device and inode;
-- `launched_utc` and the monotonic time.
+**launch receipt**, written in two parts:
+- **At launch**, immediately after the fork, before readiness. These
+  values are stable across `exec`:
+  - P and G (`P == G` required);
+  - the leader's `start_ticks` (field 22 of `/proc/P/stat`), `boot_id`
+    and `uid`;
+  - the `VENV` path, device and inode;
+  - the observer module's and `.pth` activator's paths and sha256
+    (section 6);
+  - `launched_utc` and the monotonic time.
+- **At readiness**, after owned readiness has proved that the `exec`
+  happened: the resolved interpreter identity. That is the device and
+  inode of `/proc/P/exe`, compared with those of the resolved
+  `$VENV/bin/python3`, never the literal path text. It is not read at
+  launch, because P may still be the forked shell before its `exec`. P's
+  generation is re-checked in the same step.
 
 The receipt file is created exclusively at a path given by the workflow and
 is never reused. The single ready line adds the receipt's sha256. The
@@ -128,11 +141,17 @@ first re-verifies the receipt hash, then applies the rules in this table:
 |---|---|---|
 | P alive, same generation, pgid G | our leader | TERM, then KILL, to group G, bounded |
 | P absent (ESRCH), members with pgid G and the receipt uid | surviving descendants of our group. A PGID cannot be reused while any member holds it, so these are ours | TERM, then KILL, to G, bounded |
-| P alive but with another `start_ticks` | the PID was reused after our group fully emptied | no signal; our group is proven EMPTY by that reuse |
+| P alive but with another `start_ticks` | the PID number was reallocated, which the kernel allows only after no process held it as a PID or PGID, so our group fully emptied | no signal. Our group is EMPTY by this inference, even if `kill -0 -- -G` shows PRESENT for a new group led by the reused P: the inference wins, and the receipt records both observations |
 | a member of G with another uid, or any unreadable value | not attributable | no signal; **UNPROVEN** |
 
 Group state is read from the kernel as before (PRESENT, EMPTY or UNKNOWN).
-The stop is complete only on EMPTY. There is no blocking wait, and no
+The stop is complete only on EMPTY, or on the reuse inference above.
+
+**Accepted residual (row 2).** In CI every process runs as the same uid.
+A foreign process in the same session could call `setpgid` into G, and
+row 2 would treat it as ours. Nothing in the reviewed job calls `setpgid`
+apart from the launcher's own `set -m`, so this is accepted and stated,
+not proven away. There is no blocking wait, and no
 signal is ever sent to the caller's group or to an unattributed process.
 
 ## 6. Served-observer channel
@@ -141,8 +160,12 @@ The reference stays vanilla: no edits, no altered HTTP semantics, no second
 app factory, and no values derived from responses.
 
 **Wiring (Claude's launcher).** When given `--observer <reviewed module
-path> <socket dir>`, the launcher installs the reviewed observer module and
-a one-line `.pth` activator into the **fresh** job venv before launch. The
+path> <module sha256> <socket dir>`, the launcher first checks the module's
+sha256 against the value pinned in the reviewed workflow (refusing on a
+mismatch), then installs the reviewed observer module and
+a one-line `.pth` activator into the **fresh** job venv before launch.
+This is the only code in the serving process that does not come from the
+hash-locked install, so both files' sha256 go into the launch receipt. The
 activator imports the module only when `ALRUST_OBSERVER_SOCKET` is set. The
 launcher also adds that one variable to the allowlist. The socket
 directory is created in the job root with mode 0700.
@@ -170,9 +193,11 @@ Nothing is collected before readiness.
 ## 7. Database binding
 
 - **Name.** `alrust_<profile>_<run_id>_<attempt>`, with `-` mapped to `_`.
-  The profile id is at most 32 characters, the run id at most 20 digits,
-  the attempt at most 3. A name over 63 bytes is **refused**, never
-  truncated.
+  The profile id is at most 31 characters (the longest today has 21), the
+  run id at most 20 digits, the attempt at most 3, so the name is at most
+  63 bytes. A longer name is still **refused**, never truncated. Two
+  profile ids that differ only by `-` and `_` are refused by the renderer,
+  so the mapping cannot collide.
 - **Database stage receipt.** Recorded after `CREATE DATABASE` as the
   service superuser:
   - the name;
