@@ -12,12 +12,17 @@
 #
 # Readiness is bound to the server this script launched (as in the reviewed
 # AX64-V3-E2 smoke): the port must be observably free before launch; the
-# launched child must stay alive; and the listening socket must belong to it
-# (or to a process it spawned) both before and after the health response.
+# server is launched as the leader of its own process group, which must stay
+# alive, and the listening socket must belong to a process of that group, both
+# before and after the health response. Acceptance and cleanup share that one
+# scope: on any failure, unexpected exit or TERM/INT, the whole group is
+# stopped (TERM, then KILL), bounded, and verified empty; the primary failure
+# status is kept and the cleanup outcome reported. Success hands the server off
+# only once readiness is proven.
 # The deadline is measured on the monotonic clock (/proc/uptime), and every
 # health request is capped by timeout(1) and curl's own limits to the time
-# left. On any failure the script stops and reaps only its own child. The
-# .reference.pid file is informational and never read back.
+# left. The caller's own group is never signalled. The .reference.pid file is
+# informational and never read back.
 #
 # The environment is built fresh on every run from hash locks (AX64-G1):
 # .github/reference-build.lock, then .github/reference-requirements.lock, both
@@ -57,16 +62,26 @@ port_state() {  # FREE/BUSY only on a successful observation, else UNKNOWN
   if ! out=$(ss -ltnH "sport = :$PORT" 2>/dev/null); then echo UNKNOWN; return; fi
   if [[ -z $out ]]; then echo FREE; else echo BUSY; fi
 }
-owns_port() {  # true only when ss succeeds and a listener on :$PORT is $1 or its descendant
-  local out lpid p n
+pgid_of() {  # process group of PID $1 from /proc/<pid>/stat (field after the command), or fail
+  local st rest
+  st=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+  rest=${st##*) }
+  set -- $rest
+  [[ $3 =~ ^[0-9]+$ ]] || return 1
+  echo "$3"
+}
+owns_port() {  # true only when ss succeeds and a listener on :$PORT is in process group $1
+  local out lpid
   out=$(ss -ltnpH "sport = :$PORT" 2>/dev/null) || return 1
   for lpid in $(grep -o 'pid=[0-9]*' <<<"$out" | cut -d= -f2); do
-    p=$lpid
-    for n in 1 2 3 4 5 6; do
-      [[ $p == "$1" ]] && return 0
-      p=$(awk '/^PPid:/ {print $2}' "/proc/$p/status" 2>/dev/null) || break
-      [[ -n $p && $p != 0 ]] || break
-    done
+    [[ $(pgid_of "$lpid") == "$1" ]] && return 0
+  done
+  return 1
+}
+group_alive() {  # true when any process of group $1 remains
+  local d
+  for d in /proc/[0-9]*; do
+    [[ $(pgid_of "${d#/proc/}") == "$1" ]] && return 0
   done
   return 1
 }
@@ -110,26 +125,51 @@ export SECRET_KEY="${SECRET_KEY:-conformance-not-secret}"
 
 start=$(now_ms) || { echo "run-reference: cannot read the monotonic clock" >&2; exit 1; }
 deadline=$(( start + READY_TIMEOUT * 1000 ))
+own_pgid=$(pgid_of $$) || { echo "run-reference: cannot read its own process group" >&2; exit 1; }
+
+pid=''
+handed_off=0
+stop_owned_group() {  # bounded stop of the launched group; never the caller's group
+  local i
+  [[ -n $pid && $pid != "$own_pgid" ]] || return 0
+  kill -TERM -- "-$pid" 2>/dev/null || true
+  for i in $(seq 1 20); do group_alive "$pid" || break; sleep 0.5; done
+  if group_alive "$pid"; then
+    kill -KILL -- "-$pid" 2>/dev/null || true
+    for i in $(seq 1 10); do group_alive "$pid" || break; sleep 0.5; done
+  fi
+  wait "$pid" 2>/dev/null || true
+  if group_alive "$pid"; then
+    echo "run-reference: cleanup FAILED: process group $pid still has members" >&2
+    return 1
+  fi
+  echo "run-reference: cleanup complete: process group $pid is empty" >&2
+}
+on_exit() {
+  local rc=$?
+  trap - EXIT INT TERM
+  if (( handed_off == 0 )); then
+    stop_owned_group || true
+  fi
+  exit "$rc"
+}
+trap on_exit EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+
+set -m  # job control: the server becomes the leader of its own process group
 "$venv/bin/alertad" run --host 127.0.0.1 --port "$PORT" &
 pid=$!
+set +m
+[[ $(pgid_of "$pid") == "$pid" && $pid != "$own_pgid" ]] \
+  || { echo "run-reference: the server is not the leader of its own process group" >&2; exit 1; }
 echo "$pid" > "$root/.reference.pid"
 
-stop_owned_child() {  # stop and reap only the child this script launched
-  kill -TERM "$pid" 2>/dev/null || true
-  for _ in $(seq 1 20); do
-    kill -0 "$pid" 2>/dev/null || break
-    sleep 0.5
-  done
-  kill -KILL "$pid" 2>/dev/null || true
-  wait "$pid" 2>/dev/null || true
-}
-
 while :; do
-  now=$(now_ms) || { echo "run-reference: cannot read the monotonic clock" >&2; stop_owned_child; exit 1; }
+  now=$(now_ms) || { echo "run-reference: cannot read the monotonic clock" >&2; exit 1; }
   left=$(( (deadline - now) / 1000 ))
   if (( left < 1 )); then
     echo "reference server did not become healthy within ${READY_TIMEOUT}s" >&2
-    stop_owned_child
     exit 1
   fi
   if ! kill -0 "$pid" 2>/dev/null; then
@@ -142,7 +182,9 @@ while :; do
     if timeout "$cap" curl -fsS --connect-timeout "$cap" --max-time "$cap" \
         "http://127.0.0.1:$PORT/management/healthcheck" >/dev/null 2>&1 \
         && kill -0 "$pid" 2>/dev/null && owns_port "$pid"; then
-      echo "reference alerta $(cat "$ref/VERSION") up on :$PORT (pid $pid)"
+      handed_off=1
+      trap - EXIT INT TERM
+      echo "reference alerta $(cat "$ref/VERSION") up on :$PORT (pid $pid, process group $pid)"
       exit 0
     fi
   fi
