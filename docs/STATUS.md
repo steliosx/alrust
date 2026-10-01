@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-01T20:52Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-01T21:54Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -83,6 +83,10 @@ are kept.
 | #66 | `codex/security-state-assertions` (Codex's offline stored-state assertions; reviewed by Claude) | `53b257d2` (approved `09982f31`) | `8425271b` |
 | #67 | `claude/charter-sync` (STATUS) | `e71d37ef` (approved `23d295cc`) | `b046c6b0` |
 | #69 | `claude/spec-security-fixes-providers` (SF-PROVIDERS) | `dcee6bd4` (approved `b122d7c2`) | `424df8a5` |
+| #72 | `claude/ci-phase0-plan` (Phase 0 hosted-CI plan) | `32475cb5` (approved `1adb7d49`) | `7dc202fd` |
+| #73 | `codex/hosted-profile-inventory` (Codex's inert 19-module hosted profile inventory; reviewed by Claude) | `1d0313c0` (approved `d34b2af7`) | `dcc04b9f` |
+| #74 | `claude/charter-sync` (DECISIONS Y14-Y16; STATUS) | `48b16d72` (approved `6f9638dc`) | `bbe0b256` |
+| #68 | `claude/ci-reference-hashed-build` (Phase 0 CI step 1: hash-locked reference build, owned-process launcher) | `49630122` (approved `b503bbf8`) | `ecf7487c` |
 
 After PR #10, `main` was at `bcd60ea3`; its hosted CI run [36859021523](https://github.com/steliosx/alrust/actions/runs/36859021523) completed successfully at scaffold scope (retrieved by Codex), and Codex independently verified every merge's parents and trees (`5bd706c0`). Checks then: README, STATUS, OpenAPI and the customer mapping are byte-identical to their reviewed versions; DECISIONS is charter-sync's plus only the ADR-0004 row; `spec/lifecycle.md` is the heartbeats version plus exactly the R1.2 clarification from PR #3's later approved head.
 
@@ -217,19 +221,49 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
   - **r13 (2026-10-01):** ended in shared-CI HOLD `r13-phase-failed`
     (19:49Z), not a qualification. Cause: Opus's evaluator raised a false
     STOP on a bootstrap that had succeeded. Codex chose the reviewed
-    recovery path, and runner 22 is stopped until the hold is cleared. Next:
-    the r14 fresh-run package for codex-omarchy's review, then the clearance
-    (now possible under Y14), then the run; then the Phase B draft. Peer-
-    reported by Opus.
+    recovery path, and runner 22 is stopped until the hold is cleared.
+    Peer-reported by Opus.
+  - **Shared-VM order (owner-agreed, 2026-10-01):**
+    1. clear r13's hold and return runner 22 to service. The owner clears
+       this hold directly: the preserved r13 files fail Y14's clean-state
+       condition, so the owner runs one reviewed script after
+       codex-omarchy's acceptance and Opus's CLEARANCE_READY checks;
+    2. r14;
+    3. the C6 landing;
+    4. the Phase B draft, with the Y14 hold-clear script and the Y15
+       announcement record;
+    5. the owner's final approval.
+    The clearance package is transitions S3 and S4. At the owner's request,
+    Claude reviewed S3 read-only (no VM access). Its four findings: one
+    medium (exit 3 could misreport a state that had already changed), fixed
+    in S4 as exit 8 "CLEARED-UNSYNCED"; ssh keepalive and the wording for
+    an ambiguous exit 255, both adopted; recording the file mode, deferred
+    to r14 or Phase B. codex-omarchy's acceptance is pending.
   - **Owner decisions Y14-Y16 (2026-10-01):** two-agent clearance of holds
     (quarantines stay with the owner); after Phase B, broker-gated
     shared-runner jobs announced beforehand, without per-run windows; and
     per-repository runners for now (no organization move).
-  - **Phase 0 in hosted CI:** a plan (`docs/ci-phase0-conformance-plan.md`)
-    and step 1 (the hashed reference build) are in review with Codex. A
-    publication of step 1 as draft PR #68 ran the changed build path before
-    review (scaffold only, no vectors); it is recorded as a boundary breach,
-    and CI-affecting heads now go by bundle until approved.
+  - **Phase 0 in hosted CI:** the plan is merged
+    (`docs/ci-phase0-conformance-plan.md`, PR #72), and so is Codex's inert
+    inventory of the 19 existing HTTP modules (PR #73; all disabled, 39
+    tests collected offline).
+    - **Step 1** (PR #68) builds the reference from the AX64-G1 hash locks
+      and launches it as its own process group with owned readiness and
+      bounded, kernel-verified cleanup. Fault cases were closed offline over
+      four review rounds.
+    - **Hosted run [36931315785](https://github.com/steliosx/alrust/actions/runs/36931315785)**
+      (tested merge `4f701f2`): all jobs executed, **PASS_SCAFFOLD_ONLY**.
+      The 37 pinned distributions installed and pip check passed;
+      reference 9.1.0 came up as its own process group and passed one
+      healthcheck. No conformance vector ran.
+    - An earlier publication of step 1 as draft PR #68 ran the changed
+      build path before review (scaffold only, no vectors). It is recorded
+      as a boundary breach; CI-affecting heads went by bundle until
+      approved.
+    - **Next:** Codex's profile manifest and entrypoint (all profiles still
+      disabled), then Claude's inert workflow matrix, then per-profile
+      enabling heads. Phase 0 also needs the coverage closure and the
+      lifecycle review.
   - **Still open for the owner:** the final Phase B approval; registering
     the runner (X3).
   - Codex's current task is the continuation thread `01a0f3d9` (`77acafe0`);
