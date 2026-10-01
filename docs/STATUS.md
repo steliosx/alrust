@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-01T00:10Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-01T00:40Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -121,20 +121,19 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
   - Alrust's x64 beta path is blocked on Phase B: C6 and its r13 lab run,
     the Codex reviews of the broker and adapter, and the owner decisions
     below.
-  - **Owner decisions:**
-    1. the Phase A request (Zabalack session, after Codex review);
-    2. Phase B: installing the broker as a root service (config
-       `/etc/shared-ci/broker.json`, sockets under `/run/shared-ci`, group
-       `shared-ci`) and the runner units, from reviewed bytes only;
-    3. registering I3 for `steliosx/alrust` (a registration token and a new
-       runner uid) and the Zabalack I2 successor;
-    4. who operates quarantine clearing (root on the guest; the broker
-       requires an actor, evidence and a Codex disposition);
-    5. whether self-hosted runs satisfy the Phase 0 hosted gate;
-    6. the Alrust beta definition (KICKOFF has no "beta"; draft: the Linux
-       x64 server after Phase 5);
-    7. merging the x64 workflow to `main`;
-    8. any `codex/*` push cadence, as a direct instruction to Codex.
+  - **Owner decisions (2026-10-01):** recorded as X1 to X8 in
+    `docs/DECISIONS.md`. In short: Phase A approved after codex-omarchy's
+    review of the exact scripts; Phase B approved in principle only, with a
+    separate final approval of the complete package; the Alrust runner is
+    registered only at the Phase B installation; the owner alone clears
+    quarantines; the CI gate uses the free GitHub allowance and then the
+    self-hosted VM, routed by an automatic read-only billing check, with no
+    paid usage; beta is the Linux x64 server after Phase 5; the owner merges
+    the x64 workflow after Codex approval; `codex/*` follows the `claude/*`
+    cadence once the owner tells Codex directly.
+  - **Still open for the owner:** the final Phase B approval; creating the
+    read-only billing token (X5); registering the runner (X3); the X8
+    instruction to Codex.
   - For awareness: Codex now works in two sessions under the same signing
     key, the active continuation and a separate review lane
     (`/home/user/codex-alrust/shared-x64-review-01a0eeab`, `a3286d1e`), each
