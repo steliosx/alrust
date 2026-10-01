@@ -824,10 +824,211 @@ alrust cells are NOT_RUN until an implementation exists.
 Tokens with other algorithms are not covered by these vectors; their
 refusal is left to the implementation review.
 
+## SF-QUERY: no request or stored text in SQL, and `q=` keeps every operand
+
+Status: Proposed. Covers the four string-formatted SQL constructions and the
+`q=` search dropping operands (both under Y3).
+
+**Principle.** alrust never places request text or stored text into SQL
+text. Values are bound parameters. Identifiers come only from fixed lists:
+the reference's sort columns, the queried table's columns (for `group-by`,
+`q.df` and `q=` search fields) and its `jsonb` columns (for attribute
+paths). They are emitted quoted.
+
+**Reference.**
+1. `sort-by=attributes.<k>` (and `-attributes.<k>`): the second
+   dot-separated segment is taken (`database/backends/postgres/utils.py:38-39`).
+   If it is non-empty, it is formatted into the ORDER BY clause as
+   `attributes->'<k>'`; if it is empty (`attributes.`), the whole
+   `attributes` column is used (`:46-49`). Every list using
+   `sort_by_columns` with an `attributes` sort entry is affected.
+2. `group-by` on the six top-N endpoints (`/alerts/top10/…` and
+   `/alerts/topn/…` for `count`, `flapping` and `standing`,
+   `views/alerts.py:405-483`): the first value, default `event`, is
+   formatted unvalidated into the SELECT and GROUP BY clauses
+   (`base.py:556-570`, `:582-596`, `:608-623`). The response key is the raw
+   value (`:577`, `:603`, `:630`). Because it is unquoted, `group-by=group`
+   (a reserved word) is a SQL error, as is any non-column. `count` joins
+   `UNNEST(service)`; `flapping` and `standing` also join `UNNEST(history)`
+   filtered to `type = 'severity'`, so every alert counts once per service
+   and per severity-history entry. `standing` orders by the summed
+   `last_receive_time - create_time`.
+3. `q.df`: when `q` is non-empty, the default-field placeholder is replaced
+   by plain string replacement inside a double-quoted identifier
+   (`queryparser.py:284-289`; alerts `utils.py:145-151`, blackouts
+   `:231-237`). A value containing `"` ends the identifier and the rest
+   becomes SQL text. With an empty `q`, `q.df` is ignored.
+4. `q=` search fields: a field name is a grammar word that cannot contain
+   `"` (`queryparser.py:237-238`, `:244`) and is emitted as a quoted
+   identifier without any column check (`:153-155`, `:173-175`, `:213`), so
+   an unknown field reaches SQL (`unknownfield:disk` becomes `"unknownfield"
+   ILIKE …`). For an attribute path `p.k`, the key `k` is bound
+   (`:147-151`, `:209-211`). The prefix `p` is a quoted identifier: in a term,
+   every `_` is replaced by `attributes` (`:146`, `:166`); in a subquery,
+   `_` alone becomes `attributes` and any other prefix is used as written
+   (`:208`).
+5. `GET /environments`: the stored environment names of the page are
+   formatted into `environment in ('<name>', …)` (`base.py:646`). A stored
+   name containing `'` becomes SQL text; an alert received with `status:
+   blackout` can store an arbitrary environment (lifecycle R1 step 1).
+6. `q=` flat chains: `BinaryOperation` keeps only the first two operands of
+   a same-level chain (`queryparser.py:20-26`). So `a AND b AND c` means
+   `a AND b`, and `a b c` (adjacency is OR) means `a OR b`; this also holds
+   inside subqueries. Codex's pure-source probe (`01c183e3`), replayed
+   byte-identically by Claude, shows the translations used below.
+
+**alrust.**
+1. `sort-by`: the reference's selection is kept. With a non-empty second
+   segment, the key is a bound parameter (`attributes -> $n`). With an
+   empty segment, or with `attributes` alone, the whole `attributes`
+   column is used, as in the reference. Directions and every other
+   `sort-by` rule are unchanged.
+2. `group-by` (top-N endpoints only; elsewhere it stays ignored): the value
+   must exactly equal (case-sensitive) one of the `alerts` columns: `id`,
+   `resource`, `event`, `environment`, `severity`, `correlate`, `status`,
+   `service`, `group`, `value`, `text`, `tags`, `attributes`, `origin`,
+   `type`, `create_time`, `timeout`, `raw_data`, `customer`,
+   `duplicate_count`, `repeat`, `previous_severity`, `trend_indication`,
+   `receive_time`, `last_receive_id`, `last_receive_time`, `history`,
+   `update_time` (`sql/schema.sql:32-62`). It is emitted quoted, and the
+   response key is that name. Otherwise: 400 `Grouping by '<value>' field
+   not supported.` The default stays `event`. The joins, counting and
+   ordering above are unchanged.
+3. `q.df`: when `q` is non-empty, `q.df` (if given) must exactly equal a
+   column of the queried table, whether or not the query uses the default
+   field. Otherwise: 400 `Default field '<value>' not supported.` The
+   columns are the list above for alert queries, or for blackout queries
+   `id`, `priority`, `environment`, `service`, `resource`, `event`,
+   `group`, `tags`, `customer`, `start_time`, `end_time`, `duration`,
+   `user`, `create_time`, `text`, `origin` (`sql/schema.sql:78-97`,
+   including the columns added by `ALTER TABLE`). With an empty `q`,
+   `q.df` stays ignored.
+4. `q=` search fields:
+   - a plain field must exactly equal a column of the queried table, or be
+     `_exists_` (unchanged meaning);
+   - for an attribute path `p.k`, `p` is first resolved exactly as the
+     reference does for that form, and the result must be a `jsonb` column
+     of the queried table (alerts: `attributes`; blackouts: none). The key
+     `k` stays bound.
+
+   Otherwise: 400 `Search field '<field as written>' not supported.` This
+   deliberately replaces the reference's unknown-column SQL error. For a
+   listed column whose type does not support the generated operator, this
+   entry does not change the outcome. The parser's other behaviors (the `+`
+   and `-` modifiers, ignored trailing input, term translations) are
+   unchanged.
+5. `GET /environments`: the page's names are one bound array parameter
+   (`environment = ANY($n)`). Every name, including one containing `'`, is
+   listed and counted like any other.
+6. `q=` chains: a same-precedence chain of n ≥ 2 operands is folded to the
+   left, `((x1 op x2) op x3) … op xn`. Each binary step uses the reference's
+   translation for a pair, including its rule that `OR` with a `NOT` right
+   operand becomes `AND` (`queryparser.py:54-57`). With two operands the
+   result is exactly the reference's.
+7. Order of checks; the first failure wins, with no side effect:
+   1. `q` syntax (the reference's 400 `Failed to parse query string.`);
+   2. `q.df`;
+   3. `q=` search fields, in order of appearance;
+   4. the reference's other filter checks;
+   5. `sort-by` (the reference's 400 for an unsupported name);
+   6. `group-by`.
+
+**Fixtures.** Each fixture is the only data in its own disposable store.
+`AUTH_REQUIRED = True`, `CUSTOMER_VIEWS = False`; the caller is a synthetic
+API key with scopes `[read]` and no customer. Requests use the default page
+size, which exceeds every fixture's size. `T0` is a fixed fixture time at
+least two hours before the first request: alert lists include only alerts
+with `last_receive_time` at or before the request time
+(`views/alerts.py:315-316`; `postgres/utils.py:165-175`). Every alert is
+seeded directly and completely, with no ingestion defaults: a stable `id`
+(given below), `severity 'major'`, `status 'open'`, `previous_severity
+'indeterminate'`, `trend_indication 'moreSevere'`, `type 'exceptionAlert'`,
+`origin 'fixture'`, `value NULL`, `repeat false`, `timeout 86400`,
+`correlate []`, `tags []`, `last_receive_id` equal to its `id`,
+`create_time = receive_time = T0`, `update_time = T0`, and
+`last_receive_time` and `duplicate_count` as stated (otherwise `T0` and 0).
+- **`QF`** (query store): six alerts with ids `q1` … `q6` in table order,
+  all `environment = 'Production'`,
+  `service = ['svc']`, `customer = NULL`, empty history, distinct events
+  `ev-1` … `ev-6`:
+
+  | Resource | Text | Attributes |
+  |---|---|---|
+  | `res-alpha` | `disk` | `{"region": "b"}` |
+  | `res-bravo` | `full` | `{"region": "a"}` |
+  | `res-charlie` | `server` | `{"reg'ion": "z"}` |
+  | `res-delta` | `disk full` | `{}` |
+  | `res-echo` | `disk full server` | `{}` |
+  | `res-foxtrot` | `other` | `{}`, with `environment = 'Prod''uction'`, seeded directly |
+
+  One blackout: `priority 1`, `environment 'Production'`, empty service and
+  tags, no resource, event, group, customer or origin, `start_time` and
+  `end_time` fixed one hour before and one day after the fixture time,
+  `user 'admin@example.test'`, `create_time` the fixture time, `text 'bo'`.
+- **`TN`** (top-N store): three alerts, `environment = 'Production'`,
+  `service = ['svc']`, `customer = NULL`, `create_time = T0` (a fixed
+  fixture time). Each history
+  has the stated number of `type = 'severity'` entries plus one
+  `type = 'status'` entry, which the filter excludes:
+
+  | Id | Resource | Event | Group | `duplicate_count` | Severity entries | `last_receive_time` |
+  |---|---|---|---|---|---|---|
+  | `t1` | `res-1` | `ev-a` | `grp-x` | 2 | 1 | `T0 + 10 min` |
+  | `t2` | `res-2` | `ev-a` | `grp-x` | 0 | 2 | `T0 + 60 min` |
+  | `t3` | `res-3` | `ev-b` | `grp-y` | 5 | 1 | `T0 + 30 min` |
+
+  Every top-N item has `environments ['Production']` and `services
+  ['svc']`, and `resources` lists `{id, resource, href}` for its alerts.
+  Items with equal sort values may appear in any order; the assertions
+  compare those as sets.
+
+**Vectors.** Reference cells are source-derived. Before execution they are
+NOT_RUN, and their known predicates are asserted on the first authorized
+run. Only cells marked **reference pending** skip, and only that predicate.
+alrust cells are NOT_RUN until an implementation exists. Each vector has at
+most one invalid input unless it says otherwise.
+
+| # | Case (store) | Reference | alrust | Kind |
+|---|---|---|---|---|
+| 1 | `GET /alerts?sort-by=attributes.region` (QF) | first `res-bravo`, then `res-alpha`, then the rest | same | parity |
+| 2 | `sort-by=-attributes.region` (QF) | the four without `region` first (NULLs first in DESC), then `res-alpha`, then `res-bravo` | same | parity |
+| 3 | `sort-by=attributes.region.x` (QF) | as row 1 | same | parity |
+| 4 | `sort-by=attributes.`; `sort-by=-attributes.`; `sort-by=attributes` (QF) | ordered by the whole `attributes` column, ASC, DESC, ASC | same | parity |
+| 5 | `sort-by=attributes.reg'ion` (QF) | the key ends the SQL literal; reference pending | 200; `res-charlie` first, then the rest | divergence |
+| 6 | `GET /alerts/top10/count` (TN) | `ev-a` (count 2, `duplicateCount` 2, resources `t1`, `t2`), then `ev-b` (1, 5, `t3`) | same | parity |
+| 7 | `GET /alerts/top10/flapping` (TN) | `ev-a` (count 3, `duplicateCount` 2), then `ev-b` (1, 5) | same | parity |
+| 8 | `GET /alerts/top10/standing` (TN) | `ev-a` (count 3, `duplicateCount` 2), then `ev-b` (1, 5). The order follows the summed lifetimes derived from the fixture (130 min and 30 min), which the response does not contain (`base.py:625-632`) | same | parity |
+| 9 | `GET /alerts/topn/flapping?group-by=resource` (TN) | `res-2` (count 2) first, then `res-1` and `res-3` (count 1 each) in any order; key `resource` | same | parity |
+| 10 | `GET /alerts/top10/count?group-by=group` (TN) | SQL error (`group` is reserved); reference pending | 200: `grp-x` (count 2), then `grp-y` (1); key `group` | divergence |
+| 11 | `GET /alerts/top10/standing?group-by=event,resource` (TN) | the text becomes SQL; reference pending | 400 `Grouping by 'event,resource' field not supported.` | divergence |
+| 12 | `GET /alerts/top10/count?group-by=Resource` (TN) | reference pending | 400 `Grouping by 'Resource' field not supported.` | divergence |
+| 13 | `GET /alerts?group-by=bogus` (QF) | ignored; 200 | same | parity |
+| 14 | `GET /alerts?q=alpha&q.df=resource` (QF) | `res-alpha` | same | parity |
+| 15 | `q=disk&q.df=resource" IS NOT NULL OR "text` (QF) | the value becomes SQL text and widens the match; reference pending | 400 `Default field 'resource" IS NOT NULL OR "text' not supported.` | divergence |
+| 16 | `q=alpha&q.df=Resource` (QF) | unknown column; reference pending | 400 `Default field 'Resource' not supported.` | divergence |
+| 17 | `q=resource:alpha&q.df=bogus` (QF) | 200 `res-alpha` (`q.df` unused) | 400 `Default field 'bogus' not supported.` | divergence |
+| 18 | `GET /alerts?q.df=anything` (no `q`) (QF) | `q.df` ignored | same | parity |
+| 19 | `q=resource:alpha` (QF) | `res-alpha` | same | parity (explicit column) |
+| 20 | `q=unknownfield:disk` (QF) | unknown-column SQL error; reference pending | 400 `Search field 'unknownfield' not supported.` | divergence |
+| 21 | `q=_.region:a` (QF) | `res-bravo` (ILIKE `%a%` on the `region` value) | same | parity (attribute path) |
+| 22 | `q=raw_data.x:y` (QF) | prefix becomes `rawattributesdata`, unknown column; reference pending | 400 `Search field 'raw_data.x' not supported.` | divergence |
+| 23 | `q=_exists_:region` (QF) | `res-alpha`, `res-bravo` | same | parity |
+| 24 | `GET /blackouts?q=Production&q.df=environment`; then `q.df=severity` (not a blackouts column) (QF) | 200 with the blackout; then an unknown-column error, reference pending | 200 with the blackout; then 400 `Default field 'severity' not supported.` | parity; divergence |
+| 25 | `GET /environments` (QF) | `Prod'uction` ends the SQL literal; reference pending | 200; `Production` (5 alerts) and `Prod'uction` (1) listed with their counts | divergence |
+| 26 | `q=disk full server` (QF) | `disk OR full`: `res-alpha`, `res-bravo`, `res-delta`, `res-echo` | those four plus `res-charlie` | divergence (chain) |
+| 27 | `q=disk AND full AND server` (QF) | `disk AND full`: `res-delta`, `res-echo` | `res-echo` | divergence (chain) |
+| 28 | `q=disk OR full OR NOT server` (QF) | `disk OR full`: as row 26's reference | `(disk OR full) AND NOT server`: `res-alpha`, `res-bravo`, `res-delta` | divergence (chain) |
+| 29 | `q=resource:(alpha OR bravo OR charlie)` (QF) | `res-alpha`, `res-bravo` | `res-alpha`, `res-bravo`, `res-charlie` | divergence (chain) |
+| 30 | `q=disk AND full`; `q=disk full`; `q=disk AND (full AND server)` (QF) | `res-delta`, `res-echo`; row 26's reference set; `res-echo` | same | parity |
+| 31 | two invalid inputs: `GET /alerts/top10/count?q=alpha&q.df=bogus&group-by=bogus` (TN) | reference pending | 400 `Default field 'bogus' not supported.` (`q.df` precedes `group-by`) | divergence (order) |
+
+Row 15's value is a fixed synthetic string, run only against the
+disposable fixture; it reads and writes nothing. These vectors authorize no
+provisioning and no SQL or HTTP execution.
+
 ## Not yet specified
 
 The other Y3 items get entries in this file before their phases need them:
-the string-formatted SQL constructions; WUI-SEC-1 and WP-SEC-1; W-SEC-1 and W-DL-1;
-and the `q=` search. Until an item has an entry here, its
+WUI-SEC-1 and WP-SEC-1; W-SEC-1 and W-DL-1. Until an item has an entry here, its
 reference behavior in `spec/openapi.yaml` stands as the description of the
 defect, not as a requirement for alrust.
