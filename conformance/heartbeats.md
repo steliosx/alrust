@@ -1,6 +1,10 @@
 # Heartbeat vectors
 
-SOURCE_DERIVED / HTTP NOT_RUN. Three cases target immutable reference
+The three cases passed only at frozen `9548f8781c999e43da0382be69a6d5b390e7d0e4`
+in signed reference window `alrust-heartbeat-vectors-reference-20260930-01`,
+runner `6bc8742d`: LOCAL_PASS 3 in 0.56 seconds, with config/key attestations
+and both agents confirming release (`1ba053be` / `4dbd2043`). New heads do not
+inherit that runtime result or approval. These cases target immutable reference
 `f4312727783dad64198b62ed778bbca98a5144a3` and reviewed lifecycle
 `84b2ed5de5b15d0baac5b24a423f8f1c23cb4ad1` (HB0/HB2/HB4), plus customer
 mapping `207f1bcac270afa40b8efc1bb2464e1886e48857` (C19).
@@ -20,7 +24,7 @@ mapping `207f1bcac270afa40b8efc1bb2464e1886e48857` (C19).
    `postgres/base.py:863-872`. This preserves the observed reference contract;
    it proposes no authentication divergence or removal of alert filtering.
 
-Required future execution configuration: disposable reference/Postgres, default
+Configuration for that frozen run and any proposed future run: disposable reference/Postgres, default
 `AUTH_REQUIRED=False`, `CUSTOMER_VIEWS=False`, `HEARTBEAT_TIMEOUT=86400`,
 `HEARTBEAT_MAX_LATENCY=2000`, and the existing private four-role actual-record
 synthetic fixture. Only unscoped and A admin roles are used: `write:alerts`
