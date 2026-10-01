@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-01T18:07Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-01T18:32Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -71,6 +71,9 @@ are kept.
 | #54 | `claude/spec-security-fixes-mgmt` (Y3: SF-MGMT, M-SEC-1; Y8, Y9) | `655f1958` (approved `99fe8f17`) | `cc346e5f` |
 | #55 | `codex/security-refusal-assertions` (Codex's offline refusal predicates for SF-AN1/SF-CRON; reviewed by Claude) | `b43001d3` (approved `8d092494`) | `6ee6f364` |
 | #56 | `claude/charter-sync` (STATUS) | `41718b7e` (approved `01c183e3`) | `00438236` |
+| #57 | `chatgpt/convergence-brand-20261001` (owner's PR: Convergence branding and README illustrations; owner instruction to merge after Codex review) | `077bcad5` (approved `f85ea3a8`) | `e4040810` |
+| #58 | `claude/charter-sync` (STATUS) | `26abf88b` (approved `f0c40881`) | `60ab0210` |
+| #59 | `claude/spec-security-fixes-query` (Y3: SF-QUERY) | `9b07f71a` (approved `39e98779`) | `01bc294c` |
 
 After PR #10, `main` was at `bcd60ea3`; its hosted CI run [36859021523](https://github.com/steliosx/alrust/actions/runs/36859021523) completed successfully at scaffold scope (retrieved by Codex), and Codex independently verified every merge's parents and trees (`5bd706c0`). Checks then: README, STATUS, OpenAPI and the customer mapping are byte-identical to their reviewed versions; DECISIONS is charter-sync's plus only the ADR-0004 row; `spec/lifecycle.md` is the heartbeats version plus exactly the R1.2 clarification from PR #3's later approved head.
 
@@ -270,9 +273,12 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
     secret shown only once, owner decision Y6 as amended; a key's public id
     no longer works as a credential), SF-NOTES (C21) and SF-BLACKOUTS (C22)
     (PR #50) with its edit ceiling on existing scopes (owner decision Y7,
-    PR #51), and SF-MGMT (M-SEC-1; owner decisions Y8 and Y9; PR #54); in
-    review: SF-QUERY (the four string-formatted SQL constructions and the
-    `q=` operand dropping). Still to specify: WUI-SEC-1, WP-SEC-1, W-SEC-1 and W-DL-1.
+    PR #51), SF-MGMT (M-SEC-1; owner decisions Y8 and Y9; PR #54) and
+    SF-QUERY (the four string-formatted SQL constructions and the `q=`
+    operand dropping; PR #59). Owner decisions Y10 (W-DL-1), Y11
+    (WUI-SEC-1) and Y12 (WP-SEC-1) are recorded; in review: SF-WEBHOOKS
+    (W-SEC-1, W-DL-1, WP-SEC-1) and SF-WEBUI (WUI-SEC-1), the last Y3
+    entries.
     Codex is building the
     harness cases from the approved entries (plan, PR #41); its offline
     evidence, transport and refusal-predicate components are merged
@@ -445,7 +451,7 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
     two operands of any flat same-operator chain, silently. `disk full
     server` searches only `disk` OR `full`; `a AND b AND c` ignores `c`
     (`queryparser.py:20-26`; confirmed by both agents' parser probes).
-    DECIDED under Y3: alrust searches every operand (SF-QUERY, in review);
+    DECIDED under Y3: alrust searches every operand (SF-QUERY, PR #59);
   - **App Engine cron auth branch (DECIDED under Y3, SF-CRON, PR #40):**
     alrust has no unauthenticated cron branch. In the reference, with `AUTH_REQUIRED` on, no credentials and
     `ALLOW_READONLY` off, a request with a truthy (non-empty)
