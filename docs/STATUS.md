@@ -457,8 +457,10 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
     - PagerDuty, Slack and Telegram find the alert by a **regular-expression
       id prefix**, so a key such as `.` matches whichever alert comes first
       within the caller's customers;
-    - behavior defects: Slack drops its "not found" response and fails with
-      a 400 `AttributeError`; `watch` and `unwatch` both untag in Slack and
+    - behavior defects: Slack drops its "not found" response and continues
+      with no alert, so a recognized action fails with a 400
+      `AttributeError` (an unrecognized one gives 400 `Unsupported #slack
+      action` either way); `watch` and `unwatch` both untag in Slack and
       Telegram; Telegram `blackout` without an alert raises
       `UnboundLocalError`; PagerDuty applies messages partly (the W-DL-1
       pattern);
