@@ -1026,9 +1026,155 @@ Row 15's value is a fixed synthetic string, run only against the
 disposable fixture; it reads and writes nothing. These vectors authorize no
 provisioning and no SQL or HTTP execution.
 
-## Not yet specified
+## SF-WEBHOOKS: no credentials in logs, whole batches, plain placeholders
 
-The other Y3 items get entries in this file before their phases need them:
-WUI-SEC-1 and WP-SEC-1; W-SEC-1 and W-DL-1. Until an item has an entry here, its
-reference behavior in `spec/openapi.yaml` stands as the description of the
-defect, not as a requirement for alrust.
+Status: Proposed. Covers W-SEC-1, W-DL-1 (owner decision Y10), WP-SEC-1
+(owner decision Y12) and the Prometheus `moreInfo` part of WUI-SEC-1 (owner
+decision Y11), all 2026-10-01.
+
+**Reference.**
+1. W-SEC-1: the webhooks blueprint's `before_request`
+   (`webhooks/__init__.py:17-24`) runs before authentication on every
+   method and logs, at INFO, the method, the full URL (including any
+   `?api-key=`), all request headers (including `Authorization` and
+   `X-API-Key`) and the whole body.
+2. W-DL-1: `custom` (`webhooks/custom.py:41-84`) processes the alerts
+   returned by a webhook one by one. The first alert that is rejected (403),
+   rate-limited (429), a heartbeat (202), blacked out (202), a forwarding
+   loop (202) or fails (the `AlertaException` code, else 500) ends the
+   request with that alert's response. Alerts before it are stored; alerts
+   after it are never processed. If all are stored, the response is 201
+   `{status, id, alert}` for one alert, or `{status, ids}` for several
+   (`:81-84`).
+3. WP-SEC-1: the Prometheus mapping runs every label value through
+   `str.format(**labels)` and every annotation through
+   `str.format(**expanded labels)`, keeping the original value on any
+   exception (`webhooks/prometheus.py:20-34`). The full format language
+   applies: widths, format specs, attribute and index access, conversions.
+4. `moreInfo`: with a `generatorURL`, the mapping stores the HTML string
+   `<a href="<generatorURL>" target="_blank">Prometheus Graph</a>` as an
+   annotation, which becomes `attributes.moreInfo` (`:74-75`, `:82`).
+
+**alrust.**
+1. Logging (W-SEC-1). No credential value is ever written to any log at
+   any level: no `Authorization`, `X-API-Key` or `Cookie` header value, and
+   no `api-key` query value. Request logging for webhooks records only the
+   method, the path without the query string, the webhook name, the body
+   length and the request id. Headers, the query string and the body are
+   never logged.
+2. Batches (Y10). Every alert returned by a webhook is processed, in order,
+   each independently, with the reference's per-alert handling and audit
+   events. Then:
+   - If every alert is stored, the response is the reference's (201,
+     `{status, id, alert}` for one alert, `{status, ids}` for several).
+   - A batch of one alert gets exactly the reference's response in every
+     case.
+   - Otherwise (several alerts, at least one not stored), the status code
+     and members are those of the reference's response for the **first**
+     alert not stored, in batch order. One member is added: `results`, a
+     list in batch order of `{index, id, outcome, code, message}`. `index`
+     counts from 0. `id` is the alert id, or null for a forwarding loop.
+     `outcome` is one of `stored`, `rejected`, `rate-limited`, `heartbeat`,
+     `blackout`, `forwarding-loop` or `error`. `code` is the status the
+     reference would return for that alert alone (201 when stored).
+     `message` is null when stored, else that response's message. When the
+     first alert not stored is an error, its error envelope carries
+     `results` too, as the one exception to the common error envelope.
+3. Placeholders (Y12). Each label value is expanded against the original
+   labels, and each annotation against the expanded labels, in the
+   reference's order:
+   1. The value is read left to right as literal text, `{{`, `}}` and
+      brace groups `{…}` (from a `{` to the next `}`).
+   2. If the value has an unmatched `{` or a lone `}`, or a group that is
+      empty, all digits, or a plain name missing from the map, the value is
+      kept unchanged. A plain name is a group with none of `:`, `!`, `.`,
+      `[`. This matches the reference, which keeps the value on error.
+   3. Otherwise `{{` becomes `{`, `}}` becomes `}`, and each plain-name
+      group is replaced by its value. Every other group (one containing
+      `:`, `!`, `.` or `[`) is left exactly as written, braces included.
+   4. If the result is longer than 65,536 bytes (UTF-8), the original value
+      is kept.
+4. `moreInfo` (Y11): with a `generatorURL`, the Prometheus mapping stores the
+   plain URL string as `attributes.moreInfo`. The rest of the mapping is
+   unchanged.
+
+**Fixtures.** Default settings: `PLUGINS` is the default list (`settings.py:272`,
+including `reject` and `blackout`), and `ALLOWED_ENVIRONMENTS = ['Production', 'Development']`.
+The caller holds a synthetic key with `write:webhooks`. One active
+blackout: `environment 'Production'`, `resource 'host-2'`, no other
+criteria. Prometheus payloads `POST /webhooks/prometheus` carry
+`status 'firing'`, fixed `startsAt` and `endsAt`, and labels
+`alertname 'A<n>'` and `instance 'host-<n>'`, unless a row says otherwise.
+Log capture: the server's log output at `LOG_LEVEL DEBUG` (alrust) or INFO
+(reference) is collected for the request.
+
+**Vectors.** Reference cells are source-derived. Before execution they are
+NOT_RUN, and their known predicates are asserted on the first authorized
+run. Only cells marked **reference pending** skip, and only that predicate.
+alrust cells are NOT_RUN until an implementation exists.
+
+| # | Case | Reference | alrust | Kind |
+|---|---|---|---|---|
+| 1 | webhook request with `Authorization: Key <s1>`, `?api-key=<s2>` and a body containing `<s3>` (three distinct synthetic sentinels) | the log contains `<s1>`, `<s2>` and `<s3>` | no sentinel appears in any log line at any level | divergence |
+| 2 | batch of four alerts, `host-1` … `host-4`; `host-2` is blacked out | 202 `Suppressed alert during blackout period` (`plugins/blackout.py:33`) with `host-2`'s id; only `host-1` stored | 202 with the same members plus `results` (`stored`, `blackout`, `stored`, `stored`); `host-1`, `host-3` and `host-4` stored | divergence (Y10) |
+| 3 | batch of four alerts; `host-2` has label `environment 'Bogus'` (rejected) | 403 error envelope with the reject message; only `host-1` stored | 403, same envelope plus `results` (`stored`, `rejected`, `stored`, `stored`); `host-1`, `host-3` and `host-4` stored | divergence (Y10) |
+| 4 | batch of three alerts, all valid | 201 `{status, ids}` with three ids | same; no `results` | parity |
+| 5 | batch of one valid alert; then of one alert for `host-2` | 201 `{status, id, alert}`; then 202 with the blackout message | same, no `results` | parity |
+| 6 | annotation `runbook 'https://wiki.test/{instance}/{alertname}'` | `attributes.runbook` `https://wiki.test/host-1/A1` | same | parity |
+| 7 | annotation `note '{{literal}} {alertname}'` | `{literal} A1` | same | parity |
+| 8 | annotation `note '{missing} {alertname}'`; then `'{0}'`; then `'{alertname'` | unchanged each time | same | parity |
+| 9 | annotation `note 'x {alertname:>20} {instance}'` | `x` plus `A1` right-aligned in 20 characters plus ` host-1` | `x {alertname:>20} host-1` | divergence (Y12) |
+| 10 | annotation `note '{alertname.__class__}'` | `<class 'str'>` | `{alertname.__class__}` | divergence (Y12) |
+| 11 | label `big` set to 40,000 `a` characters; annotation `note '{big}{big}'` | 80,000 characters | `{big}{big}` (above 65,536 bytes) | divergence (Y12) |
+| 12 | `generatorURL 'http://prom.test/graph?g0.expr=up'` | `attributes.moreInfo` is the HTML anchor | `attributes.moreInfo` is `http://prom.test/graph?g0.expr=up` | divergence (Y11) |
+
+Row 1 uses synthetic sentinels only. Row 11's payload is about 40 KB.
+
+## SF-WEBUI: no raw HTML in the web UI
+
+Status: Proposed. Covers WUI-SEC-1. Owner decision Y11 (2026-10-01). This is
+a change to alrust's vendored web UI (ADR-0004) and is tested with the UI's
+own component tests, not the HTTP conformance suite.
+
+**Reference.** The pinned web UI (`2687e4af`) renders nine fields as raw
+HTML with `v-html` and no sanitizer:
+- alert `value`, `text` and custom attribute columns
+  (`AlertList.vue:153`, `:162`, `:180`);
+- history text (`AlertDetail.vue:582`);
+- string attributes containing `http://` or `https://`
+  (`AlertDetail.vue:728-730`);
+- group member name and email, and name and login
+  (`GroupList.vue:53-54`, `:84-85`).
+
+Anyone who can write these fields controls HTML, including script, in
+operators' browsers.
+
+**alrust.** None of the nine places renders HTML. Each one shows its field
+as text, through one shared rendering function:
+- The text is escaped, so any HTML is shown literally.
+- Every substring matching `https?://[^\s<>"']+`, minus any trailing `.`,
+  `,`, `;`, `:`, `!`, `?` or `)`, becomes an anchor whose visible text is
+  that substring, with `href` the same substring, `target="_blank"` and
+  `rel="noopener noreferrer"`.
+- No other scheme is linked.
+- Non-string values are shown as their text form.
+
+No other UI behavior changes.
+
+**Vectors** (vendored UI component tests):
+
+| # | Field content | Rendered |
+|---|---|---|
+| 1 | `<img src=x onerror=alert(1)>` in an alert's `text` | the literal characters; no `img` element; no handler runs |
+| 2 | `see https://wiki.test/x.` in `value` | `see `, an anchor to `https://wiki.test/x` (the period stays text) with `target="_blank"` and `rel="noopener noreferrer"`, then `.` |
+| 3 | `javascript:alert(1)` in a custom attribute | the literal text, no anchor |
+| 4 | `<b>bold</b>` in history text | the literal characters |
+| 5 | a group member email `a@b.test<script>x</script>` | the literal characters; no `script` element |
+| 6 | an attribute value `http://prom.test/graph` (the alrust `moreInfo`) | one anchor to that URL |
+
+## Later findings
+
+Every Y3 item now has an entry above. A defect found later gets its own
+entry here before alrust relies on its fix; until then its reference
+behavior in `spec/openapi.yaml` stands as the description of the defect, not
+as a requirement for alrust.
