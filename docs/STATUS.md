@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-01T16:14Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-01T16:32Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -57,6 +57,10 @@ are kept.
 | #40 | `claude/spec-security-fixes` (Y3: SF-AN1, SF-CRON, SF-USERS) | `9acc9b41` (approved `654ab8a5`) | `b4cd5aca` |
 | #41 | `codex/security-fixture-plan` (Codex's fixture plan for the security fixes; reviewed by Claude) | `a9479718` (approved `8089916e`) | `5e13cdce` |
 | #42 | `claude/spec-security-fixes-gpc` (Y3: SF-GROUPS, SF-PERMS, SF-CUSTOMERS) | `4d7b5508` (approved `262c80de`) | `2eda00bb` |
+| #43 | `codex/security-evidence-state` (Codex's offline fixture-check and evidence component; reviewed by Claude) | `4e1285b7` (approved `d497ad4f`) | `bd5b47f1` |
+| #44 | `claude/charter-sync` (STATUS, DECISIONS) | `2ccdbdb8` (approved `dc31a4ab`) | `6f6f57fc` |
+| #45 | `codex/security-transport` (Codex's offline security transport; reviewed by Claude) | `c36eba87` (approved `d497ad4f`) | `b5012d5c` |
+| #46 | `claude/charter-sync` (DECISIONS Y6) | `23ad33ae` (approved `acd04922`) | `0fde1e86` |
 
 After PR #10, `main` was at `bcd60ea3`; its hosted CI run [36859021523](https://github.com/steliosx/alrust/actions/runs/36859021523) completed successfully at scaffold scope (retrieved by Codex), and Codex independently verified every merge's parents and trees (`5bd706c0`). Checks then: README, STATUS, OpenAPI and the customer mapping are byte-identical to their reviewed versions; DECISIONS is charter-sync's plus only the ADR-0004 row; `spec/lifecycle.md` is the heartbeats version plus exactly the R1.2 clarification from PR #3's later approved head.
 
@@ -242,13 +246,16 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
     each one. Specified and approved in `spec/security-fixes.md` so far:
     SF-AN1 (AN1), SF-CRON (App Engine cron), SF-USERS (users role ceiling
     and user creation), SF-GROUPS (G-SEC-1, GR-R1, G-DEF-1), SF-PERMS
-    (P-SEC-1) and SF-CUSTOMERS (C-SEC-1); proposed for review: SF-KEYS
-    (the API-key items and C23; the secret shown only once, owner decision
-    Y6), SF-NOTES (C21) and SF-BLACKOUTS (C22). Still to specify: the
+    (P-SEC-1) and SF-CUSTOMERS (C-SEC-1); SF-NOTES (C21) and SF-BLACKOUTS
+    (C22) approved as components; SF-KEYS (the API-key items and C23; the
+    secret shown only once, owner decision Y6 as amended) revised for
+    KEYS-R1..R3 and in review. Open owner question: whether `PUT /key`
+    rechecks a key's existing scopes. Still to specify: the
     string-formatted SQL, M-SEC-1, WUI-SEC-1, WP-SEC-1, W-SEC-1, W-DL-1 and
     the `q=` search. Codex is building the
-    harness cases from the approved entries (plan, PR #41); no security case
-    has run.
+    harness cases from the approved entries (plan, PR #41); its offline
+    evidence and transport components are merged (PRs #43, #45); no security
+    case has run.
   - **new, SECURITY (reference defects, source-level only, no exploit built
     or run; independently confirmed by Codex):** the pinned Alerta server
     builds SQL by string formatting from request or stored text in **four**
