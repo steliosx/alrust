@@ -215,8 +215,9 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
   confirm/forgot/reset endpoints wait for the owner's auth-contract
   decision. Keep STATUS current.
 - **Owner:**
-  - repository protection: approved (Y2) but not applicable without GitHub
-    Pro or a public repository; that choice is pending;
+  - repository protection: approved (Y2); applied when the owner makes the
+    repository public after the beta has been tested (no paid upgrade); until
+    then `main` is unprotected and the guard is not enforced;
   - production-exposure checks: deferred (Y4);
   - the security and behavior items below are DECIDED (Y3): alrust fixes
     each one; the per-item behavior is specified in `spec/` under review.
