@@ -4248,14 +4248,20 @@ paths:
         responses there all apply. Present only while the `cloudwatch` entry
         point loaded successfully. This entry documents the mapping only.
 
-        Payload: `incoming` calls `json.loads(payload)` (`:33`). That works
-        only when the dispatcher handed it **text**, that is when the body
-        is not valid JSON under a JSON content type and not a form. SNS
-        sends `text/plain`, so this is its normal path. A body the dispatcher
-        already parsed as JSON (a dict) makes `json.loads` raise
-        `TypeError`, which triggers the dispatcher's legacy retry and then an
-        unhandled **500**. Invalid JSON text gives 400 with the decoder's
-        message. A missing key gives 400 with the key (`KeyError`).
+        Payload: `incoming` calls `json.loads(payload)` (`:33`) on whatever
+        the dispatcher delivers (step 5 of `/webhooks/{webhook}`): the
+        parsed JSON body if it is truthy, else a non-empty form, else the raw
+        body text. What happens depends on that value:
+        - Text: decoded as JSON. SNS sends `text/plain`, so this is its normal
+          path. Valid but falsy JSON under a JSON content type (such as `{}`)
+          also arrives as raw text and is decoded; `{}` then gives 400
+          `'Type'` (`KeyError`). Invalid JSON text gives 400 with the
+          decoder's message.
+        - A truthy parsed value that is not a string (an object, array,
+          number or `true`): `json.loads` raises `TypeError`, which triggers
+          the dispatcher's legacy retry and then an unhandled **500**.
+        - A parsed JSON **string**: a Python string, decoded again as JSON.
+        A missing key gives 400 with the key (`KeyError`).
 
         By `Type` (`:35-82`):
         - `SubscriptionConfirmation`: one alert with `resource` = `TopicArn`,
@@ -4266,9 +4272,11 @@ paths:
           (`%Y-%m-%dT%H:%M:%S.%fZ`; another format gives 400), `rawData` the
           notification. `text` is `<Message> <a href="<SubscribeURL>"
           target="_blank">SubscribeURL</a>`, an HTML anchor built **without
-          escaping** (the WUI-SEC-1 pattern; alrust's handling follows owner
-          decision Y11 and is specified in `spec/security-fixes.md`). The
-          subscription itself is not confirmed by the server.
+          escaping** (the WUI-SEC-1 pattern). Under owner decision Y11 the
+          shared plain-text UI renderer (SF-WEBUI) already applies; the
+          server-side change for this text is **pending specification and
+          review** in `spec/security-fixes.md`. The subscription itself is
+          not confirmed by the server.
         - `Notification`: `Message` is parsed as JSON. Without a `Trigger`
           key: 400 `SNS message is not a Cloudwatch notification`.
           Otherwise `resource` = `<name>:<value>` of the first trigger
@@ -4307,7 +4315,7 @@ paths:
 
         By `state` (`incoming`, `:109-135`). A falsy payload gives 400 `no
         alerts in Grafana notification payload`; a JSON object without
-        `state` gives 400 `'state'` (`KeyError`); a text body makes the
+        `state` gives 400 `'state'` (`KeyError`); a text body (step 5's raw text, including falsy JSON such as `{}`) makes the
         indexing raise `TypeError`, so the dispatcher's legacy retry and then
         an unhandled **500**:
         - `alerting`: one alert per item of `evalMatches` (default `[]`, so
@@ -4353,11 +4361,15 @@ paths:
         5. `attributes.ruleId` = `str(ruleId)` (missing gives 400 `'ruleId'`).
            With `ruleUrl` or `imageUrl` present, `attributes.ruleUrl` and
            `attributes.imageUrl` are HTML anchors (`Rule`, `Image`) built
-           **without escaping** (the WUI-SEC-1 pattern; alrust follows owner
-           decision Y11).
+           **without escaping** (the WUI-SEC-1 pattern). The SF-WEBUI renderer
+           (Y11) applies; the server-side change to plain URLs is **pending
+           specification and review**.
         6. `resource` = the match's `metric`; `event` = `ruleName` (any of
-           `metric`, `ruleName` or the match's `value` missing gives 400); `value` = the match's `value` as a string;
-           `text` = `message`, else `title`, else `state`; `type`
+           `metric`, `ruleName` or the match's `value` missing gives 400);
+           `value` = the match's `value` as a string; `text` = `message` if
+           truthy, else `alert.get('title', state)`: `title` when the key is
+           present, **even if empty or null** (then stored as `''`), and
+           `state` only when `title` is absent; `type`
            `grafanaAlert`; `rawData` the alert, JSON-encoded.
 
         Source-derived; runtime NOT_RUN.
@@ -4405,7 +4417,7 @@ paths:
         - `resource` = `stream.title`; `text` =
           `check_result.result_description`; `attributes` `{checkId:
           check_result.triggered_condition.id}`. A missing key gives 400 with
-          the key. A text (non-JSON, non-form) body makes the indexing raise
+          the key. A text body (step 5's raw text, including falsy JSON such as `{}`) makes the indexing raise
           `TypeError`, so the dispatcher's legacy retry and then an unhandled
           **500**.
         - From the query string: `event` (default `Alert`), `environment`
@@ -4447,7 +4459,7 @@ paths:
 
         One alert per request (`incoming`, `:21-70`):
         - Without a `version` key: 400 `New Relic Legacy Alerting is not
-          supported`. With a text (non-JSON, non-form) body, `'version' in
+          supported`. With a text body (step 5's raw text, including falsy JSON such as `{}`), `'version' in
           payload` is a substring test, and a text containing `version` then
           fails at indexing with `TypeError`: the dispatcher's legacy retry,
           then an unhandled **500**.
@@ -4552,8 +4564,9 @@ paths:
           `user-defined`). An empty `messages` list gives 400 `update
           PagerDuty incident status failed`.
 
-        alrust's handling of the unescaped text and of partial application
-        follows owner decisions Y11 and Y10 and is to be added to
+        The SF-WEBUI renderer (Y11) applies to the history text; the
+        server-side text change and the handling of partial application
+        (Y10) are **pending specification and review** in
         `spec/security-fixes.md`. Source-derived; runtime NOT_RUN.
       requestBody:
         required: true
@@ -4617,7 +4630,7 @@ paths:
           `<importance_level>: <long_description>`; `tags` = `tags` as given;
           `attributes` `{checkId: check_id}`; `origin` `Pingdom`; `type`
           `availabilityAlert`; `rawData` the payload.
-        - A missing key gives 400 with the key. A text body makes indexing
+        - A missing key gives 400 with the key. A text body (step 5's raw text, including falsy JSON such as `{}`) makes indexing
           raise `TypeError`: the legacy retry, then an unhandled **500**.
 
         Source-derived; runtime NOT_RUN.
@@ -4785,7 +4798,7 @@ paths:
         `Performance`; `text` = `description`; `value` = `metric` (as given,
         possibly a number); `tags` = `tags` (possibly null); `origin`
         `Riemann`; `rawData` the payload. A missing `host` or `service` gives
-        400 with the key; a text body gives `TypeError`, so the legacy retry,
+        400 with the key; a text body (step 5's raw text, including falsy JSON such as `{}`) gives `TypeError`, so the legacy retry,
         then an unhandled **500**.
 
         Source-derived; runtime NOT_RUN.
@@ -4831,7 +4844,7 @@ paths:
         truthy, else `[]`; `attributes` `{alertId, itemId}`; `origin`
         `ServerDensity`; `type` `serverDensityAlert`; `rawData` the payload.
         Every listed key is required (a missing one gives 400 with the key);
-        a text body gives `TypeError`, so the legacy retry, then an unhandled
+        a text body (step 5's raw text, including falsy JSON such as `{}`) gives `TypeError`, so the legacy retry, then an unhandled
         **500**.
 
         Source-derived; runtime NOT_RUN.
@@ -4939,9 +4952,10 @@ paths:
           the whole payload.
         - `attributes` `{incidentId, resourceId, startedAt, endedAt}` and
           `moreInfo`, an HTML anchor (`Stackdriver Console`) to `url` built
-          **without escaping** (the WUI-SEC-1 pattern; alrust follows owner
-          decision Y11).
-        - A missing key gives 400 with the key; a text body gives
+          **without escaping** (the WUI-SEC-1 pattern). The SF-WEBUI renderer
+          (Y11) applies; the server-side change to a plain URL is **pending
+          specification and review**.
+        - A missing key gives 400 with the key; a text body (step 5's raw text, including falsy JSON such as `{}`) gives
           `TypeError`, so the legacy retry, then an unhandled **500**.
 
         Source-derived; runtime NOT_RUN.
@@ -4975,7 +4989,7 @@ paths:
         **No alert is created**; all work happens inside `incoming`
         (`:70-106`), in the parsing stage:
         - Without `callback_query`: 200 `{status: ok, message: no
-          callback_query in Telegram message}`. With a text body, `in` is a
+          callback_query in Telegram message}`. With a text body (step 5's raw text, including falsy JSON such as `{}`), `in` is a
           substring test, and a text containing `callback_query` fails at
           indexing (`TypeError`, so the legacy retry, then an unhandled
           **500**).
