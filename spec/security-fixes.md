@@ -395,10 +395,251 @@ key carries customer `A`, so `g.customers` is `[A]`.
 | caller with empty `g.customers` (for example an `admin` key with no customer), `POST` mapping to `B` | 201 | 201 | parity |
 | `CUSTOMER_VIEWS=False`, key with customer `A`, `POST` mapping to `B` | 201 | 201 | parity |
 
+## SF-KEYS: API-key expiry, scopes, secret exposure and customer
+
+Status: Proposed. Covers the API-key items, C23 and the use of a key's
+public id as a credential (KEYS-R4). The secret-exposure fix
+follows owner decision Y6 (2026-10-01): the secret is shown only once, at
+creation, and alrust's vendored web UI shows it once after creation.
+
+**Fixtures.** Settings `API_KEY_EXPIRE_DAYS = 365` (`settings.py:175`, the
+default, set explicitly), `USER_DEFAULT_SCOPES = ['read', 'write']` (`:69`),
+`ADMIN_USERS = ['root@example.test']` (default `[]`, `:64`) and
+`AUTH_REQUIRED = True`. Callers:
+- `C1`: login `alice@example.test`, scopes `[read, write:keys]`, no
+  customers.
+- `C2`: login `bob@example.test`, scopes `[admin]`.
+- `C3`: login `carol@example.test`, scopes `[read, write:keys]`, customers
+  `[A]`.
+- `C4`: login `dave@example.test`, scopes `[read, write:keys]`, customers
+  `[A, B]`.
+
+Key `K0` has scopes `[read]`, text `t0`, customer `NULL` and a stored expiry
+`E` one day ahead. Key `KA` is the same but with customer `A`. Each key is
+owned by the `C1`, `C3` or `C4` login that edits it in the vector; in rows
+where `C2` acts, it is owned by `alice@example.test`. Unless a vector varies them, a `PUT` body carries
+`text: 't1'` and `expireTime` equal to `E`, so each vector isolates one
+change. State is read from the store by a privileged observer, not through
+the API.
+
+**Reference.**
+1. Responses (`views/keys.py`):
+   - `POST /key` returns 201 `{status, key: <secret>, data: <key object>}`
+     (`:52`);
+   - `GET /key/{key}` returns `{status, total: 1, key: <key object>}` (`:71`);
+   - `GET /keys` returns `{status, page, pageSize, pages, more, keys: [<key
+     object>…], total}`, plus `message` when empty (`:94-113`);
+   - `PUT /key/{key}` returns `{status, key: <key object>}` (`:147`);
+   - `DELETE /key/{key}` returns `{status}` only (`:166`).
+
+   Every key object holds the secret as `key` and `href` =
+   `absolute_url('/key/' + <secret>)` (`models/key.py:64-78`). Paths accept
+   the id or the secret (`postgres/base.py:947-953`, `:996`, `:1013`).
+   Authentication uses the same lookup. The `permission` decorator takes a
+   token from `Authorization: Key <token>`, else `X-API-Key`, else the
+   `api-key` query parameter (`auth/decorators.py:30-40`), and passes it to
+   `ApiKey.verify_key` (`:42-43`). That calls `db.get_key(token)`, which
+   matches `id` or `key` (`models/key.py:162-166`; `postgres/base.py:947-953`),
+   and then counts the use with the same raw token (`update_key_last_used`,
+   `:1002-1008`). A key's id is therefore a working credential with that
+   key's scopes. A token that matches no key, or an expired key, gives 401
+   `API key parameter '<token>' is invalid` (`auth/decorators.py:44-45`).
+   In the store, `id` is the primary key and `key` is a separate unique
+   column (`sql/schema.sql:123-133`).
+2. Expiry on `PUT`: `ApiKey.update` replaces `expireTime` with
+   `DateTime.parse(expireTime)` when present, else with `None`
+   (`models/key.py:152`), and the store then writes it
+   (`postgres/base.py:990-991`). `DateTime.parse` returns `None` for every
+   non-string (`utils/format.py:55-57`), so an absent `expireTime`, `null`, a
+   number, a boolean, an array and an object all store `NULL`. Every read then
+   rebuilds a `NULL` expiry as the read time plus `API_KEY_EXPIRE_DAYS`
+   (`models/key.py:31`), so `verify_key` (`:162-167`) never finds the key
+   expired. A string that does not parse raises `ValueError` (`utils/format.py:58-61`)
+   outside any handler, after the audit signal (`views/keys.py:142-145`): the
+   generic 500. On `POST`, `ApiKey.parse` turns the same `ValueError` into
+   400 with its message (`views/keys.py:23-26`), and a non-string gives the
+   default expiry, which is stored.
+3. Scopes: a key with an empty scope list reads back as `USER_DEFAULT_SCOPES`
+   (`models/key.py:29`). `PUT` checks the ceiling only on the scopes in the
+   body (`views/keys.py:137-140`): `scopes: []` checks nothing and stores
+   `[]`, and a body without `scopes` does not recheck the stored scopes. On
+   `POST`, a `type` member replaces the scopes after construction, mapped
+   with the body's `user` member (`models/key.py:58-59`), before the handler
+   sets the final user (`views/keys.py:28-31`): a body `user` in
+   `ADMIN_USERS` gives `ADMIN_SCOPES`; `read-write` and `read-only` give their
+   scopes; any other type gives `[]` (`utils/key.py:36-43`). The ceiling then
+   checks the resulting scopes (`views/keys.py:38-41`), so `[]` passes and the
+   key acts with `USER_DEFAULT_SCOPES`. `scopes: []` on `POST` without `type`
+   becomes `USER_DEFAULT_SCOPES` at construction and is checked: no defect.
+4. C23: `PUT` always sets `customer` from `assign_customer`
+   (`views/keys.py:135`; `utils/api.py:14-28`). Without `customer` in the
+   body, an unscoped caller gets `None` (the customer is cleared), a caller
+   with one customer gets that customer, and a caller with several customers
+   gets 400 `must define customer as more than one possibility`.
+
+**alrust.**
+1. Responses. Every envelope keeps the reference's members, with
+   exactly these serialization changes:
+   - **S1:** the `key` member inside a key object appears only in the
+     `POST /key` 201 response, which keeps both the top-level `key` and
+     `data.key`. It is absent from `GET /key/{id}` (`key.key`), from every
+     `GET /keys` element (`keys[*].key`) and from `PUT` (`key.key`). The
+     outer `key` member of the `GET` and `PUT` envelopes is still the key
+     object.
+   - **S2:** every key object's `href` is `absolute_url('/key/' + <id>)`, in
+     `POST` (`data.href`), `GET`, `GET /keys` and `PUT`.
+   - **S3:** `GET`, `PUT` and `DELETE /key/{key}` match on `id` only. A
+     secret in the path is an unknown id: 404 `not found`, no side effect.
+   - **S4:** authentication matches the token against the `key` (secret)
+     column only, never against `id`. Carriers and their precedence are the
+     reference's (`Authorization: Key`, then `X-API-Key`, then `api-key`).
+     A token that equals a key's id but no key's secret is an unknown key:
+     401 `API key parameter '<token>' is invalid`, the reference's message
+     and envelope. That 401 has no side effect: no use is counted and the
+     handler does not run. Credential resolution comes before the scope
+     check and the handler, as in the reference. On success, the use is
+     counted on the one resolved key's row, by its id. Expired keys are
+     refused as in the reference.
+
+   Management and authentication are therefore separate: paths take the id
+   only (S3), and credentials take the secret only (S4). A response is in **operation parity** when it has the
+   reference's status, envelope members and stored state, and its key
+   objects equal the reference's after S1 and S2 are applied to them.
+2. `PUT /key/{id}` checks in this order, each refusal without side effect:
+   1. empty body: 400 `nothing to change` (reference);
+   2. lookup by id: 404 `not found` (reference, with S3);
+   3. `customer` present: the reference's `assign_customer` rules and
+      refusals. `customer` absent: the stored customer is unchanged and
+      `assign_customer` is not called (C23);
+   4. `expireTime` present and not a string that parses with the reference
+      format: 400 `dates must be ISO 8601 date format
+      YYYY-MM-DDThh:mm:ss.sssZ`. This covers `null`, numbers, booleans,
+      arrays, objects and malformed strings. `expireTime` absent: the stored
+      expiry is unchanged;
+   5. `scopes` present and an empty list: 400 `scopes must not be empty`;
+   6. the reference's ceiling on the scopes in the body: 403 with the
+      reference message (`views/keys.py:139-140`). As in the reference, a
+      body without `scopes` does not recheck the stored scopes;
+   7. the audit signal, then the update.
+3. `POST /key` keeps the reference's order (parse, final user, customer,
+   missing user, ceiling). Within parse, after the reference's own checks, a
+   `type` member other than the strings `read-only` and `read-write` is
+   400 `unknown key type`, whatever the body `user` is. A valid `type` is
+   mapped exactly as in the reference, with the body's `user` member,
+   including the `ADMIN_USERS` case. Expiry handling on `POST` is unchanged.
+4. Stored expiry and scopes are read literally; nothing is rebuilt or
+   substituted on read.
+5. Web UI (Y6, amended 2026-10-01). Against the reference, the pinned UI
+   shows a new key's secret only through the reloaded list: `createKey`
+   discards the creation response and reloads the list
+   (`store/modules/keys.store.ts:35-38`), which shows `key` from `GET /keys`
+   (`ApiKeyList.vue:215-224`). Against the S1 responses it would never show
+   the secret. alrust's vendored web UI
+   therefore carries one change: after a successful create, it shows the
+   secret from the 201 response once, with a copy control, and the list
+   no longer has a key column. Update and delete already use `id`
+   (`ApiKeyList.vue:491`, `:503-504`). This is a vendored-UI change under
+   ADR-0004 and has its own review.
+
+**Vectors.** Reference columns are source-derived expectations. Before
+execution each is NOT_RUN; on the first authorized reference run, every
+status, envelope and state predicate in them is asserted, and none is
+skipped for lack of an earlier run. Only a cell marked **reference pending**
+has an unresolved expectation: that predicate alone is an explicit skip
+(`SKIPPED_REFERENCE_UNQUALIFIED`), while the known predicates of the same
+row, including the alrust side and its no-side-effect checks, are still
+asserted.
+
+| # | Case | Reference | alrust | Kind |
+|---|---|---|---|---|
+| 1 | `C1` `PUT` `K0` with body `{text: 't1'}` (no `expireTime`) | 200; stored expiry `NULL`; each read shows read time + 365 days; `verify_key` accepts after `E` | 200; stored expiry `E` | divergence (expiry) + S1/S2 |
+| 2-6 | `C1` `PUT` `K0` with `expireTime` = `null`, `5`, `false`, `[]`, `{}` | 200, as row 1 | 400 parse message, no change | divergence |
+| 7 | `C1` `PUT` `K0` with `expireTime: 'tomorrow'` | 500 (body reference pending) | 400 parse message, no change | divergence |
+| 8 | `C1` `PUT` `K0` with a valid `expireTime` `E2` | 200, expiry `E2` | same | operation parity |
+| 9 | `C1` `PUT` `K0` with `scopes: []` | 200; stored `[]`; the response and later reads show `[read, write]` | 400 `scopes must not be empty`, no change | divergence |
+| 10 | `C1` `PUT` `K0` with `scopes: [read]` | 200 | 200 | operation parity |
+| 11 | `C1` `PUT` `K0` with `scopes: [write]` | 403 ceiling message | same | parity |
+| 12 | `C2` creates `K0` for `alice@example.test` with scopes `[admin]`; then `C1` `PUT` it with `{text: 't1', expireTime: E}` | 200; stored scopes not rechecked | same | operation parity |
+| 13 | `C1` `POST` `{type: 'bogus'}` | 201; stored scopes `[]`; the 201 object (built by `ApiKey.from_db`) and later reads show `[read, write]`; user `alice@example.test` | 400 `unknown key type`, no key | divergence |
+| 14 | `C2` `POST` `{type: 'bogus'}` | 201; stored scopes `[]`; the 201 object and later reads show `[read, write]` | 400 `unknown key type`, no key | divergence |
+| 15 | `C2` `POST` `{type: 'bogus', user: 'root@example.test'}` | 201; scopes `ADMIN_SCOPES` | 400 `unknown key type`, no key | divergence |
+| 16 | `C2` `POST` `{type: 'read-only', user: 'root@example.test'}` | 201; scopes `ADMIN_SCOPES`; user `root@example.test` | same | operation parity (`ADMIN_USERS` positive control) |
+| 17 | `C1` `POST` `{type: 'read-only', user: 'root@example.test'}` | 403 ceiling message (`ADMIN_SCOPES` from the body user; final user `alice@example.test`) | same | parity |
+| 18 | `C1` `POST` `{type: 'read-only'}` | 201; scopes `[read]` | same | operation parity |
+| 19 | `C1` `POST` `{scopes: []}` | 403 ceiling message (`write` from `USER_DEFAULT_SCOPES`) | same | parity |
+| 20 | `C1` `POST` `{scopes: [read]}` | 201 with top-level `key` and `data.key` = secret; `data.href` uses the secret | 201 with top-level `key` and `data.key` = secret; `data.href` uses the id | divergence (S2 only) |
+| 21 | `C1` `GET /key/{id}` of `K0` | 200 `{status, total, key: {…, key: <secret>, href: …/key/<secret>}}` | 200, same envelope; key object without `key`; `href` uses the id | divergence (S1, S2) |
+| 22 | `C1` `GET /keys` | each element has `key` and a secret `href` | each element without `key`; `href` uses the id | divergence (S1, S2) |
+| 23 | `C1` `GET` or `PUT /key/{secret}` of `K0`; `C2` `DELETE /key/{secret}` | 200, the key / `{status}` | 404 `not found`, no side effect | divergence (S3) |
+| 24 | `C2` `DELETE /key/{id}` | 200 `{status: 'ok'}` | same | parity |
+| 25 | `C1` `PUT` `KA` without `customer` | 200; customer cleared to `NULL` | 200; customer `A` kept | divergence (C23) + S1/S2 |
+| 26 | `C3` `PUT` `KA` without `customer` | 200; customer `A` | same | operation parity |
+| 27 | `C4` `PUT` `KA` without `customer` | 400 `must define customer as more than one possibility` | 200; customer `A` kept | divergence (C23) |
+| 28a | `C3` `PUT` `KA` with `customer: 'A'` | 200; customer `A` | same | operation parity |
+| 28b | `C3` `PUT` `KA` with `customer: 'B'` | 400 `not allowed to set customer to 'B'` | same | parity |
+| 29-31 | `GET /key/{id of K0}` with the token = `K0`'s **id**, sent as `Authorization: Key`, as `X-API-Key`, and as `?api-key=` | 200, authenticated as `K0` (`alice@example.test`, scopes `[read]`); `K0` use count +1 | 401 `API key parameter '<id>' is invalid`; count and last-used time unchanged | divergence (S4) |
+| 32-34 | same request with the token = `K0`'s **secret**, on each of the three carriers | 200; `K0` use count +1 | 200 (S1/S2 apply to the body); `K0` use count +1 | operation parity (positive control) |
+| 35 | same request with an unknown token | 401 `API key parameter '<token>' is invalid` | same | parity |
+| 36 | same request with the secret of a key stored with an expiry in the past | 401, as row 35 | same | parity |
+
+## SF-NOTES: a note is changed only through its own alert
+
+Status: Proposed. Covers C21.
+
+**Reference.** `PUT` and `DELETE /alert/{alert_id}/note/{note_id}` look up
+the alert with the caller's customer filter, but then look up the note by id
+alone (`views/alerts.py:666-697`, `:701-723`; `postgres/base.py:1381-1386`)
+and update or delete it (`:1411-1436`), without checking that the note
+belongs to that alert. A caller who can write one alert can therefore change
+or delete any note, including notes on another customer's alerts, by naming
+an alert they can see and the other note's id.
+
+**alrust.** The note must belong to the path's alert (the note's `alert` is
+that alert's id), else the handler's own not-found refusal: 404 `not found`
+for `PUT`, 404 `note not found` for `DELETE`. There is no side effect.
+
+**Vectors.**
+
+| Case | Reference | alrust | Kind |
+|---|---|---|---|
+| `PUT` with an alert the caller can see and a note of another alert (same customer) | 200 | 404 `not found`, no change | divergence |
+| same, the note's alert belongs to another customer | 200 | 404, no change | divergence |
+| `DELETE` with a note of another alert | 200 | 404 `note not found`, nothing deleted | divergence |
+| `PUT` or `DELETE` with the alert's own note | 200 | 200 | parity |
+| an alert the caller cannot see | 404 | 404 | parity |
+
+## SF-BLACKOUTS: an edit keeps the blackout's customer unless it sets one
+
+Status: Proposed. Covers C22.
+
+**Reference.** `PUT /blackout/{blackout_id}` always sets `customer` from
+`assign_customer` (`views/blackouts.py`, `update_blackout`), and the store
+writes it whenever present (`postgres/base.py:822-823`). When the body omits
+`customer`, an unscoped caller clears it to `NULL`, which widens the
+blackout's matching under `CUSTOMER_VIEWS` to every customer's alerts.
+
+**alrust.** Without `customer` in the body, the stored customer is
+unchanged. With `customer`, the reference's `assign_customer` rules apply.
+The pinned web UI always sends `customer` when editing a blackout
+(`BlackoutList.vue:728-731`), so its behavior is unchanged.
+
+**Vectors.**
+
+| Case | Reference | alrust | Kind |
+|---|---|---|---|
+| unscoped caller, `PUT` without `customer` on a blackout for customer `A` | 200, customer cleared | 200, customer `A` kept | divergence |
+| scoped caller (`[A]`), `PUT` without `customer` on its blackout | 200, customer `A` | 200, customer `A` | parity |
+| `PUT` with `customer` | reference rules | same | parity |
+
 ## Not yet specified
 
 The other Y3 items get entries in this file before their phases need them:
-the string-formatted SQL constructions; M-SEC-1; WUI-SEC-1 and WP-SEC-1; W-SEC-1 and W-DL-1; the API-key
-items; C21–C23; and the `q=` search. Until an item has an entry here, its
+the string-formatted SQL constructions; M-SEC-1; WUI-SEC-1 and WP-SEC-1; W-SEC-1 and W-DL-1;
+and the `q=` search. Until an item has an entry here, its
 reference behavior in `spec/openapi.yaml` stands as the description of the
 defect, not as a requirement for alrust.
+
+Open question, not yet decided: whether `PUT /key` should also recheck the
+scopes a key already has when the body has no `scopes` (SF-KEYS vector 12),
+so that an owner cannot extend the expiry of a key granted above their own
+scopes. Until it is decided, alrust keeps the reference behavior.
