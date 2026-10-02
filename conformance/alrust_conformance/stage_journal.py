@@ -43,6 +43,15 @@ _GIT = re.compile(r"[0-9a-f]{40}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _DIGITS = re.compile(r"[1-9][0-9]{0,19}\Z")
 _TEXT = re.compile(r"[A-Za-z0-9._/-]{1,128}\Z")
+_BOOT = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
+MAX_INT = (1 << 63) - 1
+CORE_KEYS = frozenset({
+    "schema", "repository", "run_id", "run_attempt", "job", "profile",
+    "event_head_sha", "checkout_sha", "reference_sha", "lock_sha256",
+    "manifest_sha256", "runner_image", "boot_id", "uid", "external_config",
+    "job_root", "captured_utc_ns", "captured_monotonic_ns"})
+ENVELOPE_KEYS = frozenset({"schema", "kind", "stage", "utc_ns", "monotonic_ns",
+                           "boot_id", "pid", "payload"})
 
 
 class JournalError(ValueError):
@@ -111,6 +120,70 @@ def _write_exclusive(path, data):
         os.fsync(parent)
     finally:
         os.close(parent)
+
+
+def _int(value, low=0, high=MAX_INT):
+    return type(value) is int and low <= value <= high
+
+
+def strict_json(data, code):
+    """Parse JSON refusing duplicate members, non-finite numbers, invalid
+    UTF-8 and over-deep nesting, all as the fixed CODE."""
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            _require(key not in result, code)
+            result[key] = value
+        return result
+
+    def constant(_):
+        raise JournalError(code)
+    try:
+        return json.loads(data.decode("utf-8"), object_pairs_hook=pairs,
+                          parse_constant=constant)
+    except JournalError:
+        raise
+    except (ValueError, RecursionError, UnicodeError):
+        raise JournalError(code) from None
+
+
+def validate_core(data, job_root):
+    """The core identity's bytes as a fully typed record for THIS job root."""
+    core = strict_json(data, "core_invalid")
+    _require(type(core) is dict and set(core) == CORE_KEYS
+             and core["schema"] == SCHEMA_CORE, "core_invalid")
+    for key in ("repository", "job"):
+        _require(type(core[key]) is str and _TEXT.fullmatch(core[key]), "core_invalid")
+    for key in ("run_id", "run_attempt"):
+        _require(type(core[key]) is str and _DIGITS.fullmatch(core[key]), "core_invalid")
+    _require(type(core["profile"]) is str and _STAGE.fullmatch(core["profile"]),
+             "core_invalid")
+    for key in ("event_head_sha", "checkout_sha", "reference_sha"):
+        _require(type(core[key]) is str and _GIT.fullmatch(core[key]), "core_invalid")
+    locks = core["lock_sha256"]
+    _require(type(locks) is dict and 1 <= len(locks) <= 8 and all(
+        type(k) is str and _TEXT.fullmatch(k) and type(v) is str and _SHA256.fullmatch(v)
+        for k, v in locks.items()), "core_invalid")
+    _require(type(core["manifest_sha256"]) is str
+             and _SHA256.fullmatch(core["manifest_sha256"]), "core_invalid")
+    image = core["runner_image"]
+    _require(type(image) is dict and set(image) == {"os", "version"} and all(
+        type(v) is str and _TEXT.fullmatch(v) for v in image.values()), "core_invalid")
+    _require(type(core["boot_id"]) is str and _BOOT.fullmatch(core["boot_id"]),
+             "core_invalid")
+    _require(_int(core["uid"], 0, (1 << 32) - 1) and core["uid"] == os.getuid(),
+             "core_invalid")
+    _require(core["external_config"] == {"path": EXTERNAL_CONFIG, "state": "absent"},
+             "core_invalid")
+    _require(_int(core["captured_utc_ns"]) and _int(core["captured_monotonic_ns"]),
+             "core_invalid")
+    root = core["job_root"]
+    actual = _job_root(job_root)
+    _require(type(root) is dict and set(root) == {"path", "dev", "ino"}
+             and root["path"] == job_root and _int(root["dev"]) and _int(root["ino"])
+             and (root["dev"], root["ino"]) == (actual.st_dev, actual.st_ino),
+             "core_job_root_mismatch")
+    return core
 
 
 def _dumps(value):
@@ -227,6 +300,7 @@ class StageJournal:
         _job_root(self._root)
         _private_dir(os.path.join(self._root, JOURNAL_DIR))
         core = read_bounded(os.path.join(self._root, CORE_NAME), MAX_CORE)
+        validate_core(core, self._root)
         previous = None
         if self._previous is not None:
             data = read_bounded(journal_path(self._root, self._index - 1,
@@ -271,49 +345,70 @@ class StageJournal:
         return False
 
 
-def _parse_journal(data, index, name, core_sha256, previous_sha256, previous_name):
-    """Validate one journal's bytes; return its final result."""
+def _validate_envelope(evidence, index, name, boot, floor):
+    """One record's envelope; returns its monotonic time."""
+    _require(type(evidence) is dict and set(evidence) == ENVELOPE_KEYS
+             and evidence["schema"] == SCHEMA_RECORD, "record_envelope_invalid")
+    stage = evidence["stage"]
+    _require(type(stage) is dict and set(stage) == {"index", "name"}
+             and type(stage["index"]) is int and stage["index"] == index
+             and stage["name"] == name, "record_stage_mismatch")
+    _require(type(evidence["kind"]) is str and _KIND.fullmatch(evidence["kind"]),
+             "record_kind_invalid")
+    _require(_int(evidence["utc_ns"]) and _int(evidence["monotonic_ns"])
+             and _int(evidence["pid"], 1, 4194304), "record_capture_invalid")
+    _require(type(evidence["boot_id"]) is str and evidence["boot_id"] == boot,
+             "record_boot_mismatch")
+    # Monotonic time never goes backwards on one boot; wall-clock UTC may.
+    _require(evidence["monotonic_ns"] >= floor, "record_monotonic_regressed")
+    _require(type(evidence["payload"]) is dict, "record_payload_invalid")
+    return evidence["monotonic_ns"]
+
+
+def _parse_journal(data, index, name, core, core_sha256, previous_sha256,
+                   previous_name, floor):
+    """Validate one journal's bytes; return (result, records, last monotonic)."""
     _require(data.endswith(b"\n"), "truncated_record")
     lines = data[:-1].split(b"\n")
     _require(len(lines) >= 2, "too_few_records")
     records = []
     for expected_sequence, line in enumerate(lines):
-        try:
-            record = json.loads(line)
-        except (ValueError, RecursionError):
-            raise JournalError("record_not_json") from None
+        record = strict_json(line, "record_not_json")
         _require(type(record) is dict and set(record) == {"sequence", "evidence"}
-                 and record["sequence"] == expected_sequence
-                 and type(record["sequence"]) is int, "sequence_invalid")
-        evidence = record["evidence"]
-        _require(type(evidence) is dict and evidence.get("schema") == SCHEMA_RECORD
-                 and evidence.get("stage") == {"index": index, "name": name},
-                 "record_stage_mismatch")
-        records.append(evidence)
+                 and type(record["sequence"]) is int
+                 and record["sequence"] == expected_sequence, "sequence_invalid")
+        floor = _validate_envelope(record["evidence"], index, name,
+                                   core["boot_id"], floor)
+        records.append(record["evidence"])
     first, last = records[0], records[-1]
-    _require(first.get("kind") == "stage_begin", "first_not_stage_begin")
-    begin = first.get("payload")
-    _require(type(begin) is dict and begin.get("core_identity_sha256") == core_sha256,
-             "core_identity_mismatch")
+    _require(first["kind"] == "stage_begin", "first_not_stage_begin")
     expected_previous = None if previous_name is None else {
         "index": index - 1, "name": previous_name, "sha256": previous_sha256}
-    _require(begin.get("previous_stage") == expected_previous, "chain_broken")
-    _require(last.get("kind") == "stage_complete", "no_stage_complete")
-    _require(all(r.get("kind") not in ("stage_begin", "stage_complete")
+    begin = first["payload"]
+    _require(set(begin) == {"core_identity_sha256", "previous_stage"}
+             and begin["core_identity_sha256"] == core_sha256, "core_identity_mismatch")
+    _require(begin["previous_stage"] == expected_previous, "chain_broken")
+    _require(last["kind"] == "stage_complete", "no_stage_complete")
+    _require(all(r["kind"] not in ("stage_begin", "stage_complete")
                  for r in records[1:-1]), "misplaced_boundary_record")
-    payload = last.get("payload")
-    _require(type(payload) is dict and payload.get("result") in ("COMPLETE", "FAILED"),
-             "result_invalid")
-    return payload["result"], len(records)
+    payload = last["payload"]
+    _require(payload == {"result": "COMPLETE"} or (
+        set(payload) == {"result", "code"} and payload["result"] == "FAILED"
+        and type(payload["code"]) is str and _CODE.fullmatch(payload["code"])),
+        "result_invalid")
+    return payload["result"], len(records), floor
 
 
 def aggregate(job_root, stages):
     """Validate the complete journal set without modifying it.
 
-    Returns {"verdict": "VALID"|"INCOMPLETE", "reason", "stages"}. VALID only
-    when every expected stage journal exists in order, no other file exists,
-    and every journal is complete and chained. A FAILED stage can still be
-    VALID as a journal: the record is complete, and its result says FAILED.
+    Returns {"verdict", "reason", "stages"}:
+    - VALID: every expected journal exists, in order, with no other file;
+      every record is well formed and chained; and every stage COMPLETED;
+    - FAILED: the set is structurally complete, but at least one stage
+      recorded FAILED. That is never a success (contract section 3);
+    - INCOMPLETE: anything missing, extra, malformed or unchained.
+    The per-stage results so far are returned in every case.
     """
     results = []
     try:
@@ -326,13 +421,16 @@ def aggregate(job_root, stages):
         _private_dir(directory)
         expected = ["%02d-%s.jsonl" % (i, name) for i, name in enumerate(stages)]
         _require(sorted(os.listdir(directory)) == sorted(expected), "journal_set_mismatch")
-        core = read_bounded(os.path.join(job_root, CORE_NAME), MAX_CORE)
-        core_sha256 = hashlib.sha256(core).hexdigest()
+        data = read_bounded(os.path.join(job_root, CORE_NAME), MAX_CORE)
+        core = validate_core(data, job_root)
+        core_sha256 = hashlib.sha256(data).hexdigest()
+        floor = core["captured_monotonic_ns"]
         previous_sha256 = previous_name = None
         for index, name in enumerate(stages):
             data = read_bounded(journal_path(job_root, index, name), MAX_JOURNAL)
-            result, count = _parse_journal(data, index, name, core_sha256,
-                                           previous_sha256, previous_name)
+            result, count, floor = _parse_journal(
+                data, index, name, core, core_sha256, previous_sha256,
+                previous_name, floor)
             previous_sha256 = hashlib.sha256(data).hexdigest()
             previous_name = name
             results.append({"index": index, "name": name, "result": result,
@@ -343,6 +441,9 @@ def aggregate(job_root, stages):
         return {"verdict": "INCOMPLETE", "reason": "file_missing", "stages": results}
     except OSError:
         return {"verdict": "INCOMPLETE", "reason": "file_unreadable", "stages": results}
+    if any(stage["result"] != "COMPLETE" for stage in results):
+        return {"verdict": "FAILED", "reason": "stage_failed", "stages": results,
+                "core_identity_sha256": core_sha256}
     return {"verdict": "VALID", "reason": "complete", "stages": results,
             "core_identity_sha256": core_sha256}
 
@@ -420,8 +521,9 @@ def _emit(record, code):
 
 
 def main(argv):
-    """CLI: aggregate --job-root J --stages a,b,c (exit 0 VALID, 2
-    INCOMPLETE, 64 usage), or core ... (see core_main). One JSON line."""
+    """CLI: aggregate --job-root J --stages a,b,c (exit 0 VALID only; 2 for
+    FAILED or INCOMPLETE; 64 usage), or core ... (see core_main). One JSON
+    line."""
     if argv[:1] == ["core"]:
         return core_main(argv[1:])
     if len(argv) != 5 or argv[0] != "aggregate" or argv[1] != "--job-root" \

@@ -118,12 +118,17 @@ def test_complete_chain_is_valid(job):
         journal(job, 0, "database").read_bytes()).hexdigest()
 
 
-def test_failed_stage_is_complete_record_with_fixed_code(job):
+def test_failed_stage_is_a_failed_verdict_not_a_success(job, capsys):
+    # JR542-R1: a recorded FAILED stage is structurally complete but never a
+    # success; the CLI exits 2.
     core(job)
     run_stages(job, fail_at="launch")
     report = sj.aggregate(str(job), STAGES)
-    assert report["verdict"] == "VALID"
+    assert (report["verdict"], report["reason"]) == ("FAILED", "stage_failed")
     assert [s["result"] for s in report["stages"]] == ["COMPLETE", "FAILED", "COMPLETE"]
+    assert sj.main(["aggregate", "--job-root", str(job), "--stages",
+                    ",".join(STAGES)]) == 2
+    assert json.loads(capsys.readouterr().out)["verdict"] == "FAILED"
     text = journal(job, 1, "launch").read_text()
     assert "synthetic_failure" in text and "secret detail" not in text
 
@@ -244,8 +249,9 @@ def test_record_after_stage_complete(job):
     def mutate(j):
         p = journal(j, 2, "entrypoint")
         ls = [json.loads(x) for x in lines(p)]
-        extra = dict(ls[1])
+        extra = json.loads(json.dumps(ls[1]))
         extra["sequence"] = len(ls)
+        extra["evidence"]["monotonic_ns"] = ls[-1]["evidence"]["monotonic_ns"] + 1
         ls.append(extra)
         rewrite(p, [json.dumps(x).encode() for x in ls])
     assert corrupt(job, mutate) == "no_stage_complete"
@@ -409,3 +415,126 @@ def test_core_cli_refuses_a_changed_lock_and_traversal(job, tmp_path, monkeypatc
     assert sj.main(args) == 2
     assert json.loads(capsys.readouterr().out)["reason"] == "locks_invalid"
     assert sj.main(["core", "--profile"]) == 64
+
+
+
+# JR542-R2: schema validation of the core and of every record envelope.
+def rewrite_records(job, index, name, change):
+    p = journal(job, index, name)
+    rows = [json.loads(x) for x in lines(p)]
+    change(rows)
+    rewrite(p, [json.dumps(x, separators=(",", ":")).encode() for x in rows])
+
+
+@pytest.mark.parametrize("field", ["utc_ns", "monotonic_ns", "boot_id", "pid"])
+def test_missing_capture_field(job, field):
+    def mutate(j):
+        rewrite_records(j, 1, "launch",
+                        lambda rows: [r["evidence"].pop(field) for r in rows])
+    assert corrupt(job, mutate) == "record_envelope_invalid"
+
+
+@pytest.mark.parametrize("field,value,reason", [
+    ("pid", True, "record_capture_invalid"),
+    ("pid", 0, "record_capture_invalid"),
+    ("utc_ns", -1, "record_capture_invalid"),
+    ("monotonic_ns", 1.5, "record_capture_invalid"),
+    ("boot_id", "00000000-0000-0000-0000-000000000000", "record_boot_mismatch"),
+    ("kind", "Bad Kind", "record_kind_invalid"),
+    ("payload", [], "record_payload_invalid"),
+    ("schema", "other/1", "record_envelope_invalid"),
+])
+def test_invalid_capture_values(job, field, value, reason):
+    def mutate(j):
+        def change(rows):
+            rows[1]["evidence"][field] = value
+        rewrite_records(j, 1, "launch", change)
+    assert corrupt(job, mutate) == reason
+
+
+def test_boolean_stage_index(job):
+    def mutate(j):
+        def change(rows):
+            for r in rows:
+                r["evidence"]["stage"]["index"] = False
+        rewrite_records(j, 0, "database", change)
+    assert corrupt(job, mutate) == "record_stage_mismatch"
+
+
+def test_monotonic_time_going_backwards(job):
+    def mutate(j):
+        def change(rows):
+            rows[2]["evidence"]["monotonic_ns"] = rows[0]["evidence"]["monotonic_ns"] - 1
+        rewrite_records(j, 1, "launch", change)
+    assert corrupt(job, mutate) == "record_monotonic_regressed"
+
+
+def test_duplicate_json_member(job):
+    def mutate(j):
+        p = journal(j, 0, "database")
+        p.write_bytes(p.read_bytes().replace(b'"sequence":0', b'"sequence":99,"sequence":0', 1))
+    assert corrupt(job, mutate) == "record_not_json"
+
+
+def test_non_finite_number(job):
+    def mutate(j):
+        p = journal(j, 1, "launch")
+        ls = lines(p)
+        ls[1] = ls[1].replace(b'"value":1', b'"value":NaN')
+        rewrite(p, ls)
+    assert corrupt(job, mutate) == "record_not_json"
+
+
+@pytest.mark.parametrize("payload", [
+    {"result": "FAILED"}, {"result": "FAILED", "code": "Bad Code"},
+    {"result": "COMPLETE", "extra": 1}, {"result": "DONE"}])
+def test_invalid_final_payload(job, payload):
+    def mutate(j):
+        def change(rows):
+            rows[-1]["evidence"]["payload"] = payload
+        rewrite_records(j, 2, "entrypoint", change)
+    assert corrupt(job, mutate) == "result_invalid"
+
+
+def test_malformed_core_refuses_stage_and_aggregation(job):
+    (job / "core-identity.json").write_bytes(b"not JSON\n")
+    sj.prepare_journal_dir(str(job))
+    with pytest.raises(sj.JournalError) as error:
+        with sj.StageJournal(str(job), 0, "database"):
+            pass
+    assert str(error.value) == "core_invalid"
+    report = sj.aggregate(str(job), ["database"])
+    assert report["verdict"] == "INCOMPLETE"
+
+
+@pytest.mark.parametrize("change,reason", [
+    (lambda c: c.pop("boot_id"), "core_invalid"),
+    (lambda c: c.update(uid=c["uid"] + 1), "core_invalid"),
+    (lambda c: c.update(run_id=True), "core_invalid"),
+    (lambda c: c.update(external_config={"path": "/x", "state": "absent"}),
+     "core_invalid"),
+    (lambda c: c["job_root"].update(ino=c["job_root"]["ino"] + 1),
+     "core_job_root_mismatch"),
+    (lambda c: c.update(extra=1), "core_invalid"),
+])
+def test_core_schema_and_job_root_binding(job, change, reason):
+    core(job)
+    run_stages(job)
+    p = job / "core-identity.json"
+    record = json.loads(p.read_text())
+    change(record)
+    p.write_text(json.dumps(record) + "\n")
+    report = sj.aggregate(str(job), STAGES)
+    assert (report["verdict"], report["reason"]) == ("INCOMPLETE", reason)
+
+
+def test_core_copied_to_another_root_is_refused(job, tmp_path):
+    core(job)
+    run_stages(job)
+    other = tmp_path / "other-root"
+    import shutil
+    shutil.copytree(job, other)
+    other.chmod(0o700)
+    report = sj.aggregate(str(other), STAGES)
+    assert (report["verdict"], report["reason"]) == ("INCOMPLETE",
+                                                     "core_job_root_mismatch")
