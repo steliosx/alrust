@@ -9,6 +9,12 @@
 #                    (default: a new temporary directory under RUNNER_TEMP or /tmp)
 #   REFERENCE_PYTHON interpreter for the virtualenv (default python3; must be CPython 3.12)
 #   READY_TIMEOUT    readiness deadline in seconds after launch (default 60)
+#   JOB_ROOT         supervised mode (docs/ci-launch-attestation-contract.md):
+#                    a private 0700 directory owned by this user. VENV
+#                    (default JOB_ROOT/venv) and every temporary path stay
+#                    inside it, nothing is written to the checkout, and the
+#                    built server is launched by launch-reference.py under
+#                    reference-supervisor.py instead of the group launch below.
 #
 # Readiness is bound to the server this script launched (as in the reviewed
 # AX64-V3-E2 smoke): the port must be observably free before launch; the
@@ -110,13 +116,20 @@ esac
 command -v pg_config >/dev/null \
   || { echo "run-reference: pg_config not found; install the libpq development files" >&2; exit 1; }
 
+if [[ -n ${JOB_ROOT:-} ]]; then
+  [[ $JOB_ROOT == /* && -d $JOB_ROOT && ! -L $JOB_ROOT && -O $JOB_ROOT ]] \
+    || { echo "run-reference: JOB_ROOT must be an existing directory owned by this user" >&2; exit 1; }
+  : "${VENV:=$JOB_ROOT/venv}"
+  [[ $VENV == "$JOB_ROOT"/* ]] \
+    || { echo "run-reference: VENV must be inside JOB_ROOT" >&2; exit 1; }
+fi
 if [[ -n ${VENV:-} ]]; then
   if [[ -e $VENV ]]; then
     echo "run-reference: $VENV already exists; refusing to reuse or delete it" >&2
     exit 1
   fi
   venv=$VENV
-  src=$(mktemp -d "${RUNNER_TEMP:-/tmp}/alrust-reference-src.XXXXXX")
+  src=$(mktemp -d "${JOB_ROOT:-${RUNNER_TEMP:-/tmp}}/alrust-reference-src.XXXXXX")
 else
   envroot=$(mktemp -d "${RUNNER_TEMP:-/tmp}/alrust-reference-env.XXXXXX")
   venv=$envroot/venv
@@ -138,6 +151,13 @@ echo "run-reference: environment $venv (fresh), installed:"
 export DATABASE_URL
 export AUTH_REQUIRED="${AUTH_REQUIRED:-False}"
 export SECRET_KEY="${SECRET_KEY:-conformance-not-secret}"
+
+if [[ -n ${JOB_ROOT:-} ]]; then
+  # Supervised mode: the launcher owns launch, readiness, receipt custody and
+  # cleanup; nothing below runs.
+  exec "$py" -I -S -B "$root/conformance/scripts/launch-reference.py" \
+    --job-root "$JOB_ROOT" --venv "$venv" --port "$PORT" --ready-timeout "$READY_TIMEOUT"
+fi
 
 read -r version <"$ref/VERSION" || { echo "run-reference: cannot read reference VERSION" >&2; exit 1; }
 start=$(now_ms) || { echo "run-reference: cannot read the monotonic clock" >&2; exit 1; }
