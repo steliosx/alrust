@@ -54,6 +54,10 @@ ALLOWED_ENV = {
 # it does for the served child C alone; the module itself must also check that
 # its parent is P (ALRUST_OBSERVER_PARENT).
 OBSERVER_MODULE_NAME = "alrust_observer.py"
+# The installable observer files: the producer module (required) and the
+# reviewed protocol codec it imports as a top-level module.
+OBSERVER_FILE_NAMES = (OBSERVER_MODULE_NAME, "alrust_observer_protocol.py")
+OBSERVER_MANIFEST_SCHEMA = "alrust-observer-install/1"
 OBSERVER_ACTIVATOR_NAME = "alrust_observer.pth"
 OBSERVER_ACTIVATOR = (b'import os; os.environ.get("ALRUST_OBSERVER_SOCKET") '
                       b'and __import__("alrust_observer")\n')
@@ -80,40 +84,47 @@ def log(message):
 
 
 def parse_args(argv):
+    """--job-root J --venv V --port N --ready-timeout S, plus zero or more
+    --observer-file NAME SHA256 PATH (NAME from OBSERVER_FILE_NAMES)."""
     opts = {"--job-root": None, "--venv": None, "--port": None,
-            "--ready-timeout": None, "--observer-module": None,
-            "--observer-sha256": None}
-    if len(argv) not in (8, 12) or len(argv) % 2:
-        raise Refused("usage: --job-root J --venv V --port N --ready-timeout S "
-                      "[--observer-module M --observer-sha256 H]")
-    for name, value in zip(argv[0::2], argv[1::2]):
-        if name not in opts or opts[name] is not None:
-            raise Refused("bad argument %r" % name)
-        opts[name] = value
+            "--ready-timeout": None}
+    files, i = [], 0
+    while i < len(argv):
+        name = argv[i]
+        if name == "--observer-file" and len(argv) >= i + 4:
+            files.append(tuple(argv[i + 1:i + 4]))
+            i += 4
+        elif name in opts and opts[name] is None and i + 1 < len(argv):
+            opts[name] = argv[i + 1]
+            i += 2
+        else:
+            raise Refused("usage: --job-root J --venv V --port N --ready-timeout S "
+                          "[--observer-file NAME SHA256 PATH]...")
     for name in ("--job-root", "--venv"):
-        if not os.path.isabs(opts[name]) or os.path.normpath(opts[name]) != opts[name]:
+        if opts[name] is None or not os.path.isabs(opts[name]) \
+                or os.path.normpath(opts[name]) != opts[name]:
             raise Refused("%s must be an absolute normalized path" % name)
     for name, high in (("--port", 65535), ("--ready-timeout", 9999)):
         value = opts[name]
         if value is None or not value.isdigit() or not 1 <= int(value) <= high \
                 or value[0] == "0":
             raise Refused("%s out of range" % name)
-    module, pin = opts["--observer-module"], opts["--observer-sha256"]
-    if (module is None) != (pin is None):
-        raise Refused("--observer-module and --observer-sha256 go together")
-    if module is not None:
-        if not os.path.isabs(module) or os.path.normpath(module) != module:
-            raise Refused("--observer-module must be an absolute normalized path")
+    names = [name for name, _, _ in files]
+    if files and sorted(names) != sorted(OBSERVER_FILE_NAMES):
+        raise Refused("observer files must be exactly %s, once each"
+                      % ", ".join(OBSERVER_FILE_NAMES))
+    for name, pin, path in files:
+        if not os.path.isabs(path) or os.path.normpath(path) != path:
+            raise Refused("observer file paths must be absolute and normalized")
         if len(pin) != 64 or pin.strip("0123456789abcdef"):
-            raise Refused("--observer-sha256 must be 64 lowercase hex characters")
+            raise Refused("observer pins must be 64 lowercase hex characters")
     return (opts["--job-root"], opts["--venv"], int(opts["--port"]),
-            int(opts["--ready-timeout"]),
-            None if module is None else (module, pin))
+            int(opts["--ready-timeout"]), sorted(files) or None)
 
 
 def read_observer_module(module, pin):
-    """The module's bytes, read once without following links or blocking,
-    and only if they hash to the reviewed pin."""
+    """A file's bytes, read once without following links or blocking, and
+    only if they hash to the reviewed pin."""
     fd = os.open(module, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
                  | os.O_NONBLOCK | os.O_NOCTTY)
     try:
@@ -162,18 +173,58 @@ def write_new(path, data):
         os.close(fd)
 
 
-def install_observer(job_root, venv, module, pin):
-    """Install the pinned module and the activator into the fresh venv and
-    create the private socket directory. Returns the receipt record."""
-    data = read_observer_module(module, pin)
+def verify_observer_install(manifest):
+    """Read back every installed file and the activator, before the server is
+    spawned, and require the exact bytes the manifest records."""
+    entries = manifest["files"] + [manifest["activator"]]
+    for entry in entries:
+        fd = os.open(entry["path"], os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+                     | os.O_NONBLOCK)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_OBSERVER_MODULE:
+                raise Refused("installed observer file is not a bounded regular file")
+            data = os.read(fd, MAX_OBSERVER_MODULE + 1)
+        finally:
+            os.close(fd)
+        if hashlib.sha256(data).hexdigest() != entry["sha256"]:
+            raise Refused("installed observer file differs from its manifest")
+
+
+def install_observer(job_root, venv, files, rundir):
+    """Install the pinned files and the activator into the fresh venv, create
+    the private socket directory, and write the install manifest that binds
+    every installed path and digest. Returns the receipt record."""
     site = site_packages(venv)
-    write_new(os.path.join(site, OBSERVER_MODULE_NAME), data)
-    write_new(os.path.join(site, OBSERVER_ACTIVATOR_NAME), OBSERVER_ACTIVATOR)
+    # Read and pin-check EVERY file before writing any, so a bad file never
+    # leaves a partial install. The bytes checked are the bytes installed.
+    verified = [(name, read_observer_module(path, pin))
+                for name, pin, path in files]
+    activator = os.path.join(site, OBSERVER_ACTIVATOR_NAME)
+    for target in [os.path.join(site, name) for name, _ in verified] + [activator]:
+        if os.path.lexists(target):
+            raise Refused("observer destination already exists in the venv")
+    installed = []
+    for name, data in verified:
+        target = os.path.join(site, name)
+        write_new(target, data)
+        installed.append({"name": name, "path": target, "size": len(data),
+                          "sha256": hashlib.sha256(data).hexdigest()})
+    write_new(activator, OBSERVER_ACTIVATOR)
+    manifest = {"schema": OBSERVER_MANIFEST_SCHEMA, "site_packages": site,
+                "files": installed,
+                "activator": {"name": OBSERVER_ACTIVATOR_NAME, "path": activator,
+                              "sha256": hashlib.sha256(OBSERVER_ACTIVATOR)
+                              .hexdigest()}}
+    data = (json.dumps(manifest, sort_keys=True) + "\n").encode()
+    manifest_path = os.path.join(rundir, "observer-install.json")
+    write_new(manifest_path, data)
+    verify_observer_install(manifest)
     socket_dir = os.path.join(job_root, "observer")
     os.mkdir(socket_dir, 0o700)
     return {"socket": os.path.join(socket_dir, "observer.sock"),
-            "module_sha256": hashlib.sha256(data).hexdigest(),
-            "activator_sha256": hashlib.sha256(OBSERVER_ACTIVATOR).hexdigest()}
+            "manifest": manifest_path,
+            "manifest_sha256": hashlib.sha256(data).hexdigest()}
 
 
 def check_job_root(job_root):
@@ -430,8 +481,8 @@ def main(argv):
             if os.path.lexists(os.path.join(job_root, "reference")) \
                     or os.path.lexists(os.path.join(job_root, "observer")):
                 raise Refused("job root already holds a launch")
-            if observer is not None:
-                read_observer_module(*observer)
+            for name, pin, path in observer or ():
+                read_observer_module(path, pin)
             if listeners(port):
                 raise Refused("port %d already in use" % port)
             return 0
@@ -448,7 +499,7 @@ def main(argv):
         # The installed bytes are re-read and re-hashed here, so the pin
         # binds what is installed, not what the preflight saw.
         observer_record = None if observer is None else \
-            install_observer(job_root, venv, *observer)
+            install_observer(job_root, venv, observer, rundir)
         with open(os.path.join(HERE, "..", "..", "reference", "alerta",
                                "VERSION")) as f:
             version = f.read().strip()
@@ -464,8 +515,8 @@ def main(argv):
          "--terminal", terminal, "--venv", venv]
         + ([] if observer_record is None else
            ["--observer-socket", observer_record["socket"],
-            "--observer-module-sha256", observer_record["module_sha256"],
-            "--observer-activator-sha256", observer_record["activator_sha256"]])
+            "--observer-manifest", observer_record["manifest"],
+            "--observer-manifest-sha256", observer_record["manifest_sha256"]])
         + ["--"] + command,
         process_group=0, stdin=subprocess.DEVNULL, stdout=server_log,
         stderr=server_log)
