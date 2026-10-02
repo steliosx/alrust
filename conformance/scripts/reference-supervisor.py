@@ -59,9 +59,17 @@ def fail(code, message):
     sys.exit(code)
 
 
+OBSERVER_OPTIONS = ("--observer-socket", "--observer-module-sha256",
+                    "--observer-activator-sha256")
+
+
+def is_sha256(value):
+    return len(value) == 64 and not value.strip("0123456789abcdef")
+
+
 def parse_args(argv):
-    opts = {"--receipt": None, "--terminal": None, "--venv": None,
-            "--observer-socket": None}
+    opts = {"--receipt": None, "--terminal": None, "--venv": None}
+    opts.update(dict.fromkeys(OBSERVER_OPTIONS))
     i = 0
     while i < len(argv) and argv[i] != "--":
         name = argv[i]
@@ -73,10 +81,17 @@ def parse_args(argv):
     if not command or opts["--receipt"] is None or opts["--terminal"] is None \
             or opts["--venv"] is None:
         fail(EXIT_USAGE, "usage: --receipt R --terminal T --venv V "
-                         "[--observer-socket S] -- COMMAND...")
+                         "[--observer-socket S --observer-module-sha256 H "
+                         "--observer-activator-sha256 H] -- COMMAND...")
     for name in ("--receipt", "--terminal", "--venv", "--observer-socket"):
         if opts[name] is not None and not os.path.isabs(opts[name]):
             fail(EXIT_USAGE, "%s must be absolute" % name)
+    given = [opts[name] is not None for name in OBSERVER_OPTIONS]
+    if any(given) and not all(given):
+        fail(EXIT_USAGE, "the three observer options go together")
+    for name in OBSERVER_OPTIONS[1:]:
+        if opts[name] is not None and not is_sha256(opts[name]):
+            fail(EXIT_USAGE, "%s must be 64 lowercase hex characters" % name)
     return opts, command
 
 
@@ -245,6 +260,13 @@ def main(argv):
                  "ino": venv.st_ino},
         "terminal_receipt": opts["--terminal"],
         "observer_socket": opts["--observer-socket"],
+        # The installed observer files' digests, as the launcher measured them
+        # after installing (contract section 6). P records them; the launcher
+        # cross-checks them against its own measurement.
+        "observer": None if opts["--observer-socket"] is None else {
+            "socket": opts["--observer-socket"],
+            "module_sha256": opts["--observer-module-sha256"],
+            "activator_sha256": opts["--observer-activator-sha256"]},
         "launched_utc_ns": time.time_ns(),
         "monotonic_ns": time.monotonic_ns(),
     }
