@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-01T21:54Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-01T23:33Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -87,6 +87,10 @@ are kept.
 | #73 | `codex/hosted-profile-inventory` (Codex's inert 19-module hosted profile inventory; reviewed by Claude) | `1d0313c0` (approved `d34b2af7`) | `dcc04b9f` |
 | #74 | `claude/charter-sync` (DECISIONS Y14-Y16; STATUS) | `48b16d72` (approved `6f9638dc`) | `bbe0b256` |
 | #68 | `claude/ci-reference-hashed-build` (Phase 0 CI step 1: hash-locked reference build, owned-process launcher) | `49630122` (approved `b503bbf8`) | `ecf7487c` |
+| #75 | `claude/charter-sync` (STATUS) | `1e89b39d` (approved `da75f11a`) | `41828c09` |
+| #76 | `codex/hosted-entrypoint-preflight` (Codex's inert offline profile preflight; reviewed by Claude) | `f0aefb7c` (approved by Claude `2ee1ad54`) | `f6ba1450` |
+| #77 | `claude/ci-hosted-profiles-inert` (Phase 0 CI: inert preflight job, all 19 profiles NOT_RUN) | `b096801c` (approved `1022caef`) | `1186f705` |
+| #78 | `codex/hosted-entrypoint-root-docs` (entrypoint root documentation, Claude's note N11; reviewed by Claude) | `3acfb167` (approved by Claude `ab35cb81`) | `d87e25cc` |
 
 After PR #10, `main` was at `bcd60ea3`; its hosted CI run [36859021523](https://github.com/steliosx/alrust/actions/runs/36859021523) completed successfully at scaffold scope (retrieved by Codex), and Codex independently verified every merge's parents and trees (`5bd706c0`). Checks then: README, STATUS, OpenAPI and the customer mapping are byte-identical to their reviewed versions; DECISIONS is charter-sync's plus only the ADR-0004 row; `spec/lifecycle.md` is the heartbeats version plus exactly the R1.2 clarification from PR #3's later approved head.
 
@@ -221,10 +225,17 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
   - **r13 (2026-10-01):** ended in shared-CI HOLD `r13-phase-failed`
     (19:49Z), not a qualification. Cause: Opus's evaluator raised a false
     STOP on a bootstrap that had succeeded. Codex chose the reviewed
-    recovery path, and runner 22 is stopped until the hold is cleared.
+    recovery path, and runner 22 was stopped until the hold was cleared.
     Peer-reported by Opus.
+  - **Runner 22 back in service (2026-10-01, peer-reported by Opus):** the
+    owner cleared r13's hold at 22:19:08Z (exact hold only, custody
+    complete). Opus's checks then passed, and GitHub showed runner 22
+    online and idle at 22:22Z. No other x64 runner is registered; Alrust has
+    none. r13's preserved files are untouched until r14. codex-omarchy's
+    review of the outcome is pending. Claude has no VM access, and this is
+    not Alrust validation.
   - **Shared-VM order (owner-agreed, 2026-10-01):**
-    1. clear r13's hold and return runner 22 to service. The owner clears
+    1. **done (22:19Z):** clear r13's hold and return runner 22 to service. The owner clears
        this hold directly: the preserved r13 files fail Y14's clean-state
        condition, so the owner runs one reviewed script after
        codex-omarchy's acceptance and Opus's CLEARANCE_READY checks;
@@ -260,10 +271,40 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
       build path before review (scaffold only, no vectors). It is recorded
       as a boundary breach; CI-affecting heads went by bundle until
       approved.
-    - **Next:** Codex's profile manifest and entrypoint (all profiles still
-      disabled), then Claude's inert workflow matrix, then per-profile
-      enabling heads. Phase 0 also needs the coverage closure and the
-      lifecycle review.
+    - **Inert stage merged.**
+      - Codex's offline preflight (PR #76, `alrust_conformance.ci`)
+        answers NOT_RUN or FAIL for a profile and never PASS. Its
+        documentation note N11 is merged as PR #78.
+      - The CI job `hosted profiles (inert preflight, all NOT_RUN)` (PR
+        #77) runs it for the 19 profiles. The manifest digest and the
+        profile list are pinned, and the environment is cleared. The job
+        fails unless every profile answers NOT_RUN, so a profile can be
+        enabled only by its own reviewed head.
+      - Hosted [run 36938712971](https://github.com/steliosx/alrust/actions/runs/36938712971)
+        (tested merge `9b02c1f4`): all 4 jobs succeeded; 19 rows `rc=2
+        NOT_RUN`. Retrieved independently by Codex.
+        **PASS_INERT_PREFLIGHT_AND_SCAFFOLD_ONLY**; no Phase 0 credit.
+    - **In review:** Claude's executing-stage contract
+      (`docs/ci-launch-attestation-contract.md`, design only). Revision 1
+      (`d4604c0a`) received Codex's REQUEST_CHANGES (`6e32ba91`, LC-R1 to
+      LC-R5), which covered:
+      - owned generations for launch and cleanup;
+      - a served-observer channel;
+      - typed settings in a cleared environment;
+      - per-stage journals;
+      - finalization after every writer stops;
+      - cancellation that fails closed.
+
+      Revision 2 (`975dba60`) was sent for review.
+    - **Next, in order:**
+      1. Claude's launcher receipt and observer wiring, then
+         `stop-reference.sh`, each with offline fault controls.
+      2. Codex's observer and adapters.
+      3. Claude's journals, finalizer and executing workflow.
+      4. Codex's executing entrypoint.
+      5. Per-profile enabling heads.
+
+      Phase 0 also needs the coverage closure and the lifecycle review.
   - **Still open for the owner:** the final Phase B approval; registering
     the runner (X3).
   - Codex's current task is the continuation thread `01a0f3d9` (`77acafe0`);
