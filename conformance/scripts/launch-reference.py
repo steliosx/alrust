@@ -50,9 +50,14 @@ ALLOWED_ENV = {
     "PWD", "OLDPWD", "SHLVL", "_",
 }
 # Observer installation (contract section 6). The activator imports the
-# reviewed module only when the supervisor has set the socket variable, which
-# it does for the served child C alone; the module itself must also check that
-# its parent is P (ALRUST_OBSERVER_PARENT).
+# reviewed module and calls its explicit activate_from_environment() only
+# when the supervisor has set the socket variable, which it does for the
+# served child C alone. The helper itself checks that the actual parent is P
+# (ALRUST_OBSERVER_PARENT) and is inert otherwise; importing the module does
+# nothing by itself. site.py prints and skips an exception raised by a .pth
+# line, so a failed activation leaves the server running WITHOUT an observer:
+# downstream qualification must treat a missing or refused observer as a
+# failure, never as a pass (AN-1).
 OBSERVER_MODULE_NAME = "alrust_observer.py"
 # The installable observer files: the producer module (required) and the
 # reviewed protocol codec it imports as a top-level module.
@@ -60,7 +65,7 @@ OBSERVER_FILE_NAMES = (OBSERVER_MODULE_NAME, "alrust_observer_protocol.py")
 OBSERVER_MANIFEST_SCHEMA = "alrust-observer-install/1"
 OBSERVER_ACTIVATOR_NAME = "alrust_observer.pth"
 OBSERVER_ACTIVATOR = (b'import os; os.environ.get("ALRUST_OBSERVER_SOCKET") '
-                      b'and __import__("alrust_observer")\n')
+                      b'and __import__("alrust_observer").activate_from_environment()\n')
 MAX_OBSERVER_MODULE = 1 << 20
 STOP_WAIT_SECONDS = 20.0
 POLL_SECONDS = 0.2

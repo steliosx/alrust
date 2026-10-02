@@ -664,11 +664,31 @@ def test_launch_rechecks_home(tmp_path, variant):
 
 # Observer installation and activation (contract section 6). The stub module
 # records every import and every activation next to its socket path.
+# A stub with the reviewed helper's shape: import only records itself;
+# activate_from_environment() activates only when the actual parent matches.
 OBSERVER_STUB = b"""import os
 _dir = os.path.dirname(os.environ["ALRUST_OBSERVER_SOCKET"])
 open(os.path.join(_dir, "imported-%d" % os.getpid()), "x").close()
-if os.environ.get("ALRUST_OBSERVER_PARENT") == str(os.getppid()):
+
+
+def activate_from_environment():
+    if os.environ.get("ALRUST_OBSERVER_PARENT") != str(os.getppid()):
+        return None
     open(os.path.join(_dir, "activated-%d" % os.getpid()), "x").close()
+    return True
+"""
+
+# A stub whose activation fails: site.py prints the error and the server
+# keeps running without an observer (AN-1).
+FAILING_STUB = b"""import os
+_dir = os.path.dirname(os.environ["ALRUST_OBSERVER_SOCKET"])
+
+
+def activate_from_environment():
+    if os.environ.get("ALRUST_OBSERVER_PARENT") != str(os.getppid()):
+        return None
+    open(os.path.join(_dir, "failed-%d" % os.getpid()), "x").close()
+    raise ValueError("activation_start_failed")
 """
 
 
@@ -715,7 +735,7 @@ def test_observer_is_pinned_installed_and_active_only_in_the_child(tmp_path):
     activator = (site / "alrust_observer.pth").read_bytes()
     assert module == OBSERVER_STUB and codec == CODEC_STUB
     assert activator == (b'import os; os.environ.get("ALRUST_OBSERVER_SOCKET") '
-                         b'and __import__("alrust_observer")\n')
+                         b'and __import__("alrust_observer").activate_from_environment()\n')
     manifest_path = job / "reference" / "observer-install.json"
     manifest_bytes = manifest_path.read_bytes()
     assert record["observer"] == {
@@ -879,3 +899,22 @@ def test_installed_file_read_back_detects_a_change(tmp_path):
     manifest["files"][0]["path"] = str(link)
     with pytest.raises(OSError):
         mod.verify_observer_install(manifest)
+
+
+
+def test_failed_activation_leaves_the_server_without_an_observer(tmp_path):
+    # AN-1: the .pth line raises in C; site.py reports it and continues, the
+    # server becomes ready, and no activation marker exists. Downstream
+    # qualification must therefore never treat "server ready" as "observer
+    # active".
+    job, port = make_job(tmp_path), free_port()
+    rc, out, err = finish(launch_with(job, port,
+                                      observer_args(tmp_path, FAILING_STUB)))
+    assert rc == 0, err
+    m = READY.match(out.strip())
+    child = int(m[3])
+    marks = sorted(p.name for p in (job / "observer").iterdir())
+    assert marks == ["failed-%d" % child]
+    log = (job / "reference" / "server.log").read_text()
+    assert "Error processing line" in log and "alrust_observer.pth" in log
+    assert stop(Path(m[4]), m[5], job)[1]["verdict"] == "COMPLETE"
