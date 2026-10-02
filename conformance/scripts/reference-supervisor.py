@@ -201,8 +201,16 @@ def main(argv):
         fail(EXIT_SETUP, "subreaper unavailable: %s" % error)
     if readback != 1:
         fail(EXIT_SETUP, "subreaper read-back %r" % readback)
-    my_stat = read_stat(me)
-    venv = os.stat(opts["--venv"])
+    # Everything that can fail is read before the fork, so a failure here
+    # never leaves an unsupervised child.
+    try:
+        my_stat = read_stat(me)
+        venv = os.stat(opts["--venv"])
+        boot = boot_id()
+    except (OSError, ValueError) as error:
+        fail(EXIT_SETUP, "setup read failed: %s" % error)
+    if my_stat is None:
+        fail(EXIT_SETUP, "own /proc entry unreadable")
 
     env = dict(os.environ)
     env.pop(OBSERVER_SOCKET, None)
@@ -220,7 +228,10 @@ def main(argv):
         finally:
             os._exit(127)
 
-    child_stat = read_stat(child)
+    try:
+        child_stat = read_stat(child)
+    except (OSError, ValueError):
+        child_stat = None
     log = {"signals": 0, "reaped": 0}
     receipt = {
         "schema": SCHEMA_LAUNCH,
@@ -229,7 +240,7 @@ def main(argv):
                        "subreaper": readback},
         "child": {"pid": child,
                   "start_ticks": child_stat[1] if child_stat else None},
-        "boot_id": boot_id(),
+        "boot_id": boot,
         "venv": {"path": opts["--venv"], "dev": venv.st_dev,
                  "ino": venv.st_ino},
         "terminal_receipt": opts["--terminal"],

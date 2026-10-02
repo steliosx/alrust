@@ -44,7 +44,14 @@ def verdict(name, reason, **extra):
 def read_bounded(path):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
-        data = os.read(fd, MAX_RECEIPT + 1)
+        chunks, size = [], 0
+        while size <= MAX_RECEIPT:
+            chunk = os.read(fd, MAX_RECEIPT + 1 - size)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+        data = b"".join(chunks)
     finally:
         os.close(fd)
     if len(data) > MAX_RECEIPT:

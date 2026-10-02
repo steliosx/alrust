@@ -33,6 +33,7 @@ def load(path, name):
 
 
 stop_mod = load(STOP, "stop_reference")
+sup_mod = load(SUPERVISOR, "reference_supervisor")
 
 
 def wait_for(predicate, seconds=10.0):
@@ -425,3 +426,83 @@ def test_sigint_also_stops(tmp_path):
     assert proc.wait(timeout=20) == 0
     assert json.loads(terminal.read_text())["result"] == "tree_empty"
     assert stop(receipt, digest)[1]["verdict"] == "COMPLETE"
+
+
+def test_supervisor_missing_venv_fails_before_fork(tmp_path):
+    receipt, terminal = tmp_path / "launch.json", tmp_path / "terminal.json"
+    marker = tmp_path / "child-ran"
+    proc = subprocess.run(PY + [str(SUPERVISOR), "--receipt", str(receipt),
+                                "--terminal", str(terminal), "--venv",
+                                str(tmp_path / "no-venv"), "--", "/bin/sh",
+                                "-c", "touch %s" % marker],
+                          capture_output=True, timeout=10, process_group=0)
+    assert proc.returncode == 70
+    assert not receipt.exists() and not terminal.exists()
+    assert not marker.exists()
+
+
+def run_in_process(capsys, path, digest):
+    rc = stop_mod.main([str(path), digest])
+    return rc, json.loads(capsys.readouterr().out)
+
+
+def test_unreadable_generation_is_unproven(tmp_path, cleanup, monkeypatch,
+                                           capsys):
+    other = subprocess.Popen(["/bin/sleep", "300"], process_group=0)
+    cleanup.append(other.pid)
+    path, digest = fake_receipt(tmp_path, other.pid)
+
+    def unreadable(pid):
+        raise PermissionError(13, "denied")
+    monkeypatch.setattr(stop_mod, "read_generation", unreadable)
+    rc, out = run_in_process(capsys, path, digest)
+    assert (rc, out["reason"]) == (2, "generation_unreadable")
+    assert alive(other.pid)
+
+
+def test_unreadable_boot_id_is_unproven(tmp_path, cleanup, monkeypatch,
+                                        capsys):
+    other = subprocess.Popen(["/bin/sleep", "300"], process_group=0)
+    cleanup.append(other.pid)
+    path, digest = fake_receipt(tmp_path, other.pid)
+
+    def unreadable():
+        raise PermissionError(13, "denied")
+    monkeypatch.setattr(stop_mod, "boot_id", unreadable)
+    rc, out = run_in_process(capsys, path, digest)
+    assert (rc, out["reason"]) == (2, "boot_unreadable")
+    assert alive(other.pid)
+
+
+def test_truncated_receipt_with_matching_hash_is_malformed(tmp_path, cleanup):
+    other = subprocess.Popen(["/bin/sleep", "300"], process_group=0)
+    cleanup.append(other.pid)
+    path, _ = fake_receipt(tmp_path, other.pid)
+    data = path.read_bytes()[:-20]
+    path.write_bytes(data)
+    rc, out = stop(path, hashlib.sha256(data).hexdigest())
+    assert (rc, out["reason"]) == (2, "receipt_malformed")
+    assert alive(other.pid)
+
+
+def test_oversized_receipt_is_unreadable(tmp_path):
+    path = tmp_path / "launch.json"
+    data = b" " * (stop_mod.MAX_RECEIPT + 1)
+    path.write_bytes(data)
+    rc, out = stop(path, hashlib.sha256(data).hexdigest())
+    assert (rc, out["reason"]) == (2, "receipt_unreadable")
+
+
+def test_emptiness_comes_from_echild_not_from_the_scan(monkeypatch):
+    # A child the /proc scan cannot see must keep the tree non-empty: only
+    # waitpid's ECHILD proves emptiness. This test process is the parent.
+    child = subprocess.Popen(["/bin/sleep", "300"])
+    try:
+        monkeypatch.setattr(sup_mod, "children", lambda me: [])
+        log = {"signals": 0, "reaped": 0}
+        assert sup_mod.signal_phase(os.getpid(), signal.SIGTERM, 0.3,
+                                    log) is False
+        assert log["signals"] == 0
+    finally:
+        child.kill()
+        child.wait()
