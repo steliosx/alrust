@@ -3,8 +3,10 @@
 
 Contract: docs/ci-launch-attestation-contract.md, sections 4 and 5 (SS-I1).
 Run as `python3 -I -S -B launch-reference.py --job-root J --venv V --port N
---ready-timeout S`. run-reference.sh calls it in JOB_ROOT mode after building
-V.
+--ready-timeout S`. run-reference.sh calls it in JOB_ROOT mode twice: first
+with a leading --preflight, BEFORE building V, which applies every refusal
+below that does not need the built venv (V must not exist yet) and starts
+nothing; then, after the build, without it.
 
 The launcher:
 - refuses a job root that is not a private (0700) directory owned by this
@@ -98,8 +100,17 @@ def check_job_root(job_root):
     return info
 
 
+def check_venv_path(job_root, venv):
+    """V lies strictly inside the job root, with no symlink in its parents."""
+    parent = os.path.dirname(venv)
+    if not venv.startswith(job_root + os.sep) \
+            or os.path.realpath(parent) != parent:
+        raise Refused("venv must be inside the job root, without symlinks")
+
+
 def check_venv(job_root, venv):
-    if os.path.realpath(venv) != venv or not venv.startswith(job_root + os.sep):
+    check_venv_path(job_root, venv)
+    if os.path.realpath(venv) != venv:
         raise Refused("venv must be inside the job root, without symlinks")
     info = os.lstat(venv)
     if not stat.S_ISDIR(info.st_mode):
@@ -300,11 +311,21 @@ def stop_supervisor(proc, receipt, digest, observed, job_root):
 def main(argv):
     signal.signal(signal.SIGTERM, on_signal)
     signal.signal(signal.SIGINT, on_signal)
+    preflight = argv[:1] == ["--preflight"]
     try:
-        job_root, venv, port, ready_timeout = parse_args(argv)
+        job_root, venv, port, ready_timeout = parse_args(argv[preflight:])
         check_environment()
         check_external_config()
         check_job_root(job_root)
+        if preflight:
+            check_venv_path(job_root, venv)
+            if os.path.lexists(venv):
+                raise Refused("venv %s already exists" % venv)
+            if os.path.lexists(os.path.join(job_root, "reference")):
+                raise Refused("job root already holds a launch")
+            if listeners(port):
+                raise Refused("port %d already in use" % port)
+            return 0
         venv_info = check_venv(job_root, venv)
         if listeners(port):
             raise Refused("port %d already in use" % port)

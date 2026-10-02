@@ -117,14 +117,15 @@ command -v pg_config >/dev/null \
   || { echo "run-reference: pg_config not found; install the libpq development files" >&2; exit 1; }
 
 if [[ -n ${JOB_ROOT:-} ]]; then
-  [[ $JOB_ROOT == /* && -d $JOB_ROOT && ! -L $JOB_ROOT && -O $JOB_ROOT ]] \
-    && [[ $(stat -c %a -- "$JOB_ROOT") == 700 ]] \
-    || { echo "run-reference: JOB_ROOT must be an existing 0700 directory owned by this user" >&2; exit 1; }
   : "${VENV:=$JOB_ROOT/venv}"
-  [[ $VENV == "$JOB_ROOT"/* ]] \
-    || { echo "run-reference: VENV must be inside JOB_ROOT" >&2; exit 1; }
   [[ ${HOME:-} == "$JOB_ROOT"/* ]] \
     || { echo "run-reference: HOME must be inside JOB_ROOT in supervised mode" >&2; exit 1; }
+  # Every refusal that does not need the built venv happens here, before
+  # the build, with the launcher's own checks (job root, venv path,
+  # environment allowlist, /etc/alertad.conf, port, an earlier launch).
+  "$py" -I -S -B "$root/conformance/scripts/launch-reference.py" --preflight \
+    --job-root "$JOB_ROOT" --venv "$VENV" --port "$PORT" --ready-timeout "$READY_TIMEOUT" \
+    || { echo "run-reference: supervised-mode preflight refused; nothing was built" >&2; exit 1; }
 fi
 if [[ -n ${VENV:-} ]]; then
   if [[ -e $VENV ]]; then

@@ -489,8 +489,8 @@ def fake_checkout(tmp_path):
     (repo / "conformance" / "scripts").mkdir(parents=True)
     (repo / "reference" / "alerta").mkdir(parents=True)
     (repo / "reference" / "alerta" / "setup.py").write_text("")
-    shutil.copy(SCRIPTS / "run-reference.sh",
-                repo / "conformance" / "scripts" / "run-reference.sh")
+    for name in ("run-reference.sh", "launch-reference.py"):
+        shutil.copy(SCRIPTS / name, repo / "conformance" / "scripts" / name)
     tools = tmp_path / "tools"
     tools.mkdir()
     (tools / "pg_config").write_text("#!/bin/sh\nexit 0\n")
@@ -498,29 +498,75 @@ def fake_checkout(tmp_path):
     return repo, tools
 
 
-@pytest.mark.parametrize("variant", ["mode", "symlink", "venv_outside",
-                                     "home_outside"])
-def test_run_reference_refuses_job_root_before_the_build(tmp_path, variant):
+@pytest.mark.parametrize("variant", [
+    "mode", "group_writable", "symlink", "not_normalized", "trailing_slash",
+    "venv_outside", "venv_dotdot", "venv_symlinked_parent", "home_outside",
+    "env_extra", "busy_port", "earlier_launch"])
+def test_run_reference_refuses_before_the_build(tmp_path, variant):
     repo, tools = fake_checkout(tmp_path)
     job = tmp_path / "job"
     job.mkdir(mode=0o700)
     env = dict(ENV, PATH="%s:/usr/bin:/bin" % tools, JOB_ROOT=str(job),
                HOME=str(job / "home"), REFERENCE_PYTHON=sys.executable,
                PORT=str(free_port()))
+    holder = None
     if variant == "mode":
         job.chmod(0o750)
+    elif variant == "group_writable":
+        job.chmod(0o770)
     elif variant == "symlink":
         link = tmp_path / "link"
         link.symlink_to(job)
-        env["JOB_ROOT"] = str(link)
-        env["HOME"] = str(link / "home")
+        env.update(JOB_ROOT=str(link), HOME=str(link / "home"))
+    elif variant == "not_normalized":
+        env.update(JOB_ROOT=str(tmp_path / "x" / ".." / "job"),
+                   HOME=str(tmp_path / "x" / ".." / "job" / "home"))
+        (tmp_path / "x").mkdir()
+    elif variant == "trailing_slash":
+        env.update(JOB_ROOT=str(job) + "/")
     elif variant == "venv_outside":
         env["VENV"] = str(tmp_path / "elsewhere-venv")
-    else:
+    elif variant == "venv_dotdot":
+        env["VENV"] = str(job / ".." / "escaped-venv")
+    elif variant == "venv_symlinked_parent":
+        (tmp_path / "real").mkdir()
+        (job / "sub").symlink_to(tmp_path / "real")
+        env["VENV"] = str(job / "sub" / "venv")
+    elif variant == "home_outside":
         env["HOME"] = str(tmp_path)
-    out = subprocess.run(["bash", str(repo / "conformance/scripts/run-reference.sh")],
-                         env=env, capture_output=True, text=True, timeout=60)
+    elif variant == "env_extra":
+        env["FLASK_DEBUG"] = "1"
+    elif variant == "busy_port":
+        holder = socket.socket()
+        holder.bind(("127.0.0.1", 0))
+        holder.listen()
+        env["PORT"] = str(holder.getsockname()[1])
+    else:
+        (job / "reference").mkdir(mode=0o700)
+    before = sorted(p.name for p in job.iterdir())
+    try:
+        out = subprocess.run(
+            ["bash", str(repo / "conformance/scripts/run-reference.sh")],
+            env=env, capture_output=True, text=True, timeout=60)
+    finally:
+        if holder is not None:
+            holder.close()
     assert out.returncode == 1, out.stderr
-    assert "JOB_ROOT" in out.stderr or "HOME" in out.stderr
     assert "environment" not in out.stdout  # no venv was built
-    assert sorted(p.name for p in job.iterdir()) == []
+    assert sorted(p.name for p in job.iterdir()) == before
+    assert not (tmp_path / "elsewhere-venv").exists()
+    assert not (tmp_path / "escaped-venv").exists()
+    assert not (tmp_path / "real" / "venv").exists()
+
+
+def test_preflight_alone_accepts_a_clean_job_root(tmp_path):
+    job = tmp_path / "job"
+    job.mkdir(mode=0o700)
+    scripts = copy_scripts(tmp_path)
+    out = subprocess.run(
+        PY + [str(scripts / "launch-reference.py"), "--preflight",
+              "--job-root", str(job), "--venv", str(job / "venv"),
+              "--port", str(free_port()), "--ready-timeout", "5"],
+        env=ENV, capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    assert list(job.iterdir()) == []
