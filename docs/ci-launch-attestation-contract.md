@@ -308,11 +308,41 @@ Rules:
 Every proof is written after the action it attests. The final bytes are
 scanned after every proof has been written. Steps:
 
-1. **Capture writers stop.**
-   - The entrypoint has finished and closed its journal.
-   - The stop helper has run, so the server log and observer are finished
-     and the terminal stop receipt exists, or its absence is recorded.
-   - Each stage journal is closed by its own stage.
+1. **Writer quiescence, positively proven.** This is a **prerequisite**
+   for steps 2 to 5. All of these must hold:
+   - the entrypoint has exited and its journal is closed with
+     `stage_complete`;
+   - the stop helper's verdict is COMPLETE from a terminal receipt
+     `tree_empty` of the receipt's P generation. P writes that receipt
+     only after `ECHILD`, so every process that could write the server
+     log or serve the observer has exited and its file descriptors are
+     closed. The helper has also seen P itself exit through the pidfd;
+   - each stage journal is closed with `stage_complete`.
+
+   **Merely running the stop helper proves nothing.** A missing,
+   `tree_not_empty` or unreadable receipt does **not** imply that the
+   writers have stopped. P may have been killed from outside while
+   orphans are still writing. In that branch, steps 2 to 5 do not run:
+   - no mutable log, journal or credential snapshot is read, removed or
+     exported;
+   - no orphan or other unattributed process is signalled or guessed at;
+   - the profile is FAIL with cleanup UNPROVEN, and cleanup is never
+     claimed COMPLETE.
+
+   The only output is a bounded failure-only record (section 9.1a).
+
+   **1a. Failure-only record.** The summary step may upload one record,
+   assembled only from inputs that were independently closed and are
+   immutable:
+   - the core identity;
+   - closed stage journals that end in `stage_complete`;
+   - the launch receipt, and the stop helper's own verdict.
+
+   It holds the outcome, the stop verdict and those inputs' hashes. It
+   names no log content. Before upload it is scanned completely against
+   the generic patterns and against `SECRET_KEY` and the database URL,
+   which the workflow holds; the registry is never built in this branch.
+   If anything is unavailable, nothing is uploaded.
 2. **Credential registry frozen, before the database is dropped.** A
    bounded step, with its own stage journal, writes a private registry
    (0600, exclusive) that contains:
@@ -370,8 +400,8 @@ scanned after every proof has been written. Steps:
    terminal receipt and the manifest. A missing manifest, which is what a
    scan failure leaves, means FAIL with no upload.
 
-**Failures.** Any failure in steps 2 to 5 keeps the profile FAIL, or
-UNPROVEN for cleanup. That includes a failed removal, scan, aggregation or
+**Failures.** A failure of step 1 (no positive quiescence) or of any of
+steps 2 to 5 keeps the profile FAIL, or UNPROVEN for cleanup. That includes a failed removal, scan, aggregation or
 terminal write. No unscanned byte is exported. Nothing is stamped COMPLETE
 before its action. No source log or journal is writable after it has been
 read for a candidate.
