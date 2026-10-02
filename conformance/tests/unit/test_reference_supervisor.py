@@ -61,8 +61,8 @@ def start(tmp_path, command, observer=False, extra=()):
                  str(terminal), "--venv", str(tmp_path)]
     if observer:
         args += ["--observer-socket", str(tmp_path / "observer.sock"),
-                 "--observer-module-sha256", "a" * 64,
-                 "--observer-activator-sha256", "b" * 64]
+                 "--observer-manifest", str(tmp_path / "observer-install.json"),
+                 "--observer-manifest-sha256", "a" * 64]
     args += list(extra) + ["--"] + command
     proc = subprocess.Popen(args, process_group=0, stdin=subprocess.DEVNULL,
                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -128,9 +128,10 @@ def test_observer_variables_only_in_child(tmp_path):
                      dump.read_text().splitlines() if "=" in line)
     assert child_env["ALRUST_OBSERVER_SOCKET"] == str(tmp_path / "observer.sock")
     assert child_env["ALRUST_OBSERVER_PARENT"] == str(proc.pid)
-    assert record["observer"] == {"socket": str(tmp_path / "observer.sock"),
-                                  "module_sha256": "a" * 64,
-                                  "activator_sha256": "b" * 64}
+    assert record["observer"] == {
+        "socket": str(tmp_path / "observer.sock"),
+        "manifest": str(tmp_path / "observer-install.json"),
+        "manifest_sha256": "a" * 64}
     own = Path("/proc/%d/environ" % proc.pid).read_bytes()
     assert b"ALRUST_OBSERVER" not in own
     assert stop(receipt, digest)[1]["verdict"] == "COMPLETE"
@@ -392,8 +393,11 @@ def test_supervisor_refuses_when_not_group_leader(tmp_path):
     ["--receipt", "/r", "--terminal", "/t", "--venv", "/v",
      "--observer-socket", "/s", "--", "/bin/true"],
     ["--receipt", "/r", "--terminal", "/t", "--venv", "/v",
-     "--observer-socket", "/s", "--observer-module-sha256", "A" * 64,
-     "--observer-activator-sha256", "b" * 64, "--", "/bin/true"],
+     "--observer-socket", "/s", "--observer-manifest", "/m",
+     "--observer-manifest-sha256", "A" * 64, "--", "/bin/true"],
+    ["--receipt", "/r", "--terminal", "/t", "--venv", "/v",
+     "--observer-socket", "/s", "--observer-manifest", "relative",
+     "--observer-manifest-sha256", "a" * 64, "--", "/bin/true"],
     ["--receipt", "/r", "--terminal", "/t", "--venv", "/v"],
     ["--receipt", "/r", "--receipt", "/r2", "--terminal", "/t", "--venv",
      "/v", "--", "/bin/true"],
