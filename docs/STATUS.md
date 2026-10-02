@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-02T01:30Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-02T12:24Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -94,6 +94,10 @@ are kept.
 | #80 | `claude/charter-sync` (STATUS) | `5549fe45` (approved `9803c385`) | `fce66071` |
 | #79 | `chatgpt/readme-evidence-20261001` (owner's PR: README checkpoint at `d87e25cc`; first under Y17) | `346baa4e` (approved `35399ea3`; Claude also approved) | `83d31ffa` |
 | #81 | `claude/ci-launch-attestation-contract` (Phase 0 CI executing-stage design) | `1d840e71` (approved `35399ea3`) | `9b18cad9` |
+| #82 | `claude/charter-sync` (DECISIONS Y17; STATUS) | `d2b577e0` (approved `c4fa69c3`) | `509d2a0e` |
+| #83 | `claude/ci-reference-supervisor` (Phase 0 CI: subreaper supervisor and pidfd stop helper, standalone) | `43dd73c2` (approved `eb2a251f`) | `7c4c1984` |
+| #84 | `claude/ci-stop-pid-range` (stop helper integer bounds, SS-R5) | `003b3ff6` (approved `5e779e8d`) | `27b9b136` |
+| #85 | `claude/ci-reference-launcher` (supervised launcher, receipt custody, pre-build preflight; SS-I1 component) | `82c6b06c` (approved `0474710a`) | `85442a1f` |
 
 After PR #10, `main` was at `bcd60ea3`; its hosted CI run [36859021523](https://github.com/steliosx/alrust/actions/runs/36859021523) completed successfully at scaffold scope (retrieved by Codex), and Codex independently verified every merge's parents and trees (`5bd706c0`). Checks then: README, STATUS, OpenAPI and the customer mapping are byte-identical to their reviewed versions; DECISIONS is charter-sync's plus only the ADR-0004 row; `spec/lifecycle.md` is the heartbeats version plus exactly the R1.2 clarification from PR #3's later approved head.
 
@@ -237,15 +241,24 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
     none. r13's preserved files are untouched until r14. codex-omarchy's
     review of the outcome is pending. Claude has no VM access, and this is
     not Alrust validation.
-  - **r14 (peer-reported by Opus, 2026-10-01):** the package is with
-    codex-omarchy for review. It holds a fresh request and state for C6,
-    with one map-pinned launcher, so the owner adds a single permission
-    rule. Read-only isolation probes show that it does not touch r13's
-    preserved files; their disposal is proposed separately. The owner
-    pre-approved the run on two-agent agreement. Opus agrees to the exact
-    files; the run waits for codex-omarchy's exact acceptance and the
-    owner's rule. Runner 22 is unavailable to other x64 jobs from acquire
-    to release. Opus is drafting Phase B (I3, Y14, Y15) in parallel.
+  - **r14 (peer-reported by Opus, 2026-10-01 and 2026-10-02):** it ran after
+    codex-omarchy accepted the request and state for C6, and the owner added
+    the single permission rule.
+    - Attempt 1 was stopped by Opus before any host mutation (R14-RUN-01: a
+      launcher output line would have broken two parsers). No window was
+      taken.
+    - Attempt 2 **passed every phase** at C6 `3392d399`. The window was held
+      01:52:58-02:06:25Z on 2026-10-02 and released. r13's preserved state
+      was proven untouched, and runner 22 is back online.
+    - **C6:** adoption, both canonical builds and the freeze `cd36053b` are
+      complete and confirmed by codex-omarchy. The canonical wheel equals the
+      r14-tested wheel. The C6 landing (push, PR and merge) has not happened.
+    - **Phase B scope:** Opus's plan to codex-omarchy shows that Phase B is
+      not on Zabalack's critical path (C6 admission works through Phase A).
+      If codex-omarchy agrees, Phase B serves only Alrust's I3/Y15 path and
+      is sequenced as Alrust's track. Alrust's Phase 0 runs on GitHub-hosted
+      runners in the meantime.
+    - Claude has no VM access; none of this is Alrust validation.
   - **Shared-VM order (owner-agreed, 2026-10-01):**
     1. **done (22:19Z):** clear r13's hold and return runner 22 to service. The owner clears
        this hold directly: the preserved r13 files fail Y14's clean-state
@@ -308,24 +321,60 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
         pidfd-only stop with no group signals; one failure branch open
         (`10fd1913`);
       - `1d840e71`: positive writer quiescence before finalization.
-      No component is implemented or qualified, and the design grants no
-      execution permission.
+      The design alone grants no execution permission. The source and
+      offline implementations listed below are not executing-workflow or
+      runtime-qualified components.
+    - **Executing-stage components merged** (source and offline only; not wired
+      into any workflow; hosted execution NOT_RUN):
+      - **PR #83:** `reference-supervisor.py`, a subreaper that only ever
+        signals its own unreaped children and ends at `ECHILD`, and
+        `stop-reference.py`, which signals only through a generation-checked
+        pidfd. Codex approved it after two rounds: SS-R1 (a UID mismatch is
+        not an exit), SS-R2 (FIFO receipts blocked), SS-R3 (a malformed
+        owner) and SS-R4 (deeply nested JSON).
+      - **PR #84:** SS-R5, a PID above `pid_t` overflowed `pidfd_open`.
+        Found by the review bot on #83 and confirmed by Codex.
+      - **PR #85:** `launch-reference.py`, the supervised launcher. It
+        cross-checks the supervisor's receipt against the generation
+        observed at spawn, waits for owned readiness (every listener on the
+        port belongs to the tree, one on 127.0.0.1), and prints the only
+        trusted receipt digest. A `--preflight` refuses unsafe job roots,
+        `HOME`, venv paths, environments and `/etc/alertad.conf` before the
+        build. `run-reference.sh` gains a `JOB_ROOT` mode; the legacy mode
+        used by today's CI is unchanged. Codex approved it after
+        SS-I1-HOME-1 (HOME could leave the job root). SS-I1's receipt
+        custody is closed at component level; whole SS-I1 integration stays
+        held.
+      - Evidence: 103 offline controls with real processes, stub servers
+        and a build-sentinel shim, plus mutation checks. All of it is local;
+        the merged CI does not run these unit tests.
+      - Incidents, disclosed in the mailbox: some mutation and old-code runs
+        left test processes, which were stopped by exact PID; one cleanup
+        command terminated its own shell. Old-code refusal checks once ran
+        real pip downloads into temp folders. Controls now use a build
+        sentinel and an automatic stop fixture.
+      - **Codex's session stalled** from about 03:22Z to 11:40Z on
+        2026-10-02, with no fetches. It resumed when the owner asked its
+        thread to continue; Codex now reviews in lane `01a0eeab`.
     - **Next, in order:**
-      1. Claude's launcher head (the supervisor, the launch receipt and its
-         cross-check, `JOB_ROOT` paths, observer wiring) and the
-         `stop-reference.py` stop helper, each with offline fault controls.
-      2. Codex's observer and adapters.
-      3. Claude's journals, finalizer and executing workflow.
-      4. Codex's executing entrypoint.
-      5. Per-profile enabling heads.
+      1. Claude: a hosted head that runs the existing scaffold job in
+         `JOB_ROOT` mode with a stop step, so the subreaper and pidfd run on
+         the hosted kernel (no vectors); then the observer installation and
+         receipt wiring, then the stage journals and finalizer.
+      2. Codex: the observer module and client (its interface checklist
+         was sent with `0474710a`).
+      3. Claude's executing workflow; Codex's executing entrypoint.
+      4. Per-profile enabling heads.
 
       Phase 0 also needs the coverage closure and the lifecycle review.
   - **Still open for the owner:** the final Phase B approval; registering
     the runner (X3).
-  - Codex's current task is the continuation thread `01a0f3d9` (`77acafe0`);
-    the earlier `01a0eeab` lane is superseded. Both agents check hourly and
-    message each other only when there is something meaningful (owner,
-    2026-10-01).
+  - Codex's current review lane is `01a0eeab` (resumed 2026-10-02 at the
+    owner's request). Check cadence: the owner set Codex's lane to a first
+    check 20 minutes after resuming, then every 30 minutes. Claude runs an
+    hourly mailbox check plus a 30-minute read-only tmux observation of
+    Codex's session (owner, 2026-10-02). Both report only meaningful
+    results.
 - **Repository protection:** none. `branches/main` reports `protected: false`, and
   the protection and ruleset APIs return HTTP 403 (plan). The guard is
   **not enforced**. See `docs/repo-protection-recommendation.md`.
