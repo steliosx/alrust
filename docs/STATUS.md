@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-02T12:24Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-02T13:23Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -98,6 +98,9 @@ are kept.
 | #83 | `claude/ci-reference-supervisor` (Phase 0 CI: subreaper supervisor and pidfd stop helper, standalone) | `43dd73c2` (approved `eb2a251f`) | `7c4c1984` |
 | #84 | `claude/ci-stop-pid-range` (stop helper integer bounds, SS-R5) | `003b3ff6` (approved `5e779e8d`) | `27b9b136` |
 | #85 | `claude/ci-reference-launcher` (supervised launcher, receipt custody, pre-build preflight; SS-I1 component) | `82c6b06c` (approved `0474710a`) | `85442a1f` |
+| #86 | `claude/ci-observer-wiring` (observer installation and receipt wiring) | `ebf97f48` (approved `1fb61c03`) | `0e2a3228` |
+| #87 | `claude/charter-sync` (STATUS) | `377e8d54` (approved `1fb61c03`) | `6e96c632` |
+| #88 | `claude/ci-hosted-supervised-scaffold` (scaffold reference job in supervised mode with a proven stop) | `a5ee4c22` (approved `1fb61c03`) | `b121a31b` |
 
 After PR #10, `main` was at `bcd60ea3`; its hosted CI run [36859021523](https://github.com/steliosx/alrust/actions/runs/36859021523) completed successfully at scaffold scope (retrieved by Codex), and Codex independently verified every merge's parents and trees (`5bd706c0`). Checks then: README, STATUS, OpenAPI and the customer mapping are byte-identical to their reviewed versions; DECISIONS is charter-sync's plus only the ADR-0004 row; `spec/lifecycle.md` is the heartbeats version plus exactly the R1.2 clarification from PR #3's later approved head.
 
@@ -324,8 +327,10 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
       The design alone grants no execution permission. The source and
       offline implementations listed below are not executing-workflow or
       runtime-qualified components.
-    - **Executing-stage components merged** (source and offline only; not wired
-      into any workflow; hosted execution NOT_RUN):
+    - **Executing-stage components merged** (evidence for these PRs is source
+      and offline; the supervised scaffold integration that followed, PR
+      #88, is recorded below; the observer, profiles and finalizer remain
+      NOT_RUN):
       - **PR #83:** `reference-supervisor.py`, a subreaper that only ever
         signals its own unreaped children and ends at `ECHILD`, and
         `stop-reference.py`, which signals only through a generation-checked
@@ -340,8 +345,8 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
         port belongs to the tree, one on 127.0.0.1), and prints the only
         trusted receipt digest. A `--preflight` refuses unsafe job roots,
         `HOME`, venv paths, environments and `/etc/alertad.conf` before the
-        build. `run-reference.sh` gains a `JOB_ROOT` mode; the legacy mode
-        used by today's CI is unchanged. Codex approved it after
+        build. `run-reference.sh` gains a `JOB_ROOT` mode; its legacy mode
+        stayed unchanged (CI moved to JOB_ROOT mode later, in #88). Codex approved it after
         SS-I1-HOME-1 (HOME could leave the job root). SS-I1's receipt
         custody is closed at component level; whole SS-I1 integration stays
         held.
@@ -356,13 +361,44 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
       - **Codex's session stalled** from about 03:22Z to 11:40Z on
         2026-10-02, with no fetches. It resumed when the owner asked its
         thread to continue; Codex now reviews in lane `01a0eeab`.
+    - **First hosted run of the supervised path:**
+      - PR #88 moved the scaffold reference job to the merged supervised
+        path: a private job root, `env -i`, a masked random signing key,
+        port 18081, exactly one launcher ready line, and an always-run
+        pidfd stop that must report COMPLETE with no listener left.
+      - [Run 37009548848](https://github.com/steliosx/alrust/actions/runs/37009548848)
+        (tested merge `9602c8a8`, same tree as main `b121a31b`): the fresh
+        JOB_ROOT build, the single ready line, healthcheck OK, stop
+        `tree_empty` COMPLETE, and listener inspection empty. The complete job log
+        contains no orphan-termination message (this is not a host-wide
+        process inventory).
+      - Codex audited it independently (`f4da5fc1`):
+        **PASS_SCAFFOLD_SUPERVISED**. One healthcheck only: no observer,
+        collection, finalizer or vectors; no Phase 0 credit.
+    - **Observer components** (source and offline; not wired into any
+      workflow):
+      - PR #86: launcher installation of a pinned observer module and its
+        activator, with digests in the launch receipt (Claude).
+      - Codex's protocol codec `02d4a084` and private Unix client
+        `60de7e70`, then `9422c4d4` (OC-N1: every directory between the
+        socket and the job root must be private). Both approved by Claude
+        as components; not yet published.
+      - Agreed design, implementation in review: the installer takes a
+        pinned file set (the module plus the codec) and records an install
+        manifest of the installed paths and digests. Installed-path
+        attestation stays open until the executing adapter verifies the
+        actual installed files.
+      - **Unresolved, proposed only:** how the actual serving connection's
+        database and cluster are observed. A `request_finished` receiver is
+        agreed as the attachment point. The binding of the connection's
+        lifetime and cluster, and the ordering of capture against the
+        served request, are open (Codex OCOL-D1 to D3). The receipt states
+        expected identity only; it does not observe the serving
+        connection. Database qualification and profile enabling are held.
     - **Next, in order:**
-      1. Claude: a hosted head that runs the existing scaffold job in
-         `JOB_ROOT` mode with a stop step, so the subreaper and pidfd run on
-         the hosted kernel (no vectors); then the observer installation and
-         receipt wiring, then the stage journals and finalizer.
-      2. Codex: the observer module and client (its interface checklist
-         was sent with `0474710a`).
+      1. Claude: the pinned file-set installer, then the stage journals
+         and finalizer.
+      2. Codex: the producer's private collection and attachment.
       3. Claude's executing workflow; Codex's executing entrypoint.
       4. Per-profile enabling heads.
 
