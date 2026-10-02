@@ -506,3 +506,91 @@ def test_emptiness_comes_from_echild_not_from_the_scan(monkeypatch):
     finally:
         child.kill()
         child.wait()
+
+
+def live_terminal(tmp_path, pid, **owner):
+    ticks, _ = stop_mod.read_generation(pid)
+    record = {"schema": stop_mod.SCHEMA_TERMINAL, "result": "tree_empty",
+              "supervisor": dict({"pid": pid, "start_ticks": ticks}, **owner),
+              "boot_id": stop_mod.boot_id()}
+    (tmp_path / "terminal.json").write_text(json.dumps(record))
+
+
+def test_wrong_receipt_uid_is_unproven_not_exit(tmp_path, cleanup):
+    # SS-R1: live P with matching start_ticks, receipt uid differs, and a
+    # generation-bound tree_empty terminal. Not an exit: UNPROVEN, no signal.
+    other = subprocess.Popen(["/bin/sleep", "300"], process_group=0)
+    cleanup.append(other.pid)
+    ticks, uid = stop_mod.read_generation(other.pid)
+    path, digest = fake_receipt(tmp_path, other.pid, supervisor={
+        "pid": other.pid, "pgid": other.pid, "start_ticks": ticks,
+        "uid": uid + 1, "subreaper": 1})
+    live_terminal(tmp_path, other.pid)
+    rc, out = stop(path, digest)
+    assert (rc, out["verdict"], out["reason"]) == (2, "UNPROVEN",
+                                                   "uid_mismatch")
+    assert alive(other.pid)
+
+
+def test_uid_observation_fault_is_unproven(tmp_path, cleanup, monkeypatch,
+                                           capsys):
+    other = subprocess.Popen(["/bin/sleep", "300"], process_group=0)
+    cleanup.append(other.pid)
+    path, digest = fake_receipt(tmp_path, other.pid)
+    live_terminal(tmp_path, other.pid)
+    ticks, uid = stop_mod.read_generation(other.pid)
+    monkeypatch.setattr(stop_mod, "read_generation",
+                        lambda pid: (ticks, uid + 1))
+    rc, out = run_in_process(capsys, path, digest)
+    assert (rc, out["reason"]) == (2, "uid_mismatch")
+    assert alive(other.pid)
+
+
+def test_launch_receipt_fifo_does_not_block(tmp_path):
+    fifo = tmp_path / "launch.json"
+    os.mkfifo(fifo, 0o600)
+    began = time.monotonic()
+    rc, out = stop(fifo, "0" * 64)
+    assert (rc, out["reason"]) == (2, "receipt_unreadable")
+    assert time.monotonic() - began < 5
+
+
+def test_terminal_receipt_fifo_does_not_block(tmp_path, cleanup):
+    other = subprocess.Popen(["/bin/sleep", "300"], process_group=0)
+    cleanup.append(other.pid)
+    path, digest = fake_receipt(tmp_path, other.pid)
+    os.mkfifo(tmp_path / "terminal.json", 0o600)
+    began = time.monotonic()
+    rc, out = stop(path, digest)
+    # The terminal is invalid, so no signal is sent; the helper then waits
+    # its bounded 20 s for an exit that does not come.
+    assert (rc, out["reason"]) == (2, "terminal_receipt_invalid")
+    assert alive(other.pid)
+    assert time.monotonic() - began < 25
+
+
+def test_launch_receipt_device_is_refused():
+    rc, out = stop(Path("/dev/zero"), "0" * 64)
+    assert (rc, out["reason"]) == (2, "receipt_unreadable")
+
+
+def test_launch_receipt_directory_is_refused(tmp_path):
+    rc, out = stop(tmp_path, "0" * 64)
+    assert (rc, out["reason"]) == (2, "receipt_unreadable")
+
+
+@pytest.mark.parametrize("owner", [[1], "owner", 7, True, None,
+                                   {"pid": "1", "start_ticks": 1},
+                                   {"pid": 1, "start_ticks": True}])
+def test_malformed_terminal_owner_is_invalid(tmp_path, cleanup, owner):
+    other = subprocess.Popen(["/bin/sleep", "300"], process_group=0)
+    cleanup.append(other.pid)
+    path, digest = fake_receipt(tmp_path, other.pid)
+    (tmp_path / "terminal.json").write_text(json.dumps({
+        "schema": stop_mod.SCHEMA_TERMINAL, "result": "tree_empty",
+        "supervisor": owner, "boot_id": stop_mod.boot_id()}))
+    other.kill()
+    other.wait()
+    rc, out = stop(path, digest)
+    assert (rc, out["verdict"], out["reason"]) == (
+        2, "UNPROVEN", "terminal_receipt_invalid")

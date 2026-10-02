@@ -23,6 +23,7 @@ import json
 import os
 import select
 import signal
+import stat
 import sys
 import time
 
@@ -42,8 +43,20 @@ def verdict(name, reason, **extra):
 
 
 def read_bounded(path):
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    """Read a small regular file without following links or blocking.
+
+    O_NONBLOCK makes opening a FIFO or device return at once; the fstat of
+    the opened descriptor then refuses anything but a regular file, before
+    any read can block.
+    """
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+                 | os.O_NONBLOCK | os.O_NOCTTY)
     try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("not a regular file")
+        if info.st_size > MAX_RECEIPT:
+            raise ValueError("receipt too large")
         chunks, size = [], 0
         while size <= MAX_RECEIPT:
             chunk = os.read(fd, MAX_RECEIPT + 1 - size)
@@ -86,8 +99,11 @@ def read_terminal(path, pid, start_ticks, boot):
         return "invalid"
     if not isinstance(record, dict) or record.get("schema") != SCHEMA_TERMINAL:
         return "invalid"
-    owner = record.get("supervisor") or {}
-    if owner.get("pid") != pid or owner.get("start_ticks") != start_ticks \
+    owner = record.get("supervisor")
+    if not isinstance(owner, dict) or type(owner.get("pid")) is not int \
+            or type(owner.get("start_ticks")) is not int:
+        return "invalid"
+    if owner["pid"] != pid or owner["start_ticks"] != start_ticks \
             or record.get("boot_id") != boot:
         return "invalid"
     if record.get("result") not in ("tree_empty", "tree_not_empty"):
@@ -176,10 +192,16 @@ def main(argv):
             current = read_generation(pid)
         except (OSError, ValueError):
             return verdict("UNPROVEN", "generation_unreadable")
-        if current is None or current != (start_ticks, uid):
-            # P exited, perhaps reused by another process: never signal it.
+        if current is None or current[0] != start_ticks:
+            # No process of the receipt's generation holds PID any more (on
+            # this boot): P has exited, and PID may now be another process,
+            # which is never signalled.
             return conclude(read_terminal(terminal_path, pid, start_ticks,
                                           boot), exited=True)
+        if current[1] != uid:
+            # Same generation, different owner: an ownership mismatch, not
+            # an exit. Never signal, never conclude.
+            return verdict("UNPROVEN", "uid_mismatch")
         terminal = read_terminal(terminal_path, pid, start_ticks, boot)
         if terminal is None:
             try:
