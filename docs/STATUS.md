@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-02T16:29Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-02T19:55Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -104,6 +104,10 @@ are kept.
 | #89 | `claude/ci-observer-fileset` (observer pinned file set and install manifest) | `04b7f2e2` (approved `4d7f167b`) | `3ee9cc45` |
 | #90 | `claude/charter-sync` (STATUS) | `f9903e76` (approved `4d7f167b`) | `b109277d` |
 | #91 | `claude/ci-stage-journals` (frozen core identity, stage journals, aggregation) | `a014eb43` (approved `363f0674`) | `bb6428bc` |
+| #92 | `claude/ci-finalizer` (finalizer building blocks, F1) | `0d5ca967` (approved `6bf96960`) | `38a2dfbb` |
+| #93 | `claude/charter-sync` (STATUS) | `cffbea38` (approved `6bf96960`) | `792db300` |
+| #94 | `claude/ci-observer-activation-wiring` (`.pth` calls the explicit activation helper) | `55a839d0` (approved `061c33e5`) | `94ac035d` |
+| #95 | `claude/ci-finalizer` (finalizer orchestration, upload gate, failure-only record) | `bb9c6832` (approved `5b37cb7a`) | `9730201a` |
 
 After PR #10, `main` was at `bcd60ea3`; its hosted CI run [36859021523](https://github.com/steliosx/alrust/actions/runs/36859021523) completed successfully at scaffold scope (retrieved by Codex), and Codex independently verified every merge's parents and trees (`5bd706c0`). Checks then: README, STATUS, OpenAPI and the customer mapping are byte-identical to their reviewed versions; DECISIONS is charter-sync's plus only the ADR-0004 row; `spec/lifecycle.md` is the heartbeats version plus exactly the R1.2 clarification from PR #3's later approved head.
 
@@ -364,6 +368,11 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
       - **Codex's session stalled** from about 03:22Z to 11:40Z on
         2026-10-02, with no fetches. It resumed when the owner asked its
         thread to continue; Codex now reviews in lane `01a0eeab`.
+      - At 17:51Z on 2026-10-02, Claude's tmux observation wrongly
+        suggested that Codex's reviews might be stalled. They had already
+        been delivered at 17:41Z (`061c33e5`). Codex sent a correction
+        (`75b38bd2`); Claude now checks its inbox before reading anything
+        into an idle pane.
     - **First hosted run of the supervised path:**
       - PR #88 moved the scaffold reference job to the merged supervised
         path: a private job root, `env -i`, a masked random signing key,
@@ -380,9 +389,17 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
         collection, finalizer or vectors; no Phase 0 credit.
     - **Observer components** (source and offline; not wired into any
       workflow):
-      - Claude's, merged: PR #86 (installation and receipt wiring) and PR
-        #89 (pinned two-file set: producer plus codec, an install manifest,
-        read-back before spawn).
+      - Claude's, merged: PR #86 (installation and receipt wiring), PR #89
+        (pinned two-file set: producer plus codec, an install manifest,
+        read-back before spawn) and PR #94 (the one-line `.pth` activator
+        calls the helper's explicit `activate_from_environment()` only when
+        the supervisor set the socket variable, which it does for the served
+        child alone). #94 is synthetic wiring (stubs with the helper's shape),
+        approved as `APPROVE_COMPONENT_SOURCE_OFFLINE_SYNTHETIC_PTH_WIRING`.
+        AN-1 is covered by a control: site.py prints and skips an exception
+        from a `.pth` line, so a failed activation leaves the server ready
+        without an observer. Server readiness never proves an active
+        observer; a missing or refused observer must fail qualification.
       - Codex's, **approved by Claude as components but not yet
         published** (Codex publishes its own branches):
         - `02d4a084`: protocol codec;
@@ -391,10 +408,18 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
         - `3729ff7f`: prepared observation window;
         - `5119a2fb`: marked capture receiver and cache;
         - `1d31647c`: bounded socket worker;
-        - `a099170d`: parent-gated explicit activation helper.
+        - `a099170d`: parent-gated explicit activation helper;
+        - `1b6c3065`: read-only installed-file audit (file scope only, not
+          process qualification);
+        - `91e31660`: runtime origin declarations in the package frame
+          (actual prefix, executable alias, bound receiver and codec
+          origins, and an inventory of loaded `alrust_*` modules). These
+          are private corroboration, never expected values or a trust root.
         Each was reviewed with synthetic controls only. No real reference
-        run, no `.pth` wiring of the helper, and no external attestation
-        adapter exist yet.
+        run and no external process and interpreter qualifier exist yet.
+        Ownership (agreed in the mailbox): Codex owns the producer and the
+        external adapter; Claude owns the launcher, database and finalizer
+        stages.
       - Database observation: the direction is agreed (a nonce-marked
         health request; a contained read-only identity query on the live
         serving connection, preserving its transaction with a savepoint).
@@ -405,16 +430,37 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
         and `aggregate()` (VALID only when every stage COMPLETED; FAILED for
         any failed stage; INCOMPLETE otherwise). Approved after three rounds
         (JR542-R1, R2, R2a, R2b).
-      - Finalizer building blocks (credential registry, final-byte scanner,
-        descriptor-anchored removal): in review at `0d5ca967`, after
+      - PR #92, finalizer building blocks (credential registry, final-byte
+        scanner, descriptor-anchored removal), approved after
         REQUEST_CHANGES on `46567876` (F1465-R1 to R3, including an
         ancestor-swap deletion escape that Codex reproduced on its own
-        synthetic files). The orchestrator comes next.
+        synthetic files).
+      - PR #95, the finalizer orchestrator, approved at `bb9c6832` after
+        three rounds:
+        - `fe89e9d5` was refused (F2FE89-R1 to R5 and DOC1). The gate
+          trusted the stop receipt's labels and sealed while the
+          supervisor's PID was alive; a scanned file could change before
+          hashing; the upload gate accepted an invented manifest;
+        - `213eb1ab` was refused (R4a: a failure record with missing
+          journals or no stop verdict; F2213-R6: disk errors escaped as
+          exceptions);
+        - at `bb9c6832` the gate positively observes that the supervisor
+          generation ended (pidfd and `/proc` start_ticks, same boot, no
+          signal) before any registry or candidate read. Each export file
+          is read once and scanned and hashed from the same bytes.
+          `verify_manifest` requires the sealed digest. The failure-only
+          record needs every closed input, including exactly one linked
+          stop verdict. Every outcome after the gate is a fixed report.
+        Not run: actual stage writers, database drop receipt linkage, upload
+        byte custody, the executing workflow, the reference observer, Rust
+        parity and shared-VM qualification. No workflow calls the
+        finalizer.
     - **Next, in order:**
-      1. Claude: the finalizer orchestrator and failure-only record; then
-         the `.pth` wiring of the activation helper.
-      2. Codex: the external attestation adapter; then the database
+      1. Codex: the external process and interpreter qualifier, using the
+         installed-file audit and the prepared window; then the database
          observation.
+      2. Claude: the database stage and its receipt linkage in the
+         finalizer.
       3. Claude's executing workflow; Codex's executing entrypoint.
       4. Per-profile enabling heads.
 
