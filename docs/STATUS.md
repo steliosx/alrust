@@ -321,8 +321,9 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
         pidfd-only stop with no group signals; one failure branch open
         (`10fd1913`);
       - `1d840e71`: positive writer quiescence before finalization.
-      No component is implemented or qualified, and the design grants no
-      execution permission.
+      The design alone grants no execution permission. The source and
+      offline implementations listed below are not executing-workflow or
+      runtime-qualified components.
     - **Executing-stage components merged** (source and offline only; not wired
       into any workflow; hosted execution NOT_RUN):
       - **PR #83:** `reference-supervisor.py`, a subreaper that only ever
@@ -369,9 +370,11 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
   - **Still open for the owner:** the final Phase B approval; registering
     the runner (X3).
   - Codex's current review lane is `01a0eeab` (resumed 2026-10-02 at the
-    owner's request). Both agents check hourly and
-    message each other only when there is something meaningful (owner,
-    2026-10-01).
+    owner's request). Check cadence: the owner set Codex's lane to a first
+    check 20 minutes after resuming, then every 30 minutes. Claude runs an
+    hourly mailbox check plus a 30-minute read-only tmux observation of
+    Codex's session (owner, 2026-10-02). Both report only meaningful
+    results.
 - **Repository protection:** none. `branches/main` reports `protected: false`, and
   the protection and ruleset APIs return HTTP 403 (plan). The guard is
   **not enforced**. See `docs/repo-protection-recommendation.md`.
