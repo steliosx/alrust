@@ -20,6 +20,7 @@ strings; exception text is never recorded.
 """
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -138,9 +139,15 @@ def strict_json(data, code):
 
     def constant(_):
         raise JournalError(code)
+
+    def finite(text):
+        # 1e999 parses as infinity without parse_constant; refuse it here.
+        value = float(text)
+        _require(math.isfinite(value), code)
+        return value
     try:
         return json.loads(data.decode("utf-8"), object_pairs_hook=pairs,
-                          parse_constant=constant)
+                          parse_constant=constant, parse_float=finite)
     except JournalError:
         raise
     except (ValueError, RecursionError, UnicodeError):
@@ -386,8 +393,16 @@ def _parse_journal(data, index, name, core, core_sha256, previous_sha256,
         "index": index - 1, "name": previous_name, "sha256": previous_sha256}
     begin = first["payload"]
     _require(set(begin) == {"core_identity_sha256", "previous_stage"}
+             and type(begin["core_identity_sha256"]) is str
              and begin["core_identity_sha256"] == core_sha256, "core_identity_mismatch")
-    _require(begin["previous_stage"] == expected_previous, "chain_broken")
+    link = begin["previous_stage"]
+    # Exact types first: equality alone would let False stand for 0.
+    _require(link is None or (
+        type(link) is dict and set(link) == {"index", "name", "sha256"}
+        and type(link["index"]) is int and type(link["name"]) is str
+        and type(link["sha256"]) is str and _SHA256.fullmatch(link["sha256"])),
+        "chain_broken")
+    _require(link == expected_previous, "chain_broken")
     _require(last["kind"] == "stage_complete", "no_stage_complete")
     _require(all(r["kind"] not in ("stage_begin", "stage_complete")
                  for r in records[1:-1]), "misplaced_boundary_record")

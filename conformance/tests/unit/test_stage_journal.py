@@ -538,3 +538,49 @@ def test_core_copied_to_another_root_is_refused(job, tmp_path):
     report = sj.aggregate(str(other), STAGES)
     assert (report["verdict"], report["reason"]) == ("INCOMPLETE",
                                                      "core_job_root_mismatch")
+
+
+# JR542-R2a: exponent overflow to infinity, nested in an observed payload.
+@pytest.mark.parametrize("token", [b"1e999", b"-1e999", b"[1e999]"])
+def test_exponent_overflow_is_refused(job, token):
+    def mutate(j):
+        p = journal(j, 1, "launch")
+        ls = lines(p)
+        ls[1] = ls[1].replace(b'"value":1', b'"value":{"nested":' + token + b'}')
+        assert token in ls[1]
+        rewrite(p, ls)
+    assert corrupt(job, mutate) == "record_not_json"
+
+
+# JR542-R2b: the previous-stage link must have exact types. The LAST stage's
+# link is changed, so no later chain hash can catch it instead.
+@pytest.mark.parametrize("change", [
+    lambda link: link.update(index=True),      # True == 1
+    lambda link: link.update(index=1.0),       # 1.0 == 1
+    lambda link: link.update(extra=1),
+    lambda link: link.update(sha256=link["sha256"].upper()),
+])
+def test_previous_link_exact_types(job, change):
+    core(job)
+    run_stages(job)
+    p = journal(job, 2, "entrypoint")
+    rows = [json.loads(x) for x in lines(p)]
+    link = rows[0]["evidence"]["payload"]["previous_stage"]
+    assert link["index"] == 1
+    change(link)
+    rewrite(p, [json.dumps(x, separators=(",", ":")).encode() for x in rows])
+    report = sj.aggregate(str(job), STAGES)
+    assert (report["verdict"], report["reason"]) == ("INCOMPLETE", "chain_broken")
+
+
+def test_previous_link_false_index_on_stage_one(job):
+    # Codex's case: index False for the link to stage 0, on the last stage of
+    # a two-stage set.
+    core(job)
+    run_stages(job, ["database", "launch"])
+    p = journal(job, 1, "launch")
+    rows = [json.loads(x) for x in lines(p)]
+    rows[0]["evidence"]["payload"]["previous_stage"]["index"] = False
+    rewrite(p, [json.dumps(x, separators=(",", ":")).encode() for x in rows])
+    report = sj.aggregate(str(job), ["database", "launch"])
+    assert (report["verdict"], report["reason"]) == ("INCOMPLETE", "chain_broken")
