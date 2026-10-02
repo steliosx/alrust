@@ -59,7 +59,7 @@ def build(tmp_path, monkeypatch, *, report=b'{"result": "passed"}\n',
           stop_change=None, database_change=None, candidate_change=None,
           extra_records=(), registry_secrets=None, fail_stage=None,
           terminal_change=None, obtained_change=None, leaky_dir=False,
-          generation=None):
+          generation=None, omit_stop=False):
     monkeypatch.setattr(sj, "EXTERNAL_CONFIG", str(tmp_path / "no-alertad.conf"))
     job = tmp_path / "job"
     job.mkdir(mode=0o700)
@@ -129,6 +129,8 @@ def build(tmp_path, monkeypatch, *, report=b'{"result": "passed"}\n',
             sha256=registry_sha))],
         "database": [("database_drop", database)],
     }
+    if omit_stop:
+        per_stage["stop"] = []
     for stage, kind, payload in extra_records:
         per_stage[stage].append((kind, payload))
     sj.prepare_journal_dir(str(job))
@@ -382,8 +384,8 @@ def test_failure_record_reads_only_hashes(tmp_path, monkeypatch):
     assert record["outcome"] == "FAIL" and record["cleanup"] == "UNPROVEN"
     assert record["aggregation"]["verdict"] == "VALID"
     assert record["stop"] == {"verdict": "UNPROVEN", "reason": "no_terminal_receipt"}
-    assert set(record["hashes"]) == {"core_identity", "launch_receipt"}
-    assert all(v is not None for v in record["hashes"].values())
+    assert set(record["hashes"]) == {"core_identity", "launch_receipt", "terminal_receipt"}
+    assert all(fz._sha(v) for v in record["hashes"].values())
     text = Path(path).read_text()
     for secret in (ROLE_KEY, SIGNING, DB_URL, "raw log stays private"):
         assert secret not in text
@@ -542,3 +544,154 @@ def test_verify_manifest_requires_the_mandatory_evidence(tmp_path, monkeypatch):
     text = json.dumps(manifest)
     (export / "manifest.json").write_text(text)
     assert fz.verify_manifest(str(export), hashlib.sha256(text.encode()).hexdigest()) is False
+
+
+
+# F2FE89-R4a: the failure record needs complete closed journals and exactly
+# one linked stop verdict; "stop": null never satisfies section 9.1a.
+FAILURE_ENV = {"SECRET_KEY": SIGNING, "DATABASE_URL": DB_URL}
+UNPROVEN_STOP = dict(verdict="UNPROVEN", reason="no_terminal_receipt")
+
+
+def _no_failure_output(job):
+    assert fz.failure_record(str(job), STAGES, FAILURE_ENV) is None
+    assert not (job / "export").exists()
+
+
+def test_failure_record_refuses_missing_journals(tmp_path, monkeypatch):
+    import shutil
+    job = build(tmp_path, monkeypatch, stop_change=lambda s: s.update(UNPROVEN_STOP))
+    shutil.rmtree(job / sj.JOURNAL_DIR)
+    _no_failure_output(job)
+
+
+def test_failure_record_refuses_an_unclosed_journal(tmp_path, monkeypatch):
+    job = build(tmp_path, monkeypatch, stop_change=lambda s: s.update(UNPROVEN_STOP))
+    path = Path(sj.journal_path(str(job), 4, "database"))
+    lines = path.read_bytes().splitlines(keepends=True)
+    path.chmod(0o600)
+    path.write_bytes(b"".join(lines[:-1]))          # drop stage_complete
+    _no_failure_output(job)
+
+
+def test_failure_record_refuses_a_missing_stop_verdict(tmp_path, monkeypatch):
+    job = build(tmp_path, monkeypatch, omit_stop=True)
+    assert sj.aggregate(str(job), STAGES)["verdict"] == "VALID"
+    _no_failure_output(job)
+
+
+def test_failure_record_refuses_a_repeated_stop_verdict(tmp_path, monkeypatch):
+    # Two identical, individually valid stop verdicts: ambiguous, refused.
+    extra = []
+
+    def stop_change(s):
+        s.update(UNPROVEN_STOP)
+        extra.append(("stop", "stop_verdict", dict(s)))
+    job = build(tmp_path, monkeypatch, stop_change=stop_change, extra_records=extra)
+    kinds = [k for _, k, _ in fz._journal_records(str(job), sj.aggregate(str(job), STAGES))]
+    assert kinds.count("stop_verdict") == 2
+    _no_failure_output(job)
+
+
+@pytest.mark.parametrize("change", [
+    lambda s: s.update(launch_receipt_sha256="0" * 64),     # unlinked launch
+    lambda s: s.update(terminal_receipt_sha256="0" * 64),   # unlinked terminal
+    lambda s: s.update(reason="Not A Code"),
+    lambda s: s.update(verdict="PASSED"),
+    lambda s: s.pop("terminal_receipt_sha256"),
+    lambda s: s.update(extra=1),
+])
+def test_failure_record_refuses_a_malformed_stop_verdict(tmp_path, monkeypatch, change):
+    def stop_change(s):
+        s.update(UNPROVEN_STOP)
+        change(s)
+    job = build(tmp_path, monkeypatch, stop_change=stop_change)
+    _no_failure_output(job)
+
+
+def test_failure_record_without_a_terminal_receipt(tmp_path, monkeypatch):
+    job = build(tmp_path, monkeypatch, stop_change=lambda s: s.update(
+        UNPROVEN_STOP, terminal_receipt_sha256=None))
+    (job / "reference" / "terminal.json").unlink()
+    path = fz.failure_record(str(job), STAGES, FAILURE_ENV)
+    record = json.loads(Path(path).read_text())
+    assert record["stop"] == UNPROVEN_STOP
+    assert set(record["hashes"]) == {"core_identity", "launch_receipt"}
+
+
+def test_failure_record_from_a_closed_failed_stage(tmp_path, monkeypatch):
+    # A stage that closed FAILED is failure evidence, not an unavailable input.
+    job = build(tmp_path, monkeypatch, fail_stage="database",
+                stop_change=lambda s: s.update(UNPROVEN_STOP))
+    assert sj.aggregate(str(job), STAGES)["verdict"] == "FAILED"
+    path = fz.failure_record(str(job), STAGES, FAILURE_ENV)
+    record = json.loads(Path(path).read_text())
+    assert record["aggregation"]["verdict"] == "FAILED"
+    assert set(record["hashes"]) == {"core_identity", "launch_receipt", "terminal_receipt"}
+
+
+# F2213-R6: I/O failures after the gate are fixed reports, inputs preserved.
+def _inputs_preserved(job):
+    assert (job / "venv").exists() and (job / fz.REGISTRY_NAME).exists()
+    assert (job / sj.JOURNAL_DIR).exists() and (job / "reference").exists()
+
+
+def test_export_creation_io_failure_is_a_fixed_report(tmp_path, monkeypatch):
+    import errno
+    job = build(tmp_path, monkeypatch)
+    real_mkdir = os.mkdir
+
+    def no_space(path, *args, **kwargs):
+        if path == str(job / "export"):
+            raise OSError(errno.ENOSPC, "synthetic")
+        return real_mkdir(path, *args, **kwargs)
+    monkeypatch.setattr(fz.os, "mkdir", no_space)
+    assert fz.finalize(str(job), STAGES) == {"outcome": "FAILED", "cleanup": "UNPROVEN",
+                                             "reason": "export_unavailable"}
+    _inputs_preserved(job)
+
+
+def test_journal_construction_io_failure_is_a_fixed_report(tmp_path, monkeypatch):
+    import errno
+
+    def broken(path):
+        raise OSError(errno.EIO, "synthetic")
+    job = build(tmp_path, monkeypatch)
+    monkeypatch.setattr(fz, "PrivateJournal", broken)
+    assert fz.finalize(str(job), STAGES) == {"outcome": "FAILED", "cleanup": "UNPROVEN",
+                                             "reason": "finalizer_journal_unavailable"}
+    _inputs_preserved(job)
+    assert not (job / "export" / "manifest.json").exists()
+
+
+def test_closing_failure_never_masks_or_seals(tmp_path, monkeypatch):
+    import errno
+    real = fz.PrivateJournal
+
+    class CloseFails(real):
+        def close(self):
+            super().close()
+            raise OSError(errno.EIO, "synthetic")
+    job = build(tmp_path, monkeypatch)
+    monkeypatch.setattr(fz, "PrivateJournal", CloseFails)
+    report = fz.finalize(str(job), STAGES)
+    # The explicit close inside the steps fails first; that report stands.
+    assert report == {"outcome": "FAILED", "cleanup": "COMPLETE",
+                      "reason": "finalizer_io_failed"}
+    assert not (job / "export" / "manifest.json").exists()
+
+
+def test_a_write_failure_after_removals_reports_the_actual_cleanup(tmp_path, monkeypatch):
+    import errno
+    job = build(tmp_path, monkeypatch)
+    real_open = os.open
+
+    def fail_receipt(path, *args, **kwargs):
+        if str(path).endswith("terminal-cleanup.json"):
+            raise OSError(errno.ENOSPC, "synthetic")
+        return real_open(path, *args, **kwargs)
+    monkeypatch.setattr(fz.os, "open", fail_receipt)
+    report = fz.finalize(str(job), STAGES)
+    assert report == {"outcome": "FAILED", "cleanup": "COMPLETE",
+                      "reason": "finalizer_io_failed"}
+    assert not (job / "export" / "manifest.json").exists()

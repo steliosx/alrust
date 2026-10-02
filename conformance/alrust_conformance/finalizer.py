@@ -480,11 +480,39 @@ def finalize(job_root, stages, entrypoint_stage="entrypoint"):
 
     root_identity = (core["job_root"]["dev"], core["job_root"]["ino"])
     export = os.path.join(job_root, EXPORT_DIR)
+    # From here on every outcome is a fixed report (F2213-R6). Nothing has
+    # been removed yet, so a failure before the removals is cleanup UNPROVEN
+    # with all mutable inputs still in place; what was written stays private
+    # (0700) and unsealed, and no manifest digest is ever returned.
     try:
         os.mkdir(export, 0o700)
     except FileExistsError:
         return {"outcome": "FAILED", "cleanup": "UNPROVEN", "reason": "export_exists"}
-    journal = PrivateJournal(os.path.join(export, "finalizer.jsonl"))
+    except OSError:
+        return {"outcome": "FAILED", "cleanup": "UNPROVEN", "reason": "export_unavailable"}
+    try:
+        journal = PrivateJournal(os.path.join(export, "finalizer.jsonl"))
+    except (OSError, ValueError, JournalError):
+        return {"outcome": "FAILED", "cleanup": "UNPROVEN",
+                "reason": "finalizer_journal_unavailable"}
+    report = _sealing_steps(job_root, aggregation, core_bytes, records, evidence, registry,
+                            secrets, candidates, root_identity, export, journal)
+    try:
+        journal.close()
+    except OSError:
+        # A closing failure never replaces an earlier report; it can only
+        # withdraw a seal (the journal bytes in the manifest were read after
+        # the explicit close inside the steps, so this is a second close).
+        if report["outcome"] == "SEALED":
+            return {"outcome": "FAILED", "cleanup": report["cleanup"],
+                    "reason": "finalizer_journal_close_failed"}
+    return report
+
+
+def _sealing_steps(job_root, aggregation, core_bytes, records, evidence, registry,
+                   secrets, candidates, root_identity, export, journal):
+    """Steps 3-8 after the gate; always returns a report dict."""
+    cleanup = "UNPROVEN"
     try:
         journal.append({"step": "begin", "aggregation_stages": aggregation["stages"]})
         copied = []
@@ -585,21 +613,26 @@ def finalize(job_root, stages, entrypoint_stage="entrypoint"):
         return {"outcome": "SEALED", "cleanup": cleanup, "reason": "sealed",
                 "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest()}
     except (FinalizerError, JournalError) as error:
-        return {"outcome": "FAILED", "cleanup": "UNPROVEN", "reason": str(error)}
+        return {"outcome": "FAILED", "cleanup": cleanup, "reason": str(error)}
     except OSError:
-        return {"outcome": "FAILED", "cleanup": "UNPROVEN", "reason": "finalizer_io_failed"}
-    finally:
-        journal.close()
+        return {"outcome": "FAILED", "cleanup": cleanup, "reason": "finalizer_io_failed"}
+    except (TypeError, KeyError, ValueError, UnicodeError):
+        return {"outcome": "FAILED", "cleanup": cleanup, "reason": "finalizer_step_malformed"}
 
 
 def failure_record(job_root, stages, env):
     """The bounded failure-only record (section 9 step 1a).
 
     Used when finalize() returned NOT_FINALIZED. Required inputs, each
-    independently closed: the core identity (validated for this job root)
-    and the launch receipt. If either is unavailable, nothing is written.
-    It also carries the stop verdict and reason when a closed, hash-checked
-    stage journal holds one (else null), the aggregation outcome, and the
+    independently closed (F2FE89-R4, R4a): the core identity (validated for
+    this job root); the launch receipt; a structurally complete set of
+    closed stage journals (aggregation VALID or FAILED; a closed FAILED
+    stage is failure evidence, INCOMPLETE is unavailable); and exactly one
+    stop_verdict record in those journals, of the exact shape, whose launch
+    digest links the launch receipt and whose terminal digest, when not
+    null, links the terminal receipt. If any input is unavailable, missing,
+    repeated or malformed, nothing is written. The record holds the outcome,
+    the stop verdict and reason, the aggregation outcome, and the inputs'
     hashes; only fixed identifiers, never payload, path or log content. It
     never builds the registry. It is scanned against SECRET_KEY and
     DATABASE_URL from ENV (each valid UTF-8 of at least MIN_SECRET bytes)
@@ -618,13 +651,26 @@ def failure_record(job_root, stages, env):
         launch_bytes = read_bounded(os.path.join(job_root, "reference", "launch.json"),
                                     MAX_REGISTRY)
         aggregation = _sj.aggregate(job_root, stages)
-        stop = None
-        for _, kind, payload in _journal_records(job_root, aggregation):
-            if kind == "stop_verdict" and type(payload) is dict \
-                    and payload.get("verdict") in ("COMPLETE", "FAILED", "UNPROVEN") \
-                    and type(payload.get("reason")) is str \
-                    and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", payload["reason"]):
-                stop = {"verdict": payload["verdict"], "reason": payload["reason"]}
+        _require(aggregation["verdict"] in ("VALID", "FAILED"), "failure_journals_unavailable")
+        _, payload = _one(_journal_records(job_root, aggregation), "stop_verdict")
+        _require(type(payload) is dict and set(payload) == {
+            "verdict", "reason", "launch_receipt_sha256", "terminal_receipt_sha256"}
+            and payload["verdict"] in ("COMPLETE", "FAILED", "UNPROVEN")
+            and type(payload["reason"]) is str
+            and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", payload["reason"]) is not None
+            and payload["launch_receipt_sha256"] == hashlib.sha256(launch_bytes).hexdigest()
+            and (payload["terminal_receipt_sha256"] is None
+                 or _sha(payload["terminal_receipt_sha256"])),
+            "failure_stop_unavailable")
+        hashes = {"core_identity": hashlib.sha256(core_bytes).hexdigest(),
+                  "launch_receipt": payload["launch_receipt_sha256"]}
+        if payload["terminal_receipt_sha256"] is not None:
+            terminal_bytes = read_bounded(os.path.join(job_root, "reference", "terminal.json"),
+                                          MAX_REGISTRY)
+            _require(hashlib.sha256(terminal_bytes).hexdigest()
+                     == payload["terminal_receipt_sha256"], "failure_stop_unavailable")
+            hashes["terminal_receipt"] = payload["terminal_receipt_sha256"]
+        stop = {"verdict": payload["verdict"], "reason": payload["reason"]}
         record = {"schema": SCHEMA_FAILURE, "outcome": "FAIL", "cleanup": "UNPROVEN",
                   "stop": stop,
                   "aggregation": {"verdict": aggregation["verdict"],
@@ -632,8 +678,7 @@ def failure_record(job_root, stages, env):
                                   "stages": [{"index": s["index"], "name": s["name"],
                                               "result": s["result"], "sha256": s["sha256"]}
                                              for s in aggregation["stages"]]},
-                  "hashes": {"core_identity": hashlib.sha256(core_bytes).hexdigest(),
-                             "launch_receipt": hashlib.sha256(launch_bytes).hexdigest()}}
+                  "hashes": hashes}
         data = (json.dumps(record, sort_keys=True) + "\n").encode()
         if scan_bytes(data, secrets):
             return None

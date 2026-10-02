@@ -63,19 +63,37 @@ are those observed when the resource was created. Integers are exact ints
 - `finalize()` returns `{"outcome", "cleanup", "reason"}`, plus
   `manifest_sha256` when sealed. `NOT_FINALIZED` means the gate failed and
   nothing mutable was read, removed or exported; the caller takes the
-  failure-only path.
+  failure-only path. After the gate, every outcome is a fixed report: an
+  I/O failure creating `export/` (`export_unavailable`) or the finalizer
+  journal (`finalizer_journal_unavailable`) is `FAILED` with cleanup
+  `UNPROVEN` and every input still in place. A failure after the removals
+  reports the actual cleanup verdict. A failure to close the journal never
+  replaces an earlier report and can only withdraw a seal. Partial evidence
+  stays private (0700), and no digest is returned.
 - `verify_manifest(export, manifest_sha256)` is the upload gate. The
   manifest's sha256 must equal the sealed digest. It needs the exact schema;
   typed and unique entries; the mandatory `finalizer.jsonl` and
   `terminal-cleanup.json`; only allowlisted other names; the
   terminal-receipt link; and every file present and re-hashed, with nothing
   extra.
-- `failure_record(job_root, stages, env)`: written only when the core
-  identity (validated) and the launch receipt are both available, and
-  `SECRET_KEY` and `DATABASE_URL` (valid UTF-8 of at least 16 bytes) are in
-  the environment. It holds the outcome, the stop verdict and reason when a
-  closed journal has one, the aggregation outcome, and hashes; it holds no
-  payload, path or log content. It is scanned before writing; it never
+- `failure_record(job_root, stages, env)` (section 9.1a) is written only
+  when every input is available and independently closed:
+  - the core identity, validated for this job root;
+  - the launch receipt;
+  - a structurally complete set of closed stage journals: aggregation
+    `VALID` or `FAILED` (a closed `FAILED` stage is failure evidence;
+    `INCOMPLETE` means unavailable);
+  - exactly one `stop_verdict` record, of the exact shape above, with a
+    verdict of `COMPLETE`, `FAILED` or `UNPROVEN` and a fixed-code reason.
+    Its launch digest must link the launch receipt; its terminal digest is
+    null or must link the terminal receipt;
+  - `SECRET_KEY` and `DATABASE_URL` (valid UTF-8 of at least 16 bytes) in
+    the environment.
+
+  If any input is missing, repeated or malformed, nothing is written; the
+  record never says `"stop": null`. It holds the outcome, the stop verdict
+  and reason, the aggregation outcome, and the inputs' hashes; it holds no
+  payload, path or log content. It is scanned before writing, and it never
   builds the registry.
 
 ## Credential registry
