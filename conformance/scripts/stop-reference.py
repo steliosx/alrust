@@ -31,6 +31,9 @@ SCHEMA_LAUNCH = "alrust-reference-launch/1"
 SCHEMA_TERMINAL = "alrust-reference-terminal/1"
 EXIT_WAIT_SECONDS = 20.0
 MAX_RECEIPT = 65536
+# PID_MAX_LIMIT on 64-bit Linux (2**22): no larger PID can exist, and larger
+# integers overflow pidfd_open's pid_t (SS-R5).
+PID_LIMIT = 4194304
 EXIT = {"COMPLETE": 0, "FAILED": 1, "UNPROVEN": 2}
 
 
@@ -158,7 +161,9 @@ def main(argv):
         terminal_path = receipt["terminal_receipt"]
         boot = receipt["boot_id"]
         if not all(type(v) is int and v > 1 for v in (pid, start_ticks)) \
-                or type(uid) is not int or not isinstance(terminal_path, str) \
+                or pid > PID_LIMIT or start_ticks >= 2 ** 63 \
+                or type(uid) is not int or not 0 <= uid < 2 ** 32 \
+                or not isinstance(terminal_path, str) \
                 or not os.path.isabs(terminal_path) or sup["pgid"] != pid:
             raise ValueError("fields")
     except (KeyError, TypeError, ValueError, RecursionError):
