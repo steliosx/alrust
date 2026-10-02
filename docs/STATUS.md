@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-02T13:23Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-02T16:29Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -101,6 +101,9 @@ are kept.
 | #86 | `claude/ci-observer-wiring` (observer installation and receipt wiring) | `ebf97f48` (approved `1fb61c03`) | `0e2a3228` |
 | #87 | `claude/charter-sync` (STATUS) | `377e8d54` (approved `1fb61c03`) | `6e96c632` |
 | #88 | `claude/ci-hosted-supervised-scaffold` (scaffold reference job in supervised mode with a proven stop) | `a5ee4c22` (approved `1fb61c03`) | `b121a31b` |
+| #89 | `claude/ci-observer-fileset` (observer pinned file set and install manifest) | `04b7f2e2` (approved `4d7f167b`) | `3ee9cc45` |
+| #90 | `claude/charter-sync` (STATUS) | `f9903e76` (approved `4d7f167b`) | `b109277d` |
+| #91 | `claude/ci-stage-journals` (frozen core identity, stage journals, aggregation) | `a014eb43` (approved `363f0674`) | `bb6428bc` |
 
 After PR #10, `main` was at `bcd60ea3`; its hosted CI run [36859021523](https://github.com/steliosx/alrust/actions/runs/36859021523) completed successfully at scaffold scope (retrieved by Codex), and Codex independently verified every merge's parents and trees (`5bd706c0`). Checks then: README, STATUS, OpenAPI and the customer mapping are byte-identical to their reviewed versions; DECISIONS is charter-sync's plus only the ADR-0004 row; `spec/lifecycle.md` is the heartbeats version plus exactly the R1.2 clarification from PR #3's later approved head.
 
@@ -377,28 +380,41 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
         collection, finalizer or vectors; no Phase 0 credit.
     - **Observer components** (source and offline; not wired into any
       workflow):
-      - PR #86: launcher installation of a pinned observer module and its
-        activator, with digests in the launch receipt (Claude).
-      - Codex's protocol codec `02d4a084` and private Unix client
-        `60de7e70`, then `9422c4d4` (OC-N1: every directory between the
-        socket and the job root must be private). Both approved by Claude
-        as components; not yet published.
-      - Agreed design, implementation in review: the installer takes a
-        pinned file set (the module plus the codec) and records an install
-        manifest of the installed paths and digests. Installed-path
-        attestation stays open until the executing adapter verifies the
-        actual installed files.
-      - **Unresolved, proposed only:** how the actual serving connection's
-        database and cluster are observed. A `request_finished` receiver is
-        agreed as the attachment point. The binding of the connection's
-        lifetime and cluster, and the ordering of capture against the
-        served request, are open (Codex OCOL-D1 to D3). The receipt states
-        expected identity only; it does not observe the serving
-        connection. Database qualification and profile enabling are held.
+      - Claude's, merged: PR #86 (installation and receipt wiring) and PR
+        #89 (pinned two-file set: producer plus codec, an install manifest,
+        read-back before spawn).
+      - Codex's, **approved by Claude as components but not yet
+        published** (Codex publishes its own branches):
+        - `02d4a084`: protocol codec;
+        - `9422c4d4`: private Unix client (successor of `60de7e70`, OC-N1);
+        - `0a616f05`: inert snapshot projections;
+        - `3729ff7f`: prepared observation window;
+        - `5119a2fb`: marked capture receiver and cache;
+        - `1d31647c`: bounded socket worker;
+        - `a099170d`: parent-gated explicit activation helper.
+        Each was reviewed with synthetic controls only. No real reference
+        run, no `.pth` wiring of the helper, and no external attestation
+        adapter exist yet.
+      - Database observation: the direction is agreed (a nonce-marked
+        health request; a contained read-only identity query on the live
+        serving connection, preserving its transaction with a savepoint).
+        Not implemented; database qualification and profile enabling stay
+        held.
+    - **Stage journals and finalizer** (Claude, source and offline):
+      - PR #91: the frozen core identity, one hash-chained journal per stage,
+        and `aggregate()` (VALID only when every stage COMPLETED; FAILED for
+        any failed stage; INCOMPLETE otherwise). Approved after three rounds
+        (JR542-R1, R2, R2a, R2b).
+      - Finalizer building blocks (credential registry, final-byte scanner,
+        descriptor-anchored removal): in review at `0d5ca967`, after
+        REQUEST_CHANGES on `46567876` (F1465-R1 to R3, including an
+        ancestor-swap deletion escape that Codex reproduced on its own
+        synthetic files). The orchestrator comes next.
     - **Next, in order:**
-      1. Claude: the pinned file-set installer, then the stage journals
-         and finalizer.
-      2. Codex: the producer's private collection and attachment.
+      1. Claude: the finalizer orchestrator and failure-only record; then
+         the `.pth` wiring of the activation helper.
+      2. Codex: the external attestation adapter; then the database
+         observation.
       3. Claude's executing workflow; Codex's executing entrypoint.
       4. Per-profile enabling heads.
 
