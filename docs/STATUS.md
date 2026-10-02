@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-01T23:33Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-02T01:30Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -91,6 +91,9 @@ are kept.
 | #76 | `codex/hosted-entrypoint-preflight` (Codex's inert offline profile preflight; reviewed by Claude) | `f0aefb7c` (approved by Claude `2ee1ad54`) | `f6ba1450` |
 | #77 | `claude/ci-hosted-profiles-inert` (Phase 0 CI: inert preflight job, all 19 profiles NOT_RUN) | `b096801c` (approved `1022caef`) | `1186f705` |
 | #78 | `codex/hosted-entrypoint-root-docs` (entrypoint root documentation, Claude's note N11; reviewed by Claude) | `3acfb167` (approved by Claude `ab35cb81`) | `d87e25cc` |
+| #80 | `claude/charter-sync` (STATUS) | `5549fe45` (approved `9803c385`) | `fce66071` |
+| #79 | `chatgpt/readme-evidence-20261001` (owner's PR: README checkpoint at `d87e25cc`; first under Y17) | `346baa4e` (approved `35399ea3`; Claude also approved) | `83d31ffa` |
+| #81 | `claude/ci-launch-attestation-contract` (Phase 0 CI executing-stage design) | `1d840e71` (approved `35399ea3`) | `9b18cad9` |
 
 After PR #10, `main` was at `bcd60ea3`; its hosted CI run [36859021523](https://github.com/steliosx/alrust/actions/runs/36859021523) completed successfully at scaffold scope (retrieved by Codex), and Codex independently verified every merge's parents and trees (`5bd706c0`). Checks then: README, STATUS, OpenAPI and the customer mapping are byte-identical to their reviewed versions; DECISIONS is charter-sync's plus only the ADR-0004 row; `spec/lifecycle.md` is the heartbeats version plus exactly the R1.2 clarification from PR #3's later approved head.
 
@@ -234,6 +237,15 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
     none. r13's preserved files are untouched until r14. codex-omarchy's
     review of the outcome is pending. Claude has no VM access, and this is
     not Alrust validation.
+  - **r14 (peer-reported by Opus, 2026-10-01):** the package is with
+    codex-omarchy for review. It holds a fresh request and state for C6,
+    with one map-pinned launcher, so the owner adds a single permission
+    rule. Read-only isolation probes show that it does not touch r13's
+    preserved files; their disposal is proposed separately. The owner
+    pre-approved the run on two-agent agreement. Opus agrees to the exact
+    files; the run waits for codex-omarchy's exact acceptance and the
+    owner's rule. Runner 22 is unavailable to other x64 jobs from acquire
+    to release. Opus is drafting Phase B (I3, Y14, Y15) in parallel.
   - **Shared-VM order (owner-agreed, 2026-10-01):**
     1. **done (22:19Z):** clear r13's hold and return runner 22 to service. The owner clears
        this hold directly: the preserved r13 files fail Y14's clean-state
@@ -284,21 +296,24 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
         (tested merge `9b02c1f4`): all 4 jobs succeeded; 19 rows `rc=2
         NOT_RUN`. Retrieved independently by Codex.
         **PASS_INERT_PREFLIGHT_AND_SCAFFOLD_ONLY**; no Phase 0 credit.
-    - **In review:** Claude's executing-stage contract
-      (`docs/ci-launch-attestation-contract.md`, design only). Revision 1
-      (`d4604c0a`) received Codex's REQUEST_CHANGES (`6e32ba91`, LC-R1 to
-      LC-R5), which covered:
-      - owned generations for launch and cleanup;
-      - a served-observer channel;
-      - typed settings in a cleared environment;
-      - per-stage journals;
-      - finalization after every writer stops;
-      - cancellation that fails closed.
-
-      Revision 2 (`975dba60`) was sent for review.
+    - **Executing-stage contract merged (PR #81, design only):**
+      `docs/ci-launch-attestation-contract.md`. Codex approved it at
+      `1d840e71` (`35399ea3`) after four rounds, with LC-R1 to LC-R5
+      closed at design level only:
+      - revision 1 (`d4604c0a`, REQUEST_CHANGES `6e32ba91`);
+      - revision 2 (`975dba60`): LC-R2, R3 and R5 closed; LC-R1 (a reused
+        process-group number does not prove the original group's lifetime)
+        and LC-R4 (finalization order) open (`04ec376b`);
+      - revision 3 (`5588d77e`): LC-R1 closed by a subreaper supervisor and
+        pidfd-only stop with no group signals; one failure branch open
+        (`10fd1913`);
+      - `1d840e71`: positive writer quiescence before finalization.
+      No component is implemented or qualified, and the design grants no
+      execution permission.
     - **Next, in order:**
-      1. Claude's launcher receipt and observer wiring, then
-         `stop-reference.sh`, each with offline fault controls.
+      1. Claude's launcher head (the supervisor, the launch receipt and its
+         cross-check, `JOB_ROOT` paths, observer wiring) and the
+         `stop-reference.py` stop helper, each with offline fault controls.
       2. Codex's observer and adapters.
       3. Claude's journals, finalizer and executing workflow.
       4. Codex's executing entrypoint.
