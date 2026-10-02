@@ -53,6 +53,9 @@ if MODE == "v6":
 if MODE == "noserve":
     import time
     time.sleep(300)
+if MODE == "slow":
+    import time
+    time.sleep(3)
 if MODE == "grandchild" and os.fork() != 0:
     os.wait()
     sys.exit(0)
@@ -373,6 +376,11 @@ def copy_scripts(tmp_path, supervisor_source=None, external_config=None):
     for name in ("launch-reference.py", "stop-reference.py",
                  "reference-supervisor.py"):
         shutil.copy(SCRIPTS / name, scripts / name)
+    # The stage-journal package that stage mode imports (stdlib only).
+    package = repo / "conformance" / "alrust_conformance"
+    package.mkdir()
+    for name in ("__init__.py", "stage_journal.py", "security_evidence.py"):
+        shutil.copy(SCRIPTS.parent / "alrust_conformance" / name, package / name)
     if supervisor_source is not None:
         (scripts / "reference-supervisor.py").write_text(supervisor_source)
     if external_config is not None:
@@ -917,4 +925,191 @@ def test_failed_activation_leaves_the_server_without_an_observer(tmp_path):
     assert marks == ["failed-%d" % child]
     log = (job / "reference" / "server.log").read_text()
     assert "Error processing line" in log and "alrust_observer.pth" in log
+    assert stop(Path(m[4]), m[5], job)[1]["verdict"] == "COMPLETE"
+
+
+
+# Stage mode (BP71-N1/N2): the launch runs inside its own stage journal.
+from alrust_conformance import stage_journal as sj  # noqa: E402
+
+STAGE_ARGS = ["--stage-index", "1", "--previous-stage", "database-create"]
+CORE_ENV = {"GITHUB_REPOSITORY": "steliosx/alrust", "GITHUB_RUN_ID": "1",
+            "GITHUB_RUN_ATTEMPT": "1", "GITHUB_JOB": "reference",
+            "ImageOS": "ubuntu24", "ImageVersion": "20261001.1"}
+
+
+def stage_job(tmp_path, mode="healthy", previous=True):
+    """A job root with a core identity and, optionally, a closed previous
+    stage (database-create), as the workflow will prepare it."""
+    job = make_job(tmp_path, mode)
+    ref = "e" * 40
+    sj.write_core_identity(str(job), profile="scaffold", event_head_sha="a" * 40,
+                           checkout_sha="b" * 40, reference_sha=ref, reference_pin=ref,
+                           lock_sha256={"build": "c" * 64}, lock_pins={"build": "c" * 64},
+                           manifest_sha256="d" * 64, manifest_pin="d" * 64, env=CORE_ENV)
+    sj.prepare_journal_dir(str(job))
+    if previous:
+        with sj.StageJournal(str(job), 0, "database-create"):
+            pass
+    return job
+
+
+def stage_records(job):
+    data = Path(sj.journal_path(str(job), 1, "launch")).read_bytes()
+    return [json.loads(line)["evidence"] for line in data.splitlines()]
+
+
+def by_kind(records, kind):
+    return [r["payload"] for r in records if r["kind"] == kind]
+
+
+def test_stage_mode_records_launch_and_readiness(tmp_path):
+    job, port = stage_job(tmp_path), free_port()
+    (job / "home").mkdir(mode=0o700)
+    rc, out, err = finish(launch_with(job, port, STAGE_ARGS))
+    assert rc == 0, err
+    m = READY.match(out.strip())
+    sup, child, receipt, digest = int(m[2]), int(m[3]), Path(m[4]), m[5]
+    records = stage_records(job)
+    assert records[-1]["kind"] == "stage_complete"
+    assert records[-1]["payload"] == {"result": "COMPLETE"}
+    report = sj.aggregate(str(job), ["database-create", "launch"])
+    assert report["verdict"] == "VALID", report
+    owned = {r["path"]: r for r in by_kind(records, "owned_resource")}
+    for path in (job / "venv", job / "home"):
+        info = os.lstat(path)
+        assert owned[str(path)] == {"path": str(path), "dev": info.st_dev,
+                                    "ino": info.st_ino, "type": "dir"}
+    assert by_kind(records, "launch_receipt") == [{"path": str(receipt), "sha256": digest}]
+    [ready] = by_kind(records, "launch_readiness")
+    launched = json.loads(receipt.read_text())
+    python = os.stat(job / "venv" / "bin" / "python3")
+    exe = os.stat("/proc/%d/exe" % child)
+    assert ready == {
+        "receipt_sha256": digest,
+        "supervisor": {"pid": sup, "start_ticks": launched["supervisor"]["start_ticks"]},
+        "child": {"pid": child, "start_ticks": launched["child"]["start_ticks"]},
+        "child_exe": {"dev": exe.st_dev, "ino": exe.st_ino},
+        "venv_python3": {"dev": python.st_dev, "ino": python.st_ino},
+        "observed_monotonic_ns": ready["observed_monotonic_ns"]}
+    assert type(ready["observed_monotonic_ns"]) is int
+    # The readiness record precedes stage_complete, and the receipt record
+    # precedes the readiness record.
+    kinds = [r["kind"] for r in records]
+    assert kinds.index("launch_receipt") < kinds.index("launch_readiness") \
+        < kinds.index("stage_complete")
+    assert stop(receipt, digest, job)[1]["verdict"] == "COMPLETE"
+
+
+def test_stage_mode_records_the_observer_socket_directory(tmp_path):
+    job, port = stage_job(tmp_path), free_port()
+    rc, out, err = finish(launch_with(job, port, observer_args(tmp_path) + STAGE_ARGS))
+    assert rc == 0, err
+    m = READY.match(out.strip())
+    owned = {r["path"] for r in by_kind(stage_records(job), "owned_resource")}
+    assert str(job / "observer") in owned and str(job / "venv") in owned
+    assert stop(Path(m[4]), m[5], job)[1]["verdict"] == "COMPLETE"
+
+
+def test_stage_mode_unhealthy_server_closes_the_stage_failed(tmp_path):
+    job, port = stage_job(tmp_path, "unhealthy"), free_port()
+    rc, out, err = finish(launch_with(job, port, STAGE_ARGS, timeout=3))
+    assert rc == 1 and out == ""
+    records = stage_records(job)
+    assert records[-1]["payload"] == {"result": "FAILED", "code": "launch_not_ready"}
+    assert by_kind(records, "launch_readiness") == []
+    assert sj.aggregate(str(job), ["database-create", "launch"])["verdict"] == "FAILED"
+    assert tree_gone(job)
+
+
+def test_stage_mode_refusal_before_spawn_closes_the_stage_failed(tmp_path):
+    job = stage_job(tmp_path)
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        s.listen()
+        rc, out, err = finish(launch_with(job, s.getsockname()[1], STAGE_ARGS))
+    assert rc == 1 and "already in use" in err
+    records = stage_records(job)
+    assert records[-1]["payload"] == {"result": "FAILED", "code": "launch_refused"}
+    assert not (job / "reference").exists()
+
+
+def test_stage_mode_term_during_readiness_is_interrupted(tmp_path):
+    job, port = stage_job(tmp_path, "unhealthy"), free_port()
+    proc = launch_with(job, port, STAGE_ARGS, timeout=30)
+    receipt = job / "reference" / "launch.json"
+    deadline = time.monotonic() + 15
+    while not receipt.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    time.sleep(0.5)
+    proc.send_signal(signal.SIGTERM)
+    rc, out, err = finish(proc)
+    assert rc == 143 and out == ""
+    assert stage_records(job)[-1]["payload"] == {"result": "FAILED",
+                                                 "code": "launch_interrupted"}
+    assert tree_gone(job)
+
+
+def test_stage_mode_interpreter_swap_before_the_record_is_refused(tmp_path):
+    # The venv's python3 is replaced after the launcher's first observation
+    # but before readiness: the record is never written.
+    job, port = stage_job(tmp_path, "slow"), free_port()
+    proc = launch_with(job, port, STAGE_ARGS, timeout=30)
+    receipt = job / "reference" / "launch.json"
+    deadline = time.monotonic() + 15
+    while not receipt.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    time.sleep(0.3)
+    other = tmp_path / "python3-elsewhere"
+    shutil.copy(os.path.realpath(sys.executable), other)
+    alias = job / "venv" / "bin" / "python3"
+    temporary = alias.with_name("python3.new")
+    temporary.symlink_to(other)
+    os.replace(temporary, alias)
+    rc, out, err = finish(proc)
+    assert rc == 1 and out == ""
+    records = stage_records(job)
+    assert by_kind(records, "launch_readiness") == []
+    assert records[-1]["payload"] == {"result": "FAILED", "code": "launch_not_ready"}
+    assert tree_gone(job)
+
+
+@pytest.mark.parametrize("variant", ["no_core", "no_previous", "launch_exists"])
+def test_stage_preflight_refuses_before_the_build(tmp_path, variant):
+    job = stage_job(tmp_path, previous=variant != "no_previous") \
+        if variant != "no_core" else make_job(tmp_path)
+    if variant == "launch_exists":
+        Path(sj.journal_path(str(job), 1, "launch")).write_text("")
+    shutil.rmtree(job / "venv")
+    scripts = copy_scripts(job.parent)
+    args = PY + [str(scripts / "launch-reference.py"), "--preflight",
+                 "--job-root", str(job), "--venv", str(job / "venv"),
+                 "--port", str(free_port()), "--ready-timeout", "5"] + STAGE_ARGS
+    out = subprocess.run(args, env=dict(ENV, HOME=str(job / "home")),
+                         capture_output=True, text=True, timeout=60)
+    assert out.returncode == 1 and "refused" in out.stderr
+
+
+@pytest.mark.parametrize("extra", [
+    ["--stage-index", "1"],                                   # no previous
+    ["--previous-stage", "database-create"],                  # no index
+    ["--stage-index", "0", "--previous-stage", "database-create"],
+    ["--stage-index", "01", "--previous-stage", "database-create"],
+    ["--stage-index", "32", "--previous-stage", "database-create"],
+    ["--stage-index", "x", "--previous-stage", "database-create"],
+])
+def test_stage_option_usage(tmp_path, extra):
+    job = stage_job(tmp_path)
+    rc, out, err = finish(launch_with(job, free_port(), extra))
+    assert rc == 1 and "refused" in err
+    assert not (job / "reference").exists()
+    assert not Path(sj.journal_path(str(job), 1, "launch")).exists()
+
+
+def test_without_stage_options_nothing_is_journaled(tmp_path):
+    job, port = stage_job(tmp_path), free_port()
+    rc, out, err = finish(launch_with(job, port, []))
+    assert rc == 0, err
+    m = READY.match(out.strip())
+    assert not Path(sj.journal_path(str(job), 1, "launch")).exists()
     assert stop(Path(m[4]), m[5], job)[1]["verdict"] == "COMPLETE"

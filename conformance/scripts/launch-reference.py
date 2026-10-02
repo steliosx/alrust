@@ -26,6 +26,23 @@ The launcher:
 On any failure, or on TERM or INT, it signals only P, its own unreaped child,
 waits a bounded time for P's exit, and reports the stop helper's verdict. It
 never signals a group or any other process.
+
+Stage mode (`--stage-index N [--previous-stage NAME]`, contract section 3):
+the launch runs inside its own stage journal, `launch`, chained to the core
+identity and the previous stage. The preflight also checks that the stage can
+begin. The journal records, as they are observed:
+- `owned_resource` for the venv, HOME (if it exists) and the observer socket
+  directory, with their identities;
+- `launch_receipt`: the receipt path and the digest the ready line prints;
+- `launch_readiness`, after readiness and before the ready line: the receipt
+  digest, both generations (re-read and equal to the receipt's), C's
+  /proc/C/exe identity and the resolved venv bin/python3 identity (re-read
+  and unchanged), and the monotonic time of that observation.
+
+It closes COMPLETE only after the ready line was written; any failure closes
+it FAILED with a fixed code. These are earlier observations for a later
+qualifier to compare with its own, never a substitute for them. Without the
+stage options, the launcher behaves as before.
 """
 import hashlib
 import json
@@ -70,6 +87,8 @@ MAX_OBSERVER_MODULE = 1 << 20
 STOP_WAIT_SECONDS = 20.0
 POLL_SECONDS = 0.2
 MAX_RECEIPT = 65536
+STAGE_NAME = "launch"
+MAX_STAGE_INDEX = 31
 
 stop_signal = None
 
@@ -88,11 +107,52 @@ def log(message):
     sys.stderr.flush()
 
 
+class _NoStage:
+    """Without stage options: nothing is journaled."""
+
+    def record(self, kind, payload):
+        pass
+
+    def fail(self, code):
+        pass
+
+
+class LaunchFailed(Exception):
+    def __init__(self, rc):
+        super().__init__(rc)
+        self.rc = rc
+
+
+def stage_journal_module():
+    """The reviewed stage-journal module of this checkout (stdlib only). With
+    -I only this script's directory is on sys.path, so the conformance
+    directory is added explicitly, and only in stage mode."""
+    conformance = os.path.dirname(HERE)
+    if conformance not in sys.path:
+        sys.path.insert(0, conformance)
+    from alrust_conformance import stage_journal
+    return stage_journal
+
+
+def check_stage(sj, job_root, stage):
+    """The launch stage can begin: a valid core identity for this job root,
+    the previous stage's journal present, and no launch journal yet."""
+    index, previous = stage
+    sj.validate_core(sj.read_bounded(os.path.join(job_root, sj.CORE_NAME), sj.MAX_CORE),
+                     job_root)
+    if previous is not None and not os.path.isfile(
+            sj.journal_path(job_root, index - 1, previous)):
+        raise Refused("previous stage journal missing")
+    if os.path.lexists(sj.journal_path(job_root, index, STAGE_NAME)):
+        raise Refused("launch stage journal already exists")
+
+
 def parse_args(argv):
     """--job-root J --venv V --port N --ready-timeout S, plus zero or more
-    --observer-file NAME SHA256 PATH (NAME from OBSERVER_FILE_NAMES)."""
+    --observer-file NAME SHA256 PATH (NAME from OBSERVER_FILE_NAMES), plus
+    optionally --stage-index N and, for N > 0, --previous-stage NAME."""
     opts = {"--job-root": None, "--venv": None, "--port": None,
-            "--ready-timeout": None}
+            "--ready-timeout": None, "--stage-index": None, "--previous-stage": None}
     files, i = [], 0
     while i < len(argv):
         name = argv[i]
@@ -104,7 +164,8 @@ def parse_args(argv):
             i += 2
         else:
             raise Refused("usage: --job-root J --venv V --port N --ready-timeout S "
-                          "[--observer-file NAME SHA256 PATH]...")
+                          "[--observer-file NAME SHA256 PATH]... "
+                          "[--stage-index N [--previous-stage NAME]]")
     for name in ("--job-root", "--venv"):
         if opts[name] is None or not os.path.isabs(opts[name]) \
                 or os.path.normpath(opts[name]) != opts[name]:
@@ -123,8 +184,17 @@ def parse_args(argv):
             raise Refused("observer file paths must be absolute and normalized")
         if len(pin) != 64 or pin.strip("0123456789abcdef"):
             raise Refused("observer pins must be 64 lowercase hex characters")
+    stage = None
+    index, previous = opts["--stage-index"], opts["--previous-stage"]
+    if index is not None or previous is not None:
+        if index is None or not index.isdigit() or (len(index) > 1 and index[0] == "0") \
+                or int(index) > MAX_STAGE_INDEX:
+            raise Refused("--stage-index out of range")
+        if (int(index) == 0) != (previous is None):
+            raise Refused("--previous-stage is required exactly when --stage-index > 0")
+        stage = (int(index), previous)
     return (opts["--job-root"], opts["--venv"], int(opts["--port"]),
-            int(opts["--ready-timeout"]), sorted(files) or None)
+            int(opts["--ready-timeout"]), sorted(files) or None, stage)
 
 
 def read_observer_module(module, pin):
@@ -473,12 +543,16 @@ def main(argv):
     signal.signal(signal.SIGINT, on_signal)
     preflight = argv[:1] == ["--preflight"]
     try:
-        job_root, venv, port, ready_timeout, observer = \
+        job_root, venv, port, ready_timeout, observer, stage = \
             parse_args(argv[preflight:])
         check_environment()
         check_external_config()
         check_job_root(job_root)
         check_home(job_root)
+        sj = None
+        if stage is not None:
+            sj = stage_journal_module()
+            check_stage(sj, job_root, stage)
         if preflight:
             check_venv_path(job_root, venv)
             if os.path.lexists(venv):
@@ -491,9 +565,43 @@ def main(argv):
             if listeners(port):
                 raise Refused("port %d already in use" % port)
             return 0
+    except (Refused, OSError, ValueError) as error:
+        log("refused: %s" % error)
+        return 1
+    if stage is None:
+        return launch(job_root, venv, port, ready_timeout, observer, _NoStage())
+    try:
+        with sj.StageJournal(job_root, stage[0], STAGE_NAME, stage[1]) as journal:
+            rc = launch(job_root, venv, port, ready_timeout, observer, journal)
+            if rc != 0:
+                raise LaunchFailed(rc)
+    except LaunchFailed as failed:
+        return failed.rc
+    except (OSError, ValueError) as error:
+        # The journal could not begin (nothing was launched), or it could not
+        # record stage_complete after the hand-off: never a COMPLETE stage.
+        log("stage journal: %s" % error)
+        return 1
+    return 0
+
+
+def launch(job_root, venv, port, ready_timeout, observer, stage):
+    """The launch after the shared checks; stage is a StageJournal or
+    _NoStage. Returns the exit status."""
+    try:
         venv_info = check_venv(job_root, venv)
         if listeners(port):
             raise Refused("port %d already in use" % port)
+        stage.record("owned_resource", {"path": venv, "dev": venv_info.st_dev,
+                                        "ino": venv_info.st_ino, "type": "dir"})
+        home = os.environ["HOME"]
+        try:
+            home_info = os.lstat(home)
+        except FileNotFoundError:
+            home_info = None
+        if home_info is not None:
+            stage.record("owned_resource", {"path": home, "dev": home_info.st_dev,
+                                            "ino": home_info.st_ino, "type": "dir"})
         rundir = os.path.join(job_root, "reference")
         os.mkdir(rundir, 0o700)
         receipt = os.path.join(rundir, "launch.json")
@@ -505,11 +613,18 @@ def main(argv):
         # binds what is installed, not what the preflight saw.
         observer_record = None if observer is None else \
             install_observer(job_root, venv, observer, rundir)
+        if observer_record is not None:
+            socket_dir = os.path.dirname(observer_record["socket"])
+            socket_info = os.lstat(socket_dir)
+            stage.record("owned_resource", {"path": socket_dir,
+                                            "dev": socket_info.st_dev,
+                                            "ino": socket_info.st_ino, "type": "dir"})
         with open(os.path.join(HERE, "..", "..", "reference", "alerta",
                                "VERSION")) as f:
             version = f.read().strip()
-    except (Refused, OSError) as error:
+    except (Refused, OSError, ValueError) as error:
         log("refused: %s" % error)
+        stage.fail("launch_refused")
         return 1
 
     command = [os.path.join(venv, "bin", "alertad"), "run", "--host", "127.0.0.1",
@@ -553,6 +668,7 @@ def main(argv):
                 if data.endswith(b"\n"):
                     child = cross_check(data, proc.pid, observed)
                     digest = hashlib.sha256(data).hexdigest()
+                    stage.record("launch_receipt", {"path": receipt, "sha256": digest})
                     break
             time.sleep(POLL_SECONDS)
 
@@ -571,10 +687,31 @@ def main(argv):
                     and owned_readiness(port, descendants(proc.pid)):
                 # Readiness proves C has exec'd, so its exe is now meaningful.
                 exe = os.stat("/proc/%d/exe" % child)
+                observed_ns = time.monotonic_ns()
                 if (exe.st_dev, exe.st_ino) != (python.st_dev, python.st_ino):
                     raise Refused("the served child does not run the venv's python")
                 break
             time.sleep(POLL_SECONDS)
+
+        if not isinstance(stage, _NoStage):
+            # The readiness record (stage mode only): both generations must
+            # still be the receipt's, and the venv interpreter unchanged.
+            record = json.loads(data)
+            sup_ticks = record["supervisor"]["start_ticks"]
+            child_ticks = record["child"]["start_ticks"]
+            now = os.stat(os.path.join(venv, "bin", "python3"))
+            if type(child_ticks) is not int or read_stat(child)[2] != child_ticks \
+                    or read_stat(proc.pid)[2] != sup_ticks \
+                    or (now.st_dev, now.st_ino) != (python.st_dev, python.st_ino):
+                raise Refused("a generation or the venv interpreter changed before "
+                              "readiness was recorded")
+            stage.record("launch_readiness", {
+                "receipt_sha256": digest,
+                "supervisor": {"pid": proc.pid, "start_ticks": sup_ticks},
+                "child": {"pid": child, "start_ticks": child_ticks},
+                "child_exe": {"dev": exe.st_dev, "ino": exe.st_ino},
+                "venv_python3": {"dev": python.st_dev, "ino": python.st_ino},
+                "observed_monotonic_ns": observed_ns})
 
         line = ("reference alerta %s up on :%d (supervisor %d, child %d, "
                 "receipt %s sha256 %s)\n" % (version, port, proc.pid, child,
@@ -589,8 +726,9 @@ def main(argv):
             raise Refused("could not report readiness")
         handed_off = True
         rc = 0
-    except (Refused, OSError, ValueError, IndexError) as error:
+    except (Refused, OSError, ValueError, IndexError, KeyError, TypeError) as error:
         log("failed: %s" % error)
+        stage.fail("launch_interrupted" if stop_signal is not None else "launch_not_ready")
     finally:
         # Any failure, expected or not, stops only our own supervisor child.
         if not handed_off:
