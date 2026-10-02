@@ -2,7 +2,12 @@
 """Stop a supervised reference server and report a cleanup verdict.
 
 Contract: docs/ci-launch-attestation-contract.md, section 5.
-Usage: `python3 -I -S -B stop-reference.py RECEIPT SHA256`.
+Usage: `python3 -I -S -B stop-reference.py RECEIPT SHA256 [JOB_ROOT]`.
+
+With JOB_ROOT, the receipt, its terminal path and its venv must all lie
+inside that private job root, so a receipt from another job is refused. The
+SHA256 must come from the launcher's own ready line (launch-reference.py):
+the hash binds the receipt, it does not authenticate who wrote it.
 
 The helper signals one process only: the supervisor P named by the launch
 receipt. It does so only after opening a pidfd for P and confirming,
@@ -140,10 +145,35 @@ def conclude(terminal, exited):
     return verdict("UNPROVEN", "no_terminal_receipt")
 
 
+def inside(job_root, path):
+    """PATH is a symlink-free absolute path strictly inside JOB_ROOT."""
+    return isinstance(path, str) and os.path.isabs(path) \
+        and os.path.normpath(path) == path \
+        and path.startswith(job_root + os.sep) \
+        and os.path.realpath(os.path.dirname(path)) == os.path.dirname(path)
+
+
+def private_root(job_root):
+    try:
+        info = os.lstat(job_root)
+    except OSError:
+        return False
+    return stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() \
+        and not info.st_mode & 0o077 \
+        and os.path.realpath(job_root) == job_root
+
+
 def main(argv):
-    if len(argv) != 2 or not os.path.isabs(argv[0]) \
+    if len(argv) not in (2, 3) or not os.path.isabs(argv[0]) \
             or len(argv[1]) != 64 or argv[1].strip("0123456789abcdef"):
         return verdict("UNPROVEN", "usage")
+    job_root = argv[2] if len(argv) == 3 else None
+    if job_root is not None and (not os.path.isabs(job_root)
+                                 or os.path.normpath(job_root) != job_root
+                                 or not private_root(job_root)):
+        return verdict("UNPROVEN", "job_root_invalid")
+    if job_root is not None and not inside(job_root, argv[0]):
+        return verdict("UNPROVEN", "outside_job_root")
     if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
         return verdict("UNPROVEN", "pidfd_unsupported")
     try:
@@ -169,6 +199,11 @@ def main(argv):
     except (KeyError, TypeError, ValueError, RecursionError):
         # RecursionError: valid JSON nested beyond the decoder's limit.
         return verdict("UNPROVEN", "receipt_malformed")
+    if job_root is not None:
+        venv = receipt.get("venv")
+        if not inside(job_root, terminal_path) or not isinstance(venv, dict) \
+                or not inside(job_root, venv.get("path")):
+            return verdict("UNPROVEN", "outside_job_root")
 
     try:
         own = {os.getpid(), os.getppid(), os.getpgid(0), os.getsid(0)}
