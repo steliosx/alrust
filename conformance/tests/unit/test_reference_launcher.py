@@ -79,7 +79,15 @@ def make_job(tmp_path, mode="healthy", name="job", interpreter=None):
     job.mkdir(mode=0o700)
     bin_dir = job / "venv" / "bin"
     bin_dir.mkdir(parents=True)
-    (bin_dir / "python3").symlink_to(os.path.realpath(sys.executable))
+    real = os.path.realpath(sys.executable)
+    (bin_dir / "python3").symlink_to(real)
+    # A minimal real venv layout, so .pth files in site-packages are
+    # processed by the venv interpreter as in a built venv.
+    (job / "venv" / "pyvenv.cfg").write_text(
+        "home = %s\ninclude-system-site-packages = false\nversion = %d.%d.%d\n"
+        % ((os.path.dirname(real),) + tuple(sys.version_info[:3])))
+    (job / "venv" / "lib" / ("python%d.%d" % sys.version_info[:2])
+     / "site-packages").mkdir(parents=True)
     shebang = interpreter or str(bin_dir / "python3")
     alertad = bin_dir / "alertad"
     alertad.write_text("#!%s\n%s" % (shebang, SERVER % mode))
@@ -652,3 +660,135 @@ def test_launch_rechecks_home(tmp_path, variant):
     rc, out, err = finish(proc)
     assert rc == 1 and "HOME" in err
     assert not (job / "reference").exists()
+
+
+# Observer installation and activation (contract section 6). The stub module
+# records every import and every activation next to its socket path.
+OBSERVER_STUB = b"""import os
+_dir = os.path.dirname(os.environ["ALRUST_OBSERVER_SOCKET"])
+open(os.path.join(_dir, "imported-%d" % os.getpid()), "x").close()
+if os.environ.get("ALRUST_OBSERVER_PARENT") == str(os.getppid()):
+    open(os.path.join(_dir, "activated-%d" % os.getpid()), "x").close()
+"""
+
+
+def observer_args(tmp_path, data=OBSERVER_STUB, pin=None):
+    module = tmp_path / "observer_module.py"
+    module.write_bytes(data)
+    return ["--observer-module", str(module), "--observer-sha256",
+            pin or hashlib.sha256(data).hexdigest()]
+
+
+def launch_with(job, port, extra, timeout=15, scripts=None, env=None):
+    scripts = scripts or copy_scripts(job.parent)
+    args = PY + [str(scripts / "launch-reference.py"), "--job-root", str(job),
+                 "--venv", str(job / "venv"), "--port", str(port),
+                 "--ready-timeout", str(timeout)] + extra
+    env = dict(env or ENV, HOME=str(job / "home"))
+    return subprocess.Popen(args, env=env, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True)
+
+
+def site_dir(job):
+    return job / "venv" / "lib" / ("python%d.%d" % sys.version_info[:2]) \
+        / "site-packages"
+
+
+def test_observer_is_pinned_installed_and_active_only_in_the_child(tmp_path):
+    job, port = make_job(tmp_path), free_port()
+    rc, out, err = finish(launch_with(job, port, observer_args(tmp_path)))
+    assert rc == 0, err
+    m = READY.match(out.strip())
+    record = json.loads(Path(m[4]).read_text())
+    site = site_dir(job)
+    module = (site / "alrust_observer.py").read_bytes()
+    activator = (site / "alrust_observer.pth").read_bytes()
+    assert module == OBSERVER_STUB
+    assert activator == (b'import os; os.environ.get("ALRUST_OBSERVER_SOCKET") '
+                         b'and __import__("alrust_observer")\n')
+    assert record["observer"] == {
+        "socket": str(job / "observer" / "observer.sock"),
+        "module_sha256": hashlib.sha256(module).hexdigest(),
+        "activator_sha256": hashlib.sha256(activator).hexdigest()}
+    assert oct((job / "observer").stat().st_mode & 0o777) == "0o700"
+    sup, child = int(m[2]), int(m[3])
+    marks = sorted(p.name for p in (job / "observer").iterdir())
+    # Imported and activated in C only; P runs -I -S and processes no .pth.
+    assert marks == ["activated-%d" % child, "imported-%d" % child]
+    venv_python = str(job / "venv" / "bin" / "python3")
+    # Another interpreter of the venv with the variable set: imported (the
+    # activator is unconditional on the parent) but NOT activated.
+    other = subprocess.run(
+        [venv_python, "-c", "import os; print(os.getpid())"],
+        env=dict(ENV, ALRUST_OBSERVER_SOCKET=record["observer"]["socket"],
+                 ALRUST_OBSERVER_PARENT=str(sup)),
+        capture_output=True, text=True, timeout=30)
+    assert other.returncode == 0, other.stderr
+    pid = int(other.stdout)
+    assert (job / "observer" / ("imported-%d" % pid)).exists()
+    assert not (job / "observer" / ("activated-%d" % pid)).exists()
+    # Without the variable (pip, provisioning, CLI): not even imported.
+    plain = subprocess.run([venv_python, "-c", "import os; print(os.getpid())"],
+                           env=ENV, capture_output=True, text=True, timeout=30)
+    assert not (job / "observer" / ("imported-%d" % int(plain.stdout))).exists()
+    assert stop(Path(m[4]), m[5], job)[1]["verdict"] == "COMPLETE"
+
+
+def test_without_observer_nothing_is_installed(tmp_path):
+    job, port, m = started(tmp_path)
+    record = json.loads(Path(m[4]).read_text())
+    assert record["observer"] is None
+    assert not (site_dir(job) / "alrust_observer.pth").exists()
+    assert not (job / "observer").exists()
+    assert stop(Path(m[4]), m[5], job)[1]["verdict"] == "COMPLETE"
+
+
+@pytest.mark.parametrize("variant", ["wrong_pin", "symlinked_module",
+                                     "half_options", "bad_pin_format",
+                                     "oversized"])
+def test_observer_module_refusals(tmp_path, variant):
+    job, port = make_job(tmp_path), free_port()
+    extra = observer_args(tmp_path)
+    if variant == "wrong_pin":
+        extra[3] = "0" * 64
+    elif variant == "symlinked_module":
+        link = tmp_path / "linked.py"
+        link.symlink_to(tmp_path / "observer_module.py")
+        extra[1] = str(link)
+    elif variant == "half_options":
+        extra = extra[:2]
+    elif variant == "bad_pin_format":
+        extra[3] = extra[3].upper()
+    else:
+        data = b"#" * ((1 << 20) + 1)
+        extra = observer_args(tmp_path, data)
+    for preflight in (True, False):
+        args = (["--preflight"] if preflight else [])
+        proc = subprocess.run(
+            PY + [str(copy_scripts(tmp_path) / "launch-reference.py")] + args
+            + ["--job-root", str(job), "--venv", str(job / "venv"),
+               "--port", str(port), "--ready-timeout", "5"] + extra,
+            env=dict(ENV, HOME=str(job / "home")), capture_output=True,
+            text=True, timeout=30)
+        assert proc.returncode == 1, (preflight, proc.stderr)
+        assert "refused" in proc.stderr
+    assert not (site_dir(job) / "alrust_observer.py").exists()
+    assert not (site_dir(job) / "alrust_observer.pth").exists()
+
+
+def test_receipt_without_the_observer_record_is_refused(tmp_path):
+    # A supervisor that drops the observer record from its receipt: the
+    # launcher installed the observer, so its cross-check refuses.
+    source = (SCRIPTS / "reference-supervisor.py").read_text()
+    marker = '"observer": None if opts["--observer-socket"] is None else {'
+    assert source.count(marker) == 1
+    lying = source.replace(marker, '"observer": None if True else {')
+    scripts = copy_scripts(tmp_path, supervisor_source=lying)
+    job, port = make_job(tmp_path), free_port()
+    rc, out, err = finish(launch_with(job, port, observer_args(tmp_path),
+                                      scripts=scripts))
+    assert rc == 1 and out == ""
+    # A receipt that disagrees can never bind cleanup: the tree is stopped
+    # (P was the launcher's own child), but the verdict stays UNPROVEN.
+    assert "disagrees" in err and "cleanup UNPROVEN" in err
+    assert tree_gone(job)

@@ -49,6 +49,15 @@ ALLOWED_ENV = {
     # Set by the shell that execs this launcher.
     "PWD", "OLDPWD", "SHLVL", "_",
 }
+# Observer installation (contract section 6). The activator imports the
+# reviewed module only when the supervisor has set the socket variable, which
+# it does for the served child C alone; the module itself must also check that
+# its parent is P (ALRUST_OBSERVER_PARENT).
+OBSERVER_MODULE_NAME = "alrust_observer.py"
+OBSERVER_ACTIVATOR_NAME = "alrust_observer.pth"
+OBSERVER_ACTIVATOR = (b'import os; os.environ.get("ALRUST_OBSERVER_SOCKET") '
+                      b'and __import__("alrust_observer")\n')
+MAX_OBSERVER_MODULE = 1 << 20
 STOP_WAIT_SECONDS = 20.0
 POLL_SECONDS = 0.2
 MAX_RECEIPT = 65536
@@ -72,9 +81,11 @@ def log(message):
 
 def parse_args(argv):
     opts = {"--job-root": None, "--venv": None, "--port": None,
-            "--ready-timeout": None}
-    if len(argv) != 2 * len(opts):
-        raise Refused("usage: --job-root J --venv V --port N --ready-timeout S")
+            "--ready-timeout": None, "--observer-module": None,
+            "--observer-sha256": None}
+    if len(argv) not in (8, 12) or len(argv) % 2:
+        raise Refused("usage: --job-root J --venv V --port N --ready-timeout S "
+                      "[--observer-module M --observer-sha256 H]")
     for name, value in zip(argv[0::2], argv[1::2]):
         if name not in opts or opts[name] is not None:
             raise Refused("bad argument %r" % name)
@@ -84,10 +95,85 @@ def parse_args(argv):
             raise Refused("%s must be an absolute normalized path" % name)
     for name, high in (("--port", 65535), ("--ready-timeout", 9999)):
         value = opts[name]
-        if not value.isdigit() or not 1 <= int(value) <= high or value[0] == "0":
+        if value is None or not value.isdigit() or not 1 <= int(value) <= high \
+                or value[0] == "0":
             raise Refused("%s out of range" % name)
+    module, pin = opts["--observer-module"], opts["--observer-sha256"]
+    if (module is None) != (pin is None):
+        raise Refused("--observer-module and --observer-sha256 go together")
+    if module is not None:
+        if not os.path.isabs(module) or os.path.normpath(module) != module:
+            raise Refused("--observer-module must be an absolute normalized path")
+        if len(pin) != 64 or pin.strip("0123456789abcdef"):
+            raise Refused("--observer-sha256 must be 64 lowercase hex characters")
     return (opts["--job-root"], opts["--venv"], int(opts["--port"]),
-            int(opts["--ready-timeout"]))
+            int(opts["--ready-timeout"]),
+            None if module is None else (module, pin))
+
+
+def read_observer_module(module, pin):
+    """The module's bytes, read once without following links or blocking,
+    and only if they hash to the reviewed pin."""
+    fd = os.open(module, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+                 | os.O_NONBLOCK | os.O_NOCTTY)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_OBSERVER_MODULE:
+            raise Refused("observer module is not a bounded regular file")
+        chunks, size = [], 0
+        while size <= MAX_OBSERVER_MODULE:
+            chunk = os.read(fd, MAX_OBSERVER_MODULE + 1 - size)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+    finally:
+        os.close(fd)
+    data = b"".join(chunks)
+    if size > MAX_OBSERVER_MODULE or hashlib.sha256(data).hexdigest() != pin:
+        raise Refused("observer module does not match its reviewed pin")
+    return data
+
+
+def site_packages(venv):
+    """The venv's single site-packages directory, symlink-free."""
+    lib = os.path.join(venv, "lib")
+    found = [os.path.join(lib, name, "site-packages") for name in os.listdir(lib)
+             if name.startswith("python3.")]
+    found = [path for path in found if os.path.lexists(path)]
+    if len(found) != 1:
+        raise Refused("venv must have exactly one site-packages directory")
+    path = found[0]
+    info = os.lstat(path)
+    if not stat.S_ISDIR(info.st_mode) or os.path.realpath(path) != path:
+        raise Refused("venv site-packages must be a real directory")
+    return path
+
+
+def write_new(path, data):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+                 | os.O_CLOEXEC, 0o600)
+    try:
+        view = memoryview(data)
+        while view:
+            view = view[os.write(fd, view):]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def install_observer(job_root, venv, module, pin):
+    """Install the pinned module and the activator into the fresh venv and
+    create the private socket directory. Returns the receipt record."""
+    data = read_observer_module(module, pin)
+    site = site_packages(venv)
+    write_new(os.path.join(site, OBSERVER_MODULE_NAME), data)
+    write_new(os.path.join(site, OBSERVER_ACTIVATOR_NAME), OBSERVER_ACTIVATOR)
+    socket_dir = os.path.join(job_root, "observer")
+    os.mkdir(socket_dir, 0o700)
+    return {"socket": os.path.join(socket_dir, "observer.sock"),
+            "module_sha256": hashlib.sha256(data).hexdigest(),
+            "activator_sha256": hashlib.sha256(OBSERVER_ACTIVATOR).hexdigest()}
 
 
 def check_job_root(job_root):
@@ -258,7 +344,7 @@ def parse_receipt(data):
         claimed = (record["schema"], sup["pid"], sup["pgid"], sup["start_ticks"],
                    sup["uid"], sup["subreaper"], record["boot_id"],
                    record["venv"]["dev"], record["venv"]["ino"],
-                   record["terminal_receipt"])
+                   record["terminal_receipt"], record.get("observer"))
         child_pid = child["pid"]
     except (KeyError, TypeError, ValueError, RecursionError):
         raise Refused("launch receipt malformed")
@@ -331,7 +417,8 @@ def main(argv):
     signal.signal(signal.SIGINT, on_signal)
     preflight = argv[:1] == ["--preflight"]
     try:
-        job_root, venv, port, ready_timeout = parse_args(argv[preflight:])
+        job_root, venv, port, ready_timeout, observer = \
+            parse_args(argv[preflight:])
         check_environment()
         check_external_config()
         check_job_root(job_root)
@@ -340,8 +427,11 @@ def main(argv):
             check_venv_path(job_root, venv)
             if os.path.lexists(venv):
                 raise Refused("venv %s already exists" % venv)
-            if os.path.lexists(os.path.join(job_root, "reference")):
+            if os.path.lexists(os.path.join(job_root, "reference")) \
+                    or os.path.lexists(os.path.join(job_root, "observer")):
                 raise Refused("job root already holds a launch")
+            if observer is not None:
+                read_observer_module(*observer)
             if listeners(port):
                 raise Refused("port %d already in use" % port)
             return 0
@@ -355,6 +445,10 @@ def main(argv):
         server_log = os.open(os.path.join(rundir, "server.log"),
                              os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
                              0o600)
+        # The installed bytes are re-read and re-hashed here, so the pin
+        # binds what is installed, not what the preflight saw.
+        observer_record = None if observer is None else \
+            install_observer(job_root, venv, *observer)
         with open(os.path.join(HERE, "..", "..", "reference", "alerta",
                                "VERSION")) as f:
             version = f.read().strip()
@@ -367,7 +461,12 @@ def main(argv):
     deadline = time.monotonic() + ready_timeout
     proc = subprocess.Popen(
         [sys.executable, "-I", "-S", "-B", SUPERVISOR, "--receipt", receipt,
-         "--terminal", terminal, "--venv", venv, "--"] + command,
+         "--terminal", terminal, "--venv", venv]
+        + ([] if observer_record is None else
+           ["--observer-socket", observer_record["socket"],
+            "--observer-module-sha256", observer_record["module_sha256"],
+            "--observer-activator-sha256", observer_record["activator_sha256"]])
+        + ["--"] + command,
         process_group=0, stdin=subprocess.DEVNULL, stdout=server_log,
         stderr=server_log)
     os.close(server_log)
@@ -377,7 +476,8 @@ def main(argv):
         # P is our unreaped child, so its /proc entry names it until we reap.
         _, pgrp, ticks = read_stat(proc.pid)
         observed = (SCHEMA_LAUNCH, proc.pid, proc.pid, ticks, os.getuid(), 1,
-                    boot_id(), venv_info.st_dev, venv_info.st_ino, terminal)
+                    boot_id(), venv_info.st_dev, venv_info.st_ino, terminal,
+                    observer_record)
     except (OSError, ValueError, IndexError):
         pass
     handed_off = False
