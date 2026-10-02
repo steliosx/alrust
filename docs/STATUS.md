@@ -327,8 +327,10 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
       The design alone grants no execution permission. The source and
       offline implementations listed below are not executing-workflow or
       runtime-qualified components.
-    - **Executing-stage components merged** (source and offline only; not wired
-      into any workflow; hosted execution NOT_RUN):
+    - **Executing-stage components merged** (evidence for these PRs is source
+      and offline; the supervised scaffold integration that followed, PR
+      #88, is recorded below; the observer, profiles and finalizer remain
+      NOT_RUN):
       - **PR #83:** `reference-supervisor.py`, a subreaper that only ever
         signals its own unreaped children and ends at `ECHILD`, and
         `stop-reference.py`, which signals only through a generation-checked
@@ -343,8 +345,8 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
         port belongs to the tree, one on 127.0.0.1), and prints the only
         trusted receipt digest. A `--preflight` refuses unsafe job roots,
         `HOME`, venv paths, environments and `/etc/alertad.conf` before the
-        build. `run-reference.sh` gains a `JOB_ROOT` mode; the legacy mode
-        used by today's CI is unchanged. Codex approved it after
+        build. `run-reference.sh` gains a `JOB_ROOT` mode; its legacy mode
+        stayed unchanged (CI moved to JOB_ROOT mode later, in #88). Codex approved it after
         SS-I1-HOME-1 (HOME could leave the job root). SS-I1's receipt
         custody is closed at component level; whole SS-I1 integration stays
         held.
@@ -367,8 +369,9 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
       - [Run 37009548848](https://github.com/steliosx/alrust/actions/runs/37009548848)
         (tested merge `9602c8a8`, same tree as main `b121a31b`): the fresh
         JOB_ROOT build, the single ready line, healthcheck OK, stop
-        `tree_empty` COMPLETE, and listener inspection empty; no orphan was
-        terminated after the job.
+        `tree_empty` COMPLETE, and listener inspection empty. The complete job log
+        contains no orphan-termination message (this is not a host-wide
+        process inventory).
       - Codex audited it independently (`f4da5fc1`):
         **PASS_SCAFFOLD_SUPERVISED**. One healthcheck only: no observer,
         collection, finalizer or vectors; no Phase 0 credit.
@@ -380,12 +383,18 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
         `60de7e70`, then `9422c4d4` (OC-N1: every directory between the
         socket and the job root must be private). Both approved by Claude
         as components; not yet published.
-      - In design: the installer will take a pinned file set (the module
-        plus the codec), which also binds installed paths. The serving
-        connection is observed from a `request_finished` receiver in the
-        served child, using only client-side libpq identity from the
-        request's live connection (no second connection and no SQL on it).
-        The cluster and database are resolved through the receipt.
+      - Agreed design, implementation in review: the installer takes a
+        pinned file set (the module plus the codec) and records an install
+        manifest of the installed paths and digests. Installed-path
+        attestation stays open until the executing adapter verifies the
+        actual installed files.
+      - **Unresolved, proposed only:** how the actual serving connection's
+        database and cluster are observed. A `request_finished` receiver is
+        agreed as the attachment point. The binding of the connection's
+        lifetime and cluster, and the ordering of capture against the
+        served request, are open (Codex OCOL-D1 to D3). The receipt states
+        expected identity only; it does not observe the serving
+        connection. Database qualification and profile enabling are held.
     - **Next, in order:**
       1. Claude: the pinned file-set installer, then the stage journals
          and finalizer.
