@@ -137,6 +137,11 @@ def test_scan_file_unreadable_is_a_finding(root, tmp_path):
     assert fz.scan_file(str(clean), [SECRET.encode()]) == []
 
 
+def ident(root):
+    info = os.lstat(root)
+    return (info.st_dev, info.st_ino)
+
+
 def record(path, kind):
     info = os.lstat(path)
     return {"path": str(path), "dev": info.st_dev, "ino": info.st_ino, "type": kind}
@@ -148,8 +153,8 @@ def test_remove_file_and_tree(root):
     tree = root / "venv"
     (tree / "lib" / "deep").mkdir(parents=True)
     (tree / "lib" / "deep" / "m.py").write_text("y")
-    assert fz.remove_owned(str(root), record(f, "file"))["outcome"] == "REMOVED"
-    out = fz.remove_owned(str(root), record(tree, "dir"))
+    assert fz.remove_owned(str(root), record(f, "file"), ident(root))["outcome"] == "REMOVED"
+    out = fz.remove_owned(str(root), record(tree, "dir"), ident(root))
     assert (out["outcome"], out["reason"]) == ("REMOVED", "removed_and_verified_absent")
     assert not f.exists() and not tree.exists()
 
@@ -162,7 +167,7 @@ def test_symlink_inside_tree_is_not_followed(root, tmp_path):
     tree.mkdir()
     (tree / "link").symlink_to(outside)
     (tree / "file-link").symlink_to(outside / "keep.txt")
-    out = fz.remove_owned(str(root), record(tree, "dir"))
+    out = fz.remove_owned(str(root), record(tree, "dir"), ident(root))
     assert out["outcome"] == "REMOVED"
     assert (outside / "keep.txt").read_text() == "must survive"
 
@@ -176,7 +181,7 @@ def test_identity_mismatch_leaves_the_resource(root):
     rec_now = record(f, "file")
     if rec_now["ino"] == rec["ino"]:
         pytest.skip("filesystem reused the inode")
-    out = fz.remove_owned(str(root), rec)
+    out = fz.remove_owned(str(root), rec, ident(root))
     assert (out["outcome"], out["reason"]) == ("UNPROVEN", "identity_mismatch")
     assert f.read_text() == "replacement"
 
@@ -184,7 +189,7 @@ def test_identity_mismatch_leaves_the_resource(root):
 @pytest.mark.parametrize("variant,reason", [
     ("outside", "outside_job_root"),
     ("dotdot", "outside_job_root"),
-    ("symlinked_parent", "outside_job_root"),
+    ("symlinked_parent", "ancestor_unavailable"),
     ("type", "type_mismatch"),
     ("record", "resource_record_invalid"),
     ("bool_ino", "resource_record_invalid"),
@@ -208,7 +213,7 @@ def test_removal_refusals(root, tmp_path, variant, reason):
         rec["extra"] = 1
     else:
         rec["ino"] = True
-    out = fz.remove_owned(str(root), rec)
+    out = fz.remove_owned(str(root), rec, ident(root))
     assert (out["outcome"], out["reason"]) == ("UNPROVEN", reason)
     assert victim.read_text() == "keep"
 
@@ -218,5 +223,107 @@ def test_absent_is_not_a_proven_removal(root):
     f.write_text("x")
     rec = record(f, "file")
     f.unlink()
-    out = fz.remove_owned(str(root), rec)
+    out = fz.remove_owned(str(root), rec, ident(root))
     assert (out["outcome"], out["reason"]) == ("ABSENT", "already_absent")
+
+
+
+# F1465-R1: a secret with non-ASCII plus quote and backslash, in all three
+# supported forms.
+def test_mixed_secret_found_in_all_supported_forms():
+    secret = '\u00e9"and\\backslash-synthetic-012345'
+    for data in (secret.encode(), json.dumps({"v": secret}).encode(),
+                 json.dumps({"v": secret}, ensure_ascii=False).encode()):
+        assert ("secret", 0) in fz.scan_bytes(data, [secret.encode()]), data
+
+
+# F1465-R2: an escaped unpaired surrogate is a fixed registry_invalid.
+def test_registry_surrogate_is_fixed_error(root):
+    bad = json.dumps({"schema": fz.SCHEMA_REGISTRY,
+                      "secrets": ["x" * 20 + "\ud800"]}).encode()
+    digest = write_registry(root, None, raw=bad)
+    with pytest.raises(fz.FinalizerError) as error:
+        fz.load_registry(str(root), digest)
+    assert str(error.value) == "registry_invalid"
+
+
+# F1465-R3: an ancestor replaced by a symlink AT the mutation boundary.
+def test_ancestor_swap_at_unlink_cannot_escape(root, tmp_path, monkeypatch):
+    parent = root / "owned"
+    parent.mkdir()
+    item = parent / "item"
+    item.write_bytes(b"owned-synthetic")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    victim = outside / "item"
+    victim.write_bytes(b"foreign-synthetic")
+    rec = record(item, "file")
+    real_unlink = os.unlink
+
+    def swap_then_unlink(path, *args, **kwargs):
+        parent.rename(root / "original-parent")
+        parent.symlink_to(outside, target_is_directory=True)
+        return real_unlink(path, *args, **kwargs)
+    monkeypatch.setattr(fz.os, "unlink", swap_then_unlink)
+    out = fz.remove_owned(str(root), rec, ident(root))
+    monkeypatch.setattr(fz.os, "unlink", real_unlink)
+    assert victim.read_bytes() == b"foreign-synthetic"
+    assert not (root / "original-parent" / "item").exists()
+    assert (out["outcome"], out["reason"]) == ("REMOVED", "removed_and_verified_absent")
+
+
+def test_ancestor_swap_at_rmtree_cannot_escape(root, tmp_path, monkeypatch):
+    parent = root / "owned"
+    (parent / "venv" / "lib").mkdir(parents=True)
+    (parent / "venv" / "lib" / "m.py").write_text("owned")
+    outside = tmp_path / "outside"
+    (outside / "venv").mkdir(parents=True)
+    (outside / "venv" / "keep.txt").write_text("foreign")
+    rec = record(parent / "venv", "dir")
+    real_rmtree = fz.shutil.rmtree
+
+    def swap_then_rmtree(path, *args, **kwargs):
+        parent.rename(root / "original-parent")
+        parent.symlink_to(outside, target_is_directory=True)
+        return real_rmtree(path, *args, **kwargs)
+    monkeypatch.setattr(fz.shutil, "rmtree", swap_then_rmtree)
+    out = fz.remove_owned(str(root), rec, ident(root))
+    monkeypatch.setattr(fz.shutil, "rmtree", real_rmtree)
+    assert (outside / "venv" / "keep.txt").read_text() == "foreign"
+    assert not (root / "original-parent" / "venv").exists()
+    assert out["outcome"] == "REMOVED"
+
+
+def test_symlinked_ancestor_before_open_is_refused(root, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "item").write_text("foreign")
+    (root / "owned").symlink_to(outside, target_is_directory=True)
+    info = os.lstat(outside / "item")
+    rec = {"path": str(root / "owned" / "item"), "dev": info.st_dev,
+           "ino": info.st_ino, "type": "file"}
+    out = fz.remove_owned(str(root), rec, ident(root))
+    assert (out["outcome"], out["reason"]) == ("UNPROVEN", "ancestor_unavailable")
+    assert (outside / "item").read_text() == "foreign"
+
+
+@pytest.mark.parametrize("variant,reason", [
+    ("other_root", "root_identity_mismatch"),
+    ("public_root", "root_identity_mismatch"),
+    ("bad_identity", "root_identity_invalid"),
+])
+def test_root_identity_is_required(root, tmp_path, variant, reason):
+    f = root / "a.txt"
+    f.write_text("x")
+    identity = ident(root)
+    if variant == "other_root":
+        other = tmp_path / "other"
+        other.mkdir()
+        identity = ident(other)
+    elif variant == "public_root":
+        root.chmod(0o755)
+    else:
+        identity = (True, 1)
+    out = fz.remove_owned(str(root), record(f, "file"), identity)
+    assert (out["outcome"], out["reason"]) == ("UNPROVEN", reason)
+    assert f.exists()

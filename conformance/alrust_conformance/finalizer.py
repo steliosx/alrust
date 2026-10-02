@@ -88,7 +88,12 @@ def load_registry(job_root, expected_sha256):
     secrets = []
     for value in record["secrets"]:
         _require(type(value) is str, "registry_invalid")
-        encoded = value.encode("utf-8")
+        try:
+            encoded = value.encode("utf-8")
+        except UnicodeError:
+            # For example an escaped unpaired surrogate: valid JSON text,
+            # but not a UTF-8 string. Refused without echoing it.
+            raise FinalizerError("registry_invalid") from None
         _require(MIN_SECRET <= len(encoded) <= MAX_SECRET, "registry_secret_too_short"
                  if len(encoded) < MIN_SECRET else "registry_invalid")
         secrets.append(encoded)
@@ -97,9 +102,18 @@ def load_registry(job_root, expected_sha256):
 
 
 def secret_forms(secret):
-    """The byte forms searched for one secret: raw, and JSON-escaped."""
-    escaped = json.dumps(secret.decode("utf-8"))[1:-1].encode("utf-8")
-    return {secret, escaped}
+    """The byte forms searched for one secret.
+
+    Supported forms: the raw UTF-8 bytes; the JSON string form with ASCII
+    escaping (json.dumps default, \\uXXXX for non-ASCII); and the JSON
+    string form without ASCII escaping (ensure_ascii=False, UTF-8). Other
+    encodings (for example base64 or URL encoding) are not searched; the
+    generic patterns and the export allowlist must not rely on them.
+    """
+    text = secret.decode("utf-8")
+    return {secret,
+            json.dumps(text)[1:-1].encode("utf-8"),
+            json.dumps(text, ensure_ascii=False)[1:-1].encode("utf-8")}
 
 
 def scan_bytes(data, secrets):
@@ -128,18 +142,34 @@ def scan_file(path, secrets):
 def _inside(job_root, path):
     return (type(path) is str and os.path.isabs(path)
             and os.path.normpath(path) == path
-            and path.startswith(job_root + os.sep)
-            and os.path.realpath(os.path.dirname(path)) == os.path.dirname(path))
+            and path.startswith(job_root + os.sep))
 
 
-def remove_owned(job_root, resource):
+def _open_dir(name, dir_fd=None):
+    return os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                   dir_fd=dir_fd)
+
+
+def remove_owned(job_root, resource, root_identity):
     """Remove one owned resource recorded as {"path", "dev", "ino", "type"}.
 
-    Returns {"path", "type", "outcome", "reason"} with outcome REMOVED,
-    ABSENT (already gone, which proves nothing about who removed it and so
-    counts as UNPROVEN for the cleanup verdict) or UNPROVEN. Nothing outside
-    the job root, nothing whose dev/ino differ and nothing of another type
-    is touched.
+    Every step is anchored to directory descriptors (F1465-R3):
+    - the job root is opened without following symlinks, and must have
+      root_identity (its dev and ino from the core identity), the caller's
+      uid and mode 0700;
+    - each parent component is opened relative to the previous descriptor
+      with O_NOFOLLOW, so a symlinked component is refused;
+    - the final entry is inspected, removed (unlink, or the symlink-safe
+      rmtree with dir_fd) and verified absent relative to the held parent
+      descriptor. Replacing an ancestor with a symlink after it was opened
+      cannot redirect any of these operations out of the verified hierarchy.
+    Limitation, stated rather than claimed away: another process of the same
+    uid can still substitute the final entry inside the verified parent
+    between its inspection and its removal. That stays inside the job's own
+    hierarchy; it cannot reach outside it.
+
+    Returns {"path", "type", "outcome", "reason"}: REMOVED, ABSENT (already
+    gone; not a proven removal) or UNPROVEN, with a fixed reason.
     """
     result = {"path": None, "type": None, "outcome": "UNPROVEN"}
     if not (type(resource) is dict and set(resource) == {"path", "dev", "ino", "type"}
@@ -148,32 +178,60 @@ def remove_owned(job_root, resource):
         return dict(result, reason="resource_record_invalid")
     path, kind = resource["path"], resource["type"]
     result.update(path=path if type(path) is str else None, type=kind)
+    if not (type(root_identity) is tuple and len(root_identity) == 2
+            and all(type(v) is int for v in root_identity)):
+        return dict(result, reason="root_identity_invalid")
     if not _inside(job_root, path):
         return dict(result, reason="outside_job_root")
+    parts = path[len(job_root) + 1:].split(os.sep)
+    if any(part in ("", ".", "..") for part in parts):
+        return dict(result, reason="outside_job_root")
+    opened = []
     try:
-        info = os.lstat(path)
-    except FileNotFoundError:
-        return dict(result, outcome="ABSENT", reason="already_absent")
-    except OSError:
-        return dict(result, reason="inspection_failed")
-    expected_type = stat.S_ISDIR if kind == "dir" else stat.S_ISREG
-    if not expected_type(info.st_mode):
-        return dict(result, reason="type_mismatch")
-    if (info.st_dev, info.st_ino) != (resource["dev"], resource["ino"]):
-        return dict(result, reason="identity_mismatch")
-    if info.st_uid != os.getuid():
-        return dict(result, reason="owner_mismatch")
-    try:
-        if kind == "dir":
-            shutil.rmtree(path)
-        else:
-            os.unlink(path)
-    except OSError:
-        return dict(result, reason="removal_failed")
-    try:
-        os.lstat(path)
-    except FileNotFoundError:
-        return dict(result, outcome="REMOVED", reason="removed_and_verified_absent")
-    except OSError:
-        return dict(result, reason="verification_failed")
-    return dict(result, reason="still_present")
+        try:
+            fd = _open_dir(job_root)
+        except OSError:
+            return dict(result, reason="root_unavailable")
+        opened.append(fd)
+        info = os.fstat(fd)
+        if (info.st_dev, info.st_ino) != root_identity or info.st_uid != os.getuid() \
+                or stat.S_IMODE(info.st_mode) != 0o700:
+            return dict(result, reason="root_identity_mismatch")
+        for part in parts[:-1]:
+            try:
+                fd = _open_dir(part, dir_fd=fd)
+            except OSError:
+                # Missing, not a directory, or a symlinked component.
+                return dict(result, reason="ancestor_unavailable")
+            opened.append(fd)
+        name = parts[-1]
+        try:
+            info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return dict(result, outcome="ABSENT", reason="already_absent")
+        except OSError:
+            return dict(result, reason="inspection_failed")
+        expected_type = stat.S_ISDIR if kind == "dir" else stat.S_ISREG
+        if not expected_type(info.st_mode):
+            return dict(result, reason="type_mismatch")
+        if (info.st_dev, info.st_ino) != (resource["dev"], resource["ino"]):
+            return dict(result, reason="identity_mismatch")
+        if info.st_uid != os.getuid():
+            return dict(result, reason="owner_mismatch")
+        try:
+            if kind == "dir":
+                shutil.rmtree(name, dir_fd=fd)
+            else:
+                os.unlink(name, dir_fd=fd)
+        except OSError:
+            return dict(result, reason="removal_failed")
+        try:
+            os.stat(name, dir_fd=fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return dict(result, outcome="REMOVED", reason="removed_and_verified_absent")
+        except OSError:
+            return dict(result, reason="verification_failed")
+        return dict(result, reason="still_present")
+    finally:
+        for descriptor in reversed(opened):
+            os.close(descriptor)
