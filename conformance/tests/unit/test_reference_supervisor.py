@@ -594,3 +594,39 @@ def test_malformed_terminal_owner_is_invalid(tmp_path, cleanup, owner):
     rc, out = stop(path, digest)
     assert (rc, out["verdict"], out["reason"]) == (
         2, "UNPROVEN", "terminal_receipt_invalid")
+
+
+def deep_json(record):
+    # Valid JSON under MAX_RECEIPT, nested beyond the decoder's limit.
+    data = json.dumps(record).encode()
+    data = data[:-1] + b', "extra": ' + b"[" * 10000 + b"0" + b"]" * 10000 + b"}"
+    assert len(data) < stop_mod.MAX_RECEIPT
+    return data
+
+
+def test_deeply_nested_launch_receipt_is_malformed(tmp_path, cleanup):
+    other = subprocess.Popen(["/bin/sleep", "300"], process_group=0)
+    cleanup.append(other.pid)
+    path, _ = fake_receipt(tmp_path, other.pid)
+    data = deep_json(json.loads(path.read_bytes()))
+    path.write_bytes(data)
+    rc, out = stop(path, hashlib.sha256(data).hexdigest())
+    assert (rc, out["verdict"], out["reason"]) == (2, "UNPROVEN",
+                                                   "receipt_malformed")
+    assert alive(other.pid)
+
+
+def test_deeply_nested_terminal_receipt_is_invalid(tmp_path, cleanup):
+    other = subprocess.Popen(["/bin/sleep", "300"], process_group=0)
+    cleanup.append(other.pid)
+    path, digest = fake_receipt(tmp_path, other.pid)
+    ticks, _ = stop_mod.read_generation(other.pid)
+    (tmp_path / "terminal.json").write_bytes(deep_json({
+        "schema": stop_mod.SCHEMA_TERMINAL, "result": "tree_empty",
+        "supervisor": {"pid": other.pid, "start_ticks": ticks},
+        "boot_id": stop_mod.boot_id()}))
+    other.kill()
+    other.wait()
+    rc, out = stop(path, digest)
+    assert (rc, out["verdict"], out["reason"]) == (
+        2, "UNPROVEN", "terminal_receipt_invalid")

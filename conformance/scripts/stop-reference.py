@@ -95,7 +95,8 @@ def read_terminal(path, pid, start_ticks, boot):
         record = json.loads(read_bounded(path))
     except FileNotFoundError:
         return None
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
+        # RecursionError: valid JSON nested beyond the decoder's limit.
         return "invalid"
     if not isinstance(record, dict) or record.get("schema") != SCHEMA_TERMINAL:
         return "invalid"
@@ -160,7 +161,8 @@ def main(argv):
                 or type(uid) is not int or not isinstance(terminal_path, str) \
                 or not os.path.isabs(terminal_path) or sup["pgid"] != pid:
             raise ValueError("fields")
-    except (KeyError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError, RecursionError):
+        # RecursionError: valid JSON nested beyond the decoder's limit.
         return verdict("UNPROVEN", "receipt_malformed")
 
     try:
