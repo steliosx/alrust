@@ -126,18 +126,32 @@ def check_environment():
         raise Refused("environment outside the allowlist: %s" % ", ".join(extra))
 
 
+LOOPBACK_V4 = "0100007F"  # 127.0.0.1 as /proc/net/tcp writes it
+
+
 def listeners(port):
-    """Socket inodes listening on 127.0.0.1 or any address at PORT."""
-    found = set()
-    for table in ("/proc/net/tcp", "/proc/net/tcp6"):
-        with open(table) as f:
+    """{inode: (table, address)} for every TCP listener on PORT, any address."""
+    found = {}
+    for table in ("tcp", "tcp6"):
+        with open("/proc/net/" + table) as f:
             next(f)
             for line in f:
                 fields = line.split()
                 address, state, inode = fields[1], fields[3], fields[9]
-                if state == "0A" and int(address.rsplit(":", 1)[1], 16) == port:
-                    found.add(inode)
+                host, _, hexport = address.rpartition(":")
+                if state == "0A" and int(hexport, 16) == port:
+                    found[inode] = (table, host)
     return found
+
+
+def owned_readiness(port, tree):
+    """Every listener on PORT, on any address, is held by P's tree, and one of
+    them is on 127.0.0.1, where the health check connects. A foreign
+    listener anywhere on the port means not ready."""
+    found = listeners(port)
+    if not found or set(found) - owned_inodes(tree):
+        return False
+    return ("tcp", LOOPBACK_V4) in found.values()
 
 
 def read_stat(pid):
@@ -166,20 +180,21 @@ def descendants(root):
     return found
 
 
-def socket_owners(inodes, pids):
-    owners = set()
-    wanted = {"socket:[%s]" % i for i in inodes}
+def owned_inodes(pids):
+    """Socket inodes held open by any of PIDS."""
+    inodes = set()
     for pid in pids:
         try:
             for fd in os.listdir("/proc/%d/fd" % pid):
                 try:
-                    if os.readlink("/proc/%d/fd/%s" % (pid, fd)) in wanted:
-                        owners.add(pid)
+                    target = os.readlink("/proc/%d/fd/%s" % (pid, fd))
                 except OSError:
                     continue
+                if target.startswith("socket:[") and target.endswith("]"):
+                    inodes.add(target[8:-1])
         except OSError:
             continue
-    return owners
+    return inodes
 
 
 def boot_id():
@@ -355,9 +370,9 @@ def main(argv):
             if proc.poll() is not None:
                 raise Refused("supervisor exited (status %d)" % proc.returncode)
             tree = descendants(proc.pid)
-            if child in tree and socket_owners(listeners(port), tree) \
+            if child in tree and owned_readiness(port, tree) \
                     and healthy(port, min(5.0, left)) and proc.poll() is None \
-                    and socket_owners(listeners(port), descendants(proc.pid)):
+                    and owned_readiness(port, descendants(proc.pid)):
                 # Readiness proves C has exec'd, so its exe is now meaningful.
                 exe = os.stat("/proc/%d/exe" % child)
                 if (exe.st_dev, exe.st_ino) != (python.st_dev, python.st_ino):

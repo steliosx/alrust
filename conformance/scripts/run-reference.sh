@@ -118,7 +118,8 @@ command -v pg_config >/dev/null \
 
 if [[ -n ${JOB_ROOT:-} ]]; then
   [[ $JOB_ROOT == /* && -d $JOB_ROOT && ! -L $JOB_ROOT && -O $JOB_ROOT ]] \
-    || { echo "run-reference: JOB_ROOT must be an existing directory owned by this user" >&2; exit 1; }
+    && [[ $(stat -c %a -- "$JOB_ROOT") == 700 ]] \
+    || { echo "run-reference: JOB_ROOT must be an existing 0700 directory owned by this user" >&2; exit 1; }
   : "${VENV:=$JOB_ROOT/venv}"
   [[ $VENV == "$JOB_ROOT"/* ]] \
     || { echo "run-reference: VENV must be inside JOB_ROOT" >&2; exit 1; }

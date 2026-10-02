@@ -45,6 +45,11 @@ class H(http.server.BaseHTTPRequestHandler):
 MODE = %r
 if MODE == "exit":
     sys.exit(3)
+if MODE == "v6":
+    import socket
+    class V6(http.server.HTTPServer):
+        address_family = socket.AF_INET6
+    V6(("::1", port), H).serve_forever()
 if MODE == "noserve":
     import time
     time.sleep(300)
@@ -437,3 +442,85 @@ def test_foreign_listener_is_not_readiness(tmp_path):
     assert rc == 1 and out == ""
     assert "not healthy" in err and '"verdict": "COMPLETE"' in err
     assert tree_gone(job)
+
+
+def test_foreign_listener_elsewhere_on_the_port_blocks_readiness(tmp_path):
+    # Our server holds [::1]:PORT; an unrelated server answers healthy on
+    # 127.0.0.1:PORT, where the health check connects. Holding *a* listener
+    # on the port is not enough: every listener must be ours, and one must
+    # be on 127.0.0.1.
+    import http.server
+    import threading
+
+    class Healthy(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+
+        def log_message(self, *a):
+            pass
+
+    if not socket.has_ipv6:
+        pytest.skip("needs IPv6 loopback")
+    job, port = make_job(tmp_path, "v6"), free_port()
+    proc = launch(job, port, timeout=4)
+    receipt = job / "reference" / "launch.json"
+    deadline = time.monotonic() + 10
+    while not receipt.exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    server = http.server.HTTPServer(("127.0.0.1", port), Healthy)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        rc, out, err = finish(proc)
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert rc == 1 and out == ""
+    assert "not healthy" in err and '"verdict": "COMPLETE"' in err
+    assert tree_gone(job)
+
+
+def fake_checkout(tmp_path):
+    """run-reference.sh in a layout where every check before the build can
+    run offline: a stub reference tree and a stub pg_config."""
+    repo = tmp_path / "shrepo"
+    (repo / "conformance" / "scripts").mkdir(parents=True)
+    (repo / "reference" / "alerta").mkdir(parents=True)
+    (repo / "reference" / "alerta" / "setup.py").write_text("")
+    shutil.copy(SCRIPTS / "run-reference.sh",
+                repo / "conformance" / "scripts" / "run-reference.sh")
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "pg_config").write_text("#!/bin/sh\nexit 0\n")
+    (tools / "pg_config").chmod(0o755)
+    return repo, tools
+
+
+@pytest.mark.parametrize("variant", ["mode", "symlink", "venv_outside",
+                                     "home_outside"])
+def test_run_reference_refuses_job_root_before_the_build(tmp_path, variant):
+    repo, tools = fake_checkout(tmp_path)
+    job = tmp_path / "job"
+    job.mkdir(mode=0o700)
+    env = dict(ENV, PATH="%s:/usr/bin:/bin" % tools, JOB_ROOT=str(job),
+               HOME=str(job / "home"), REFERENCE_PYTHON=sys.executable,
+               PORT=str(free_port()))
+    if variant == "mode":
+        job.chmod(0o750)
+    elif variant == "symlink":
+        link = tmp_path / "link"
+        link.symlink_to(job)
+        env["JOB_ROOT"] = str(link)
+        env["HOME"] = str(link / "home")
+    elif variant == "venv_outside":
+        env["VENV"] = str(tmp_path / "elsewhere-venv")
+    else:
+        env["HOME"] = str(tmp_path)
+    out = subprocess.run(["bash", str(repo / "conformance/scripts/run-reference.sh")],
+                         env=env, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 1, out.stderr
+    assert "JOB_ROOT" in out.stderr or "HOME" in out.stderr
+    assert "environment" not in out.stdout  # no venv was built
+    assert sorted(p.name for p in job.iterdir()) == []
