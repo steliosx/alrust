@@ -81,7 +81,10 @@ them.
   allowlist and nothing else: `PATH` (fixed), `LANG=C.UTF-8`,
   `HOME=<job root>/home`, `DATABASE_URL`, `SECRET_KEY`, `AUTH_REQUIRED`,
   `ALERTA_SVR_CONF_FILE`, `PORT=18081` (N10) and the launcher's own
-  `VENV`, `REFERENCE_PYTHON` and `READY_TIMEOUT`. No Sentry, Flask, proxy
+  `VENV`, `REFERENCE_PYTHON`, `READY_TIMEOUT` and the required `JOB_ROOT`.
+  The two observer variables (`ALRUST_OBSERVER_SOCKET`,
+  `ALRUST_OBSERVER_PARENT`) are **not** in this set: the supervisor adds
+  them to C's environment only (section 5). No Sentry, Flask, proxy
   or other inherited variable passes.
 - **Variables that `get_config` reads.** Of these, only `DATABASE_URL`,
   `SECRET_KEY` and `AUTH_REQUIRED` are set, because the launcher always
@@ -99,6 +102,13 @@ them.
   value is ever passed through the environment: `get_config` splits on
   `,`, so `''` would become `['']`, `'[]'` would become `['[]']`, and
   `'None'` would become a string (Codex's probes, `6e32ba91`).
+- **One serving process.** `alertad run` is Flask's `run` command
+  (`alerta/commands.py:30`, `FlaskGroup`; pinned Flask 3.1.3). Its reloader
+  would fork a second serving process, which breaks the rule that C is the
+  served process. The launcher therefore passes `--no-reload
+  --no-debugger` explicitly; `FLASK_DEBUG` is outside the allowlist; and
+  the renderer refuses `DEBUG=True` (the baseline sets `DEBUG: false`).
+  Threads stay inside C.
 - **Signing key.** `SECRET_KEY` is 32 random bytes, hex-encoded, and
   masked.
 - **Database URL.** `DATABASE_URL` stays private.
@@ -159,13 +169,23 @@ group:
     replaces the old process-group test for listener ownership.
 
 The receipt path is under the job root. It is created exclusively and
-never reused. The ready line adds its sha256.
+never reused. **P writes the receipt itself**, so it is an expected binding,
+not an attestation. Before printing the ready line, the launcher
+cross-checks it against its own observations: `$!` must equal P, and
+`/proc/$!/stat` must give the same `start_ticks`. A mismatch fails the
+launch. The ready line adds the receipt's sha256.
 
 **Stop helper** `stop-reference.py <receipt> <sha256>` (new, its own head):
 1. It re-verifies the receipt hash.
-2. If no terminal receipt exists yet, it calls `pidfd_open(P)`, then reads
+2. If no terminal receipt exists yet, it calls `pidfd_open(P)` first, then reads
    `/proc/P/stat` and checks P's `start_ticks`, `uid` and `boot_id` through
    that stable handle.
+   **Why this is race-free.** The pidfd refers to whichever process held
+   P at the moment it was opened. `/proc/P/stat` is read by number
+   afterwards. A matching `start_ticks` (with the same `boot_id`) means
+   the receipt's generation still held P at that read. P's number cannot
+   change hands while that process lives, so the pidfd opened earlier
+   refers to it. A mismatch or an unreadable value means no signal.
 3. It signals only through `pidfd_send_signal`. It never calls `kill`,
    never signals a group, and never signals a PID other than the verified
    P.
@@ -199,7 +219,8 @@ a one-line `.pth` activator into the **fresh** job venv before launch.
 This is the only code in the serving process that does not come from the
 hash-locked install, so both files' sha256 go into the launch receipt. The
 activator imports the module only when `ALRUST_OBSERVER_SOCKET` is set. The
-launcher also adds that one variable to the allowlist. The socket
+launcher does not add the observer variables to its allowlist; the
+supervisor sets them in C's environment only. The socket
 directory is created in the job root with mode 0700.
 
 **Observer module (Codex's component, its own head).** It runs inside the
@@ -295,11 +316,16 @@ scanned after every proof has been written. Steps:
 2. **Credential registry frozen, before the database is dropped.** A
    bounded step, with its own stage journal, writes a private registry
    (0600, exclusive) that contains:
-   - every `keys.key` value in the job database, which covers the keys
+   - every `keys.key` value in the job database
+     (`alerta/sql/schema.sql:123-125`, `key text UNIQUE NOT NULL`), which
+     covers the API keys
      that tests created;
    - the provisioner's role keys;
    - `SECRET_KEY`;
    - the database URL and password.
+
+   - every other secret that Codex's entrypoint reports it obtained, for
+     example a token from `/auth` or a user password.
 
    A registry that cannot be completed fails the profile.
 3. **Database drop and verification** (section 7), in its own stage
@@ -331,13 +357,18 @@ scanned after every proof has been written. Steps:
       and the generic patterns.
    7. It builds the manifest (names, sizes, sha256) in memory, scans the
       manifest bytes, and writes it. It then marks the directory 0500 and
-      the files 0400. That is a custody convention, not a security
+      the files 0400. The manifest is written **only on a clean scan**,
+      and it records the scan verdict and the terminal receipt's hash. On a
+      failed scan, nothing is written. That marking is a custody convention, not a security
       boundary for the same uid. Nothing writes to staging after this.
    8. It exits. The registry existed only in its memory and in the file
       it removed.
 5. **Upload.** The upload step re-hashes every file against the manifest
    immediately before uploading, and uploads only the manifest's files.
    Any mismatch means no upload and FAIL.
+6. **Summary.** The summary step derives the outcome only from the
+   terminal receipt and the manifest. A missing manifest, which is what a
+   scan failure leaves, means FAIL with no upload.
 
 **Failures.** Any failure in steps 2 to 5 keeps the profile FAIL, or
 UNPROVEN for cleanup. That includes a failed removal, scan, aggregation or
@@ -380,7 +411,9 @@ result also carries `cleanup: UNPROVEN`, with no gate credit.
 | reserved for cleanup, finalization and aggregation | 8 min |
 | entrypoint | at most what is left, and its manifest budget |
 | every SQL call | `statement_timeout` plus a client timeout of 30 s |
-| producer and stop helpers | their own bounded limits |
+| supervisor teardown | TERM 10 s, then KILL 5 s |
+| stop helper | pidfd exit poll 20 s |
+| credential registry, finalizer | 60 s each, inside the 8-minute reserve |
 
 `if: always()` only **schedules** cleanup. In-process traps and `finally`
 blocks attempt cleanup on a handled interruption. If GitHub kills the job,
@@ -406,10 +439,14 @@ own heads.
 ## 12. Order of the next heads
 
 1. This contract (design).
-2. The launcher receipt and observer wiring head (Claude), with offline
-   controls: an unauthorized or caller group, generation reuse or
-   mismatch, unreadable inspection, a leader gone with surviving
-   descendants, TERM-ignoring members, interrupted output.
+2. The launcher head (Claude): the supervisor, the launch receipt and its
+   cross-check, `JOB_ROOT`-only paths, the observer wiring and
+   `--no-reload --no-debugger`. Offline controls cover:
+   - a receipt that disagrees with `$!`;
+   - a child that exits before readiness;
+   - the subreaper read-back failing;
+   - observer activation outside C;
+   - interrupted receipt writes.
 3. The supervisor and the `stop-reference.py` stop helper (Claude), with
    offline controls for:
    - the caller and an unauthorized input;
