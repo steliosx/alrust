@@ -233,10 +233,25 @@ def test_database_drop_must_be_proven(tmp_path, monkeypatch, change):
                                                      "database_drop_not_proven")
 
 
-def test_failed_stage_is_not_finalized(tmp_path, monkeypatch):
+def test_failed_entrypoint_is_named(tmp_path, monkeypatch):
     job = build(tmp_path, monkeypatch, fail_stage="entrypoint")
     report = fz.finalize(str(job), STAGES)
+    assert (report["outcome"], report["reason"]) == ("NOT_FINALIZED",
+                                                     "entrypoint_not_complete")
+    assert not (job / "export").exists()
+
+
+def test_other_failed_stage_is_not_finalized(tmp_path, monkeypatch):
+    job = build(tmp_path, monkeypatch, fail_stage="launch")
+    report = fz.finalize(str(job), STAGES)
     assert (report["outcome"], report["reason"]) == ("NOT_FINALIZED", "aggregation_failed")
+
+
+def test_entrypoint_stage_must_be_named(tmp_path, monkeypatch):
+    job = build(tmp_path, monkeypatch)
+    report = fz.finalize(str(job), STAGES, entrypoint_stage="executor")
+    assert (report["outcome"], report["reason"]) == ("NOT_FINALIZED",
+                                                     "entrypoint_stage_missing")
 
 
 @pytest.mark.parametrize("change,reason", [
@@ -245,14 +260,14 @@ def test_failed_stage_is_not_finalized(tmp_path, monkeypatch):
     (lambda o: o.update(count=4), "registry_incomplete"),
 ])
 def test_obtained_secret_count_must_link_registry(tmp_path, monkeypatch, change, reason):
+    # All of these are refused before the export directory exists.
     job = build(tmp_path, monkeypatch, obtained_change=change)
     report = fz.finalize(str(job), STAGES)
-    assert report["reason"] == reason
-    assert report["outcome"] in ("NOT_FINALIZED", "FAILED")
-    assert not (job / "export" / "manifest.json").exists()
+    assert (report["outcome"], report["reason"]) == ("NOT_FINALIZED", reason)
+    assert not (job / "export").exists()
 
 
-def test_repeated_required_record_is_refused(tmp_path, monkeypatch):
+def test_required_record_repeated_is_refused(tmp_path, monkeypatch):
     job = build(tmp_path, monkeypatch, extra_records=[
         ("stop", "database_drop", {"verdict": "COMPLETE", "database": "x",
                                    "oid": 1, "system_identifier": "1"})])
@@ -261,16 +276,29 @@ def test_repeated_required_record_is_refused(tmp_path, monkeypatch):
         "NOT_FINALIZED", "database_drop_missing_or_repeated")
 
 
-@pytest.mark.parametrize("change,reason", [
-    (lambda c: c.update(name="anything.json"), "candidate_record_invalid"),
-    (lambda c: c.update(ino=c["ino"] + 1), "candidate_identity_mismatch"),
-    (lambda c: c.update(path="/etc/hostname"), "candidate_record_invalid"),
+@pytest.mark.parametrize("change,outcome,reason", [
+    (lambda c: c.update(name="anything.json"), "NOT_FINALIZED", "candidate_record_invalid"),
+    (lambda c: c.update(path="/etc/hostname"), "NOT_FINALIZED", "candidate_record_invalid"),
+    # The identity is only knowable when the file is opened for copying.
+    (lambda c: c.update(ino=c["ino"] + 1), "FAILED", "candidate_identity_mismatch"),
 ])
-def test_candidate_must_be_allowlisted_and_identified(tmp_path, monkeypatch, change, reason):
+def test_candidate_must_be_allowlisted_and_identified(tmp_path, monkeypatch, change,
+                                                      outcome, reason):
     job = build(tmp_path, monkeypatch, candidate_change=change)
     report = fz.finalize(str(job), STAGES)
-    assert (report["outcome"], report["reason"]) == ("FAILED", reason)
+    assert (report["outcome"], report["reason"]) == (outcome, reason)
     assert not (job / "export" / "manifest.json").exists()
+
+
+def test_second_invalid_candidate_means_nothing_is_copied(tmp_path, monkeypatch):
+    # Every candidate record is validated before the first copy.
+    job = build(tmp_path, monkeypatch, extra_records=[
+        ("entrypoint", "export_candidate", {"path": "/etc/hostname", "dev": 1,
+                                            "ino": 1, "name": "other.json"})])
+    report = fz.finalize(str(job), STAGES)
+    assert (report["outcome"], report["reason"]) == ("NOT_FINALIZED",
+                                                     "candidate_record_invalid")
+    assert not (job / "export").exists()
 
 
 def test_oversized_candidate_is_refused(tmp_path, monkeypatch):
@@ -304,16 +332,23 @@ def test_export_directory_must_not_exist(tmp_path, monkeypatch):
     assert (job / "venv").exists()
 
 
-def test_manifest_detects_later_tampering(tmp_path, monkeypatch):
+@pytest.mark.parametrize("tamper", ["content", "extra_file", "missing_file"])
+def test_verify_manifest_detects_later_tampering(tmp_path, monkeypatch, tamper):
     job = build(tmp_path, monkeypatch)
     assert fz.finalize(str(job), STAGES)["outcome"] == "SEALED"
     export = job / "export"
-    manifest = json.loads((export / "manifest.json").read_text())
+    assert fz.verify_manifest(str(export)) is True
+    export.chmod(0o700)
     report_file = export / "conformance-report.json"
-    report_file.chmod(0o600)
-    report_file.write_bytes(b'{"result": "tampered"}\n')
-    entry = next(e for e in manifest["files"] if e["name"] == "conformance-report.json")
-    assert hashlib.sha256(report_file.read_bytes()).hexdigest() != entry["sha256"]
+    if tamper == "content":
+        report_file.chmod(0o600)
+        report_file.write_bytes(b'{"result": "tampered"}\n')
+    elif tamper == "extra_file":
+        (export / "added.json").write_text("{}")
+    else:
+        report_file.chmod(0o600)
+        report_file.unlink()
+    assert fz.verify_manifest(str(export)) is False
 
 
 def test_failure_record_reads_only_hashes(tmp_path, monkeypatch):
@@ -340,3 +375,27 @@ def test_failure_record_needs_the_scan_secrets(tmp_path, monkeypatch):
     assert fz.failure_record(str(job), STAGES, {"SECRET_KEY": "short",
                                                  "DATABASE_URL": DB_URL}) is None
     assert not (job / "export").exists()
+
+
+def test_repeated_candidate_name_is_refused(tmp_path, monkeypatch):
+    # A second, well-formed record for the same allowlisted name.
+    job = build(tmp_path, monkeypatch, extra_records=[
+        ("entrypoint", "export_candidate", {"path": str(tmp_path / "job" / "x.json"),
+                                            "dev": 1, "ino": 1,
+                                            "name": "conformance-report.json"})])
+    report = fz.finalize(str(job), STAGES)
+    assert (report["outcome"], report["reason"]) == ("NOT_FINALIZED", "candidate_repeated")
+    assert not (job / "export").exists()
+
+
+def test_verify_manifest_requires_a_clean_scan_record(tmp_path, monkeypatch):
+    job = build(tmp_path, monkeypatch)
+    assert fz.finalize(str(job), STAGES)["outcome"] == "SEALED"
+    export = job / "export"
+    export.chmod(0o700)
+    manifest_path = export / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["scan"] = "finding"
+    manifest_path.chmod(0o600)
+    manifest_path.write_text(json.dumps(manifest))
+    assert fz.verify_manifest(str(export)) is False

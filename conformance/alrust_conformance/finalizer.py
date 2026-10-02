@@ -322,7 +322,10 @@ def _quiescence(job_root, records, core):
     launch and terminal receipts by sha256; both are re-read and re-hashed,
     the terminal must be tree_empty for the launch receipt's supervisor
     generation, and both must be on the core's boot. The database_drop record
-    must be COMPLETE with its database identity. Returns the evidence."""
+    must be COMPLETE with its database identity. DEFERRED: comparing that
+    identity with the database stage's receipt belongs to the database stage
+    head, which does not exist yet; until then the record's fields are only
+    type-checked. Returns the evidence."""
     _, stop = _one(records, "stop_verdict")
     _require(type(stop) is dict and set(stop) == {
         "verdict", "reason", "launch_receipt_sha256", "terminal_receipt_sha256"}
@@ -357,7 +360,7 @@ def _quiescence(job_root, records, core):
     return {"stop": stop, "database": database}
 
 
-def finalize(job_root, stages):
+def finalize(job_root, stages, entrypoint_stage="entrypoint"):
     """Run the finalizer for a closed job. Returns a report dict:
     {"outcome": "SEALED"|"FAILED"|"NOT_FINALIZED", "cleanup": ..., "reason"}.
 
@@ -366,7 +369,16 @@ def finalize(job_root, stages):
     path (failure_record). FAILED means the gate passed but a later step
     did not; no manifest exists. SEALED means the manifest was written after
     a clean scan; "cleanup" says whether every removal was proven."""
+    if type(stages) is not list or entrypoint_stage not in stages:
+        return {"outcome": "NOT_FINALIZED", "cleanup": "UNPROVEN",
+                "reason": "entrypoint_stage_missing"}
     aggregation = _sj.aggregate(job_root, stages)
+    entry = [s for s in aggregation["stages"] if s["name"] == entrypoint_stage]
+    if entry and entry[0]["result"] != "COMPLETE":
+        # Section 9.1: the entrypoint must have exited with its journal
+        # closed COMPLETE; named explicitly rather than inferred.
+        return {"outcome": "NOT_FINALIZED", "cleanup": "UNPROVEN",
+                "reason": "entrypoint_not_complete"}
     if aggregation["verdict"] != "VALID":
         return {"outcome": "NOT_FINALIZED", "cleanup": "UNPROVEN",
                 "reason": "aggregation_" + aggregation["verdict"].lower()}
@@ -385,6 +397,25 @@ def finalize(job_root, stages):
                  and type(obtained["count"]) is int and obtained["count"] >= 0
                  and obtained["registry_sha256"] == registry["sha256"],
                  "obtained_secrets_unlinked")
+        # The registry and every candidate record are verified BEFORE the
+        # first write, so a failure here leaves nothing behind.
+        info = os.lstat(registry["path"])
+        _require((info.st_dev, info.st_ino) == (registry["dev"], registry["ino"]),
+                 "registry_identity_mismatch")
+        secrets = load_registry(job_root, registry["sha256"])
+        _require(len(secrets) >= obtained["count"], "registry_incomplete")
+        candidates = []
+        for stage, kind, payload in records:
+            if kind != "export_candidate":
+                continue
+            _require(type(payload) is dict and set(payload) == {"path", "dev", "ino", "name"}
+                     and payload["name"] in EXPORT_ALLOWLIST
+                     and _inside(job_root, payload["path"])
+                     and type(payload["dev"]) is int and type(payload["ino"]) is int,
+                     "candidate_record_invalid")
+            _require(all(c["name"] != payload["name"] for _, c in candidates),
+                     "candidate_repeated")
+            candidates.append((stage, payload))
     except (FinalizerError, JournalError) as error:
         return {"outcome": "NOT_FINALIZED", "cleanup": "UNPROVEN", "reason": str(error)}
     except OSError:
@@ -399,21 +430,8 @@ def finalize(job_root, stages):
     journal = PrivateJournal(os.path.join(export, "finalizer.jsonl"))
     try:
         journal.append({"step": "begin", "aggregation_stages": aggregation["stages"]})
-        info = os.lstat(registry["path"])
-        _require((info.st_dev, info.st_ino) == (registry["dev"], registry["ino"]),
-                 "registry_identity_mismatch")
-        secrets = load_registry(job_root, registry["sha256"])
-        _require(len(secrets) >= obtained["count"], "registry_incomplete")
         copied = []
-        for stage, kind, payload in records:
-            if kind != "export_candidate":
-                continue
-            _require(type(payload) is dict and set(payload) == {"path", "dev", "ino", "name"}
-                     and payload["name"] in EXPORT_ALLOWLIST
-                     and _inside(job_root, payload["path"])
-                     and type(payload["dev"]) is int and type(payload["ino"]) is int,
-                     "candidate_record_invalid")
-            _require(all(c["name"] != payload["name"] for c in copied), "candidate_repeated")
+        for stage, payload in candidates:
             data = _read_identified(payload["path"], payload["dev"], payload["ino"],
                                     EXPORT_ALLOWLIST[payload["name"]])
             target = os.path.join(export, payload["name"])
@@ -527,7 +545,12 @@ def failure_record(job_root, stages, env):
         if type(value) is not str or len(value.encode("utf-8")) < MIN_SECRET:
             return None
         secrets.append(value.encode("utf-8"))
-    aggregation = _sj.aggregate(job_root, stages)
+    try:
+        aggregation = _sj.aggregate(job_root, stages)
+    except Exception:
+        return None
+    # Only fixed identifiers (verdicts, reasons, stage names) and hashes are
+    # recorded; no payload, path or log content.
     hashes = {}
     for name, path in (("core_identity", os.path.join(job_root, _sj.CORE_NAME)),
                        ("launch_receipt", os.path.join(job_root, "reference", "launch.json"))):
@@ -562,3 +585,24 @@ def failure_record(job_root, stages, env):
     except OSError:
         return None
     return path
+
+
+def verify_manifest(export):
+    """Re-hash every export file against manifest.json immediately before
+    upload (section 9 step 5). True only if the file set and every size and
+    sha256 match exactly; any difference means no upload."""
+    try:
+        manifest = _sj.strict_json(read_bounded(os.path.join(export, "manifest.json"),
+                                                MAX_REGISTRY), "manifest_invalid")
+        entries = manifest["files"]
+        names = sorted(os.listdir(export))
+        if names != sorted([e["name"] for e in entries] + ["manifest.json"]):
+            return False
+        for entry in entries:
+            data = read_bounded(os.path.join(export, entry["name"]), MAX_SCANNED_FILE)
+            if len(data) != entry["size"] or \
+                    hashlib.sha256(data).hexdigest() != entry["sha256"]:
+                return False
+        return manifest["scan"] == "clean"
+    except (JournalError, OSError, KeyError, TypeError):
+        return False
