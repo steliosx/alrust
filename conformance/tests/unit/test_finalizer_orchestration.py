@@ -38,6 +38,18 @@ def unseal_after(tmp_path):
                     entry.chmod(0o600)
 
 
+def ended_generation():
+    """(pid, start_ticks) of a real child that has exited and been reaped,
+    so the finalizer's positive exit observation has a genuine subject."""
+    import subprocess
+    child = subprocess.Popen(["/bin/sleep", "30"])
+    with open("/proc/%d/stat" % child.pid, "rb") as f:
+        ticks = int(f.read().rsplit(b")", 1)[1].split()[19])
+    child.kill()
+    child.wait()
+    return child.pid, ticks
+
+
 def stat_record(path, kind):
     info = os.lstat(path)
     return {"path": str(path), "dev": info.st_dev, "ino": info.st_ino, "type": kind}
@@ -46,7 +58,8 @@ def stat_record(path, kind):
 def build(tmp_path, monkeypatch, *, report=b'{"result": "passed"}\n',
           stop_change=None, database_change=None, candidate_change=None,
           extra_records=(), registry_secrets=None, fail_stage=None,
-          terminal_change=None, obtained_change=None, leaky_dir=False):
+          terminal_change=None, obtained_change=None, leaky_dir=False,
+          generation=None):
     monkeypatch.setattr(sj, "EXTERNAL_CONFIG", str(tmp_path / "no-alertad.conf"))
     job = tmp_path / "job"
     job.mkdir(mode=0o700)
@@ -60,12 +73,13 @@ def build(tmp_path, monkeypatch, *, report=b'{"result": "passed"}\n',
     (job / "settings.py").write_text("DEBUG = False\n")
     reference = job / "reference"
     reference.mkdir(mode=0o700)
+    pid, ticks = generation if generation is not None else ended_generation()
     launch = {"schema": fz.SCHEMA_LAUNCH,
-              "supervisor": {"pid": 4000, "pgid": 4000, "start_ticks": 99,
+              "supervisor": {"pid": pid, "pgid": pid, "start_ticks": ticks,
                              "uid": os.getuid(), "subreaper": 1},
               "boot_id": core["boot_id"]}
     terminal = {"schema": fz.SCHEMA_STOP_TERMINAL, "result": "tree_empty",
-                "supervisor": {"pid": 4000, "start_ticks": 99},
+                "supervisor": {"pid": pid, "start_ticks": ticks},
                 "boot_id": core["boot_id"]}
     if terminal_change:
         terminal_change(terminal)
@@ -136,7 +150,9 @@ def build(tmp_path, monkeypatch, *, report=b'{"result": "passed"}\n',
 def test_sealed_export_with_complete_cleanup(tmp_path, monkeypatch):
     job = build(tmp_path, monkeypatch)
     report = fz.finalize(str(job), STAGES)
+    digest = report.pop("manifest_sha256")
     assert report == {"outcome": "SEALED", "cleanup": "COMPLETE", "reason": "sealed"}
+    assert fz.verify_manifest(str(job / "export"), digest) is True
     export = job / "export"
     names = sorted(p.name for p in export.iterdir())
     assert names == ["conformance-report.json", "finalizer.jsonl", "manifest.json",
@@ -207,8 +223,10 @@ def test_stop_evidence_must_link_receipts(tmp_path, monkeypatch, change, reason)
 
 
 @pytest.mark.parametrize("change", [
-    lambda t: t["supervisor"].update(start_ticks=100),   # another generation
-    lambda t: t["supervisor"].update(pid=4001),
+    lambda t: t["supervisor"].update(start_ticks=t["supervisor"]["start_ticks"] + 1),
+    lambda t: t["supervisor"].update(pid=t["supervisor"]["pid"] + 1),
+    lambda t: t["supervisor"].update(start_ticks=float(t["supervisor"]["start_ticks"])),
+    lambda t: t["supervisor"].update(extra=1),
     lambda t: t.update(result="tree_not_empty"),
     lambda t: t.update(boot_id="00000000-0000-0000-0000-000000000000"),
 ])
@@ -335,9 +353,11 @@ def test_export_directory_must_not_exist(tmp_path, monkeypatch):
 @pytest.mark.parametrize("tamper", ["content", "extra_file", "missing_file"])
 def test_verify_manifest_detects_later_tampering(tmp_path, monkeypatch, tamper):
     job = build(tmp_path, monkeypatch)
-    assert fz.finalize(str(job), STAGES)["outcome"] == "SEALED"
+    report = fz.finalize(str(job), STAGES)
+    assert report["outcome"] == "SEALED"
     export = job / "export"
-    assert fz.verify_manifest(str(export)) is True
+    digest = report["manifest_sha256"]
+    assert fz.verify_manifest(str(export), digest) is True
     export.chmod(0o700)
     report_file = export / "conformance-report.json"
     if tamper == "content":
@@ -348,7 +368,7 @@ def test_verify_manifest_detects_later_tampering(tmp_path, monkeypatch, tamper):
     else:
         report_file.chmod(0o600)
         report_file.unlink()
-    assert fz.verify_manifest(str(export)) is False
+    assert fz.verify_manifest(str(export), digest) is False
 
 
 def test_failure_record_reads_only_hashes(tmp_path, monkeypatch):
@@ -361,7 +381,9 @@ def test_failure_record_reads_only_hashes(tmp_path, monkeypatch):
     record = json.loads(Path(path).read_text())
     assert record["outcome"] == "FAIL" and record["cleanup"] == "UNPROVEN"
     assert record["aggregation"]["verdict"] == "VALID"
+    assert record["stop"] == {"verdict": "UNPROVEN", "reason": "no_terminal_receipt"}
     assert set(record["hashes"]) == {"core_identity", "launch_receipt"}
+    assert all(v is not None for v in record["hashes"].values())
     text = Path(path).read_text()
     for secret in (ROLE_KEY, SIGNING, DB_URL, "raw log stays private"):
         assert secret not in text
@@ -390,12 +412,133 @@ def test_repeated_candidate_name_is_refused(tmp_path, monkeypatch):
 
 def test_verify_manifest_requires_a_clean_scan_record(tmp_path, monkeypatch):
     job = build(tmp_path, monkeypatch)
-    assert fz.finalize(str(job), STAGES)["outcome"] == "SEALED"
+    report = fz.finalize(str(job), STAGES)
     export = job / "export"
     export.chmod(0o700)
     manifest_path = export / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
     manifest["scan"] = "finding"
     manifest_path.chmod(0o600)
-    manifest_path.write_text(json.dumps(manifest))
-    assert fz.verify_manifest(str(export)) is False
+    data = json.dumps(manifest)
+    manifest_path.write_text(data)
+    # Even with the matching digest of the changed manifest, a non-clean
+    # scan record is refused.
+    assert fz.verify_manifest(str(export), hashlib.sha256(data.encode()).hexdigest()) is False
+    assert fz.verify_manifest(str(export), report["manifest_sha256"]) is False
+
+
+
+# F2FE89-R1: positive generation-exit observation, not labels.
+def test_live_supervisor_is_not_quiescence(tmp_path, monkeypatch):
+    with open("/proc/self/stat", "rb") as f:
+        ticks = int(f.read().rsplit(b")", 1)[1].split()[19])
+    job = build(tmp_path, monkeypatch, generation=(os.getpid(), ticks))
+    report = fz.finalize(str(job), STAGES)
+    assert (report["outcome"], report["reason"]) == ("NOT_FINALIZED",
+                                                     "supervisor_generation_live_or_unproven")
+    assert not (job / "export").exists()
+    assert (job / "venv").exists() and (job / fz.REGISTRY_NAME).exists()
+
+
+def test_generation_ended_observations():
+    pid, ticks = ended_generation()
+    with open("/proc/sys/kernel/random/boot_id") as f:
+        boot = f.read().strip()
+    assert fz.generation_ended(pid, ticks, boot) is True
+    with open("/proc/self/stat", "rb") as f:
+        own = int(f.read().rsplit(b")", 1)[1].split()[19])
+    assert fz.generation_ended(os.getpid(), own, boot) is False
+    assert fz.generation_ended(os.getpid(), own + 1, boot) is True   # PID reused
+    assert fz.generation_ended(pid, ticks, "0" * 8 + "-0000-0000-0000-" + "0" * 12) is False
+
+
+# F2FE89-R2: the bytes scanned are the bytes hashed; a later change fails
+# the upload gate.
+def test_change_after_scan_fails_the_upload_gate(tmp_path, monkeypatch):
+    job = build(tmp_path, monkeypatch)
+    target = job / "export" / "conformance-report.json"
+    original = fz.read_bounded
+    calls = []
+
+    def change_on_second_read(path, limit):
+        if path == str(target):
+            calls.append(True)
+            if len(calls) == 2:
+                target.chmod(0o600)
+                target.write_bytes(SIGNING.encode())
+        return original(path, limit)
+    monkeypatch.setattr(fz, "read_bounded", change_on_second_read)
+    report = fz.finalize(str(job), STAGES)
+    assert len(calls) == 1          # finalize read the export file once
+    assert report["outcome"] == "SEALED"
+    assert fz.verify_manifest(str(job / "export"), report["manifest_sha256"]) is False
+    assert len(calls) == 2
+
+
+# F2FE89-R3: the upload gate accepts only the sealed, complete evidence.
+def test_verify_manifest_refuses_invented_or_incomplete_manifests(tmp_path, monkeypatch):
+    export = tmp_path / "export"
+    export.mkdir(mode=0o700)
+    data = json.dumps({"schema": "invalid", "files": [], "scan": "clean"})
+    (export / "manifest.json").write_text(data)
+    assert fz.verify_manifest(str(export), hashlib.sha256(data.encode()).hexdigest()) is False
+    job = build(tmp_path, monkeypatch)
+    report = fz.finalize(str(job), STAGES)
+    real = job / "export"
+    assert fz.verify_manifest(str(real), "0" * 64) is False
+    assert fz.verify_manifest(str(real), "not-a-digest") is False
+    manifest = json.loads((real / "manifest.json").read_text())
+    for change in (lambda m: m["files"][0].update(size=True),
+                   lambda m: m.update(files=[e for e in m["files"]
+                                             if e["name"] != "finalizer.jsonl"]),
+                   lambda m: m["files"][0].update(name="other.json"),
+                   lambda m: m.update(terminal_receipt_sha256="0" * 64)):
+        changed = json.loads(json.dumps(manifest))
+        change(changed)
+        real.chmod(0o700)
+        (real / "manifest.json").chmod(0o600)
+        text = json.dumps(changed)
+        (real / "manifest.json").write_text(text)
+        assert fz.verify_manifest(str(real), hashlib.sha256(text.encode()).hexdigest()) is False
+
+
+# F2FE89-R4: no failure record when a required input is unavailable.
+@pytest.mark.parametrize("missing", ["core-identity.json", "reference/launch.json"])
+def test_failure_record_requires_its_inputs(tmp_path, monkeypatch, missing):
+    job = build(tmp_path, monkeypatch, stop_change=lambda s: s.update(
+        verdict="UNPROVEN", reason="no_terminal_receipt"))
+    (job / missing).unlink()
+    env = {"SECRET_KEY": SIGNING, "DATABASE_URL": DB_URL}
+    assert fz.failure_record(str(job), STAGES, env) is None
+    assert not (job / "export").exists()
+
+
+# F2FE89-R5: wrong types and invalid UTF-8 are fixed refusals.
+def test_candidate_name_of_wrong_type(tmp_path, monkeypatch):
+    job = build(tmp_path, monkeypatch, candidate_change=lambda c: c.update(name=[]))
+    report = fz.finalize(str(job), STAGES)
+    assert (report["outcome"], report["reason"]) == ("NOT_FINALIZED",
+                                                     "candidate_record_invalid")
+
+
+def test_failure_record_env_with_surrogate(tmp_path, monkeypatch):
+    job = build(tmp_path, monkeypatch)
+    env = {"SECRET_KEY": "x" * 20 + "\ud800", "DATABASE_URL": DB_URL}
+    assert fz.failure_record(str(job), STAGES, env) is None
+
+
+def test_verify_manifest_requires_the_mandatory_evidence(tmp_path, monkeypatch):
+    # The finalizer journal removed from both the manifest AND the directory:
+    # the file set is consistent, so only the mandatory-evidence rule refuses.
+    job = build(tmp_path, monkeypatch)
+    fz.finalize(str(job), STAGES)
+    export = job / "export"
+    export.chmod(0o700)
+    manifest = json.loads((export / "manifest.json").read_text())
+    manifest["files"] = [e for e in manifest["files"] if e["name"] != "finalizer.jsonl"]
+    (export / "finalizer.jsonl").chmod(0o600)
+    (export / "finalizer.jsonl").unlink()
+    (export / "manifest.json").chmod(0o600)
+    text = json.dumps(manifest)
+    (export / "manifest.json").write_text(text)
+    assert fz.verify_manifest(str(export), hashlib.sha256(text.encode()).hexdigest()) is False

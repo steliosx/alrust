@@ -315,6 +315,54 @@ def _read_identified(path, dev, ino, limit):
     return b"".join(chunks)
 
 
+_PID_LIMIT = 4194304
+
+
+def _generation(value):
+    """(pid, start_ticks) from a receipt's supervisor dict, exact ints only."""
+    _require(type(value) is dict and type(value.get("pid")) is int
+             and type(value.get("start_ticks")) is int
+             and 1 < value["pid"] <= _PID_LIMIT and 0 < value["start_ticks"] < (1 << 63),
+             "stop_receipt_mismatch")
+    return value["pid"], value["start_ticks"]
+
+
+def generation_ended(pid, start_ticks, boot):
+    """Positively observe that the process generation (pid, start_ticks) on
+    BOOT has ended (section 9.1): the PID is absent, held by another
+    start_ticks, or the generation is a zombie (its pidfd reports exit).
+    A live generation, a different boot or any failed inspection is False.
+    No signal is ever sent."""
+    try:
+        with open("/proc/sys/kernel/random/boot_id") as f:
+            if f.read(64).strip() != boot:
+                return False
+    except OSError:
+        return False
+    try:
+        fd = os.pidfd_open(pid, 0)
+    except ProcessLookupError:
+        return True
+    except (OSError, AttributeError, OverflowError):
+        return False
+    try:
+        try:
+            with open("/proc/%d/stat" % pid, "rb") as f:
+                fields = f.read(4096).rsplit(b")", 1)[1].split()
+        except FileNotFoundError:
+            return True
+        if int(fields[19]) != start_ticks:
+            return True
+        import select
+        poller = select.poll()
+        poller.register(fd, select.POLLIN)
+        return bool(poller.poll(0))
+    except (OSError, ValueError, IndexError):
+        return False
+    finally:
+        os.close(fd)
+
+
 def _quiescence(job_root, records, core):
     """Positive quiescence (section 9 step 1), from journal records only.
 
@@ -340,17 +388,21 @@ def _quiescence(job_root, records, core):
              == stop["terminal_receipt_sha256"], "stop_receipt_mismatch")
     launch = _sj.strict_json(launch_bytes, "stop_receipt_mismatch")
     terminal = _sj.strict_json(terminal_bytes, "stop_receipt_mismatch")
-    try:
-        supervisor = launch["supervisor"]
-        _require(launch["schema"] == SCHEMA_LAUNCH and terminal["schema"] == SCHEMA_STOP_TERMINAL
-                 and terminal["result"] == "tree_empty"
-                 and terminal["supervisor"] == {"pid": supervisor["pid"],
-                                                "start_ticks": supervisor["start_ticks"]}
-                 and type(supervisor["pid"]) is int and type(supervisor["start_ticks"]) is int
-                 and launch["boot_id"] == terminal["boot_id"] == core["boot_id"],
-                 "stop_receipt_mismatch")
-    except (KeyError, TypeError):
-        raise FinalizerError("stop_receipt_mismatch") from None
+    _require(type(launch) is dict and type(terminal) is dict, "stop_receipt_mismatch")
+    launched = _generation(launch.get("supervisor"))
+    _require(type(terminal.get("supervisor")) is dict
+             and set(terminal["supervisor"]) == {"pid", "start_ticks"}
+             and _generation(terminal["supervisor"]) == launched
+             and launch.get("schema") == SCHEMA_LAUNCH
+             and terminal.get("schema") == SCHEMA_STOP_TERMINAL
+             and terminal.get("result") == "tree_empty"
+             and type(launch.get("boot_id")) is str
+             and launch["boot_id"] == terminal.get("boot_id") == core["boot_id"],
+             "stop_receipt_mismatch")
+    # The labels and hashes above are expected bindings; this is the
+    # positive observation that the supervisor generation actually ended.
+    _require(generation_ended(launched[0], launched[1], core["boot_id"]),
+             "supervisor_generation_live_or_unproven")
     _, database = _one(records, "database_drop")
     _require(type(database) is dict and set(database) == {
         "verdict", "database", "oid", "system_identifier"}
@@ -409,6 +461,7 @@ def finalize(job_root, stages, entrypoint_stage="entrypoint"):
             if kind != "export_candidate":
                 continue
             _require(type(payload) is dict and set(payload) == {"path", "dev", "ino", "name"}
+                     and type(payload["name"]) is str
                      and payload["name"] in EXPORT_ALLOWLIST
                      and _inside(job_root, payload["path"])
                      and type(payload["dev"]) is int and type(payload["ino"]) is int,
@@ -420,6 +473,10 @@ def finalize(job_root, stages, entrypoint_stage="entrypoint"):
         return {"outcome": "NOT_FINALIZED", "cleanup": "UNPROVEN", "reason": str(error)}
     except OSError:
         return {"outcome": "NOT_FINALIZED", "cleanup": "UNPROVEN", "reason": "evidence_unreadable"}
+    except (TypeError, KeyError, ValueError, UnicodeError):
+        # A record of the wrong type anywhere in the evidence: fixed code,
+        # nothing echoed.
+        return {"outcome": "NOT_FINALIZED", "cleanup": "UNPROVEN", "reason": "evidence_malformed"}
 
     root_identity = (core["job_root"]["dev"], core["job_root"]["ino"])
     export = os.path.join(job_root, EXPORT_DIR)
@@ -493,12 +550,16 @@ def finalize(job_root, stages, entrypoint_stage="entrypoint"):
         expected = sorted(["finalizer.jsonl", "terminal-cleanup.json"]
                           + [c["name"] for c in copied])
         _require(names == expected, "export_set_changed")
-        for name in names:
-            if scan_file(os.path.join(export, name), secrets):
-                return {"outcome": "FAILED", "cleanup": cleanup, "reason": "scan_finding"}
         files = []
         for name in names:
-            data = read_bounded(os.path.join(export, name), MAX_SCANNED_FILE)
+            # One read per file: the bytes scanned are exactly the bytes
+            # hashed into the manifest (F2FE89-R2).
+            try:
+                data = read_bounded(os.path.join(export, name), MAX_SCANNED_FILE)
+            except (JournalError, OSError):
+                return {"outcome": "FAILED", "cleanup": cleanup, "reason": "scan_finding"}
+            if scan_bytes(data, secrets):
+                return {"outcome": "FAILED", "cleanup": cleanup, "reason": "scan_finding"}
             files.append({"name": name, "size": len(data),
                           "sha256": hashlib.sha256(data).hexdigest()})
         manifest = {"schema": SCHEMA_MANIFEST, "files": files, "scan": "clean",
@@ -520,7 +581,9 @@ def finalize(job_root, stages, entrypoint_stage="entrypoint"):
         for name in names + ["manifest.json"]:
             os.chmod(os.path.join(export, name), 0o400, follow_symlinks=False)
         os.chmod(export, 0o500)
-        return {"outcome": "SEALED", "cleanup": cleanup, "reason": "sealed"}
+        # The upload step must verify against THIS digest (verify_manifest).
+        return {"outcome": "SEALED", "cleanup": cleanup, "reason": "sealed",
+                "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest()}
     except (FinalizerError, JournalError) as error:
         return {"outcome": "FAILED", "cleanup": "UNPROVEN", "reason": str(error)}
     except OSError:
@@ -532,44 +595,49 @@ def finalize(job_root, stages, entrypoint_stage="entrypoint"):
 def failure_record(job_root, stages, env):
     """The bounded failure-only record (section 9 step 1a).
 
-    Used when finalize() returned NOT_FINALIZED. It reads only the core
-    identity, closed stage journals (as hashed by the aggregation), and the
-    launch receipt, records only their hashes, the aggregation outcome and
-    stop verdict, and names no log content. It never builds the registry. It
-    is scanned against SECRET_KEY and DATABASE_URL from ENV plus the generic
-    patterns; if either is unavailable or anything matches, nothing is
-    written. Returns the record path, or None."""
-    secrets = []
-    for key in ("SECRET_KEY", "DATABASE_URL"):
-        value = env.get(key)
-        if type(value) is not str or len(value.encode("utf-8")) < MIN_SECRET:
-            return None
-        secrets.append(value.encode("utf-8"))
+    Used when finalize() returned NOT_FINALIZED. Required inputs, each
+    independently closed: the core identity (validated for this job root)
+    and the launch receipt. If either is unavailable, nothing is written.
+    It also carries the stop verdict and reason when a closed, hash-checked
+    stage journal holds one (else null), the aggregation outcome, and the
+    hashes; only fixed identifiers, never payload, path or log content. It
+    never builds the registry. It is scanned against SECRET_KEY and
+    DATABASE_URL from ENV (each valid UTF-8 of at least MIN_SECRET bytes)
+    plus the generic patterns; if they are unavailable or anything matches,
+    nothing is written. Returns the record path, or None."""
     try:
+        secrets = []
+        for key in ("SECRET_KEY", "DATABASE_URL"):
+            value = env.get(key)
+            _require(type(value) is str, "failure_secret_unavailable")
+            encoded = value.encode("utf-8")
+            _require(len(encoded) >= MIN_SECRET, "failure_secret_unavailable")
+            secrets.append(encoded)
+        core_bytes = read_bounded(os.path.join(job_root, _sj.CORE_NAME), _sj.MAX_CORE)
+        _sj.validate_core(core_bytes, job_root)
+        launch_bytes = read_bounded(os.path.join(job_root, "reference", "launch.json"),
+                                    MAX_REGISTRY)
         aggregation = _sj.aggregate(job_root, stages)
-    except Exception:
-        return None
-    # Only fixed identifiers (verdicts, reasons, stage names) and hashes are
-    # recorded; no payload, path or log content.
-    hashes = {}
-    for name, path in (("core_identity", os.path.join(job_root, _sj.CORE_NAME)),
-                       ("launch_receipt", os.path.join(job_root, "reference", "launch.json"))):
-        try:
-            hashes[name] = hashlib.sha256(read_bounded(path, _sj.MAX_CORE)).hexdigest()
-        except (JournalError, OSError):
-            hashes[name] = None
-    record = {"schema": SCHEMA_FAILURE, "outcome": "FAIL", "cleanup": "UNPROVEN",
-              "aggregation": {"verdict": aggregation["verdict"],
-                              "reason": aggregation["reason"],
-                              "stages": [{"index": s["index"], "name": s["name"],
-                                          "result": s["result"], "sha256": s["sha256"]}
-                                         for s in aggregation["stages"]]},
-              "hashes": hashes}
-    data = (json.dumps(record, sort_keys=True) + "\n").encode()
-    if scan_bytes(data, secrets):
-        return None
-    export = os.path.join(job_root, EXPORT_DIR)
-    try:
+        stop = None
+        for _, kind, payload in _journal_records(job_root, aggregation):
+            if kind == "stop_verdict" and type(payload) is dict \
+                    and payload.get("verdict") in ("COMPLETE", "FAILED", "UNPROVEN") \
+                    and type(payload.get("reason")) is str \
+                    and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", payload["reason"]):
+                stop = {"verdict": payload["verdict"], "reason": payload["reason"]}
+        record = {"schema": SCHEMA_FAILURE, "outcome": "FAIL", "cleanup": "UNPROVEN",
+                  "stop": stop,
+                  "aggregation": {"verdict": aggregation["verdict"],
+                                  "reason": aggregation["reason"],
+                                  "stages": [{"index": s["index"], "name": s["name"],
+                                              "result": s["result"], "sha256": s["sha256"]}
+                                             for s in aggregation["stages"]]},
+                  "hashes": {"core_identity": hashlib.sha256(core_bytes).hexdigest(),
+                             "launch_receipt": hashlib.sha256(launch_bytes).hexdigest()}}
+        data = (json.dumps(record, sort_keys=True) + "\n").encode()
+        if scan_bytes(data, secrets):
+            return None
+        export = os.path.join(job_root, EXPORT_DIR)
         os.mkdir(export, 0o700)
         path = os.path.join(export, "failure-record.json")
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
@@ -582,27 +650,53 @@ def failure_record(job_root, stages, env):
         finally:
             os.close(fd)
         os.chmod(export, 0o500)
-    except OSError:
+        return path
+    except (FinalizerError, JournalError, OSError, TypeError, KeyError, ValueError,
+            UnicodeError):
         return None
-    return path
 
 
-def verify_manifest(export):
-    """Re-hash every export file against manifest.json immediately before
-    upload (section 9 step 5). True only if the file set and every size and
-    sha256 match exactly; any difference means no upload."""
+_REQUIRED_EXPORT = ("finalizer.jsonl", "terminal-cleanup.json")
+
+
+def verify_manifest(export, expected_manifest_sha256):
+    """Upload gate (section 9.5): True only if manifest.json is EXACTLY the
+    sealed manifest (its sha256 equals the digest finalize() returned), has
+    the exact schema and typed entries, lists the mandatory evidence plus
+    only allowlisted names, links the terminal receipt, and every listed
+    file re-hashes to its entry with nothing else present."""
     try:
-        manifest = _sj.strict_json(read_bounded(os.path.join(export, "manifest.json"),
-                                                MAX_REGISTRY), "manifest_invalid")
-        entries = manifest["files"]
-        names = sorted(os.listdir(export))
-        if names != sorted([e["name"] for e in entries] + ["manifest.json"]):
-            return False
-        for entry in entries:
+        _require(_sha(expected_manifest_sha256), "manifest_invalid")
+        raw = read_bounded(os.path.join(export, "manifest.json"), MAX_REGISTRY)
+        _require(hashlib.sha256(raw).hexdigest() == expected_manifest_sha256,
+                 "manifest_invalid")
+        manifest = _sj.strict_json(raw, "manifest_invalid")
+        _require(type(manifest) is dict and set(manifest) == {
+            "schema", "files", "scan", "terminal_receipt_sha256", "cleanup"}
+            and manifest["schema"] == SCHEMA_MANIFEST and manifest["scan"] == "clean"
+            and manifest["cleanup"] in ("COMPLETE", "UNPROVEN")
+            and _sha(manifest["terminal_receipt_sha256"])
+            and type(manifest["files"]) is list, "manifest_invalid")
+        names = []
+        for entry in manifest["files"]:
+            _require(type(entry) is dict and set(entry) == {"name", "size", "sha256"}
+                     and type(entry["name"]) is str and type(entry["size"]) is int
+                     and entry["size"] >= 0 and _sha(entry["sha256"])
+                     and (entry["name"] in _REQUIRED_EXPORT
+                          or entry["name"] in EXPORT_ALLOWLIST), "manifest_invalid")
+            names.append(entry["name"])
+        _require(len(set(names)) == len(names)
+                 and all(n in names for n in _REQUIRED_EXPORT), "manifest_invalid")
+        _require(sorted(os.listdir(export)) == sorted(names + ["manifest.json"]),
+                 "manifest_invalid")
+        for entry in manifest["files"]:
             data = read_bounded(os.path.join(export, entry["name"]), MAX_SCANNED_FILE)
-            if len(data) != entry["size"] or \
-                    hashlib.sha256(data).hexdigest() != entry["sha256"]:
-                return False
-        return manifest["scan"] == "clean"
-    except (JournalError, OSError, KeyError, TypeError):
+            _require(len(data) == entry["size"]
+                     and hashlib.sha256(data).hexdigest() == entry["sha256"],
+                     "manifest_invalid")
+            if entry["name"] == "terminal-cleanup.json":
+                _require(entry["sha256"] == manifest["terminal_receipt_sha256"],
+                         "manifest_invalid")
+        return True
+    except (FinalizerError, JournalError, OSError, KeyError, TypeError, ValueError):
         return False
