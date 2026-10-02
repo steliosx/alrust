@@ -122,6 +122,8 @@ if [[ -n ${JOB_ROOT:-} ]]; then
   : "${VENV:=$JOB_ROOT/venv}"
   [[ $VENV == "$JOB_ROOT"/* ]] \
     || { echo "run-reference: VENV must be inside JOB_ROOT" >&2; exit 1; }
+  [[ ${HOME:-} == "$JOB_ROOT"/* ]] \
+    || { echo "run-reference: HOME must be inside JOB_ROOT in supervised mode" >&2; exit 1; }
 fi
 if [[ -n ${VENV:-} ]]; then
   if [[ -e $VENV ]]; then

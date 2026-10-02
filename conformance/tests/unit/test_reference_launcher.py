@@ -143,7 +143,6 @@ def test_ready_line_binds_the_receipt_and_stop_completes(tmp_path):
     record = json.loads(receipt.read_text())
     assert (record["supervisor"]["pid"], record["child"]["pid"]) == (sup, child)
     assert alive(sup) and alive(child)
-    assert not (ROOT / ".reference.pid").exists() or True  # legacy file untouched
     rc, out = stop(receipt, digest, job)
     assert (rc, out["verdict"]) == (0, "COMPLETE")
     assert tree_gone(job)

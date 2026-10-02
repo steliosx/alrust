@@ -193,10 +193,18 @@ def read_receipt(path):
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_RECEIPT:
             raise Refused("launch receipt is not a bounded regular file")
-        data = os.read(fd, MAX_RECEIPT + 1)
+        chunks, size = [], 0
+        while size <= MAX_RECEIPT:
+            chunk = os.read(fd, MAX_RECEIPT + 1 - size)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
     finally:
         os.close(fd)
-    return data
+    if size > MAX_RECEIPT:
+        raise Refused("launch receipt too large")
+    return b"".join(chunks)
 
 
 def parse_receipt(data):
@@ -239,7 +247,7 @@ def healthy(port, seconds):
         return False
 
 
-def stop_supervisor(proc, receipt, digest, observed):
+def stop_supervisor(proc, receipt, digest, observed, job_root):
     """Signal only P (our own unreaped child); report the stop verdict."""
     if proc.poll() is None:
         try:
@@ -267,7 +275,8 @@ def stop_supervisor(proc, receipt, digest, observed):
         log("cleanup UNPROVEN: no validated launch receipt (supervisor exit %d)"
             % code)
         return False
-    out = subprocess.run([sys.executable, "-I", "-S", "-B", STOP, receipt, digest],
+    out = subprocess.run([sys.executable, "-I", "-S", "-B", STOP, receipt, digest,
+                          job_root],
                          capture_output=True, text=True, timeout=60)
     log("cleanup verdict: %s" % out.stdout.strip())
     return out.returncode == 0
@@ -374,7 +383,7 @@ def main(argv):
     finally:
         # Any failure, expected or not, stops only our own supervisor child.
         if not handed_off:
-            stop_supervisor(proc, receipt, digest, observed)
+            stop_supervisor(proc, receipt, digest, observed, job_root)
             if stop_signal == signal.SIGTERM:
                 rc = 143
             elif stop_signal == signal.SIGINT:
