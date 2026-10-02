@@ -118,10 +118,8 @@ command -v pg_config >/dev/null \
 
 if [[ -n ${JOB_ROOT:-} ]]; then
   : "${VENV:=$JOB_ROOT/venv}"
-  [[ ${HOME:-} == "$JOB_ROOT"/* ]] \
-    || { echo "run-reference: HOME must be inside JOB_ROOT in supervised mode" >&2; exit 1; }
   # Every refusal that does not need the built venv happens here, before
-  # the build, with the launcher's own checks (job root, venv path,
+  # the build, with the launcher's own checks (job root, HOME, venv path,
   # environment allowlist, /etc/alertad.conf, port, an earlier launch).
   "$py" -I -S -B "$root/conformance/scripts/launch-reference.py" --preflight \
     --job-root "$JOB_ROOT" --venv "$VENV" --port "$PORT" --ready-timeout "$READY_TIMEOUT" \

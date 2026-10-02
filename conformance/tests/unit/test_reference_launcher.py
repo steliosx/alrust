@@ -94,7 +94,9 @@ def launch(job, port, timeout=15, scripts=None, env=None, **kw):
     args = PY + [str(scripts / "launch-reference.py"), "--job-root", str(job),
                  "--venv", str(job / "venv"), "--port", str(port),
                  "--ready-timeout", str(timeout)]
-    return subprocess.Popen(args, env=env or ENV, stdout=subprocess.PIPE,
+    env = dict(env or ENV)
+    env.setdefault("HOME", str(job / "home"))
+    return subprocess.Popen(args, env=env, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, **kw)
 
 
@@ -118,6 +120,25 @@ def tree_gone(job):
     record = json.loads(path.read_text())
     return not alive(record["supervisor"]["pid"]) \
         and not alive(record["child"]["pid"])
+
+
+@pytest.fixture(autouse=True)
+def stop_leftover_launches(tmp_path):
+    """After each test, stop any launch still running under tmp_path.
+
+    A defective launcher can hand off by mistake; its supervisor is then
+    stopped through stop-reference.py itself (pidfd, generation-checked), so
+    a failing control never leaves processes behind."""
+    yield
+    for receipt in tmp_path.glob("**/reference/launch.json"):
+        job = receipt.parent.parent
+        try:
+            digest = hashlib.sha256(receipt.read_bytes()).hexdigest()
+        except OSError:
+            continue
+        subprocess.run(PY + [str(SCRIPTS / "stop-reference.py"), str(receipt),
+                             digest, str(job)],
+                       capture_output=True, text=True, timeout=60)
 
 
 @pytest.fixture
@@ -255,7 +276,8 @@ def test_closed_output_is_a_failure_with_cleanup(tmp_path):
               "--job-root", str(job),
               "--venv", str(job / "venv"), "--port", str(port),
               "--ready-timeout", "15"],
-        env=ENV, stdout=write_end, stderr=subprocess.PIPE, text=True)
+        env=dict(ENV, HOME=str(job / "home")), stdout=write_end,
+        stderr=subprocess.PIPE, text=True)
     os.close(write_end)
     _, err = proc.communicate(timeout=60)
     assert proc.returncode == 1
@@ -294,8 +316,8 @@ def test_job_root_and_venv_checks(tmp_path, variant):
     args = PY + [str(copy_scripts(tmp_path) / "launch-reference.py"),
                  "--job-root", str(job), "--venv", str(venv),
                  "--port", str(port), "--ready-timeout", "5"]
-    out = subprocess.run(args, env=ENV, capture_output=True, text=True,
-                         timeout=30)
+    out = subprocess.run(args, env=dict(ENV, HOME=str(job / "home")),
+                         capture_output=True, text=True, timeout=30)
     assert out.returncode == 1 and "refused" in out.stderr
 
 
@@ -495,19 +517,37 @@ def fake_checkout(tmp_path):
     tools.mkdir()
     (tools / "pg_config").write_text("#!/bin/sh\nexit 0\n")
     (tools / "pg_config").chmod(0o755)
+    # A build sentinel: the interpreter shim passes everything to the real
+    # Python except `-m venv`, which records the sentinel and exits 97. A
+    # control that wrongly reaches the build therefore never installs.
+    shim = tools / "reference-python"
+    shim.write_text(
+        "#!%s\nimport os, sys\n"
+        "if sys.argv[1:3] == ['-m', 'venv']:\n"
+        "    open(%r, 'x').write('BUILD_REACHED\\n')\n"
+        "    sys.exit(97)\n"
+        "os.execv(%r, [%r] + sys.argv[1:])\n"
+        % (sys.executable, str(tmp_path / "build-reached"), sys.executable,
+           sys.executable))
+    shim.chmod(0o755)
     return repo, tools
 
 
 @pytest.mark.parametrize("variant", [
-    "mode", "group_writable", "symlink", "not_normalized", "trailing_slash",
-    "venv_outside", "venv_dotdot", "venv_symlinked_parent", "home_outside",
-    "env_extra", "busy_port", "earlier_launch"])
+    "valid", "mode", "group_writable", "symlink", "not_normalized",
+    "trailing_slash", "venv_outside", "venv_dotdot", "venv_symlinked_parent",
+    "home_outside", "home_dotdot", "home_final_symlink",
+    "home_symlinked_parent", "home_unset", "env_extra", "busy_port",
+    "earlier_launch"])
 def test_run_reference_refuses_before_the_build(tmp_path, variant):
     repo, tools = fake_checkout(tmp_path)
     job = tmp_path / "job"
     job.mkdir(mode=0o700)
+    outside = tmp_path / "outside"
+    outside.mkdir(mode=0o700)
     env = dict(ENV, PATH="%s:/usr/bin:/bin" % tools, JOB_ROOT=str(job),
-               HOME=str(job / "home"), REFERENCE_PYTHON=sys.executable,
+               HOME=str(job / "home"),
+               REFERENCE_PYTHON=str(tools / "reference-python"),
                PORT=str(free_port()))
     holder = None
     if variant == "mode":
@@ -534,6 +574,17 @@ def test_run_reference_refuses_before_the_build(tmp_path, variant):
         env["VENV"] = str(job / "sub" / "venv")
     elif variant == "home_outside":
         env["HOME"] = str(tmp_path)
+    elif variant == "home_dotdot":
+        env["HOME"] = str(job) + "/../outside"
+    elif variant == "home_final_symlink":
+        (job / "home").symlink_to(outside)
+    elif variant == "home_symlinked_parent":
+        (job / "sub").symlink_to(outside)
+        env["HOME"] = str(job / "sub" / "home")
+    elif variant == "home_unset":
+        del env["HOME"]
+    elif variant == "valid":
+        pass
     elif variant == "env_extra":
         env["FLASK_DEBUG"] = "1"
     elif variant == "busy_port":
@@ -551,7 +602,14 @@ def test_run_reference_refuses_before_the_build(tmp_path, variant):
     finally:
         if holder is not None:
             holder.close()
+    if variant == "valid":
+        # The positive control: every check passes and the build is reached
+        # (the sentinel stops it there).
+        assert out.returncode == 97, out.stderr
+        assert (tmp_path / "build-reached").exists()
+        return
     assert out.returncode == 1, out.stderr
+    assert not (tmp_path / "build-reached").exists()
     assert "environment" not in out.stdout  # no venv was built
     assert sorted(p.name for p in job.iterdir()) == before
     assert not (tmp_path / "elsewhere-venv").exists()
@@ -567,6 +625,30 @@ def test_preflight_alone_accepts_a_clean_job_root(tmp_path):
         PY + [str(scripts / "launch-reference.py"), "--preflight",
               "--job-root", str(job), "--venv", str(job / "venv"),
               "--port", str(free_port()), "--ready-timeout", "5"],
-        env=ENV, capture_output=True, text=True, timeout=30)
+        env=dict(ENV, HOME=str(job / "home")), capture_output=True,
+        text=True, timeout=30)
     assert out.returncode == 0, out.stderr
     assert list(job.iterdir()) == []
+
+
+@pytest.mark.parametrize("variant", ["dotdot", "final_symlink", "unset"])
+def test_launch_rechecks_home(tmp_path, variant):
+    # The launch step itself, not only the preflight, refuses a HOME that
+    # leaves the job root, before starting anything.
+    job, port = make_job(tmp_path), free_port()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    env = dict(ENV)
+    if variant == "dotdot":
+        env["HOME"] = str(job) + "/../outside"
+    elif variant == "final_symlink":
+        (job / "home").symlink_to(outside)
+        env["HOME"] = str(job / "home")
+    proc = subprocess.Popen(
+        PY + [str(copy_scripts(tmp_path) / "launch-reference.py"),
+              "--job-root", str(job), "--venv", str(job / "venv"),
+              "--port", str(port), "--ready-timeout", "5"],
+        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    rc, out, err = finish(proc)
+    assert rc == 1 and "HOME" in err
+    assert not (job / "reference").exists()

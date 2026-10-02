@@ -100,6 +100,24 @@ def check_job_root(job_root):
     return info
 
 
+def check_home(job_root):
+    """HOME is an absolute normalized path strictly inside the job root, with
+    symlink-free parents; if it exists, it is a real directory of this user
+    (SS-I1-HOME-1)."""
+    home = os.environ.get("HOME", "")
+    parent = os.path.dirname(home)
+    if not os.path.isabs(home) or os.path.normpath(home) != home \
+            or not home.startswith(job_root + os.sep) \
+            or os.path.realpath(parent) != parent:
+        raise Refused("HOME must be inside the job root, without symlinks")
+    try:
+        info = os.lstat(home)
+    except FileNotFoundError:
+        return
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+        raise Refused("HOME must be a real directory of this user")
+
+
 def check_venv_path(job_root, venv):
     """V lies strictly inside the job root, with no symlink in its parents."""
     parent = os.path.dirname(venv)
@@ -317,6 +335,7 @@ def main(argv):
         check_environment()
         check_external_config()
         check_job_root(job_root)
+        check_home(job_root)
         if preflight:
             check_venv_path(job_root, venv)
             if os.path.lexists(venv):
