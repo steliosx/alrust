@@ -140,13 +140,59 @@ jobs:
             sudo apt-get install -y -q --no-install-recommends libpq-dev
           fi
           pg_config --version
-      - name: Boot reference server (fresh hash-locked environment, AX64-G1)
+      # Supervised mode (docs/ci-launch-attestation-contract.md, sections 4-5):
+      # a private job root, a cleared environment, the subreaper supervisor
+      # and a pidfd-only stop with a proven cleanup verdict. Scaffold scope
+      # only: one healthcheck, no conformance vectors.
+      - name: Prepare a private job root
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          job="$RUNNER_TEMP/alrust-job"
+          mkdir -m 700 -- "$job"
+          mkdir -m 700 -- "$job/home"
+          echo "JOB_ROOT=$job" >> "$GITHUB_ENV"
+      - name: Boot reference server under the supervisor (fresh hash-locked environment, AX64-G1)
+        id: boot
         timeout-minutes: 15
-        env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/alerta
-        run: conformance/scripts/run-reference.sh
+        run: |
+          set -euo pipefail
+          secret=$("$pythonLocation/bin/python3" -I -c 'import secrets; print(secrets.token_hex(32))')
+          echo "::add-mask::$secret"
+          env -i PATH=/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 HOME="$JOB_ROOT/home" \
+            JOB_ROOT="$JOB_ROOT" PORT=18081 READY_TIMEOUT=60 \
+            REFERENCE_PYTHON="$pythonLocation/bin/python3" SECRET_KEY="$secret" \
+            DATABASE_URL=postgres://postgres:postgres@localhost:5432/alerta \
+            conformance/scripts/run-reference.sh | tee "$RUNNER_TEMP/boot.out"
+          # The launcher's single ready line is the only trusted receipt binding.
+          line=$(grep -E '^reference alerta [^ ]+ up on :18081 \(supervisor [0-9]+, child [0-9]+, receipt [^ ]+ sha256 [0-9a-f]{64}\)$' "$RUNNER_TEMP/boot.out" | tail -n 1) \
+            || { echo "no ready line from the launcher" >&2; exit 1; }
+          receipt=$(sed -E 's/.* receipt ([^ ]+) sha256 .*/\1/' <<<"$line")
+          digest=$(sed -E 's/.* sha256 ([0-9a-f]{64})\)$/\1/' <<<"$line")
+          [[ $receipt == "$JOB_ROOT/reference/launch.json" && $digest =~ ^[0-9a-f]{64}$ ]] \
+            || { echo "unexpected receipt binding" >&2; exit 1; }
+          echo "receipt=$receipt" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
       - name: Smoke check
         timeout-minutes: 1
-        run: curl -fsS --max-time 30 http://127.0.0.1:8080/management/healthcheck
-      # Phase 0: the black-box suite runs here against ALRUST_TARGET=http://127.0.0.1:8080
-      # once conformance/ has one (language pending ADR-0002).
+        run: curl -fsS --max-time 30 http://127.0.0.1:18081/management/healthcheck
+      # Phase 0: the black-box suite runs here against http://127.0.0.1:18081
+      # once a profile is enabled by its own reviewed head.
+      - name: Stop the supervised server and prove cleanup
+        if: always() && steps.boot.outputs.digest != ''
+        timeout-minutes: 2
+        env:
+          RECEIPT: ${{ steps.boot.outputs.receipt }}
+          DIGEST: ${{ steps.boot.outputs.digest }}
+        run: |
+          set -euo pipefail
+          env -i PATH=/usr/bin:/bin LANG=C.UTF-8 "$pythonLocation/bin/python3" -I -S -B \
+            conformance/scripts/stop-reference.py "$RECEIPT" "$DIGEST" "$JOB_ROOT" \
+            | tee "$RUNNER_TEMP/stop.out"
+          grep -qx '{"reason": "tree_empty", "verdict": "COMPLETE"}' "$RUNNER_TEMP/stop.out" \
+            || { echo "cleanup not proven COMPLETE" >&2; exit 1; }
+          if ss -ltnH 'sport = :18081' | grep -q .; then
+            echo "a listener remains on :18081 after the proven stop" >&2
+            exit 1
+          fi
+          echo "cleanup COMPLETE: the supervisor's whole tree ended (ECHILD) and nothing listens on :18081"
