@@ -196,6 +196,7 @@ launch. The ready line adds the receipt's sha256.
 | P live with a matching generation (via pidfd) | TERM via pidfd; poll the pidfd for exit, bounded at 20 s; then read the terminal receipt | COMPLETE only on `tree_empty`, else UNPROVEN |
 | a terminal receipt `tree_not_empty` | none | FAILED |
 | P absent, reused or unreadable, with no terminal receipt | none | UNPROVEN |
+| P live with a matching `start_ticks` but another uid | none (an ownership mismatch, not an exit) | UNPROVEN |
 
 - **No group-number evidence.** In none of these cases does a group number,
   session id or uid count as attribution. The kernel group state of G may be
@@ -316,7 +317,10 @@ scanned after every proof has been written. Steps:
      `tree_empty` of the receipt's P generation. P writes that receipt
      only after `ECHILD`, so every process that could write the server
      log or serve the observer has exited and its file descriptors are
-     closed. The helper has also seen P itself exit through the pidfd;
+     closed. The helper has also observed that P's generation ended: its
+     pidfd reported exit, or later, on the same boot, P's PID was absent
+     or held by a process with a different `start_ticks`. A UID mismatch
+     or a failed inspection is never such an observation;
    - each stage journal is closed with `stage_complete`.
 
    **Merely running the stop helper proves nothing.** A missing,
