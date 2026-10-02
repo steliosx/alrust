@@ -630,3 +630,25 @@ def test_deeply_nested_terminal_receipt_is_invalid(tmp_path, cleanup):
     rc, out = stop(path, digest)
     assert (rc, out["verdict"], out["reason"]) == (
         2, "UNPROVEN", "terminal_receipt_invalid")
+
+
+@pytest.mark.parametrize("field,value", [
+    ("pid", 2 ** 31), ("pid", 2 ** 63), ("pid", stop_mod.PID_LIMIT + 1),
+    ("start_ticks", 2 ** 63), ("uid", 2 ** 32), ("uid", -1)])
+def test_out_of_range_receipt_fields_are_malformed(tmp_path, field, value):
+    # SS-R5: no process is created; the values exceed what the kernel can
+    # hold, so the helper must refuse them before any syscall.
+    record = {"schema": stop_mod.SCHEMA_LAUNCH,
+              "supervisor": {"pid": 4000, "pgid": 4000, "start_ticks": 2,
+                             "uid": os.getuid(), "subreaper": 1},
+              "boot_id": stop_mod.boot_id(),
+              "terminal_receipt": str(tmp_path / "terminal.json")}
+    record["supervisor"][field] = value
+    if field == "pid":
+        record["supervisor"]["pgid"] = value
+    data = json.dumps(record).encode()
+    path = tmp_path / "launch.json"
+    path.write_bytes(data)
+    rc, out = stop(path, hashlib.sha256(data).hexdigest())
+    assert (rc, out["verdict"], out["reason"]) == (2, "UNPROVEN",
+                                                   "receipt_malformed")
