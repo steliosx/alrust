@@ -93,7 +93,8 @@ def test_independent_core_expectations_refuse_mismatch(fixture,field,value):
 @pytest.mark.parametrize("path,value",[
     (("schema",),"other"),(("supervisor","pid"),True),
     (("supervisor","pgid"),10002),(("supervisor","start_ticks"),False),
-    (("supervisor","subreaper"),True),(("supervisor","uid"),True),
+    (("supervisor","subreaper"),True),(("supervisor","subreaper"),0),
+    (("supervisor","uid"),True),
     (("child","pid"),10000),(("child","start_ticks"),None),
     (("child","start_ticks"),False),(("venv","dev"),True),
     (("venv","path"),"/tmp/elsewhere"),(("observer",),None),
@@ -182,6 +183,36 @@ def test_directory_symlinks_refused(fixture,tmp_path,target):
     try:
         with pytest.raises(br.BindingReadError):br.read_binding_inputs(**args)
     finally:p.unlink();moved.rename(p)
+
+
+def test_public_reference_directory_refused(fixture):
+    root,*_,args=fixture
+    (root/"reference").chmod(0o755)
+    with pytest.raises(br.BindingReadError,match="reference_invalid"):
+        br.read_binding_inputs(**args)
+
+
+def test_foreign_owned_reference_directory_refused(fixture,monkeypatch):
+    *_,args=fixture
+    original_open=br._Handles.open
+    original_stat=os.fstat
+    reference_fds=set()
+    def track(self,path,**kw):
+        fd=original_open(self,path,**kw)
+        if path=="reference" and kw.get("directory"):
+            reference_fds.add(fd)
+        return fd
+    def observed_stat(fd):
+        info=original_stat(fd)
+        if fd in reference_fds:
+            fields=list(info)
+            fields[4]=os.getuid()+1  # Synthetic observed UID; no host chown.
+            return os.stat_result(fields)
+        return info
+    monkeypatch.setattr(br._Handles,"open",track)
+    monkeypatch.setattr(br.os,"fstat",observed_stat)
+    with pytest.raises(br.BindingReadError,match="reference_invalid"):
+        br.read_binding_inputs(**args)
 
 
 @pytest.mark.parametrize("target",["root","reference","core","launch"])
