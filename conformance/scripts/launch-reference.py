@@ -110,11 +110,9 @@ def parse_args(argv):
                 or value[0] == "0":
             raise Refused("%s out of range" % name)
     names = [name for name, _, _ in files]
-    if files and (len(set(names)) != len(names)
-                  or not set(names) <= set(OBSERVER_FILE_NAMES)
-                  or OBSERVER_MODULE_NAME not in names):
-        raise Refused("observer files must be unique allowlisted names "
-                      "including %s" % OBSERVER_MODULE_NAME)
+    if files and sorted(names) != sorted(OBSERVER_FILE_NAMES):
+        raise Refused("observer files must be exactly %s, once each"
+                      % ", ".join(OBSERVER_FILE_NAMES))
     for name, pin, path in files:
         if not os.path.isabs(path) or os.path.normpath(path) != path:
             raise Refused("observer file paths must be absolute and normalized")
@@ -175,6 +173,24 @@ def write_new(path, data):
         os.close(fd)
 
 
+def verify_observer_install(manifest):
+    """Read back every installed file and the activator, before the server is
+    spawned, and require the exact bytes the manifest records."""
+    entries = manifest["files"] + [manifest["activator"]]
+    for entry in entries:
+        fd = os.open(entry["path"], os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+                     | os.O_NONBLOCK)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_OBSERVER_MODULE:
+                raise Refused("installed observer file is not a bounded regular file")
+            data = os.read(fd, MAX_OBSERVER_MODULE + 1)
+        finally:
+            os.close(fd)
+        if hashlib.sha256(data).hexdigest() != entry["sha256"]:
+            raise Refused("installed observer file differs from its manifest")
+
+
 def install_observer(job_root, venv, files, rundir):
     """Install the pinned files and the activator into the fresh venv, create
     the private socket directory, and write the install manifest that binds
@@ -184,13 +200,16 @@ def install_observer(job_root, venv, files, rundir):
     # leaves a partial install. The bytes checked are the bytes installed.
     verified = [(name, read_observer_module(path, pin))
                 for name, pin, path in files]
+    activator = os.path.join(site, OBSERVER_ACTIVATOR_NAME)
+    for target in [os.path.join(site, name) for name, _ in verified] + [activator]:
+        if os.path.lexists(target):
+            raise Refused("observer destination already exists in the venv")
     installed = []
     for name, data in verified:
         target = os.path.join(site, name)
         write_new(target, data)
         installed.append({"name": name, "path": target, "size": len(data),
                           "sha256": hashlib.sha256(data).hexdigest()})
-    activator = os.path.join(site, OBSERVER_ACTIVATOR_NAME)
     write_new(activator, OBSERVER_ACTIVATOR)
     manifest = {"schema": OBSERVER_MANIFEST_SCHEMA, "site_packages": site,
                 "files": installed,
@@ -200,6 +219,7 @@ def install_observer(job_root, venv, files, rundir):
     data = (json.dumps(manifest, sort_keys=True) + "\n").encode()
     manifest_path = os.path.join(rundir, "observer-install.json")
     write_new(manifest_path, data)
+    verify_observer_install(manifest)
     socket_dir = os.path.join(job_root, "observer")
     os.mkdir(socket_dir, 0o700)
     return {"socket": os.path.join(socket_dir, "observer.sock"),

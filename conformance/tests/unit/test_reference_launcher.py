@@ -770,7 +770,8 @@ def test_without_observer_nothing_is_installed(tmp_path):
 @pytest.mark.parametrize("variant", [
     "wrong_pin", "wrong_codec_pin", "symlinked_module", "truncated_option",
     "bad_pin_format", "oversized", "unknown_name", "duplicate_name",
-    "codec_without_module", "relative_path"])
+    "codec_without_module", "module_without_codec", "relative_path",
+    "existing_destination"])
 def test_observer_module_refusals(tmp_path, variant):
     job, port = make_job(tmp_path), free_port()
     extra = observer_args(tmp_path)
@@ -795,20 +796,43 @@ def test_observer_module_refusals(tmp_path, variant):
         extra[5] = "alrust_observer.py"
     elif variant == "codec_without_module":
         extra = extra[4:]
+    elif variant == "module_without_codec":
+        extra = extra[:4]
+    elif variant == "existing_destination":
+        # A stale codec already in site-packages: refused before any write
+        # (the preflight cannot see it; the launch refuses it).
+        (site_dir(job) / "alrust_observer_protocol.py").write_text("stale")
     else:
         extra[3] = "observer_module.py"
-    for preflight in (True, False):
-        args = (["--preflight"] if preflight else [])
-        proc = subprocess.run(
-            PY + [str(copy_scripts(tmp_path) / "launch-reference.py")] + args
-            + ["--job-root", str(job), "--venv", str(job / "venv"),
-               "--port", str(port), "--ready-timeout", "5"] + extra,
-            env=dict(ENV, HOME=str(job / "home")), capture_output=True,
-            text=True, timeout=30)
-        assert proc.returncode == 1, (preflight, proc.stderr)
-        assert "refused" in proc.stderr
+    # The preflight runs against a fresh job root whose venv does not exist
+    # yet (as before a real build), so it is the observer fault that it
+    # refuses, not the existing venv.
+    fresh = tmp_path / "fresh-job"
+    fresh.mkdir(mode=0o700)
+    pre = subprocess.run(
+        PY + [str(copy_scripts(tmp_path) / "launch-reference.py"), "--preflight",
+              "--job-root", str(fresh), "--venv", str(fresh / "venv"),
+              "--port", str(port), "--ready-timeout", "5"] + extra,
+        env=dict(ENV, HOME=str(fresh / "home")), capture_output=True,
+        text=True, timeout=30)
+    if variant == "existing_destination":
+        # A stale file inside a venv cannot exist before the build; only
+        # the launch can see it.
+        assert pre.returncode == 0, pre.stderr
+    else:
+        assert pre.returncode == 1 and "refused" in pre.stderr, pre.stderr
+        assert "already exists" not in pre.stderr
+    proc = subprocess.run(
+        PY + [str(copy_scripts(tmp_path) / "launch-reference.py"),
+              "--job-root", str(job), "--venv", str(job / "venv"),
+              "--port", str(port), "--ready-timeout", "5"] + extra,
+        env=dict(ENV, HOME=str(job / "home")), capture_output=True,
+        text=True, timeout=30)
+    assert proc.returncode == 1 and "refused" in proc.stderr, proc.stderr
+    assert not (job / "reference" / "launch.json").exists()
     assert not (site_dir(job) / "alrust_observer.py").exists()
-    assert not (site_dir(job) / "alrust_observer_protocol.py").exists()
+    if variant != "existing_destination":
+        assert not (site_dir(job) / "alrust_observer_protocol.py").exists()
     assert not (site_dir(job) / "alrust_observer.pth").exists()
 
 
@@ -829,3 +853,29 @@ def test_receipt_without_the_observer_record_is_refused(tmp_path):
     # (P was the launcher's own child), but the verdict stays UNPROVEN.
     assert "disagrees" in err and "cleanup UNPROVEN" in err
     assert tree_gone(job)
+
+
+def test_installed_file_read_back_detects_a_change(tmp_path):
+    # verify_observer_install re-reads every installed file and the
+    # activator before the server is spawned; a changed byte is refused.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "launch_reference", SCRIPTS / "launch-reference.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    entries = []
+    for name, data in (("a.py", b"A\n"), ("b.pth", b"B\n")):
+        path = tmp_path / name
+        path.write_bytes(data)
+        entries.append({"path": str(path),
+                        "sha256": hashlib.sha256(data).hexdigest()})
+    manifest = {"files": entries[:1], "activator": entries[1]}
+    mod.verify_observer_install(manifest)
+    (tmp_path / "b.pth").write_bytes(b"C\n")
+    with pytest.raises(mod.Refused):
+        mod.verify_observer_install(manifest)
+    link = tmp_path / "link.py"
+    link.symlink_to(tmp_path / "a.py")
+    manifest["files"][0]["path"] = str(link)
+    with pytest.raises(OSError):
+        mod.verify_observer_install(manifest)
