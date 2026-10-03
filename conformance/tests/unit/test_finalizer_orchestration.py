@@ -19,7 +19,11 @@ SHA = "b" * 64
 ENV = {"GITHUB_REPOSITORY": "steliosx/alrust", "GITHUB_RUN_ID": "123",
        "GITHUB_RUN_ATTEMPT": "1", "GITHUB_JOB": "profile",
        "ImageOS": "ubuntu24", "ImageVersion": "20261001.1"}
-STAGES = ["launch", "entrypoint", "stop", "registry", "database"]
+STAGES = ["database-create", "launch", "launch-confirm", "entrypoint", "stop", "registry",
+          "database-drop"]
+DB_IDENTITY = {"oid": 16384, "role": "alrust_scaffold_123_1", "role_oid": 16383,
+               "system_identifier": "7123456789012345678",
+               "postmaster_start_time": "2026-10-03T01:02:03.456789Z"}
 ROLE_KEY = "SYNTHETIC-" + "0f" * 24
 SIGNING = "synthetic-signing-key-" + "c" * 32
 DB_URL = "postgres://alrust:" + "d" * 32 + "@127.0.0.1:5432/alrust_scaffold_1_1"
@@ -59,7 +63,8 @@ def build(tmp_path, monkeypatch, *, report=b'{"result": "passed"}\n',
           stop_change=None, database_change=None, candidate_change=None,
           extra_records=(), registry_secrets=None, fail_stage=None,
           terminal_change=None, obtained_change=None, leaky_dir=False,
-          generation=None, omit_stop=False):
+          generation=None, omit_stop=False, created_change=None, handoff_change=None,
+          omit_handoff=False, upto=None):
     monkeypatch.setattr(sj, "EXTERNAL_CONFIG", str(tmp_path / "no-alertad.conf"))
     job = tmp_path / "job"
     job.mkdir(mode=0o700)
@@ -102,10 +107,27 @@ def build(tmp_path, monkeypatch, *, report=b'{"result": "passed"}\n',
                 (reference / "terminal.json").read_bytes()).hexdigest()}
     if stop_change:
         stop_change(stop)
-    database = {"verdict": "COMPLETE", "database": "alrust_scaffold_1_1",
-                "oid": 16384, "system_identifier": "7123456789012345678"}
+    created = dict(DB_IDENTITY, name="alrust_scaffold_123_1", server_version_num=160004,
+                   version="PostgreSQL 16.4 (synthetic)",
+                   psql={"path": "/usr/bin/psql", "version": "psql (PostgreSQL) 16.4"})
+    if created_change:
+        created_change(created)
+    database = dict(DB_IDENTITY, verdict="COMPLETE", reason="dropped_and_verified_absent",
+                    database="alrust_scaffold_123_1")
     if database_change:
         database_change(database)
+
+    def handoff(job_root):
+        # Built when the launch journal exists, so its digest is real.
+        value = {"launch_journal_sha256": hashlib.sha256(
+                     Path(sj.journal_path(str(job_root), 1, "launch")).read_bytes()).hexdigest(),
+                 "receipt_sha256": stop["launch_receipt_sha256"],
+                 "supervisor": {"pid": pid, "start_ticks": ticks},
+                 "child": {"pid": pid + 1, "start_ticks": ticks + 1},
+                 "observed_monotonic_ns": 1}
+        if handoff_change:
+            handoff_change(value)
+        return value
     cand = dict(stat_record(candidate, "file"), name="conformance-report.json")
     del cand["type"]
     if candidate_change:
@@ -120,14 +142,16 @@ def build(tmp_path, monkeypatch, *, report=b'{"result": "passed"}\n',
         leak.mkdir()
         launch_records.append(("owned_resource", stat_record(leak, "dir")))
     per_stage = {
+        "database-create": [("database_created", created)],
         "launch": launch_records,
+        "launch-confirm": [] if omit_handoff else [("launch_handoff", handoff)],
         "entrypoint": [("export_candidate", cand),
                        ("obtained_secret_count", obtained)],
         "stop": [("stop_verdict", stop)],
         "registry": [("credential_registry", dict(
             {k: v for k, v in stat_record(registry, "file").items() if k != "type"},
             sha256=registry_sha))],
-        "database": [("database_drop", database)],
+        "database-drop": [("database_drop", database)],
     }
     if omit_stop:
         per_stage["stop"] = []
@@ -135,11 +159,11 @@ def build(tmp_path, monkeypatch, *, report=b'{"result": "passed"}\n',
         per_stage[stage].append((kind, payload))
     sj.prepare_journal_dir(str(job))
     previous = None
-    for index, name in enumerate(STAGES):
+    for index, name in enumerate(STAGES[:STAGES.index(upto) + 1] if upto else STAGES):
         try:
             with sj.StageJournal(str(job), index, name, previous) as journal:
                 for kind, payload in per_stage[name]:
-                    journal.record(kind, payload)
+                    journal.record(kind, payload(job) if callable(payload) else payload)
                 if name == fail_stage:
                     journal.fail("synthetic_failure")
                     raise RuntimeError("synthetic")
@@ -243,14 +267,47 @@ def test_terminal_must_be_tree_empty_for_the_launch_generation(tmp_path, monkeyp
     assert not (job / "export").exists()
 
 
-@pytest.mark.parametrize("change", [
-    lambda d: d.update(verdict="UNPROVEN"), lambda d: d.pop("oid"),
-    lambda d: d.update(oid=True)])
-def test_database_drop_must_be_proven(tmp_path, monkeypatch, change):
+@pytest.mark.parametrize("change,reason", [
+    (lambda d: d.update(verdict="UNPROVEN"), "database_drop_not_proven"),
+    (lambda d: d.update(verdict="ROLE_ONLY_COMPLETE"), "database_drop_not_proven"),
+    (lambda d: d.update(verdict="NONE_ALLOCATED"), "database_drop_not_proven"),
+    (lambda d: d.pop("oid"), "database_drop_not_proven"),
+    (lambda d: d.update(extra=1), "database_drop_not_proven"),
+    (lambda d: d.update(oid=True), "database_linkage_mismatch"),
+    (lambda d: d.update(oid=16385), "database_linkage_mismatch"),
+    (lambda d: d.update(role_oid=1), "database_linkage_mismatch"),
+    (lambda d: d.update(database="alrust_other_1_1"), "database_linkage_mismatch"),
+    (lambda d: d.update(system_identifier="1"), "database_linkage_mismatch"),
+    (lambda d: d.update(postmaster_start_time="2026-10-03T09:00:00.000000Z"),
+     "database_linkage_mismatch"),
+])
+def test_database_drop_must_be_proven_and_linked(tmp_path, monkeypatch, change, reason):
     job = build(tmp_path, monkeypatch, database_change=change)
     report = fz.finalize(str(job), STAGES)
-    assert (report["outcome"], report["reason"]) == ("NOT_FINALIZED",
-                                                     "database_drop_not_proven")
+    assert (report["outcome"], report["reason"]) == ("NOT_FINALIZED", reason)
+    assert not (job / "export").exists()
+
+
+def test_database_created_must_be_recorded_once(tmp_path, monkeypatch):
+    job = build(tmp_path, monkeypatch, extra_records=[
+        ("database-create", "database_created", dict(DB_IDENTITY, name="x"))])
+    report = fz.finalize(str(job), STAGES)
+    assert (report["outcome"], report["reason"]) == (
+        "NOT_FINALIZED", "database_created_missing_or_repeated")
+
+
+@pytest.mark.parametrize("change,omit,reason", [
+    (None, True, "launch_handoff_missing"),
+    (lambda h: h.update(launch_journal_sha256="0" * 64), False, "launch_handoff_mismatch"),
+    (lambda h: h.update(receipt_sha256="0" * 64), False, "launch_handoff_mismatch"),
+    (lambda h: h.update(supervisor={"pid": 1, "start_ticks": 1}), False,
+     "launch_handoff_mismatch"),
+    (lambda h: h.update(extra=1), False, "launch_handoff_mismatch"),
+])
+def test_finalizer_requires_the_launch_handoff(tmp_path, monkeypatch, change, omit, reason):
+    job = build(tmp_path, monkeypatch, handoff_change=change, omit_handoff=omit)
+    report = fz.finalize(str(job), STAGES)
+    assert (report["outcome"], report["reason"]) == ("NOT_FINALIZED", reason)
 
 
 def test_failed_entrypoint_is_named(tmp_path, monkeypatch):
@@ -567,7 +624,7 @@ def test_failure_record_refuses_missing_journals(tmp_path, monkeypatch):
 
 def test_failure_record_refuses_an_unclosed_journal(tmp_path, monkeypatch):
     job = build(tmp_path, monkeypatch, stop_change=lambda s: s.update(UNPROVEN_STOP))
-    path = Path(sj.journal_path(str(job), 4, "database"))
+    path = Path(sj.journal_path(str(job), 6, "database-drop"))
     lines = path.read_bytes().splitlines(keepends=True)
     path.chmod(0o600)
     path.write_bytes(b"".join(lines[:-1]))          # drop stage_complete
@@ -621,7 +678,7 @@ def test_failure_record_without_a_terminal_receipt(tmp_path, monkeypatch):
 
 def test_failure_record_from_a_closed_failed_stage(tmp_path, monkeypatch):
     # A stage that closed FAILED is failure evidence, not an unavailable input.
-    job = build(tmp_path, monkeypatch, fail_stage="database",
+    job = build(tmp_path, monkeypatch, fail_stage="database-drop",
                 stop_change=lambda s: s.update(UNPROVEN_STOP))
     assert sj.aggregate(str(job), STAGES)["verdict"] == "FAILED"
     path = fz.failure_record(str(job), STAGES, FAILURE_ENV)
@@ -695,3 +752,82 @@ def test_a_write_failure_after_removals_reports_the_actual_cleanup(tmp_path, mon
     assert report == {"outcome": "FAILED", "cleanup": "COMPLETE",
                       "reason": "finalizer_io_failed"}
     assert not (job / "export" / "manifest.json").exists()
+
+
+
+# writer_quiescence: the gate the registry and database-drop stages run
+# BEFORE opening their own journals (database design section 4, DBC023-R1).
+PREFIX = STAGES[:STAGES.index("stop") + 1]
+
+
+def test_writer_gate_passes_on_a_quiescent_prefix(tmp_path, monkeypatch):
+    job = build(tmp_path, monkeypatch, upto="stop")
+    evidence = fz.writer_quiescence(str(job), PREFIX)
+    assert evidence["aggregation"]["verdict"] == "VALID"
+    assert evidence["stop"]["verdict"] == "COMPLETE"
+    # The registry's own prefix (through registry) also passes.
+    (tmp_path / "second").mkdir()
+    job2 = build(tmp_path / "second", monkeypatch, upto="registry")
+    fz.writer_quiescence(str(job2), STAGES[:STAGES.index("registry") + 1])
+
+
+@pytest.mark.parametrize("prefix", [
+    ["database-create", "launch", "entrypoint", "stop"],          # no launch-confirm
+    ["launch", "launch-confirm", "entrypoint", "stop"],           # no database-create
+    ["database-create", "launch", "entrypoint", "launch-confirm", "stop"],  # not adjacent
+    ["database-create", "launch", "launch-confirm", "entrypoint"],          # no stop
+    "database-create,launch",
+])
+def test_writer_gate_refuses_an_invalid_prefix(tmp_path, monkeypatch, prefix):
+    job = build(tmp_path, monkeypatch, upto="stop")
+    with pytest.raises(fz.FinalizerError, match="writer_gate_stages_invalid"):
+        fz.writer_quiescence(str(job), prefix)
+
+
+@pytest.mark.parametrize("kwargs,code", [
+    ({"fail_stage": "launch"}, "writer_gate_failed"),
+    ({"fail_stage": "entrypoint"}, "writer_gate_failed"),
+    ({"omit_stop": True}, "stop_verdict_missing_or_repeated"),
+    ({"stop_change": lambda s: s.update(reason="tree_not_empty")}, "stop_not_proven"),
+    ({"terminal_change": lambda t: t.update(result="tree_not_empty")},
+     "stop_receipt_mismatch"),
+    ({"omit_handoff": True}, "launch_handoff_missing"),
+    ({"handoff_change": lambda h: h.update(launch_journal_sha256="0" * 64)},
+     "launch_handoff_mismatch"),
+])
+def test_writer_gate_refusals(tmp_path, monkeypatch, kwargs, code):
+    job = build(tmp_path, monkeypatch, upto="stop", **kwargs)
+    with pytest.raises(fz.FinalizerError, match=code):
+        fz.writer_quiescence(str(job), PREFIX)
+
+
+def test_writer_gate_refuses_a_live_supervisor(tmp_path, monkeypatch):
+    with open("/proc/self/stat", "rb") as f:
+        ticks = int(f.read().rsplit(b")", 1)[1].split()[19])
+    job = build(tmp_path, monkeypatch, upto="stop", generation=(os.getpid(), ticks))
+    with pytest.raises(fz.FinalizerError, match="supervisor_generation_live_or_unproven"):
+        fz.writer_quiescence(str(job), PREFIX)
+
+
+def test_writer_gate_refuses_an_unclosed_or_extra_journal(tmp_path, monkeypatch):
+    job = build(tmp_path, monkeypatch, upto="stop")
+    # An already-open next journal (the order N4 forbids) is an extra file.
+    Path(sj.journal_path(str(job), len(PREFIX), "registry")).write_text("")
+    with pytest.raises(fz.FinalizerError, match="writer_gate_incomplete"):
+        fz.writer_quiescence(str(job), PREFIX)
+
+
+def test_writer_gate_reads_no_registry_or_credential(tmp_path, monkeypatch):
+    # DBC023-N3: only immutable proof inputs are read.
+    job = build(tmp_path, monkeypatch, upto="stop")
+    read = []
+    real = fz.read_bounded
+
+    def spy(path, limit):
+        read.append(os.path.basename(path))
+        return real(path, limit)
+    monkeypatch.setattr(fz, "read_bounded", spy)
+    fz.writer_quiescence(str(job), PREFIX)
+    assert fz.REGISTRY_NAME not in read and "server.log" not in read
+    assert set(read) <= {"core-identity.json", "launch.json", "terminal.json"} | {
+        os.path.basename(sj.journal_path(str(job), i, n)) for i, n in enumerate(PREFIX)}

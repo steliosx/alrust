@@ -480,16 +480,15 @@ def allocation_states(create_journal_bytes):
     return role_state, database_state, role_record, database_record
 
 
-def drop_database(job_root, journal, *, gate, create_journal_bytes, port, superuser,
+def drop_database(job_root, journal, *, create_journal_bytes, port, superuser,
                   superuser_password, psql_path, deadline_ns):
-    """Run inside the open `database-drop` StageJournal, after `gate()`
-    (writer_quiescence or no_launch_quiescence, part B) has passed; the gate
-    runs here, before the first SQL statement. Only RECORDED objects that
-    match on cluster, name and oid are dropped. Appends exactly one
-    database_drop record and returns its verdict."""
+    """Run inside the open `database-drop` StageJournal, which run_drop_stage
+    opens only after its gate (writer_quiescence or no_launch_quiescence)
+    passed. Only RECORDED objects that match on cluster, name and oid are
+    dropped. Appends exactly one database_drop record and returns its
+    verdict."""
     role_state, database_state, role_record, database_record = \
         allocation_states(create_journal_bytes)
-    gate()
     record = {"verdict": "UNPROVEN", "reason": "drop_not_proven",
               "database": None, "oid": None, "role": None, "role_oid": None,
               "system_identifier": None, "postmaster_start_time": None}
@@ -555,3 +554,171 @@ def drop_database(job_root, journal, *, gate, create_journal_bytes, port, superu
         record.update(reason=error.code)
     journal.record("database_drop", record)
     return record["verdict"]
+
+
+# ---------------------------------------------------------------------------
+# Part B: the no-launch gate and the registry stage
+
+def no_launch_quiescence(job_root, prefix):
+    """Gate for database-drop when nothing was launched (design section 4,
+    DBC023-N4). Evaluated BEFORE the drop journal is opened. PREFIX is the
+    stage list ending with database-create. Requires the prefix closed (VALID
+    or FAILED, never INCOMPLETE), the journal directory holding exactly the
+    prefix journals (aggregate's exact-set rule: no launch or later journal),
+    and no reference/ or observer/ directory (no launch receipt, no observer
+    socket). Anything not positively established refuses."""
+    _require(type(prefix) is list and prefix and prefix[-1] == CREATE_STAGE,
+             "no_launch_prefix_invalid")
+    aggregation = sj.aggregate(job_root, prefix)
+    _require(aggregation["verdict"] in ("VALID", "FAILED"), "no_launch_prefix_not_closed")
+    for name in ("reference", "observer"):
+        try:
+            os.lstat(os.path.join(job_root, name))
+        except FileNotFoundError:
+            continue
+        raise DatabaseStageError("launch_evidence_present")
+
+
+SQL_KEYS = """-- alrust:op=registry_keys
+SELECT json_build_object('keys', coalesce(json_agg(key), '[]'::json))
+FROM (SELECT key FROM keys ORDER BY key LIMIT :limit) AS k;
+"""
+_URL = re.compile(r"postgresql://(alrust_[a-z0-9_]{1,56}):([0-9a-f]{64})"
+                  r"@127\.0\.0\.1:([0-9]{1,5})/(alrust_[a-z0-9_]{1,56})\Z")
+
+
+def _read_private_file(path, limit):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        _require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid()
+                 and stat.S_IMODE(info.st_mode) == 0o600 and info.st_size <= limit,
+                 "private_file_invalid")
+        data = os.read(fd, limit + 1)
+        _require(len(data) == info.st_size, "private_file_invalid")
+        return data, info
+    finally:
+        os.close(fd)
+
+
+def build_registry(job_root, journal, *, secret_key_path, other_secrets, port,
+                   psql_path, deadline_ns):
+    """The registry stage (contract section 9 step 2), inside the open
+    `registry` StageJournal, which run_registry_stage opens only after
+    writer_quiescence passed: before any private file is opened or any key
+    is enumerated. Then: the job
+    role's URL and password from the 0600 URL file, SECRET_KEY from its 0600
+    file (recorded as an owned resource), every keys.key value read as the
+    job role (bounded: one row more than the room left is a refusal, never a
+    truncation), and OTHER_SECRETS (the provisioner and entrypoint secrets;
+    their file interface is Codex's and not yet approved, Q1). The registry
+    is written in the finalizer's format, 0600, exclusively, and recorded."""
+    from . import finalizer as fz
+    directory, _ = _database_dir(job_root, create=False)
+    url_bytes, _ = _read_private_file(os.path.join(directory, URL_NAME), 1024)
+    url = url_bytes.decode("ascii", "replace").rstrip("\n")
+    match = _URL.fullmatch(url)
+    _require(match and match[1] == match[4] and int(match[3]) == port, "url_invalid")
+    role, password = match[1], match[2]
+    key_bytes, key_info = _read_private_file(secret_key_path, fz.MAX_SECRET)
+    journal.record("owned_resource", {"path": secret_key_path, "dev": key_info.st_dev,
+                                      "ino": key_info.st_ino, "type": "file"})
+    try:
+        secret_key = key_bytes.decode("utf-8").rstrip("\n")
+    except UnicodeError:
+        raise DatabaseStageError("secret_key_invalid") from None
+    _require(type(other_secrets) is list and all(type(v) is str for v in other_secrets),
+             "other_secrets_invalid")
+    fixed = list(other_secrets) + [secret_key, url, password]
+    room = fz.MAX_SECRETS - len(fixed)
+    _require(room >= 0, "registry_incomplete")
+    client = Psql(psql_path, port=port, user=role, password=password,
+                  database_dir=directory, deadline_ns=deadline_ns)
+    value = client.query_json(SQL_KEYS, role, [("limit", str(room + 1))])
+    _require(set(value) == {"keys"} and type(value["keys"]) is list, "psql_output_invalid")
+    keys = value["keys"]
+    _require(len(keys) <= room, "registry_incomplete")
+    secrets_out = []
+    for item in keys + fixed:
+        _require(type(item) is str, "registry_incomplete")
+        try:
+            size = len(item.encode("utf-8"))
+        except UnicodeError:
+            raise DatabaseStageError("registry_incomplete") from None
+        _require(fz.MIN_SECRET <= size <= fz.MAX_SECRET, "registry_incomplete")
+        if item not in secrets_out:
+            secrets_out.append(item)
+    path = os.path.join(job_root, fz.REGISTRY_NAME)
+    data = (json.dumps({"schema": fz.SCHEMA_REGISTRY, "secrets": secrets_out},
+                       sort_keys=True) + "\n").encode()
+    _require(len(data) <= fz.MAX_REGISTRY, "registry_incomplete")
+    _write_private(path, data)
+    info = os.lstat(path)
+    journal.record("credential_registry", {"path": path, "dev": info.st_dev,
+                                           "ino": info.st_ino,
+                                           "sha256": hashlib.sha256(data).hexdigest()})
+    return path
+
+
+# ---------------------------------------------------------------------------
+# Stage runners: gate first, then the journal, then the action
+
+def _gate_code(error):
+    if isinstance(error, DatabaseStageError):
+        return error.code
+    if isinstance(error, (sj.JournalError,)) or type(error).__name__ == "FinalizerError":
+        code = str(error)
+        return code if re.fullmatch(r"[a-z][a-z0-9_]{0,63}", code) else "gate_refused"
+    return "gate_unavailable"
+
+
+def _run_stage(job_root, prefix, name, gate, action):
+    """Evaluate GATE (read-only) with no journal of this stage open, then open
+    it (index len(prefix), previous prefix[-1], binding that journal's sha256)
+    and either record the refusal and close FAILED, or run ACTION. ACTION
+    returns (result, failure_code or None)."""
+    refusal = None
+    try:
+        gate()
+    except Exception as error:  # every gate failure is a fixed-code refusal
+        refusal = _gate_code(error)
+    with sj.StageJournal(job_root, len(prefix), name, prefix[-1]) as journal:
+        if refusal is not None:
+            journal.fail(refusal)
+            raise DatabaseStageError(refusal)
+        try:
+            result, failure = action(journal)
+        except DatabaseStageError as error:
+            journal.fail(error.code)
+            raise
+        if failure is not None:
+            journal.fail(failure)
+            raise DatabaseStageError(failure)
+        return result
+
+
+def run_registry_stage(job_root, prefix, **kwargs):
+    """The `registry` stage, gated by the finalizer's writer_quiescence over
+    PREFIX (through stop). Returns the registry path."""
+    from . import finalizer as fz
+    return _run_stage(job_root, prefix, "registry",
+                      lambda: fz.writer_quiescence(job_root, prefix),
+                      lambda journal: (build_registry(job_root, journal, **kwargs), None))
+
+
+def run_drop_stage(job_root, prefix, *, launched, **kwargs):
+    """The `database-drop` stage. LAUNCHED selects the gate: writer_quiescence
+    over PREFIX, or no_launch_quiescence for an allocation that never reached
+    launch. The stage closes COMPLETE only for verdict COMPLETE; any other
+    verdict is recorded, then the stage closes FAILED with that verdict."""
+    from . import finalizer as fz
+    _require(CREATE_STAGE in prefix, "drop_prefix_invalid")
+    create = sj.read_bounded(sj.journal_path(job_root, prefix.index(CREATE_STAGE),
+                                             CREATE_STAGE), sj.MAX_JOURNAL)
+    gate = (lambda: fz.writer_quiescence(job_root, prefix)) if launched else \
+        (lambda: no_launch_quiescence(job_root, prefix))
+
+    def action(journal):
+        verdict = drop_database(job_root, journal, create_journal_bytes=create, **kwargs)
+        return verdict, None if verdict == "COMPLETE" else "drop_" + verdict.lower()
+    return _run_stage(job_root, prefix, DROP_STAGE, gate, action)
