@@ -539,3 +539,75 @@ def test_docker_output_over_limit_refuses(tmp_path):
     import time as _time
     with pytest.raises(ds.DatabaseStageError, match="docker_output_too_large"):
         ds.container_identity(str(stub), CONTAINER, _time.monotonic_ns() + 3_000_000_000)
+
+
+# --- DBA2-R2: stdin is fed under the same deadline ------------------------------
+
+def test_stdin_feed_obeys_call_deadline(tmp_path):
+    # Codex's control from f44f8e40: a child that never reads its stdin.
+    directory = tmp_path / "database"
+    directory.mkdir(mode=0o700)
+    pidfile = tmp_path / "stub.pid"
+    stub = tmp_path / "psql-never-reads"
+    stub.write_text("#!" + sys.executable + "\nimport os,time\n"
+                    + "open(" + repr(str(pidfile)) + ", 'w').write(str(os.getpid()))\n"
+                    + "time.sleep(2)\n")
+    stub.chmod(0o755)
+    import time as _time
+    client = ds.Psql(str(stub), port=5432, user="postgres",
+                     password="SYNTHETIC-public-password", database_dir=str(directory),
+                     deadline_ns=_time.monotonic_ns() + 200_000_000)
+    start = _time.monotonic()
+    with pytest.raises(ds.DatabaseStageError, match="psql_timeout"):
+        client.query("-- SYNTHETIC\n" + " " * (128 * 1024), "postgres")
+    elapsed = _time.monotonic() - start
+    pid = int(pidfile.read_text())
+    assert not os.path.exists("/proc/%d" % pid), "owned child not reaped"
+    assert elapsed < 1.0, "stdin feeding escaped the call deadline"
+
+
+def test_large_stdin_reaches_a_reading_child(tmp_path):
+    # 128 KiB is more than a pipe buffer: it must be fed while draining.
+    directory = tmp_path / "database"
+    directory.mkdir(mode=0o700)
+    stub = tmp_path / "psql-reads"
+    stub.write_text("#!%s\nimport sys, json\ndata = sys.stdin.read()\n"
+                    "print(json.dumps({'received': len(data)}))\n" % sys.executable)
+    stub.chmod(0o755)
+    import time as _time
+    client = ds.Psql(str(stub), port=5432, user="postgres",
+                     password="SYNTHETIC-public-password", database_dir=str(directory),
+                     deadline_ns=_time.monotonic_ns() + 5_000_000_000)
+    sql = "-- SYNTHETIC\n" + " " * (128 * 1024)
+    assert client.query_json(sql, "postgres") == {"received": len(sql)}
+
+
+def test_oversized_input_is_refused_before_spawning(tmp_path):
+    pidfile = tmp_path / "spawned"
+    directory = tmp_path / "database"
+    directory.mkdir(mode=0o700)
+    stub = tmp_path / "psql-spawn-marker"
+    stub.write_text("#!%s\nopen(%r, 'w').close()\n" % (sys.executable, str(pidfile)))
+    stub.chmod(0o755)
+    import time as _time
+    client = ds.Psql(str(stub), port=5432, user="postgres",
+                     password="SYNTHETIC-public-password", database_dir=str(directory),
+                     deadline_ns=_time.monotonic_ns() + 5_000_000_000)
+    with pytest.raises(ds.DatabaseStageError, match="psql_input_too_large"):
+        client.query("-- SYNTHETIC\n" + " " * ds.MAX_INPUT, "postgres")
+    assert not pidfile.exists()
+
+
+@pytest.mark.parametrize("size", [10, 256 * 1024])
+def test_child_exiting_without_reading_is_a_clean_failure(tmp_path, size):
+    directory = tmp_path / "database"
+    directory.mkdir(mode=0o700)
+    stub = tmp_path / "psql-exits"
+    stub.write_text("#!%s\nimport sys\nsys.exit(3)\n" % sys.executable)
+    stub.chmod(0o755)
+    import time as _time
+    client = ds.Psql(str(stub), port=5432, user="postgres",
+                     password="SYNTHETIC-public-password", database_dir=str(directory),
+                     deadline_ns=_time.monotonic_ns() + 5_000_000_000)
+    with pytest.raises(ds.DatabaseStageError, match="psql_failed"):
+        client.query("-- SYNTHETIC\n" + " " * size, "postgres")

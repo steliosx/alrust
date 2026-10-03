@@ -40,6 +40,7 @@ SERVER_VERSION_MIN, SERVER_VERSION_MAX = 160000, 169999
 STAGE_BUDGET_NS = 60 * 1_000_000_000
 CALL_TIMEOUT_S = 30.0
 MAX_OUTPUT = 64 * 1024
+MAX_INPUT = 1024 * 1024
 MAX_PROFILE, MAX_RUN_ID, MAX_ATTEMPT = 31, 20, 3
 SCRAM_ITERATIONS = 4096
 _NAME = re.compile(r"alrust_[a-z0-9_]{1,56}\Z")
@@ -142,34 +143,48 @@ def _database_dir(job_root, create):
 # Bounded child processes (DB61-R1)
 
 def _bounded_run(argv, stdin, env, timeout_s, limit):
-    """Run ARGV, draining stdout and stderr AS THEY ARRIVE, each bounded to
-    LIMIT bytes. Exceeding either bound or TIMEOUT_S is a refusal, never a
+    """Run ARGV, feeding STDIN and draining stdout and stderr AS THEY
+    PROGRESS, all inside one deadline. stdin is written in non-blocking
+    chunks through the same selector (DBA2-R2), so a child that never reads
+    cannot hold the caller past TIMEOUT_S; each output stream is bounded to
+    LIMIT bytes. Exceeding a bound or TIMEOUT_S is a refusal, never a
     truncation: the owned direct child is killed (it alone, never a group)
     and reaped. Returns (failure, returncode, stdout, stderr), where
     failure is None, "timeout" or "output_too_large", and the returned
     streams are the bounded bytes kept (failure evidence)."""
+    deadline = time.monotonic() + timeout_s
     proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, env=env, close_fds=True)
-    deadline = time.monotonic() + timeout_s
     out, err = bytearray(), bytearray()
+    pending = memoryview(stdin or b"")
     failure = None
     try:
-        try:
-            if stdin:
-                proc.stdin.write(stdin)
-            proc.stdin.close()
-        except BrokenPipeError:
-            pass
         selector = selectors.DefaultSelector()
+        if pending:
+            os.set_blocking(proc.stdin.fileno(), False)
+            selector.register(proc.stdin, selectors.EVENT_WRITE, None)
+        else:
+            proc.stdin.close()
         selector.register(proc.stdout, selectors.EVENT_READ, out)
         selector.register(proc.stderr, selectors.EVENT_READ, err)
         streams = 2
-        while streams and failure is None:
+        while (streams or pending) and failure is None:
             left = deadline - time.monotonic()
             if left <= 0:
                 failure = "timeout"
                 break
             for key, _ in selector.select(timeout=left):
+                if key.fileobj is proc.stdin:
+                    try:
+                        pending = pending[os.write(proc.stdin.fileno(), pending[:65536]):]
+                    except BlockingIOError:
+                        continue
+                    except BrokenPipeError:
+                        pending = memoryview(b"")
+                    if not pending:
+                        selector.unregister(proc.stdin)
+                        proc.stdin.close()
+                    continue
                 chunk = os.read(key.fileobj.fileno(), 65536)
                 if not chunk:
                     selector.unregister(key.fileobj)
@@ -191,8 +206,11 @@ def _bounded_run(argv, stdin, env, timeout_s, limit):
         if proc.poll() is None:
             proc.kill()
         proc.wait()
-        for stream in (proc.stdout, proc.stderr):
-            stream.close()
+        for stream in (proc.stdin, proc.stdout, proc.stderr):
+            try:
+                stream.close()
+            except OSError:
+                pass   # an unwritten stdin buffer to a dead child
     return failure, proc.returncode, bytes(out), bytes(err)
 
 
@@ -251,6 +269,7 @@ class Psql:
     def _run(self, args, stdin):
         left = (self._deadline - time.monotonic_ns()) / 1e9
         _require(left > 0, "stage_deadline_expired")
+        _require(stdin is None or len(stdin) <= MAX_INPUT, "psql_input_too_large")
         self._calls += 1
         env = {"PATH": _PATH, "LANG": "C.UTF-8", "PGPASSFILE": self.passfile,
                "PGCONNECT_TIMEOUT": "10",
