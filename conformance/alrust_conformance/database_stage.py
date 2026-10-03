@@ -25,6 +25,7 @@ import json
 import os
 import re
 import secrets
+import selectors
 import stat
 import subprocess
 import time
@@ -138,13 +139,73 @@ def _database_dir(job_root, create):
 
 
 # ---------------------------------------------------------------------------
+# Bounded child processes (DB61-R1)
+
+def _bounded_run(argv, stdin, env, timeout_s, limit):
+    """Run ARGV, draining stdout and stderr AS THEY ARRIVE, each bounded to
+    LIMIT bytes. Exceeding either bound or TIMEOUT_S is a refusal, never a
+    truncation: the owned direct child is killed (it alone, never a group)
+    and reaped. Returns (failure, returncode, stdout, stderr), where
+    failure is None, "timeout" or "output_too_large", and the returned
+    streams are the bounded bytes kept (failure evidence)."""
+    proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, env=env, close_fds=True)
+    deadline = time.monotonic() + timeout_s
+    out, err = bytearray(), bytearray()
+    failure = None
+    try:
+        try:
+            if stdin:
+                proc.stdin.write(stdin)
+            proc.stdin.close()
+        except BrokenPipeError:
+            pass
+        selector = selectors.DefaultSelector()
+        selector.register(proc.stdout, selectors.EVENT_READ, out)
+        selector.register(proc.stderr, selectors.EVENT_READ, err)
+        streams = 2
+        while streams and failure is None:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                failure = "timeout"
+                break
+            for key, _ in selector.select(timeout=left):
+                chunk = os.read(key.fileobj.fileno(), 65536)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    streams -= 1
+                    continue
+                kept = key.data
+                if len(kept) + len(chunk) > limit:
+                    kept.extend(chunk[:limit - len(kept)])
+                    failure = "output_too_large"
+                    break
+                kept.extend(chunk)
+        selector.close()
+        if failure is None:
+            try:
+                proc.wait(timeout=max(deadline - time.monotonic(), 0))
+            except subprocess.TimeoutExpired:
+                failure = "timeout"
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait()
+        for stream in (proc.stdout, proc.stderr):
+            stream.close()
+    return failure, proc.returncode, bytes(out), bytes(err)
+
+
+# ---------------------------------------------------------------------------
 # Bounded psql client
 
 class Psql:
     """One psql invocation per call, under a cleared environment, with a
     0600 passfile, stdin SQL, a per-call timeout no later than the stage
-    deadline, and bounded output. Errors are fixed codes; psql's stderr is
-    kept private in the database directory."""
+    deadline, and stdout and stderr each drained and bounded to MAX_OUTPUT
+    (an overflow or timeout stops and reaps the child, then refuses).
+    Errors are fixed codes; psql's stderr is kept private (bounded) in the
+    database directory."""
 
     def __init__(self, psql_path, *, port, user, password, database_dir, deadline_ns):
         _require(type(psql_path) is str and os.path.isabs(psql_path)
@@ -195,19 +256,19 @@ class Psql:
                "PGCONNECT_TIMEOUT": "10",
                "PGOPTIONS": "-c statement_timeout=30s -c lock_timeout=10s"}
         try:
-            done = subprocess.run([self.path] + args, input=stdin, env=env,
-                                  capture_output=True, timeout=min(CALL_TIMEOUT_S, left))
-        except subprocess.TimeoutExpired:
-            raise DatabaseStageError("psql_timeout") from None
+            failure, returncode, stdout, stderr = _bounded_run(
+                [self.path] + args, stdin, env, min(CALL_TIMEOUT_S, left), MAX_OUTPUT)
         except OSError:
             raise DatabaseStageError("psql_unavailable") from None
-        if done.stderr:
+        if stderr:
+            # Bounded private evidence (at most MAX_OUTPUT bytes), kept on
+            # success and failure alike; an overflow is refused below.
             _write_private(os.path.join(self._dir, "psql-stderr-%s-%d"
-                                        % (secrets.token_hex(4), self._calls)),
-                           done.stderr[:MAX_OUTPUT])
-        _require(len(done.stdout) <= MAX_OUTPUT, "psql_output_too_large")
-        _require(done.returncode == 0, "psql_failed")
-        return done.stdout
+                                        % (secrets.token_hex(4), self._calls)), stderr)
+        _require(failure != "timeout", "psql_timeout")
+        _require(failure != "output_too_large", "psql_output_too_large")
+        _require(returncode == 0, "psql_failed")
+        return stdout
 
 
 # The SQL. Identifiers and names come from psql variables; the only literal
@@ -291,13 +352,14 @@ def container_identity(docker_path, container_id, deadline_ns):
         left = (deadline_ns - time.monotonic_ns()) / 1e9
         _require(left > 0, "stage_deadline_expired")
         try:
-            done = subprocess.run([docker_path] + args, env={"PATH": _PATH, "LANG": "C.UTF-8"},
-                                  capture_output=True, timeout=min(CALL_TIMEOUT_S, left))
-        except (subprocess.TimeoutExpired, OSError):
+            failure, returncode, stdout, _ = _bounded_run(
+                [docker_path] + args, None, {"PATH": _PATH, "LANG": "C.UTF-8"},
+                min(CALL_TIMEOUT_S, left), 4 * MAX_OUTPUT)
+        except OSError:
             raise DatabaseStageError("docker_unavailable") from None
-        _require(done.returncode == 0 and len(done.stdout) <= 4 * MAX_OUTPUT,
-                 "docker_failed")
-        return _json(done.stdout.strip(), "docker_output_invalid")
+        _require(failure is None, "docker_" + (failure or "failed"))
+        _require(returncode == 0, "docker_failed")
+        return _json(stdout.strip(), "docker_output_invalid")
 
     container = run(["inspect", "--format", "{{json .}}", container_id])
     _require(type(container) is dict and type(container.get("Image")) is str

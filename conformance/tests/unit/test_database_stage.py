@@ -469,3 +469,73 @@ def test_oversized_and_malformed_output_are_refused(env):
     job, stub = env
     set_state(stub, faults={"identity": "garbage"})
     assert run_create(job, stub)[1] == "psql_output_invalid"
+
+
+# --- DB61-R1: bounded draining; overflow and timeout refuse, never truncate ---
+
+def raw_psql(tmp_path, body):
+    directory = tmp_path / "database"
+    directory.mkdir(mode=0o700)
+    stub = tmp_path / "psql-raw"
+    stub.write_text("#!%s\nimport os, sys, time\nsys.stdin.read()\n%s\n" % (sys.executable, body))
+    stub.chmod(0o755)
+    import time as _time
+    return directory, ds.Psql(str(stub), port=5432, user="postgres",
+                              password="SYNTHETIC-public-password",
+                              database_dir=str(directory),
+                              deadline_ns=_time.monotonic_ns() + 3_000_000_000)
+
+
+def evidence(directory):
+    return [p for p in directory.iterdir() if p.name.startswith("psql-stderr-")]
+
+
+def test_stderr_over_limit_refuses_with_bounded_evidence(tmp_path):
+    # Codex's control from 5425c1b8: 1 MiB stderr plus valid output.
+    directory, client = raw_psql(tmp_path, "sys.stderr.write('x' * 1048576)\nprint('{}')")
+    with pytest.raises(ds.DatabaseStageError, match="psql_output_too_large"):
+        client.query_json("-- SYNTHETIC\nSELECT 1;", "postgres")
+    [kept] = evidence(directory)
+    assert kept.stat().st_size == ds.MAX_OUTPUT
+
+
+def test_stdout_over_limit_refuses(tmp_path):
+    _, client = raw_psql(tmp_path, "sys.stdout.write('{' + ' ' * 1048576 + '}')")
+    with pytest.raises(ds.DatabaseStageError, match="psql_output_too_large"):
+        client.query("-- SYNTHETIC\nSELECT 1;", "postgres")
+
+
+@pytest.mark.parametrize("size,accepted", [(65536, True), (65537, False)])
+def test_stderr_bound_is_exact(tmp_path, size, accepted):
+    directory, client = raw_psql(
+        tmp_path, "sys.stderr.write('e' * %d)\nsys.stderr.flush()\nprint('{}')" % size)
+    if accepted:
+        assert client.query_json("-- SYNTHETIC\nSELECT 1;", "postgres") == {}
+    else:
+        with pytest.raises(ds.DatabaseStageError, match="psql_output_too_large"):
+            client.query_json("-- SYNTHETIC\nSELECT 1;", "postgres")
+    [kept] = evidence(directory)
+    assert kept.stat().st_size == min(size, ds.MAX_OUTPUT)
+
+
+def test_hung_child_is_stopped_and_reaped(tmp_path):
+    pid_file = tmp_path / "child.pid"
+    _, client = raw_psql(tmp_path, "open(%r, 'w').write(str(os.getpid()))\ntime.sleep(60)"
+                         % str(pid_file))
+    import time as _time
+    started = _time.monotonic()
+    with pytest.raises(ds.DatabaseStageError, match="psql_timeout"):
+        client.query("-- SYNTHETIC\nSELECT 1;", "postgres")
+    assert _time.monotonic() - started < 10            # stopped at the deadline
+    pid = int(pid_file.read_text())
+    assert not os.path.exists("/proc/%d" % pid)       # killed AND reaped
+
+
+def test_docker_output_over_limit_refuses(tmp_path):
+    stub = tmp_path / "docker-raw"
+    stub.write_text("#!%s\nimport sys\nsys.stdout.write('[' + ' ' * 1048576 + ']')\n"
+                    % sys.executable)
+    stub.chmod(0o755)
+    import time as _time
+    with pytest.raises(ds.DatabaseStageError, match="docker_output_too_large"):
+        ds.container_identity(str(stub), CONTAINER, _time.monotonic_ns() + 3_000_000_000)
