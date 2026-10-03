@@ -49,17 +49,18 @@ The full plan and its fixed decisions are in the
 
 ## Status
 
-**Current checkpoint: 2 October 2026**, inspected at main
-[`bdbd651`](https://github.com/steliosx/alrust/tree/bdbd6511e9fd7f613cea624e0bf84a86c845b14c).
+**Current checkpoint: 3 October 2026**, inspected at main
+[`def59f1`](https://github.com/steliosx/alrust/tree/def59f18c852ff6572238c87d90f1d294b381e19).
 The scaffold, extracted specifications and conformance tooling are merged.
 **Phase 0 remains open; no Rust server or two-server conformance result is claimed.**
 
 | Area | Current evidence | What it does not establish |
 |---|---|---|
-| CI bootstrap and scaffold | [Run 37065389939](https://github.com/steliosx/alrust/actions/runs/37065389939) passed all four jobs at `bdbd651`: reference guard, Rust formatting/lint/build checks, inert profile preflight and supervised reference-server bootstrap. | Rust targets still contain zero tests; no HTTP conformance vectors run in this workflow. |
+| CI bootstrap and scaffold | [Run 37132740751](https://github.com/steliosx/alrust/actions/runs/37132740751) passed all four jobs at `def59f1`: reference guard, Rust formatting/lint/build checks, inert profile preflight and supervised reference-server bootstrap. | Rust targets still contain zero tests; no HTTP conformance vectors run in this workflow. |
 | Supervised reference process | [PR #88](https://github.com/steliosx/alrust/pull/88) integrates the supervisor/launcher into hosted CI. The reference job observes a healthy Python server, then verifies `tree_empty / COMPLETE` and no remaining listener after shutdown. | This is reference bootstrap and cleanup evidence, not an implemented Alrust server or full-suite conformance. |
 | Profile inventory and entrypoint | All **19 profiles return `NOT_RUN`**, with execution disabled, in the current preflight job. | A green preflight gives no Phase 0 execution credit. Each enabling head and the complete reference suite still need qualification. |
-| Observer and evidence finalizer | Observer wiring, stage journals and finalizer components are merged. [PR #95](https://github.com/steliosx/alrust/pull/95), head `bb9c6832`, records Codex's source/offline approval after corrective review. | No workflow calls the finalizer. Actual stage writers, database-receipt linkage, upload-byte custody and reference-observer execution remain unqualified; see [interfaces](conformance/finalizer-interfaces.md). |
+| Launch and observer interoperability | [PR #98](https://github.com/steliosx/alrust/pull/98), head `effe4099`, adds opt-in launch journals and launch confirmation. Codex-authored [#99](https://github.com/steliosx/alrust/pull/99), head `583cd721`, is merged after Claude's reported exact-head component review; it corrects the receipt reader's socket path and adds synthetic producer/consumer controls. Source inspected. | Synthetic HTTP stand-ins and offline components do not establish actual reference-observer capture, SQL qualification or complete Phase 0 execution. |
+| Evidence finalizer and database lifecycle | Finalizer components are merged. Unmerged [PR #100](https://github.com/steliosx/alrust/pull/100) at `d9ad6378` proposes database creation, guarded drop and finalizer linkage. | Three automatic P1 findings remain open: the SQL port is not bound to the inspected container; finalization does not require container evidence; the drop verdict is not bound to its stage. Source inspection supports these findings. Its green CI does not execute the component unit tests or real PostgreSQL. No workflow calls the finalizer yet; see [interfaces](conformance/finalizer-interfaces.md). |
 | Local reference and offline checks | Scoped results and attributed independent dispositions are recorded in [STATUS](docs/STATUS.md). | Local passes and published review summaries are separate from CI qualification, direct inspection of signed private records and cross-implementation parity. |
 | Open proposals | [PR #71](https://github.com/steliosx/alrust/pull/71) proposes structural OpenAPI validation; draft [PR #70](https://github.com/steliosx/alrust/pull/70) addresses batch retry safety. | Neither proposal is part of this main checkpoint. The retry contract needs an owner decision. |
 
