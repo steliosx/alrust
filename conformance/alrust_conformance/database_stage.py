@@ -706,17 +706,47 @@ def run_registry_stage(job_root, prefix, **kwargs):
                       lambda journal: (build_registry(job_root, journal, **kwargs), None))
 
 
+def registry_frozen(job_root, evidence):
+    """DBFE-R2: on the launched path, the database may be dropped only after
+    the credential registry was frozen from it. Checked AFTER the writer gate
+    passed (so the gate's N3 read set is unchanged), using the gate's own
+    validated aggregation: a COMPLETE `registry` stage after `stop` holding
+    exactly one credential_registry record whose path, identity and sha256
+    match the registry file now."""
+    from . import finalizer as fz
+    aggregation = evidence["aggregation"]
+    names = [stage["name"] for stage in aggregation["stages"]]
+    _require("registry" in names and names.index("registry") > names.index("stop"),
+             "registry_not_frozen")
+    records = [(stage, kind, payload) for stage, kind, payload
+               in fz._journal_records(job_root, aggregation) if kind == "credential_registry"]
+    _require(len(records) == 1 and records[0][0] == "registry", "registry_not_frozen")
+    record = records[0][2]
+    path = os.path.join(job_root, fz.REGISTRY_NAME)
+    _require(type(record) is dict and set(record) == {"path", "dev", "ino", "sha256"}
+             and record["path"] == path, "registry_not_frozen")
+    data, info = _read_private_file(path, fz.MAX_REGISTRY)
+    _require((info.st_dev, info.st_ino) == (record["dev"], record["ino"])
+             and hashlib.sha256(data).hexdigest() == record["sha256"], "registry_changed")
+
+
 def run_drop_stage(job_root, prefix, *, launched, **kwargs):
     """The `database-drop` stage. LAUNCHED selects the gate: writer_quiescence
-    over PREFIX, or no_launch_quiescence for an allocation that never reached
-    launch. The stage closes COMPLETE only for verdict COMPLETE; any other
+    over PREFIX followed by registry_frozen (DBFE-R2), or
+    no_launch_quiescence for an allocation that never reached launch. The stage closes COMPLETE only for verdict COMPLETE; any other
     verdict is recorded, then the stage closes FAILED with that verdict."""
     from . import finalizer as fz
     _require(CREATE_STAGE in prefix, "drop_prefix_invalid")
     create = sj.read_bounded(sj.journal_path(job_root, prefix.index(CREATE_STAGE),
                                              CREATE_STAGE), sj.MAX_JOURNAL)
-    gate = (lambda: fz.writer_quiescence(job_root, prefix)) if launched else \
-        (lambda: no_launch_quiescence(job_root, prefix))
+    if launched:
+        def gate():
+            # The registry check runs only after the writer gate passed.
+            registry_frozen(job_root, fz.writer_quiescence(job_root, prefix))
+    else:
+        def gate():
+            # A positively proven no-launch cleanup never needs a registry.
+            no_launch_quiescence(job_root, prefix)
 
     def action(journal):
         verdict = drop_database(job_root, journal, create_journal_bytes=create, **kwargs)

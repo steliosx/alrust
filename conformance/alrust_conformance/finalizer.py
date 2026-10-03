@@ -424,12 +424,14 @@ def _launch_handoff(records, aggregation, stop, launched):
         "launch_handoff_mismatch")
 
 
-def writer_quiescence(job_root, stages):
+def writer_quiescence(job_root, stages, entrypoint_stage="entrypoint"):
     """The writer gate for the registry and database-drop stages (database
     design section 4, DBC023-R1). STAGES is the prefix written so far, ending
     with the stage just before the caller's (at least through `stop`).
-    Requires: aggregation over the prefix VALID (every journal closed and
-    COMPLETE, including database-create, launch, launch-confirm and
+    The prefix must contain database-create < launch, launch-confirm
+    immediately after launch, then the entrypoint stage, then stop
+    (DBFE-R1). Requires: aggregation over the prefix VALID (every journal
+    closed and COMPLETE, including database-create, launch, launch-confirm and
     entrypoint); exactly one linked COMPLETE/tree_empty stop verdict whose
     supervisor generation is positively observed to have ended; and the
     launch-confirm hand-off. It reads only immutable proof inputs (core,
@@ -437,10 +439,12 @@ def writer_quiescence(job_root, stages):
     a credential, a log or the database (DBC023-N3). It does not require
     database_drop. Raises FinalizerError or JournalError on refusal."""
     _require(type(stages) is list and all(
-        name in stages for name in ("database-create", "launch", "launch-confirm", "stop"))
+        name in stages for name in ("database-create", "launch", "launch-confirm",
+                                    entrypoint_stage, "stop"))
         and stages.index("launch-confirm") == stages.index("launch") + 1
         and stages.index("database-create") < stages.index("launch")
-        < stages.index("stop"), "writer_gate_stages_invalid")
+        < stages.index(entrypoint_stage) < stages.index("stop"),
+        "writer_gate_stages_invalid")
     aggregation = _sj.aggregate(job_root, stages)
     _require(aggregation["verdict"] == "VALID", "writer_gate_" + aggregation["verdict"].lower())
     core_bytes = read_bounded(os.path.join(job_root, _sj.CORE_NAME), _sj.MAX_CORE)

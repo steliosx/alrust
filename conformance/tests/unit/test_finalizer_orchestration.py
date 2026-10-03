@@ -7,6 +7,7 @@ directory. No process, network, database or reference server.
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -142,7 +143,12 @@ def build(tmp_path, monkeypatch, *, report=b'{"result": "passed"}\n',
         leak.mkdir()
         launch_records.append(("owned_resource", stat_record(leak, "dir")))
     per_stage = {
-        "database-create": [("database_created", created)],
+        "database-create": [
+            ("database_role_attempted", {"role": DB_IDENTITY["role"]}),
+            ("database_role_created", {k: DB_IDENTITY[k] for k in (
+                "role", "role_oid", "system_identifier", "postmaster_start_time")}),
+            ("database_create_attempted", {"name": "alrust_scaffold_123_1"}),
+            ("database_created", created)],
         "launch": launch_records,
         "launch-confirm": [] if omit_handoff else [("launch_handoff", handoff)],
         "entrypoint": [("export_candidate", cand),
@@ -831,3 +837,20 @@ def test_writer_gate_reads_no_registry_or_credential(tmp_path, monkeypatch):
     assert fz.REGISTRY_NAME not in read and "server.log" not in read
     assert set(read) <= {"core-identity.json", "launch.json", "terminal.json"} | {
         os.path.basename(sj.journal_path(str(job), i, n)) for i, n in enumerate(PREFIX)}
+
+
+
+def test_writer_gate_requires_a_closed_entrypoint(tmp_path, monkeypatch):
+    # DBFE-R1 (Codex's control): a valid closed prefix with no entrypoint.
+    prefix = ["database-create", "launch", "launch-confirm", "stop"]
+    monkeypatch.setattr(sys.modules[__name__], "STAGES", prefix)
+    job = build(tmp_path, monkeypatch, upto="stop")
+    assert sj.aggregate(str(job), prefix)["verdict"] == "VALID"
+    with pytest.raises(fz.FinalizerError, match="writer_gate_stages_invalid"):
+        fz.writer_quiescence(str(job), prefix)
+
+
+def test_writer_gate_requires_entrypoint_before_stop(tmp_path, monkeypatch):
+    prefix = ["database-create", "launch", "launch-confirm", "stop", "entrypoint"]
+    with pytest.raises(fz.FinalizerError, match="writer_gate_stages_invalid"):
+        fz.writer_quiescence(str(tmp_path), prefix)

@@ -60,7 +60,7 @@ are those observed when the resource was created. Integers are exact ints
 for the stages that run before the finalizer. PREFIX ends with the stage
 just before the caller's (at least through `stop`) and must contain
 `database-create`, then `launch` immediately followed by `launch-confirm`,
-then `stop`. It requires aggregation over the prefix VALID (aggregate's
+then the entrypoint stage, then `stop` (DBFE-R1). It requires aggregation over the prefix VALID (aggregate's
 exact-set rule), the linked stop verdict with the supervisor generation
 positively ended, and the launch hand-off. It reads only immutable proof
 inputs (core, closed journals, launch and terminal receipts), never the
@@ -69,6 +69,14 @@ registry, a credential, a log or the database, and does not require
 journal; a refusal then opens the journal only to close it FAILED with the
 gate's code. A failed pre-launch allocation uses `no_launch_quiescence`
 instead (database_stage.py).
+
+On the launched path, the `database-drop` runner also requires, after the
+writer gate passed, a frozen registry (`registry_frozen`, DBFE-R2): a
+COMPLETE `registry` stage after `stop` holding exactly one
+`credential_registry` record whose path, identity and sha256 match the
+registry file. Otherwise it sends no SQL and drops nothing, so the database
+cannot be dropped before its secrets are captured. A positively proven
+no-launch cleanup never needs a registry.
 - The registry's identity, digest and completeness, and every candidate
   record, are checked before `export/` is created.
 

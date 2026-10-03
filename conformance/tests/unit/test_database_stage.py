@@ -801,3 +801,73 @@ def test_registry_runner_end_to_end_through_the_real_writer_gate(env, tmp_path, 
 def fz_registry_name():
     from alrust_conformance import finalizer as fz
     return fz.REGISTRY_NAME
+
+
+# --- DBFE-R2: a launched drop requires the frozen registry --------------------
+
+def composed_drop(env, tmp_path, monkeypatch, upto):
+    from test_finalizer_orchestration import build, STAGES, DB_IDENTITY
+    _, stub = env
+    (tmp_path / "composed").mkdir()
+    job = build(tmp_path / "composed", monkeypatch, upto=upto)
+    (job / "database").mkdir(mode=0o700)
+    name = "alrust_scaffold_123_1"
+    set_state(stub, cluster=dict(CLUSTER, system_identifier=DB_IDENTITY["system_identifier"],
+                                 postmaster_start_time=DB_IDENTITY["postmaster_start_time"]),
+              roles={name: {"oid": DB_IDENTITY["role_oid"]}},
+              databases={name: {"oid": DB_IDENTITY["oid"], "owner": name}})
+    return job, stub, STAGES[:STAGES.index(upto) + 1]
+
+
+def test_launched_drop_complete_after_the_registry(env, tmp_path, monkeypatch):
+    job, stub, prefix = composed_drop(env, tmp_path, monkeypatch, "registry")
+    assert ds.run_drop_stage(str(job), prefix, launched=True, **kw(stub)) == "COMPLETE"
+    assert state(stub)["roles"] == {} and state(stub)["databases"] == {}
+    assert sj.aggregate(str(job), prefix + [ds.DROP_STAGE])["verdict"] == "VALID"
+
+
+def test_launched_drop_refuses_without_a_registry(env, tmp_path, monkeypatch):
+    # Codex's control from 5425c1b8: quiescent through stop, no registry.
+    job, stub, prefix = composed_drop(env, tmp_path, monkeypatch, "stop")
+    before = (stub / "received.log").read_bytes() if (stub / "received.log").exists() else b""
+    with pytest.raises(ds.DatabaseStageError, match="registry_not_frozen"):
+        ds.run_drop_stage(str(job), prefix, launched=True, **kw(stub))
+    after = (stub / "received.log").read_bytes() if (stub / "received.log").exists() else b""
+    assert after == before                                   # no SQL at all
+    assert state(stub)["roles"] and state(stub)["databases"]  # nothing dropped
+
+
+def test_launched_drop_refuses_a_failed_registry_stage(env, tmp_path, monkeypatch):
+    from test_finalizer_orchestration import build, STAGES
+    job, stub, prefix = composed_drop(env, tmp_path, monkeypatch, "stop")
+    # Replace the job with one whose registry stage closed FAILED.
+    (tmp_path / "failed").mkdir()
+    job = build(tmp_path / "failed", monkeypatch, upto="registry", fail_stage="registry")
+    (job / "database").mkdir(mode=0o700)
+    with pytest.raises(ds.DatabaseStageError, match="writer_gate_failed"):
+        ds.run_drop_stage(str(job), STAGES[:STAGES.index("registry") + 1], launched=True,
+                          **kw(stub))
+    assert state(stub)["databases"]
+
+
+def test_launched_drop_refuses_a_changed_registry(env, tmp_path, monkeypatch):
+    from alrust_conformance import finalizer as fz
+    job, stub, prefix = composed_drop(env, tmp_path, monkeypatch, "registry")
+    registry = job / fz.REGISTRY_NAME
+    registry.write_text(registry.read_text().replace("SYNTHETIC", "CHANGED"))
+    with pytest.raises(ds.DatabaseStageError, match="registry_changed"):
+        ds.run_drop_stage(str(job), prefix, launched=True, **kw(stub))
+    assert state(stub)["databases"]
+
+
+def test_launched_drop_refuses_a_registry_frozen_before_stop(env, tmp_path, monkeypatch):
+    # A registry written while the server might still run is not frozen.
+    import test_finalizer_orchestration as tf
+    order = ["database-create", "launch", "launch-confirm", "entrypoint", "registry", "stop"]
+    monkeypatch.setattr(tf, "STAGES", order)
+    _, stub = env
+    (tmp_path / "early").mkdir()
+    job = tf.build(tmp_path / "early", monkeypatch, upto="stop")
+    (job / "database").mkdir(mode=0o700)
+    with pytest.raises(ds.DatabaseStageError, match="registry_not_frozen"):
+        ds.run_drop_stage(str(job), order, launched=True, **kw(stub))
