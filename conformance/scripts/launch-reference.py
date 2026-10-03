@@ -42,11 +42,21 @@ begin. The journal records, as they are observed:
 The stage closes COMPLETE after the ready line was written and BEFORE the
 launcher gives up ownership of P (LB80-R1). If that close fails (an append,
 fsync or close error), the launcher stops P exactly as on any other failure,
-reports the stop helper's verdict and exits 1. The journal then has no
-stage_complete, so it is INCOMPLETE, never COMPLETE. In stage mode, a ready
-line followed by a non-zero exit is therefore a failure whose tree has been
-stopped; only exit 0 hands the server off. Any other failure closes the
-stage FAILED with a fixed code. These are earlier observations for a later
+reports the stop helper's verdict and exits 1. What the journal then holds
+depends on where the close failed (LB4E-R2):
+- before stage_complete was written: FAILED, or no stage_complete
+  (INCOMPLETE);
+- after the full stage_complete COMPLETE bytes were written (a failed fsync
+  or close): a syntactically COMPLETE record of a launch that FAILED. Those
+  bytes are not rewritten or truncated.
+
+A COMPLETE launch stage is therefore never, on its own, proof of a hand-off.
+The proof is the next stage, `launch-confirm` (confirm-launch.py), run only
+after this launcher exited 0. It observes the receipt's exact P and C
+generations alive. A stopped tree fails it. In stage mode, a ready line
+followed by a non-zero exit is a failure whose tree has been stopped; only
+exit 0 followed by a COMPLETE launch-confirm hands the server off. Any other
+failure closes the stage FAILED with a fixed code. These are earlier observations for a later
 qualifier to compare with its own, never a substitute for them. Without the
 stage options, the launcher behaves as before.
 """

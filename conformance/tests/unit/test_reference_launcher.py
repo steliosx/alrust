@@ -376,7 +376,7 @@ def copy_scripts(tmp_path, supervisor_source=None, external_config=None,
     (repo / "reference" / "alerta").mkdir(parents=True)
     (repo / "reference" / "alerta" / "VERSION").write_text("9.1.0\n")
     for name in ("launch-reference.py", "stop-reference.py",
-                 "reference-supervisor.py"):
+                 "reference-supervisor.py", "confirm-launch.py"):
         shutil.copy(SCRIPTS / name, scripts / name)
     # The stage-journal package that stage mode imports (stdlib only).
     package = repo / "conformance" / "alrust_conformance"
@@ -1178,3 +1178,228 @@ def test_stage_preflight_refuses_an_invalid_previous_stage_name(tmp_path):
     out = subprocess.run(args, env=dict(ENV, HOME=str(job / "home")),
                          capture_output=True, text=True, timeout=60)
     assert out.returncode == 1 and "refused" in out.stderr
+
+
+
+# LB4E-R2: a failed fsync or close AFTER the full stage_complete COMPLETE
+# bytes were written leaves a syntactically COMPLETE launch journal for a
+# launch that failed. The launcher still stops the tree, and the
+# launch-confirm stage refuses, so the chain never shows a hand-off.
+_FSYNC_FAULT = (
+    '            if exc_type is None:\n'
+    '                real_fsync = os.fsync\n'
+    '                def failing_fsync(fd):\n'
+    '                    raise OSError("synthetic fsync fault")\n'
+    '                os.fsync = failing_fsync\n'
+    '                try:\n'
+    '        ' + _APPEND_LINE +
+    '                finally:\n'
+    '                    os.fsync = real_fsync\n'
+    '            else:\n'
+    '    ' + _APPEND_LINE)
+_CLOSE_AFTER_WRITE_FAULT = (
+    _APPEND_LINE +
+    '            if exc_type is None:\n'
+    '                self._journal.close()\n'
+    '                raise OSError("synthetic close fault after the write")\n')
+LATE_DURABILITY_FAULTS = {"fsync_after_write": (_APPEND_LINE, _FSYNC_FAULT),
+                          "close_after_write": (_APPEND_LINE, _CLOSE_AFTER_WRITE_FAULT)}
+CONFIRM_STAGES = ["database-create", "launch", "launch-confirm"]
+
+
+def confirm(job, digest, scripts=None, index="2"):
+    scripts = scripts or copy_scripts(job.parent)
+    out = subprocess.run(PY + [str(scripts / "confirm-launch.py"), "--job-root", str(job),
+                               "--stage-index", index, "--receipt-digest", digest],
+                         env=ENV, capture_output=True, text=True, timeout=60)
+    return out.returncode, out.stdout, out.stderr
+
+
+def confirm_records(job):
+    data = Path(sj.journal_path(str(job), 2, "launch-confirm")).read_bytes()
+    return [json.loads(line)["evidence"] for line in data.splitlines()]
+
+
+def test_confirm_records_a_live_hand_off(tmp_path):
+    job, port = stage_job(tmp_path), free_port()
+    rc, out, err = finish(launch_with(job, port, STAGE_ARGS))
+    assert rc == 0, err
+    m = READY.match(out.strip())
+    sup, child, receipt, digest = int(m[2]), int(m[3]), Path(m[4]), m[5]
+    rc, out, err = confirm(job, digest)
+    assert rc == 0, err
+    records = confirm_records(job)
+    [handoff] = by_kind(records, "launch_handoff")
+    launched = json.loads(receipt.read_text())
+    launch_bytes = Path(sj.journal_path(str(job), 1, "launch")).read_bytes()
+    assert handoff == {
+        "launch_journal_sha256": hashlib.sha256(launch_bytes).hexdigest(),
+        "receipt_sha256": digest,
+        "supervisor": {"pid": sup, "start_ticks": launched["supervisor"]["start_ticks"]},
+        "child": {"pid": child, "start_ticks": launched["child"]["start_ticks"]},
+        "observed_monotonic_ns": handoff["observed_monotonic_ns"]}
+    assert sj.aggregate(str(job), CONFIRM_STAGES)["verdict"] == "VALID"
+    assert stop(receipt, digest, job)[1]["verdict"] == "COMPLETE"
+
+
+@pytest.mark.parametrize("fault", sorted(LATE_DURABILITY_FAULTS))
+def test_complete_bytes_after_a_failed_close_never_confirm(tmp_path, fault):
+    job, port = stage_job(tmp_path), free_port()
+    faulty = copy_scripts(tmp_path / "faulty", journal_patch=LATE_DURABILITY_FAULTS[fault])
+    rc, out, err = finish(launch_with(job, port, STAGE_ARGS, scripts=faulty))
+    assert rc == 1 and READY.match(out.strip())
+    assert '"verdict": "COMPLETE"' in err and tree_gone(job)
+    # The launch journal is syntactically COMPLETE: stated, not hidden.
+    records = stage_records(job)
+    assert records[-1]["kind"] == "stage_complete"
+    assert records[-1]["payload"] == {"result": "COMPLETE"}
+    assert sj.aggregate(str(job), ["database-create", "launch"])["verdict"] == "VALID"
+    # The confirmation (unpatched copy) refuses: P and C are gone.
+    digest = READY.match(out.strip())[5]
+    rc, out, err = confirm(job, digest)
+    assert rc == 1 and "process_not_live" in err
+    assert confirm_records(job)[-1]["payload"] == {"result": "FAILED",
+                                                   "code": "process_not_live"}
+    assert sj.aggregate(str(job), CONFIRM_STAGES)["verdict"] == "FAILED"
+
+
+def test_confirm_refuses_a_failed_launch_stage(tmp_path):
+    job, port = stage_job(tmp_path, "unhealthy"), free_port()
+    rc, out, err = finish(launch_with(job, port, STAGE_ARGS, timeout=3))
+    assert rc == 1
+    receipt = job / "reference" / "launch.json"
+    digest = hashlib.sha256(receipt.read_bytes()).hexdigest()
+    rc, out, err = confirm(job, digest)
+    assert rc == 1 and "launch_stage_not_complete" in err
+    assert sj.aggregate(str(job), CONFIRM_STAGES)["verdict"] == "FAILED"
+
+
+def test_confirm_refuses_another_digest(tmp_path):
+    job, port = stage_job(tmp_path), free_port()
+    rc, out, err = finish(launch_with(job, port, STAGE_ARGS))
+    assert rc == 0, err
+    m = READY.match(out.strip())
+    rc, _, err = confirm(job, "0" * 64)
+    assert rc == 1 and "launch_digest_mismatch" in err
+    assert stop(Path(m[4]), m[5], job)[1]["verdict"] == "COMPLETE"
+
+
+@pytest.mark.parametrize("argv", [
+    [], ["--job-root", "relative", "--stage-index", "2", "--receipt-digest", "0" * 64],
+    ["--job-root", "/tmp/x", "--stage-index", "0", "--receipt-digest", "0" * 64],
+    ["--job-root", "/tmp/x", "--stage-index", "02", "--receipt-digest", "0" * 64],
+    ["--job-root", "/tmp/x", "--stage-index", "2", "--receipt-digest", "XYZ"],
+])
+def test_confirm_usage(tmp_path, argv):
+    scripts = copy_scripts(tmp_path)
+    out = subprocess.run(PY + [str(scripts / "confirm-launch.py")] + argv, env=ENV,
+                         capture_output=True, text=True, timeout=60)
+    assert out.returncode == 64 and "usage" in out.stderr
+
+
+
+# Isolation controls for each confirm-launch rule: a synthetic launch
+# journal and receipt naming live processes this test owns. Each case
+# breaks exactly one rule while every other rule holds.
+def _ticks(pid):
+    with open("/proc/%d/stat" % pid, "rb") as f:
+        return int(f.read().rsplit(b")", 1)[1].split()[19])
+
+
+def synthetic_launch(tmp_path, sup, child, *, complete=True, journal_digest=None):
+    job = stage_job(tmp_path)
+    (job / "reference").mkdir(mode=0o700)
+    core = json.loads((job / sj.CORE_NAME).read_text())
+    receipt = job / "reference" / "launch.json"
+    receipt.write_text(json.dumps({
+        "schema": "alrust-reference-launch/1", "boot_id": core["boot_id"],
+        "supervisor": {"pid": sup, "start_ticks": _ticks(sup)},
+        "child": {"pid": child, "start_ticks": _ticks(child)}}))
+    digest = hashlib.sha256(receipt.read_bytes()).hexdigest()
+    recorded = journal_digest or digest
+
+    class Synthetic(Exception):
+        pass
+    try:
+        with sj.StageJournal(str(job), 1, "launch", "database-create") as journal:
+            journal.record("launch_receipt", {"path": str(receipt), "sha256": recorded})
+            journal.record("launch_readiness", {"receipt_sha256": recorded})
+            if not complete:
+                raise Synthetic()
+    except Synthetic:
+        pass
+    return job, digest
+
+
+@pytest.fixture
+def owned_pair():
+    """A parent P (a shell) with its own child C, plus an unrelated process."""
+    p = subprocess.Popen(["/bin/sh", "-c", "sleep 30 & wait"])
+    unrelated = subprocess.Popen(["/bin/sleep", "30"])
+    deadline = time.monotonic() + 10
+    child = None
+    while child is None and time.monotonic() < deadline:
+        for name in os.listdir("/proc"):
+            if name.isdigit():
+                try:
+                    with open("/proc/%s/stat" % name, "rb") as f:
+                        if int(f.read().rsplit(b")", 1)[1].split()[1]) == p.pid:
+                            child = int(name)
+                except (OSError, ValueError, IndexError):
+                    pass
+        time.sleep(0.02)
+    yield p.pid, child, unrelated
+    for proc in (p, unrelated):
+        proc.kill()
+        proc.wait()
+    if child is not None:
+        try:
+            os.kill(child, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
+def test_confirm_isolated_success(tmp_path, owned_pair):
+    sup, child, _ = owned_pair
+    job, digest = synthetic_launch(tmp_path, sup, child)
+    rc, _, err = confirm(job, digest)
+    assert rc == 0, err
+
+
+def test_confirm_isolated_launch_stage_not_complete(tmp_path, owned_pair):
+    sup, child, _ = owned_pair
+    job, digest = synthetic_launch(tmp_path, sup, child, complete=False)
+    rc, _, err = confirm(job, digest)
+    assert rc == 1 and "launch_stage_not_complete" in err
+
+
+def test_confirm_isolated_journal_names_another_digest(tmp_path, owned_pair):
+    sup, child, _ = owned_pair
+    job, digest = synthetic_launch(tmp_path, sup, child, journal_digest="1" * 64)
+    rc, _, err = confirm(job, digest)
+    assert rc == 1 and "launch_digest_mismatch" in err
+
+
+def test_confirm_isolated_wrong_parent(tmp_path, owned_pair):
+    sup, _, unrelated = owned_pair
+    job, digest = synthetic_launch(tmp_path, sup, unrelated.pid)
+    rc, _, err = confirm(job, digest)
+    assert rc == 1 and "parent_mismatch" in err
+
+
+def test_confirm_isolated_zombie_child(tmp_path):
+    # The child has exited but is not reaped: the PID exists, as a zombie.
+    sup = os.getpid()
+    zombie = subprocess.Popen(["/bin/true"])
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        with open("/proc/%d/stat" % zombie.pid, "rb") as f:
+            if f.read().rsplit(b")", 1)[1].split()[0] == b"Z":
+                break
+        time.sleep(0.02)
+    try:
+        job, digest = synthetic_launch(tmp_path, sup, zombie.pid)
+        rc, _, err = confirm(job, digest)
+        assert rc == 1 and "process_not_live" in err
+    finally:
+        zombie.wait()
