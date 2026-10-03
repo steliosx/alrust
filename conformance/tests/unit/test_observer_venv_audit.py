@@ -130,6 +130,40 @@ def test_invalid_or_disagreeing_targets(layout, kind):
         window(layout).__enter__()
 
 
+def test_link_loop_has_a_fixed_resolution_limit(layout):
+    _, venv, _ = layout
+    alias = venv / "bin/python3"
+    alias.unlink()
+    alias.symlink_to("python")
+    with pytest.raises(va.VenvAuditError, match="^resolution_limit$"):
+        window(layout).__enter__()
+
+
+def test_link_count_limit_independent_of_step_count(layout):
+    _, venv, _ = layout
+    # Forty-one extra links, each a single relative component: far below
+    # 256 steps including the original aliases and external terminal target.
+    for index in range(41):
+        (venv / "bin" / ("chain%d" % index)).symlink_to(
+            "chain%d" % (index + 1) if index < 40 else "python3")
+    alias = venv / "bin/python"
+    alias.unlink()
+    alias.symlink_to("chain0")
+    with pytest.raises(va.VenvAuditError, match="^resolution_limit$"):
+        window(layout).__enter__()
+
+
+def test_step_count_limit_independent_of_link_count(layout):
+    _, venv, target = layout
+    # Only two links including python -> python3; 300 explicit dot steps
+    # cannot be collapsed lexically or hidden behind the 40-link bound.
+    alias = venv / "bin/python3"
+    alias.unlink()
+    alias.symlink_to(str(target.parent) + "/" + "./" * 300 + target.name)
+    with pytest.raises(va.VenvAuditError, match="^resolution_limit$"):
+        window(layout).__enter__()
+
+
 @pytest.mark.parametrize("changes", [
     {"root_identity": (False, 1)}, {"venv_identity": (0, True)},
     {"root_identity": (0, 1)}, {"venv_identity": (0, 1)},
