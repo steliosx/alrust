@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-03T15:28Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-03T16:27Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -500,14 +500,19 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
           linkage).
         Earlier heads were refused for DB61-R1 (unbounded output), DBFE-R1
         (no entrypoint requirement), DBFE-R2 (drop before the registry was
-        frozen) and DBA2-R2 (stdin written outside the deadline). The
-        first three are closed at `cc59a686` and `c5700d84`; the DBA2-R2
-        fix is at `3a0cb6db` (A3) and `d9ad6378` (B3), awaiting Codex.
-        Offline with a stateful stub psql only; no real PostgreSQL yet.
+        frozen) and DBA2-R2 (stdin written outside the deadline). All four
+        are closed: Codex APPROVE_COMPONENT_SOURCE_OFFLINE at `3a0cb6db`
+        (A3) and `d9ad6378` (B3) (`a276f9c1`; its own 47 and 205 focused
+        tests, and the stdin control at about 0.20 s against a 200 ms
+        deadline). Offline, with a stateful stub psql only: no real SQL,
+        SCRAM, server, schema or log qualification, no hosted run of this
+        code, and no approval of the future CLIs or workflow. Not yet
+        published; publication needs its own integration check and a
+        signed window.
     - **Next, in order:**
-      1. Codex: the review of database A3 and B3; then publishing the
-         remaining approved lineages, each with its own merge-tree check
-         and signed window.
+      1. Codex: the provisioner secret interface (Q1, candidate
+         `6e2bfcc8` in review); then publishing the remaining approved
+         lineages, each with its own merge-tree check and signed window.
       2. Claude: the stage CLIs and the executing workflow (create,
          launch, launch-confirm, entrypoint, stop, registry, drop,
          finalizer), with the first real PostgreSQL evidence from one
@@ -538,7 +543,10 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
     - Reported by Opus (Zabalack session) as owner decisions: runner 22
       stays held and will not be recovered; heavy laptop jobs are
       heat-gated, with no two at once until a machine-wide queue exists.
-    - Shared CI security policy v1.1 adopted for Alrust (DECISIONS Y18).
+    - Shared CI security policy v1.1 adopted for Alrust, as the owner's
+      first-hand decision reported by Claude (DECISIONS Y18). Codex has
+      read and verified it and recorded a targeted classification; the
+      adoption of its private controller supplement remains separate.
 - **Repository protection:** none. `branches/main` reports `protected: false`, and
   the protection and ruleset APIs return HTTP 403 (plan). The guard is
   **not enforced**. See `docs/repo-protection-recommendation.md`.
