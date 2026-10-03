@@ -1,0 +1,471 @@
+"""Offline controls for the database stage library (part A).
+
+A stub `psql` holds a tiny cluster state in a JSON file next to itself
+(the stage runs psql under a cleared environment, so the stub cannot be
+configured through variables). It answers exactly the tagged statements the
+library sends, logs every argv and stdin it receives (for secret-exclusion
+checks), and can inject one fault per operation: fail before the effect,
+fail after the effect (a CREATE that succeeded but reported an error),
+hang (a timeout), or print malformed output. A stub `docker` answers the
+two inspect calls. No PostgreSQL server, network or container is used.
+"""
+import base64
+import hashlib
+import hmac
+import json
+import os
+from pathlib import Path
+import re
+import sys
+
+import pytest
+
+from alrust_conformance import database_stage as ds
+from alrust_conformance import stage_journal as sj
+
+SUPERUSER_PASSWORD = "public-workflow-superuser-password"
+CONTAINER = "0123456789abcdef0123"
+IMAGE = "sha256:" + "a" * 64
+CLUSTER = {"server_version_num": 160004, "system_identifier": "7300000000000000001",
+           "postmaster_start_time": "2026-10-03T01:02:03.456789Z",
+           "version": "PostgreSQL 16.4 (synthetic)"}
+
+STUB_PSQL = r'''#!%(python)s
+import json, os, re, sys, time
+here = os.path.dirname(os.path.abspath(__file__))
+state_path = os.path.join(here, "state.json")
+state = json.load(open(state_path))
+argv = sys.argv[1:]
+if argv == ["--version"]:
+    print("psql (PostgreSQL) 16.4 (synthetic)")
+    sys.exit(0)
+sql = sys.stdin.read()
+with open(os.path.join(here, "received.log"), "a") as log:
+    log.write(json.dumps({"argv": argv, "stdin": sql, "env": dict(os.environ)}) + "\n")
+op = re.search(r"-- alrust:op=(\w+)", sql).group(1)
+var = {}
+for i, a in enumerate(argv):
+    if a == "-v" and "=" in argv[i + 1]:
+        k, v = argv[i + 1].split("=", 1)
+        var[k] = v
+fault = state.get("faults", {}).get(op)
+def save():
+    json.dump(state, open(state_path, "w"))
+def out(value):
+    print(json.dumps(value))
+if fault == "fail":
+    sys.stderr.write("ERROR: synthetic failure\n"); sys.exit(3)
+if fault == "hang":
+    time.sleep(120)
+if fault == "garbage":
+    print("not json"); sys.exit(0)
+name = var.get("name")
+roles, dbs = state["roles"], state["databases"]
+if op == "identity":
+    out(state["cluster"])
+elif op == "exists":
+    out({"database": name in dbs, "role": name in roles})
+elif op == "create_role":
+    m = re.search(r"PASSWORD '([^']*)'", sql)
+    roles[name] = {"oid": state["next_oid"], "verifier": m.group(1)}
+    state["next_oid"] += 1
+elif op == "role_info":
+    if name in roles:
+        r = roles[name]
+        out({"oid": r["oid"], "login": True, "super": state.get("role_super", False),
+             "createdb": False, "createrole": False, "replication": False,
+             "bypassrls": False})
+elif op == "create_database":
+    dbs[name] = {"oid": state["next_oid"], "owner": name}
+    state["next_oid"] += 1
+elif op == "database_info":
+    if name in dbs:
+        out(dbs[name])
+elif op == "drop_database":
+    dbs.pop(name, None)
+elif op == "drop_role":
+    if any(d["owner"] == name for d in dbs.values()):
+        sys.stderr.write("ERROR: role owns a database\n"); sys.exit(3)
+    if not state.get("drop_role_noop"):
+        roles.pop(name, None)
+elif op == "absence":
+    out({"database_by_name": name in dbs,
+         "database_by_oid": any(d["oid"] == int(var["database_oid"]) for d in dbs.values()),
+         "role_by_name": name in roles,
+         "role_by_oid": any(r["oid"] == int(var["role_oid"]) for r in roles.values())})
+save()
+if fault == "fail_after":
+    sys.stderr.write("ERROR: synthetic failure after the effect\n"); sys.exit(3)
+'''
+
+STUB_DOCKER = r'''#!%(python)s
+import json, sys
+argv = sys.argv[1:]
+if argv[:1] == ["inspect"]:
+    print(json.dumps({"Image": "%(image)s", "NetworkSettings": {"Ports": {
+        "5432/tcp": [{"HostIp": "0.0.0.0", "HostPort": "5432"}]}}}))
+elif argv[:2] == ["image", "inspect"]:
+    print(json.dumps(["postgres@sha256:%(digest)s"]))
+else:
+    sys.exit(2)
+'''
+
+
+@pytest.fixture
+def env(tmp_path):
+    job = tmp_path / "job"
+    job.mkdir(mode=0o700)
+    ref = "e" * 40
+    sj.write_core_identity(str(job), profile="scaffold", event_head_sha="a" * 40,
+                           checkout_sha="b" * 40, reference_sha=ref, reference_pin=ref,
+                           lock_sha256={"build": "c" * 64}, lock_pins={"build": "c" * 64},
+                           manifest_sha256="d" * 64, manifest_pin="d" * 64,
+                           env={"GITHUB_REPOSITORY": "steliosx/alrust",
+                                "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1",
+                                "GITHUB_JOB": "reference", "ImageOS": "ubuntu24",
+                                "ImageVersion": "20261001.1"})
+    sj.prepare_journal_dir(str(job))
+    stub = tmp_path / "stub"
+    stub.mkdir()
+    (stub / "psql").write_text(STUB_PSQL % {"python": sys.executable})
+    (stub / "docker").write_text(STUB_DOCKER % {"python": sys.executable, "image": IMAGE,
+                                                "digest": "b" * 64})
+    for name in ("psql", "docker"):
+        (stub / name).chmod(0o755)
+    state = {"cluster": dict(CLUSTER), "roles": {}, "databases": {}, "next_oid": 16384,
+             "faults": {}}
+    (stub / "state.json").write_text(json.dumps(state))
+    return job, stub
+
+
+def state(stub):
+    return json.loads((stub / "state.json").read_text())
+
+
+def set_state(stub, **changes):
+    value = state(stub)
+    value.update(changes)
+    (stub / "state.json").write_text(json.dumps(value))
+
+
+def kw(stub, deadline=60):
+    import time
+    return dict(port=5432, superuser="postgres", superuser_password=SUPERUSER_PASSWORD,
+                psql_path=str(stub / "psql"),
+                deadline_ns=time.monotonic_ns() + int(deadline * 1e9))
+
+
+def run_create(job, stub, index=0, deadline=60, **overrides):
+    args = dict(profile="customer-mapping", run_id="123", attempt="1",
+                container_id=CONTAINER, docker_path=str(stub / "docker"))
+    args.update(kw(stub, deadline))
+    args.update(overrides)
+    error = None
+    try:
+        with sj.StageJournal(str(job), index, ds.CREATE_STAGE) as journal:
+            try:
+                url = ds.create_database(str(job), journal, **args)
+            except ds.DatabaseStageError as failure:
+                journal.fail(failure.code)
+                raise
+    except ds.DatabaseStageError as failure:
+        error, url = failure.code, None
+    return url, error
+
+
+def create_bytes(job, index=0):
+    return Path(sj.journal_path(str(job), index, ds.CREATE_STAGE)).read_bytes()
+
+
+def records(data):
+    return [json.loads(line)["evidence"] for line in data.splitlines()]
+
+
+def run_drop(job, stub, gate=lambda: None, index=1):
+    verdicts = []
+    with sj.StageJournal(str(job), index, ds.DROP_STAGE, ds.CREATE_STAGE) as journal:
+        verdicts.append(ds.drop_database(str(job), journal, gate=gate,
+                                         create_journal_bytes=create_bytes(job), **kw(stub)))
+    drop = [r["payload"] for r in records(
+        Path(sj.journal_path(str(job), index, ds.DROP_STAGE)).read_bytes())
+        if r["kind"] == "database_drop"]
+    assert len(drop) == 1
+    return verdicts[0], drop[0]
+
+
+# --- name -------------------------------------------------------------------
+
+def test_name_follows_the_contract():
+    assert ds.database_name("customer-mapping", "123", "1") == "alrust_customer_mapping_123_1"
+    longest = ds.database_name("p" * 31, "9" * 20, "999")
+    assert len(longest) == 63
+
+
+@pytest.mark.parametrize("args", [("p" * 32, "1", "1"), ("x", "9" * 21, "1"),
+                                  ("x", "1", "1000"), ("X", "1", "1"), ("x", "01", "1"),
+                                  ("x", "1", "0"), ("x_", "", "1"), ("-x", "1", "1"),
+                                  (1, "1", "1")])
+def test_name_refuses_rather_than_truncates(args):
+    with pytest.raises(ds.DatabaseStageError):
+        ds.database_name(*args)
+
+
+# --- SCRAM (RFC 7677 section 3 example) -------------------------------------
+
+def test_scram_keys_reproduce_the_rfc7677_exchange():
+    salt = base64.b64decode("W22ZaJ0SNY7soEsUEjb6gQ==")
+    client_key, stored_key, server_key = ds.scram_keys(b"pencil", salt)
+    auth = (b"n=user,r=rOprNGfwEbeRWgbNEkqO,"
+            b"r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,"
+            b"s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096,"
+            b"c=biws,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0")
+    signature = hmac.new(stored_key, auth, "sha256").digest()
+    proof = bytes(a ^ b for a, b in zip(client_key, signature))
+    assert base64.b64encode(proof) == b"dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ="
+    assert base64.b64encode(hmac.new(server_key, auth, "sha256").digest()) == \
+        b"6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4="
+
+
+def test_verifier_has_postgresql_format_and_no_password():
+    verifier = ds.scram_verifier(b"x" * 64, salt=b"s" * 16)
+    assert re.fullmatch(r"SCRAM-SHA-256\$4096:[A-Za-z0-9+/=]+\$[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+",
+                        verifier)
+    assert "x" * 16 not in verifier
+    with pytest.raises(ds.DatabaseStageError):
+        ds.scram_verifier(b"short")
+
+
+# --- create -----------------------------------------------------------------
+
+def test_create_records_every_object_and_keeps_the_password_private(env):
+    job, stub = env
+    url, error = run_create(job, stub)
+    assert error is None
+    name = "alrust_customer_mapping_123_1"
+    text = Path(url).read_text()
+    password = re.fullmatch(r"postgresql://%s:([0-9a-f]{64})@127\.0\.0\.1:5432/%s\n"
+                            % (name, name), text)[1]
+    assert os.stat(url).st_mode & 0o777 == 0o600
+    data = create_bytes(job)
+    kinds = [r["kind"] for r in records(data)]
+    assert kinds == ["stage_begin", "owned_resource", "database_role_attempted",
+                     "database_role_created", "database_create_attempted",
+                     "database_created", "database_container", "stage_complete"]
+    created = [r["payload"] for r in records(data) if r["kind"] == "database_created"][0]
+    current = state(stub)
+    assert created == {"name": name, "oid": current["databases"][name]["oid"], "role": name,
+                       "role_oid": current["roles"][name]["oid"],
+                       "system_identifier": CLUSTER["system_identifier"],
+                       "postmaster_start_time": CLUSTER["postmaster_start_time"],
+                       "server_version_num": CLUSTER["server_version_num"],
+                       "version": CLUSTER["version"],
+                       "psql": {"path": str(stub / "psql"),
+                                "version": "psql (PostgreSQL) 16.4 (synthetic)"}}
+    container = [r["payload"] for r in records(data) if r["kind"] == "database_container"][0]
+    assert container["image_id"] == IMAGE and container["container_id"] == CONTAINER
+    # The server received only the SCRAM verifier, and the password appears
+    # nowhere outside the URL file: not in argv, stdin, the child
+    # environment, or the journal.
+    received = (stub / "received.log").read_text()
+    assert password not in received and password not in data.decode()
+    assert current["roles"][name]["verifier"].startswith("SCRAM-SHA-256$4096:")
+    for line in received.splitlines():
+        entry = json.loads(line)
+        assert set(entry["env"]) <= {"PATH", "LANG", "PGPASSFILE", "PGCONNECT_TIMEOUT",
+                                     "PGOPTIONS", "LC_CTYPE"}
+        assert SUPERUSER_PASSWORD not in " ".join(entry["argv"])
+    assert sj.aggregate(str(job), [ds.CREATE_STAGE])["verdict"] == "VALID"
+
+
+def test_existing_name_is_refused_before_anything_is_attempted(env):
+    job, stub = env
+    set_state(stub, roles={"alrust_customer_mapping_123_1": {"oid": 1, "verifier": ""}})
+    url, error = run_create(job, stub)
+    assert error == "name_already_exists"
+    kinds = [r["kind"] for r in records(create_bytes(job))]
+    assert "database_role_attempted" not in kinds
+
+
+@pytest.mark.parametrize("version", [150007, 170000])
+def test_unsupported_server_version_is_refused(env, version):
+    job, stub = env
+    set_state(stub, cluster=dict(CLUSTER, server_version_num=version))
+    assert run_create(job, stub)[1] == "server_version_unsupported"
+
+
+def test_role_with_extra_attributes_is_refused(env):
+    job, stub = env
+    set_state(stub, role_super=True)
+    assert run_create(job, stub)[1] == "role_attributes_invalid"
+
+
+# Partial allocation states (DBC023-R2).
+@pytest.mark.parametrize("op,fault,role_state,db_state", [
+    ("create_role", "fail", "UNKNOWN", "NONE"),          # error after sending
+    ("create_role", "fail_after", "UNKNOWN", "NONE"),    # created, then an error
+    ("role_info", "garbage", "UNKNOWN", "NONE"),         # read-back failed
+    ("create_database", "fail_after", "RECORDED", "UNKNOWN"),
+    ("database_info", "fail", "RECORDED", "UNKNOWN"),
+])
+def test_partial_allocation_states(env, op, fault, role_state, db_state):
+    job, stub = env
+    set_state(stub, faults={op: fault})
+    url, error = run_create(job, stub)
+    assert url is None and error is not None
+    role, db, _, _ = ds.allocation_states(create_bytes(job))
+    assert (role, db) == (role_state, db_state)
+    assert sj.aggregate(str(job), [ds.CREATE_STAGE])["verdict"] == "FAILED"
+
+
+def test_create_timeout_is_an_unknown_outcome(env):
+    job, stub = env
+    set_state(stub, faults={"create_role": "hang"})
+    url, error = run_create(job, stub, deadline=2)
+    assert error == "psql_timeout"
+    assert ds.allocation_states(create_bytes(job))[:2] == ("UNKNOWN", "NONE")
+
+
+def test_container_failure_after_the_database_is_recorded(env):
+    job, stub = env
+    (stub / "docker").write_text("#!/bin/sh\nexit 1\n")
+    url, error = run_create(job, stub)
+    assert error == "docker_failed"
+    # The database identity was recorded first, so it can be dropped.
+    assert ds.allocation_states(create_bytes(job))[:2] == ("RECORDED", "RECORDED")
+
+
+# --- drop -------------------------------------------------------------------
+
+def test_drop_complete_after_a_full_create(env):
+    job, stub = env
+    run_create(job, stub)
+    verdict, record = run_drop(job, stub)
+    assert verdict == "COMPLETE" and record["reason"] == "dropped_and_verified_absent"
+    created = [r["payload"] for r in records(create_bytes(job))
+               if r["kind"] == "database_created"][0]
+    for key in ("oid", "role", "role_oid", "system_identifier", "postmaster_start_time"):
+        assert record[key] == created[key]
+    assert record["database"] == created["name"]
+    assert state(stub)["roles"] == {} and state(stub)["databases"] == {}
+
+
+def test_drop_runs_the_gate_before_any_sql(env):
+    job, stub = env
+    run_create(job, stub)
+    before = (stub / "received.log").read_text()
+
+    class Refused(Exception):
+        pass
+
+    def gate():
+        raise Refused()
+    with pytest.raises(Refused):
+        with sj.StageJournal(str(job), 1, ds.DROP_STAGE, ds.CREATE_STAGE) as journal:
+            ds.drop_database(str(job), journal, gate=gate,
+                             create_journal_bytes=create_bytes(job), **kw(stub))
+    assert (stub / "received.log").read_text() == before
+    assert state(stub)["databases"]
+
+
+def test_drop_role_only_when_no_database_was_attempted(env, monkeypatch):
+    # The stage stops after the role record and BEFORE the database attempt
+    # record, so the database state is NONE: a genuine role-only cleanup.
+    job, stub = env
+    real = sj.StageJournal.record
+
+    def record(self, kind, payload):
+        if kind == "database_create_attempted":
+            raise ds.DatabaseStageError("synthetic_stop_before_database")
+        return real(self, kind, payload)
+    monkeypatch.setattr(sj.StageJournal, "record", record)
+    url, error = run_create(job, stub)
+    monkeypatch.setattr(sj.StageJournal, "record", real)
+    assert error == "synthetic_stop_before_database"
+    assert ds.allocation_states(create_bytes(job))[:2] == ("RECORDED", "NONE")
+    verdict, record = run_drop(job, stub)
+    assert (verdict, record["reason"]) == ("ROLE_ONLY_COMPLETE", "role_dropped_no_database")
+    assert record["database"] is None and record["oid"] is None
+    assert state(stub)["roles"] == {}
+
+
+def test_drop_unknown_role_drops_nothing(env):
+    job, stub = env
+    set_state(stub, faults={"create_role": "fail_after"})
+    run_create(job, stub)
+    set_state(stub, faults={})
+    verdict, record = run_drop(job, stub)
+    assert (verdict, record["reason"]) == ("UNPROVEN", "role_outcome_unknown")
+    assert state(stub)["roles"]          # never adopted by name
+
+
+def test_drop_unknown_database_present_drops_nothing(env):
+    job, stub = env
+    set_state(stub, faults={"create_database": "fail_after"})
+    run_create(job, stub)
+    set_state(stub, faults={})
+    verdict, record = run_drop(job, stub)
+    assert (verdict, record["reason"]) == ("UNPROVEN", "database_outcome_unknown_present")
+    assert state(stub)["databases"] and state(stub)["roles"]
+
+
+def test_drop_unknown_database_absent_drops_role_but_stays_unproven(env):
+    job, stub = env
+    set_state(stub, faults={"create_database": "fail"})   # attempt recorded, no effect
+    run_create(job, stub)
+    set_state(stub, faults={})
+    verdict, record = run_drop(job, stub)
+    assert (verdict, record["reason"]) == ("UNPROVEN", "role_dropped_database_outcome_unknown")
+    assert state(stub)["roles"] == {}
+
+
+def test_drop_refuses_another_cluster(env):
+    job, stub = env
+    run_create(job, stub)
+    set_state(stub, cluster=dict(CLUSTER, postmaster_start_time="2026-10-03T09:00:00.000000Z"))
+    verdict, record = run_drop(job, stub)
+    assert (verdict, record["reason"]) == ("UNPROVEN", "cluster_mismatch")
+    assert state(stub)["databases"]
+
+
+def test_drop_refuses_a_replaced_database(env):
+    job, stub = env
+    run_create(job, stub)
+    current = state(stub)
+    name = next(iter(current["databases"]))
+    current["databases"][name]["oid"] += 1000
+    (stub / "state.json").write_text(json.dumps(current))
+    verdict, record = run_drop(job, stub)
+    assert (verdict, record["reason"]) == ("UNPROVEN", "database_identity_mismatch")
+    assert state(stub)["databases"]
+
+
+def test_drop_failed_absence_is_unproven(env):
+    job, stub = env
+    run_create(job, stub)
+    set_state(stub, drop_role_noop=True)
+    verdict, record = run_drop(job, stub)
+    assert (verdict, record["reason"]) == ("UNPROVEN", "still_present")
+
+
+def test_drop_with_nothing_attempted(env):
+    job, stub = env
+    set_state(stub, faults={"identity": "fail"})
+    run_create(job, stub)
+    set_state(stub, faults={})
+    verdict, record = run_drop(job, stub)
+    assert verdict == "NONE_ALLOCATED"
+
+
+def test_drop_refuses_an_unclosed_create_journal(env):
+    job, stub = env
+    run_create(job, stub)
+    data = create_bytes(job)
+    unclosed = b"\n".join(data.splitlines()[:-1]) + b"\n"
+    with pytest.raises(ds.DatabaseStageError, match="create_journal_not_closed"):
+        ds.allocation_states(unclosed)
+
+
+def test_oversized_and_malformed_output_are_refused(env):
+    job, stub = env
+    set_state(stub, faults={"identity": "garbage"})
+    assert run_create(job, stub)[1] == "psql_output_invalid"
