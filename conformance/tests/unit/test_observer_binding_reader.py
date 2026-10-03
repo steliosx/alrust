@@ -37,7 +37,7 @@ def fixture(tmp_path):
                 external_config={"path":sj.EXTERNAL_CONFIG,"state":"absent"},
                 job_root={"path":str(root),"dev":ri.st_dev,"ino":ri.st_ino},
                 captured_utc_ns=100, captured_monotonic_ns=100)
-    observer = {"socket":str(ref/"observer.sock"),
+    observer = {"socket":str(root/"observer/observer.sock"),
                 "manifest":str(ref/"observer-install.json"),"manifest_sha256":"f"*64}
     launch = dict(schema="alrust-reference-launch/1",
                   supervisor={"pid":10000,"pgid":10000,"start_ticks":123,
@@ -110,6 +110,18 @@ def test_rehashed_forged_launch_does_not_satisfy_schema_and_bindings(fixture,pat
     args["launch_sha256"]=dump(root/"reference/launch.json",launch)
     refresh_readiness(args,launch)
     with pytest.raises(br.BindingReadError):br.read_binding_inputs(**args)
+
+
+def test_rehashed_legacy_wrong_socket_directory_refuses(fixture):
+    root, _, launch, args = fixture
+    # Keep every neighboring receipt/readiness binding valid. The old reader
+    # accepted this synthetic path, but the actual producer never emits it.
+    wrong = str(root / "reference/observer.sock")
+    launch["observer"]["socket"] = launch["observer_socket"] = wrong
+    args["launch_sha256"] = dump(root / "reference/launch.json", launch)
+    refresh_readiness(args, launch)
+    with pytest.raises(br.BindingReadError, match="^launch_observer_invalid$"):
+        br.read_binding_inputs(**args)
 
 
 @pytest.mark.parametrize("which",["core","launch","readiness"])

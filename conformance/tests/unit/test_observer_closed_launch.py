@@ -196,10 +196,18 @@ def test_exact_receipt_count_order_and_confirmation_shape(closed, change):
         # Preserve valid capture chronology, isolating record order refusal.
         data[1]["evidence"]["payload"]["observed_monotonic_ns"] = 200
     if change == "extra-confirm-record":
-        value = copy.deepcopy(data[1]);value["evidence"]["kind"] = "synthetic-extra";data.insert(1, value)
+        value = copy.deepcopy(data[1]);value["evidence"]["kind"] = "synthetic_extra";data.insert(1, value)
     for i, value in enumerate(data): value["sequence"] = i
     write(paths[index], data);repin(paths, args)
-    with pytest.raises(cl.ClosedLaunchError): cl.read_closed_launch(**args)
+    if change == "extra-confirm-record":
+        # Prove the parser/chain/digest/type checks cannot mask the shape rule.
+        aggregate = sj.aggregate(args["job_root"], [name for name, _ in args["stages"]])
+        assert aggregate["verdict"] == "VALID"
+        assert aggregate["stages"][-1]["records"] == 4
+        with pytest.raises(cl.ClosedLaunchError, match="^launch_record_order_invalid$"):
+            cl.read_closed_launch(**args)
+    else:
+        with pytest.raises(cl.ClosedLaunchError): cl.read_closed_launch(**args)
 
 
 @pytest.mark.parametrize("target", ["core", "receipt"])

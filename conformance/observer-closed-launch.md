@@ -41,8 +41,8 @@ capture composition must pass the exact `ObservationWindow` deadline rather
 than reconstructing a later budget.
 
 The dependency helpers and journal schema are those already reviewed on
-`90b77847a7f27c58963028bf4a6f0ac391e5b869`; unchanged byte-reader implementation
-`4b50c29f709f35d81671baa2f9b10396ea68c47efbf3189624f79225d4cda257`.
+`90b77847a7f27c58963028bf4a6f0ac391e5b869`, with the byte-reader socket-path
+correction documented in `observer-binding-reader.md` (CL62-R1).
 Payloads match the independently reviewed launcher/confirmation source
 `effe409933390c75d2062f3a2e1fef4aedd00703`; no producer schema is changed.
 
@@ -52,3 +52,10 @@ observer activation, marked HTTP capture or database connection. The later
 held audits and executing composition need their own exact-source reviews.
 Real reference execution, full Phase 0, hosted/shared-VM qualification and
 Rust parity remain NOT_RUN. No workflow or permission changes are included.
+
+CL62-T1 exposed a masked control: the extra confirmation record used a kind
+containing `-`, which the generic journal parser refuses. The corrected control
+uses `synthetic_extra`, proves generic aggregate VALID with four confirmation
+records, and then requires the closed reader's specific shape refusal. Dropping
+that shape rule must fail this control. Previous failing interoperability
+attempts and the surviving mutation remain historical evidence.

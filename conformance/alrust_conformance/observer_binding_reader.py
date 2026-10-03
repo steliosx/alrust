@@ -147,7 +147,7 @@ def read_binding_inputs(job_root, root_identity, *, expected_core, core_sha256,
     """Read a single bounded private snapshot using independent caller pins.
 
     Fixed launcher layout: core-identity.json, reference/launch.json,
-    reference/terminal.json, reference/observer.sock and observer-install.json.
+    reference/terminal.json, observer/observer.sock and reference/observer-install.json.
     Readiness bytes are caller-provided original stdout, independently pinned;
     parsing or hashing them cannot prove their origin or a closed launch stage.
     Actual venv/interpreter inspection is deliberately outside this component.
@@ -206,7 +206,7 @@ def read_binding_inputs(job_root, root_identity, *, expected_core, core_sha256,
             _require(type(venv) is dict and set(venv) == {"path", "dev", "ino"}
                      and venv["path"] == expected_venv_path
                      and _identity((venv["dev"], venv["ino"])), "launch_venv_invalid")
-            observer = {"socket": job_root + "/reference/observer.sock",
+            observer = {"socket": job_root + "/observer/observer.sock",
                         "manifest": job_root + "/reference/observer-install.json",
                         "manifest_sha256": observer_manifest_sha256}
             _require(launch["observer"] == observer
