@@ -241,20 +241,35 @@ class PrivateSecretWriter:
                 except OSError:
                     self._failed = self._failed or "secret_close_failed"
 
-    def _close_handles(self):
+    def _close_handles(self, *, preserve_primary=False):
         for name in ("_events_fd", "_root_fd"):
             fd = getattr(self, name)
             setattr(self, name, None)
             if fd is not None:
                 try:
                     os.close(fd)
-                except OSError:
+                except BaseException as error:
                     self._failed = self._failed or "secret_close_failed"
+                    if not preserve_primary and not isinstance(error, OSError):
+                        raise
         self._closed = True
 
     def __exit__(self, exc_type, exc, traceback):
         if exc_type is not None:
             self._failed = self._failed or "secret_writer_body_failed"
+            # Preserve the caller's exact primary exception, including
+            # interrupts. Secondary cleanup/recording failures cannot turn
+            # it into a catchable ValueError or permit completion.
+            self._close_handles(preserve_primary=True)
+            self._values.clear()
+            try:
+                if type(self._stage) is sj.StageJournal:
+                    self._stage.fail(self._failed)
+            except BaseException:
+                # The surrounding stage still receives the primary exception.
+                # No completion/export claim follows a failed failure record.
+                pass
+            return False
         try:
             if self._failed is None:
                 self._owner()

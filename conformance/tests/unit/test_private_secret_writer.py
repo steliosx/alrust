@@ -92,11 +92,76 @@ def test_explicit_empty_snapshot_and_completion_after_handles_close(job, monkeyp
     assert completion(root)[0]["count"] == 0
 
 
+@pytest.mark.parametrize("raised", [RuntimeError, KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("finished", [False, True])
+@pytest.mark.parametrize("close_failed", [None, OSError, KeyboardInterrupt])
+def test_body_exception_preserved_without_completion(job, monkeypatch, raised,
+                                                     finished, close_failed):
+    root, core = job
+    primary = raised("untrusted primary detail")
+    with pytest.raises(raised) as caught:
+        with stage(root) as journal:
+            with writer.PrivateSecretWriter(str(root), core, journal) as capture:
+                capture.remember("SYNTHETIC-discovery-value-0001")
+                if finished:
+                    capture.finish()
+                fds = [capture._events_fd, capture._root_fd]
+                if close_failed:
+                    real_close = os.close
+                    armed_fds = set(fds)
+
+                    def close(fd):
+                        real_close(fd)
+                        if fd in armed_fds:
+                            armed_fds.remove(fd)
+                            raise close_failed("untrusted secondary detail")
+
+                    monkeypatch.setattr(writer.os, "close", close)
+                raise primary
+    assert caught.value is primary
+    assert not primary.__suppress_context__
+    assert capture._closed and capture._values == []
+    assert capture._events_fd is None and capture._root_fd is None
+    for fd in fds:
+        with pytest.raises(OSError):
+            os.fstat(fd)
+    assert completion(root) == []
+    assert (root / writer.EVENTS_NAME).exists()
+    assert (root / writer.SNAPSHOT_NAME).exists() == finished
+    evidence = sj.aggregate(str(root), ["entrypoint"])
+    assert evidence["verdict"] == "FAILED"
+    journal_bytes = Path(sj.journal_path(str(root), 0, "entrypoint")).read_bytes()
+    assert b"secret_writer_body_failed" in journal_bytes
+    assert b"untrusted" not in journal_bytes
+
+
+@pytest.mark.parametrize("raised", [RuntimeError, KeyboardInterrupt, SystemExit])
+def test_secondary_failure_marking_cannot_replace_primary(job, monkeypatch, raised):
+    root, core = job
+    primary = raised("untrusted primary detail")
+    with pytest.raises(raised) as caught:
+        with stage(root) as journal:
+            def fail(code):
+                raise RuntimeError("untrusted secondary detail")
+
+            monkeypatch.setattr(journal, "fail", fail)
+            with writer.PrivateSecretWriter(str(root), core, journal) as capture:
+                capture.remember("SYNTHETIC-discovery-value-0001")
+                capture.finish()
+                raise primary
+    assert caught.value is primary
+    assert capture._closed and capture._values == []
+    assert completion(root) == []
+    assert sj.aggregate(str(root), ["entrypoint"])["verdict"] == "FAILED"
+    journal_bytes = Path(sj.journal_path(str(root), 0, "entrypoint")).read_bytes()
+    assert b"untrusted" not in journal_bytes
+
+
 @pytest.mark.parametrize("phase", ["unfinished", "body_failed", "capture_after_finish",
                                    "finish_twice"])
 def test_failed_context_never_commits_completion(job, phase):
     root, core = job
-    with pytest.raises(writer.SecretWriterError):
+    with pytest.raises(RuntimeError if phase == "body_failed" else writer.SecretWriterError):
         with stage(root) as journal:
             with writer.PrivateSecretWriter(str(root), core, journal) as capture:
                 capture.remember("x" * 16)

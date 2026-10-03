@@ -52,6 +52,12 @@ the component never removes them or claims cleanup. A closed/incomplete entrypoi
 uses the existing failure-only path, not a completed inventory/normal export.
 The executor must propagate writer failures to the stage context; catching and
 suppressing the writer context itself is not an approved execution pattern.
+An exception from the caller's body propagates as the identical exception,
+including `KeyboardInterrupt` and `SystemExit`. Exit closes owned handles,
+clears buffered values and marks failure without recording an inventory.
+Secondary close/failure-marking errors cannot replace that primary exception.
+Only a successful body followed by failed exit validation/completion raises
+the writer's fixed diagnostic. No caller exception detail enters the journal.
 
 The active-stage check currently uses `StageJournal`'s internal `_root`,
 `_name`, `_journal._fd` fields because no public accessor exists. This dependency
