@@ -39,8 +39,14 @@ begin. The journal records, as they are observed:
   /proc/C/exe identity and the resolved venv bin/python3 identity (re-read
   and unchanged), and the monotonic time of that observation.
 
-It closes COMPLETE only after the ready line was written; any failure closes
-it FAILED with a fixed code. These are earlier observations for a later
+The stage closes COMPLETE after the ready line was written and BEFORE the
+launcher gives up ownership of P (LB80-R1). If that close fails (an append,
+fsync or close error), the launcher stops P exactly as on any other failure,
+reports the stop helper's verdict and exits 1. The journal then has no
+stage_complete, so it is INCOMPLETE, never COMPLETE. In stage mode, a ready
+line followed by a non-zero exit is therefore a failure whose tree has been
+stopped; only exit 0 hands the server off. Any other failure closes the
+stage FAILED with a fixed code. These are earlier observations for a later
 qualifier to compare with its own, never a substitute for them. Without the
 stage options, the launcher behaves as before.
 """
@@ -138,6 +144,8 @@ def check_stage(sj, job_root, stage):
     """The launch stage can begin: a valid core identity for this job root,
     the previous stage's journal present, and no launch journal yet."""
     index, previous = stage
+    # Validates the stage index and names without opening anything (LB80-N1).
+    sj.StageJournal(job_root, index, STAGE_NAME, previous)
     sj.validate_core(sj.read_bounded(os.path.join(job_root, sj.CORE_NAME), sj.MAX_CORE),
                      job_root)
     if previous is not None and not os.path.isfile(
@@ -569,25 +577,30 @@ def main(argv):
         log("refused: %s" % error)
         return 1
     if stage is None:
-        return launch(job_root, venv, port, ready_timeout, observer, _NoStage())
+        return launch(job_root, venv, port, ready_timeout, observer, _NoStage(), None)
+    journal = sj.StageJournal(job_root, stage[0], STAGE_NAME, stage[1])
     try:
-        with sj.StageJournal(job_root, stage[0], STAGE_NAME, stage[1]) as journal:
-            rc = launch(job_root, venv, port, ready_timeout, observer, journal)
-            if rc != 0:
-                raise LaunchFailed(rc)
-    except LaunchFailed as failed:
-        return failed.rc
+        journal.__enter__()
     except (OSError, ValueError) as error:
-        # The journal could not begin (nothing was launched), or it could not
-        # record stage_complete after the hand-off: never a COMPLETE stage.
-        log("stage journal: %s" % error)
+        log("refused: stage journal could not begin: %s" % error)
         return 1
-    return 0
+    rc = 1
+    try:
+        # launch() closes the stage COMPLETE itself, while it still owns P.
+        rc = launch(job_root, venv, port, ready_timeout, observer, journal,
+                    lambda: journal.__exit__(None, None, None))
+    finally:
+        if rc != 0:
+            # FAILED with the code launch() set. A journal whose COMPLETE close
+            # already failed is closed and stays without stage_complete.
+            journal.__exit__(LaunchFailed, LaunchFailed(rc), None)
+    return rc
 
 
-def launch(job_root, venv, port, ready_timeout, observer, stage):
+def launch(job_root, venv, port, ready_timeout, observer, stage, close_stage):
     """The launch after the shared checks; stage is a StageJournal or
-    _NoStage. Returns the exit status."""
+    _NoStage, and close_stage (stage mode only) records stage_complete
+    COMPLETE. Returns the exit status; 0 only after a hand-off."""
     try:
         venv_info = check_venv(job_root, venv)
         if listeners(port):
@@ -724,6 +737,12 @@ def launch(job_root, venv, port, ready_timeout, observer, stage):
                 view = view[os.write(1, view):]
         except OSError:
             raise Refused("could not report readiness")
+        if close_stage is not None:
+            try:
+                close_stage()
+            except (OSError, ValueError) as error:
+                # Still our child: the failure path below stops P (LB80-R1).
+                raise Refused("could not close the launch stage COMPLETE: %s" % error)
         handed_off = True
         rc = 0
     except (Refused, OSError, ValueError, IndexError, KeyError, TypeError) as error:

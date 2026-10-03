@@ -363,12 +363,14 @@ def test_copies_are_byte_identical(tmp_path):
         assert (scripts / name).read_bytes() == (SCRIPTS / name).read_bytes()
 
 
-def copy_scripts(tmp_path, supervisor_source=None, external_config=None):
-    """A private copy of the scripts, optionally with one component replaced."""
+def copy_scripts(tmp_path, supervisor_source=None, external_config=None,
+                 journal_patch=None):
+    """A private copy of the scripts, optionally with one component replaced
+    (journal_patch: (old, new) applied to the copied stage_journal.py)."""
     repo = tmp_path / "repo"
     scripts = repo / "conformance" / "scripts"
     if supervisor_source is None and external_config is None \
-            and scripts.exists():
+            and journal_patch is None and scripts.exists():
         return scripts
     scripts.mkdir(parents=True)
     (repo / "reference" / "alerta").mkdir(parents=True)
@@ -381,6 +383,10 @@ def copy_scripts(tmp_path, supervisor_source=None, external_config=None):
     package.mkdir()
     for name in ("__init__.py", "stage_journal.py", "security_evidence.py"):
         shutil.copy(SCRIPTS.parent / "alrust_conformance" / name, package / name)
+    if journal_patch is not None:
+        text = (package / "stage_journal.py").read_text()
+        assert text.count(journal_patch[0]) == 1
+        (package / "stage_journal.py").write_text(text.replace(*journal_patch))
     if supervisor_source is not None:
         (scripts / "reference-supervisor.py").write_text(supervisor_source)
     if external_config is not None:
@@ -1113,3 +1119,62 @@ def test_without_stage_options_nothing_is_journaled(tmp_path):
     m = READY.match(out.strip())
     assert not Path(sj.journal_path(str(job), 1, "launch")).exists()
     assert stop(Path(m[4]), m[5], job)[1]["verdict"] == "COMPLETE"
+
+
+
+# LB80-R1: a failure to close the stage COMPLETE after readiness must not
+# leave P and C running. The fault is injected only into the copied journal
+# module; the launcher, supervisor and stop helper are the real copies.
+_COMPLETE_LINE = '        result = {"result": "COMPLETE"} if exc_type is None else \\\n'
+_APPEND_LINE = '            self._journal.append(self._envelope("stage_complete", result))\n'
+CLOSE_FAULTS = {
+    # __exit__ raises before stage_complete is appended.
+    "exit_raises": (_COMPLETE_LINE,
+                    '        if exc_type is None:\n'
+                    '            raise OSError("synthetic close fault")\n' + _COMPLETE_LINE),
+    # The stage_complete append itself fails (the journal then closes).
+    "append_fails": (_APPEND_LINE,
+                     '            if exc_type is None:\n'
+                     '                self._journal.close()\n'
+                     '                raise OSError("synthetic append fault")\n' + _APPEND_LINE),
+}
+
+
+@pytest.mark.parametrize("fault", sorted(CLOSE_FAULTS))
+def test_late_stage_close_failure_stops_the_tree(tmp_path, fault):
+    job, port = stage_job(tmp_path), free_port()
+    scripts = copy_scripts(tmp_path / "faulty", journal_patch=CLOSE_FAULTS[fault])
+    rc, out, err = finish(launch_with(job, port, STAGE_ARGS, scripts=scripts))
+    # The ready line was written, but the launch failed and the tree is gone.
+    assert rc == 1
+    assert READY.match(out.strip()), out
+    assert "could not close the launch stage COMPLETE" in err
+    assert '"verdict": "COMPLETE"' in err          # the stop helper's verdict
+    assert tree_gone(job)
+    records = stage_records(job)
+    completes = [r["payload"] for r in records if r["kind"] == "stage_complete"]
+    report = sj.aggregate(str(job), ["database-create", "launch"])
+    # Never COMPLETE. If the journal is still open after the fault, the
+    # failure path records FAILED; if the fault closed it, the stage stays
+    # without stage_complete (INCOMPLETE).
+    if fault == "exit_raises":
+        assert completes == [{"result": "FAILED", "code": "launch_not_ready"}]
+        assert report["verdict"] == "FAILED"
+    else:
+        assert completes == [] and records[-1]["kind"] == "launch_readiness"
+        assert report["verdict"] == "INCOMPLETE"
+
+
+def test_stage_preflight_refuses_an_invalid_previous_stage_name(tmp_path):
+    # LB80-N1: a file with the odd name exists, but the name itself is invalid.
+    job = stage_job(tmp_path)
+    Path(sj.journal_path(str(job), 0, "Bad_Name")).write_text("")
+    shutil.rmtree(job / "venv")
+    scripts = copy_scripts(job.parent)
+    args = PY + [str(scripts / "launch-reference.py"), "--preflight",
+                 "--job-root", str(job), "--venv", str(job / "venv"),
+                 "--port", str(free_port()), "--ready-timeout", "5",
+                 "--stage-index", "1", "--previous-stage", "Bad_Name"]
+    out = subprocess.run(args, env=dict(ENV, HOME=str(job / "home")),
+                         capture_output=True, text=True, timeout=60)
+    assert out.returncode == 1 and "refused" in out.stderr
