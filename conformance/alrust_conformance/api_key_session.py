@@ -67,7 +67,13 @@ class ApiKeySession:
                 'ordinary key requires a clock before the explicit expiry')
         self.identifier = str(uuid.uuid4())
         self._secret = 'SYNTHETIC-' + secrets.token_hex(24)
+        self._persist_material(private_directory)
+
+    def _persist_material(self, private_directory):
         persist_private_material(private_directory, self.identifier, self._secret)
+
+    def _send_request(self, method, path, payload, expected):
+        return self.client.request(method, path, payload)
 
     def _request(self, method, path, payload=None, expected=(200,)):
         require((method == 'POST' and path == '/key') or
@@ -75,7 +81,7 @@ class ApiKeySession:
                  path in {'/key/' + identifier for identifier in self.owned_ids | {self.identifier}}),
                 'ordinary key request is outside its owned endpoint scope')
         try:
-            response = self.client.request(method, path, payload)
+            response = self._send_request(method, path, payload, expected)
         except Exception:
             raise AssertionError('ordinary key HTTP request failed') from None
         # No body, payload, actual path, URL, headers or exception text emitted.

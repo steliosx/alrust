@@ -223,6 +223,22 @@ class PrivateSecretWriter:
         except (OSError, sj.JournalError, ValueError):
             self._refuse("secret_capture_failed")
 
+    def check_binding(self, job_root, core_sha256):
+        """Check an explicit caller pin against this live writer generation.
+
+        The root and exact core bytes must still match the active entrypoint.
+        This is custody checking, not proof of child exit or profile coverage.
+        """
+        self.check_collecting()
+        self._require(type(job_root) is str and job_root == self._root
+                      and type(core_sha256) is str
+                      and core_sha256 == self._core_sha256,
+                      "secret_binding_mismatch")
+        try:
+            self._read_core()
+        except (OSError, sj.JournalError, ValueError):
+            self._refuse("secret_binding_invalid")
+
     def abort(self):
         """Permanently refuse completion after a capture/oracle failure."""
         self._owner()

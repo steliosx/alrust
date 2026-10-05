@@ -85,6 +85,29 @@ class ApiKeyCapture:
             self._abort()
             raise
 
+    def check_session_binding(self, client, job_root, core_sha256):
+        """Bind the actual client and explicit live writer/core pins.
+
+        A caller must recheck before material persistence and requests. No
+        paths, clients or writers are selected from an environment variable.
+        """
+        self._guard()
+        try:
+            if client is not self._client or client.base_url != self._base:
+                self._refuse("capture_session_client_mismatch")
+            self._writer.check_binding(job_root, core_sha256)
+        except CaptureError:
+            raise
+        except Exception:
+            self._refuse("capture_session_binding_invalid")
+        except BaseException:
+            self._abort()
+            raise
+
+    def abort(self):
+        """Latch caller failure while preserving its primary exception."""
+        self._abort()
+
     def generated(self, secret):
         """Durably retain a generated value BEFORE persistence or any use."""
         self._remember(secret)
