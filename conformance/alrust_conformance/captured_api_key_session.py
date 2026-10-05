@@ -7,7 +7,7 @@ is refused; executor-owned teardown remains a separate qualification gate.
 from functools import wraps
 
 from .api_key_capture import ApiKeyCapture, CaptureError
-from .api_key_session import ApiKeySession, require
+from .api_key_session import ApiKeySession, require, validate_private_directory
 
 
 def _oracle(operation):
@@ -22,8 +22,8 @@ def _oracle(operation):
 class CapturedApiKeySession(ApiKeySession):
     """Same ordinary oracle, with explicit durable capture and poison scope.
 
-    The private material destination is exactly the pinned job root; no new
-    directory is allocated. An executing profile must require this class,
+    Discovery stays in the writer's owned events/snapshot files at the pinned
+    job root. No duplicate material file or directory is allocated. An executing profile must require this class,
     not silently fall back to the legacy uncaptured fixture.
     """
 
@@ -44,12 +44,14 @@ class CapturedApiKeySession(ApiKeySession):
 
     def _binding(self):
         self._capture.check_session_binding(self.client, self._job_root, self._core_sha256)
+        validate_private_directory(self._job_root)
 
     def _persist_material(self, private_directory):
         self._binding()
         self._capture.generated(self._secret)
-        # Capture precedes both the private file and any HTTP use.
-        super()._persist_material(private_directory)
+        # The writer already durably owns this discovery. Do not create the
+        # legacy standalone material file: it has no owned-resource record
+        # and would survive finalization. No HTTP use precedes this capture.
 
     def _send_request(self, method, path, payload, expected):
         self._binding()

@@ -14,17 +14,22 @@ core and verifies its active entrypoint header. This couples the session to
 the collecting writer generation; it does **not** prove child exit, server
 generation, role coverage or hostile same-UID isolation.
 
-Generated secret bytes are durably recorded before the existing private material
-file is written or any request sent. The material destination is exactly the
-job root, already allocated by the executor, with existing absolute/0700/outside-
-Git/mailbox and exclusive-file checks. The caller owns client closure if the
+Generated secret bytes are durably recorded before any request or other use.
+Captured mode creates no `owned-api-key-material.json`: that legacy standalone
+runner file would be an unrecorded secret-bearing resource. The writer's events
+and snapshot files are the authoritative private discoveries and already have
+owned-resource records for finalizer removal. The job root is already allocated
+by the executor; the existing absolute/0700/outside-Git/mailbox placement checks
+are retained through a shared validation helper, without creating a duplicate
+file. Legacy `ApiKeySession` still creates its exclusive material file for its
+separate standalone runner. The caller owns client closure if the
 constructor fails, including interrupts. Raw values, files, responses, refusal
 records and test tracebacks are private; summaries are not discovery evidence.
 
 The base session gained only two delegating hooks: `_persist_material` and
 `_send_request`. Its existing predicates and owned-ID whitelist are unchanged.
 Create, read, update, delete and summary execute inside capture's oracle scope.
-Any caught constructor, persistence, request or ordinary oracle failure latches
+Any caught constructor, durable-capture, request or ordinary oracle failure latches
 the writer failure and prevents COMPLETE. Declared shape/status selection is
 made before the client runs: create/201, read and update/200, ordinary delete/200,
 absence GET/404, cleanup DELETE/200-or-404. Response outcomes never select a

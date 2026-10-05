@@ -9,7 +9,7 @@ from alrust_conformance.api_key_capture import ApiKeyCapture, CaptureError
 from alrust_conformance.captured_api_key_session import CapturedApiKeySession
 from alrust_conformance.client import Response
 from alrust_conformance import private_secret_writer as w
-from test_private_secret_writer import job, stage, completion
+from test_private_secret_writer import job, stage, completion, records
 from test_api_key_privacy_cleanup import StubClient
 
 
@@ -36,24 +36,46 @@ def entity(session, text="SYNTHETIC ordinary key"):
             "count": 0, "lastUsedTime": None, "customer": None}
 
 
-def test_capture_precedes_private_persistence_and_first_use(job, monkeypatch):
+def test_durable_capture_is_the_only_secret_file_allocation_before_first_use(job, monkeypatch):
     root, core = job
-    original = legacy.persist_private_material
-    seen = []
-    def persist(directory, identifier, secret):
-        assert discoveries(root) == [secret]
-        assert not (root / "owned-api-key-material.json").exists()
-        seen.append("durable")
-        original(directory, identifier, secret)
-    monkeypatch.setattr(legacy, "persist_private_material", persist)
+    def forbidden_legacy_file(*args):
+        raise AssertionError("captured mode called legacy material allocation")
+    monkeypatch.setattr(legacy, "persist_private_material", forbidden_legacy_file)
     with stage(root) as journal:
         with w.PrivateSecretWriter(str(root), core, journal) as writer:
             session, client = start(root, core, writer)
-            assert not client.calls and seen == ["durable"]
-            assert json.loads((root / "owned-api-key-material.json").read_bytes())["key"] == session._secret
+            assert not client.calls and discoveries(root) == [session._secret]
+            assert not (root / "owned-api-key-material.json").exists()
             session.close()
             writer.finish()
     assert client.closed and completion(root)[0]["count"] == 1
+    owned = {record["payload"]["path"]: record["payload"] for record in records(root)
+             if record["kind"] == "owned_resource"}
+    for name in (w.EVENTS_NAME, w.SNAPSHOT_NAME):
+        path = root / name
+        info = path.stat()
+        assert owned[str(path)] == {"path": str(path), "dev": info.st_dev,
+                                    "ino": info.st_ino, "type": "file"}
+    assert not (root / "owned-api-key-material.json").exists()
+
+
+def test_successful_crud_leaves_only_recorded_writer_secret_resources(job):
+    root, core = job
+    with stage(root) as journal:
+        with w.PrivateSecretWriter(str(root), core, journal) as writer:
+            session, client = start(root, core, writer)
+            client.responses = [Response(201, {"status": "ok", "key": session._secret,
+                                "data": entity(session)}),
+                                Response(200, {"status": "ok"}), Response(404, ABSENT)]
+            session.create(); session.delete(); session.close(); writer.finish()
+    owned = {record["payload"]["path"] for record in records(root)
+             if record["kind"] == "owned_resource"}
+    assert completion(root)
+    secret_files = [path for path in root.iterdir() if path.is_file()
+                    and session._secret.encode() in path.read_bytes()]
+    assert {path.name for path in secret_files} == {w.EVENTS_NAME, w.SNAPSHOT_NAME}
+    assert all(str(path) in owned for path in secret_files)
+    assert not (root / "owned-api-key-material.json").exists()
 
 
 def test_same_ordinary_crud_oracle_and_declared_shapes(job, monkeypatch):
@@ -102,7 +124,7 @@ def test_caught_unchanged_entity_oracle_failure_poison_and_no_http_cleanup(job, 
     assert not completion(root)
 
 
-@pytest.mark.parametrize("fault", ["existing-material", "clock", "persistence-interrupt"])
+@pytest.mark.parametrize("fault", ["clock", "capture-interrupt", "capture-persistence", "directory-check"])
 def test_caught_constructor_failure_permanently_refuses_completion(job, monkeypatch, fault):
     root, core = job
     with pytest.raises(w.SecretWriterError):
@@ -111,18 +133,24 @@ def test_caught_constructor_failure_permanently_refuses_completion(job, monkeypa
                 client = StubClient(); capture = ApiKeyCapture(writer, client)
                 kwargs = {}
                 expected = AssertionError
-                if fault == "existing-material":
-                    (root / "owned-api-key-material.json").write_text("SYNTHETIC-old-file\n")
-                elif fault == "clock":
+                if fault == "clock":
                     kwargs["now"] = datetime(2099, 1, 1, tzinfo=timezone.utc)
-                else:
+                elif fault == "capture-interrupt":
                     expected = KeyboardInterrupt
                     def interrupted(*args):
-                        raise KeyboardInterrupt("private persistence interrupted")
-                    monkeypatch.setattr(legacy, "persist_private_material", interrupted)
+                        raise KeyboardInterrupt("private capture interrupted")
+                    monkeypatch.setattr(writer, "remember", interrupted)
+                elif fault == "capture-persistence":
+                    expected = CaptureError
+                    def failed_write(*args):
+                        raise OSError("private capture persistence failed")
+                    monkeypatch.setattr(writer, "remember", failed_write)
+                else:
+                    (root / ".git").write_text("gitdir: unused\n")
                 with pytest.raises(expected):
                     CapturedApiKeySession(client, str(root), capture=capture, core_sha256=core, **kwargs)
                 assert not client.calls
+                assert not (root / "owned-api-key-material.json").exists()
                 writer.finish()
     assert not completion(root)
 

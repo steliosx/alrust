@@ -26,8 +26,8 @@ def shared_evidence_safe(data, private_keys=()):
         raise ValueError('credential pattern found in proposed shared evidence')
 
 
-def persist_private_material(directory, identifier, secret):
-    """Keep the generated key available for the runner's exclusion check only."""
+def validate_private_directory(directory):
+    """Check private placement without allocating a credential file."""
     path = Path(directory)
     try:
         info = path.lstat()
@@ -46,6 +46,15 @@ def persist_private_material(directory, identifier, secret):
                         or parent.name.endswith('-mailbox')
                         for parent in (path, *path.parents)),
                 'private material must stay outside Git and mailboxes')
+        return path
+    except Exception:
+        raise AssertionError('private material directory invalid') from None
+
+
+def persist_private_material(directory, identifier, secret):
+    """Legacy standalone runner exclusion file; captured mode uses its writer."""
+    try:
+        path = validate_private_directory(directory)
         destination = path / 'owned-api-key-material.json'
         fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, 'w') as handle:
