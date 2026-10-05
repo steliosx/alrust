@@ -24,7 +24,8 @@ are those observed when the resource was created. Integers are exact ints
 |---|---|---|---|
 | `owned_resource` | `{"path", "dev", "ino", "type": "file" or "dir"}` | any | a resource the job created and the finalizer must remove |
 | `credential_registry` | `{"path": "<job root>/credential-registry.json", "dev", "ino", "sha256"}` | exactly 1 | the frozen registry; written before the database drop |
-| `obtained_secret_count` | `{"count", "registry_sha256"}` | exactly 1 | how many secrets the entrypoint obtained; must link the registry digest, and the registry must hold at least that many |
+| `obtained_secret_count` | `{"count", "registry_sha256"}` | exactly 1, in stage `registry` | how many distinct secrets the entrypoint obtained; must link the registry digest, and the registry must hold at least that many. Written by `run_registry_stage` only after every inventory value was found in the frozen registry (value-set inclusion; the count is only a lower bound) |
+| `private_secret_inventory` | `{"path": "<job root>/entrypoint-secrets.json", "dev", "ino", "sha256", "count"}` | exactly 1, in stage `entrypoint` | the entrypoint's frozen private snapshot (provisioner-secret-interface.md); read by the registry stage after the writer gate, decoded against the gate's core digest and this count |
 | `export_candidate` | `{"path", "dev", "ino", "name"}` | any, unique names | a file to publish; `name` must be in `EXPORT_ALLOWLIST`, whose fixed bound applies; the source stage is recorded in the receipt |
 | `stop_verdict` | `{"verdict": "COMPLETE", "reason": "tree_empty", "launch_receipt_sha256", "terminal_receipt_sha256"}` | exactly 1 | the stop helper's verdict and the receipts it was based on |
 | `database_created` | `{"name", "oid", "role", "role_oid", "system_identifier", "postmaster_start_time", "server_version_num", "version", "psql"}` | exactly 1, in stage `database-create` | the allocated database's identity (database_stage.py) |

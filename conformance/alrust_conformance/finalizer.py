@@ -514,7 +514,13 @@ def finalize(job_root, stages, entrypoint_stage="entrypoint"):
                  and registry["path"] == os.path.join(job_root, REGISTRY_NAME)
                  and type(registry["dev"]) is int and type(registry["ino"]) is int
                  and _sha(registry["sha256"]), "registry_record_invalid")
-        _, obtained = _one(records, "obtained_secret_count")
+        found = [(stage, payload) for stage, kind, payload in records
+                 if kind == "obtained_secret_count"]
+        _require(len(found) == 1, "obtained_secret_count_missing_or_repeated")
+        # Q1 (b): only the registry stage, after the registry digest exists,
+        # may author the count; never the entrypoint or a backfill.
+        _require(found[0][0] == "registry", "obtained_secret_count_not_from_registry")
+        obtained = found[0][1]
         _require(type(obtained) is dict and set(obtained) == {"count", "registry_sha256"}
                  and type(obtained["count"]) is int and obtained["count"] >= 0
                  and obtained["registry_sha256"] == registry["sha256"],

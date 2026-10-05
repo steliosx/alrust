@@ -587,8 +587,9 @@ _URL = re.compile(r"postgresql://(alrust_[a-z0-9_]{1,56}):([0-9a-f]{64})"
                   r"@127\.0\.0\.1:([0-9]{1,5})/(alrust_[a-z0-9_]{1,56})\Z")
 
 
-def _read_private_file(path, limit):
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+def _read_private_file(path, limit, dir_fd=None):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+                 dir_fd=dir_fd)
     try:
         info = os.fstat(fd)
         _require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid()
@@ -675,11 +676,12 @@ def _gate_code(error):
 def _run_stage(job_root, prefix, name, gate, action):
     """Evaluate GATE (read-only) with no journal of this stage open, then open
     it (index len(prefix), previous prefix[-1], binding that journal's sha256)
-    and either record the refusal and close FAILED, or run ACTION. ACTION
-    returns (result, failure_code or None)."""
-    refusal = None
+    and either record the refusal and close FAILED, or run ACTION with the
+    gate's own result. ACTION(journal, evidence) returns (result, failure
+    code or None)."""
+    refusal = evidence = None
     try:
-        gate()
+        evidence = gate()
     except Exception as error:  # every gate failure is a fixed-code refusal
         refusal = _gate_code(error)
     with sj.StageJournal(job_root, len(prefix), name, prefix[-1]) as journal:
@@ -687,7 +689,7 @@ def _run_stage(job_root, prefix, name, gate, action):
             journal.fail(refusal)
             raise DatabaseStageError(refusal)
         try:
-            result, failure = action(journal)
+            result, failure = action(journal, evidence)
         except DatabaseStageError as error:
             journal.fail(error.code)
             raise
@@ -697,13 +699,83 @@ def _run_stage(job_root, prefix, name, gate, action):
         return result
 
 
+INVENTORY_NAME = "entrypoint-secrets.json"
+
+
+def read_inventory(job_root, evidence):
+    """Q1 reader, steps 2 and 3 of the approved interface (6e2bfcc8), run
+    only after writer_quiescence passed: EVIDENCE is that gate's validated
+    result, so the closed COMPLETE entrypoint journal and the core digest
+    come from it, never from the snapshot. Requires exactly one
+    private_secret_inventory record, in the entrypoint stage, with the exact
+    payload {path, dev, ino, sha256, count} and the fixed path; then the
+    snapshot, opened without following links relative to the job root held
+    open (itself opened O_NOFOLLOW; directories above it are not checked
+    here), must be a private regular single-link file of that identity and
+    digest, and decode against the independent core digest and count.
+    Returns the private values; never log or repr them."""
+    from . import finalizer as fz
+    from . import private_secret_inventory as inventory
+    aggregation = evidence["aggregation"]
+    found = [(stage, payload) for stage, kind, payload
+             in fz._journal_records(job_root, aggregation)
+             if kind == "private_secret_inventory"]
+    _require(len(found) == 1 and found[0][0] == "entrypoint",
+             "inventory_record_missing_or_repeated")
+    record = found[0][1]
+    path = os.path.join(job_root, INVENTORY_NAME)
+    _require(type(record) is dict and set(record) == {"path", "dev", "ino", "sha256", "count"}
+             and record["path"] == path
+             and all(type(record[k]) is int for k in ("dev", "ino", "count"))
+             and type(record["sha256"]) is str, "inventory_record_invalid")
+    try:
+        root = os.open(job_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            data, info = _read_private_file(INVENTORY_NAME, inventory.MAX_INVENTORY,
+                                            dir_fd=root)
+        finally:
+            os.close(root)
+    except OSError:
+        raise DatabaseStageError("inventory_unreadable") from None
+    _require(info.st_nlink == 1
+             and (info.st_dev, info.st_ino) == (record["dev"], record["ino"])
+             and hashlib.sha256(data).hexdigest() == record["sha256"], "inventory_changed")
+    try:
+        return inventory.decode_inventory(
+            data, expected_core_sha256=aggregation["core_identity_sha256"],
+            expected_count=record["count"])
+    except inventory.InventoryError as error:
+        raise DatabaseStageError(str(error)) from None
+
+
 def run_registry_stage(job_root, prefix, **kwargs):
     """The `registry` stage, gated by the finalizer's writer_quiescence over
-    PREFIX (through stop). Returns the registry path."""
+    PREFIX (through stop). After the gate: the entrypoint inventory is read
+    (read_inventory) and its values join the registry as other secrets;
+    the frozen registry is re-read and must contain EVERY inventory value
+    (the value-set inclusion gate; the finalizer's count check is only a
+    lower bound); only then is obtained_secret_count {count,
+    registry_sha256} recorded, in this registry journal, exactly once.
+    Returns the registry path."""
     from . import finalizer as fz
+
+    def action(journal, evidence):
+        values = read_inventory(job_root, evidence)
+        extra = list(kwargs.pop("other_secrets", []))
+        path = build_registry(job_root, journal, other_secrets=extra + values, **kwargs)
+        data, _ = _read_private_file(path, fz.MAX_REGISTRY)
+        digest = hashlib.sha256(data).hexdigest()
+        try:
+            frozen = set(fz.load_registry(job_root, digest))
+        except fz.FinalizerError as error:
+            raise DatabaseStageError(str(error)) from None
+        _require(all(value.encode("utf-8") in frozen for value in values),
+                 "registry_inclusion_failed")
+        journal.record("obtained_secret_count", {"count": len(values),
+                                                 "registry_sha256": digest})
+        return path, None
     return _run_stage(job_root, prefix, "registry",
-                      lambda: fz.writer_quiescence(job_root, prefix),
-                      lambda journal: (build_registry(job_root, journal, **kwargs), None))
+                      lambda: fz.writer_quiescence(job_root, prefix), action)
 
 
 def registry_frozen(job_root, evidence):
@@ -748,7 +820,7 @@ def run_drop_stage(job_root, prefix, *, launched, **kwargs):
             # A positively proven no-launch cleanup never needs a registry.
             no_launch_quiescence(job_root, prefix)
 
-    def action(journal):
+    def action(journal, evidence):
         verdict = drop_database(job_root, journal, create_journal_bytes=create, **kwargs)
         return verdict, None if verdict == "COMPLETE" else "drop_" + verdict.lower()
     return _run_stage(job_root, prefix, DROP_STAGE, gate, action)
