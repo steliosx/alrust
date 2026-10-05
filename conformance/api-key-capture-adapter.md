@@ -33,8 +33,10 @@ used by the existing security predicates: `status`, `message`, `code`,
 `errors`, `requestId`. The API-key not-found path has `errors: null` and a
 nonempty request ID; three-field synthetic responses are insufficient.
 This is source-derived from pinned Alerta `f4312727783dad64198b62ed778bbca98a5144a3`
-at `alerta/views/keys.py:71`, `:162`, `alerta/exceptions.py:98` and
+at `alerta/views/keys.py:73`, `:160`, `alerta/exceptions.py:98` and
 `alerta/utils/tracing.py:18`; it is not a new reference HTTP run.
+The shared field set is `security_assertions._ERROR_FIELDS`; a change to that
+pin also affects this adapter and requires review of its capture controls.
 
 The future `ApiKeySession.close()` bridge must declare `shape="cleanup"`
 and `expected=(200, 404)`. That shape validates the actual response status
