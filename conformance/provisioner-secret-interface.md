@@ -125,9 +125,10 @@ Claude's future registry reader must:
 
 Step 4 avoids a cycle: the entrypoint cannot know a later registry digest.
 The interface requires registry authorship of `obtained_secret_count`; a
-count in any other stage must refuse. Claude's reader candidate `44b5b168`
-adds that finalizer stage check and awaits its separate exact-head review;
-it is not part of this document's executable base. The finalizer's count
+count in any other stage must refuse. Claude's branch `claude/ci-db-q1-reader`
+adds that finalizer stage check; its corrected head `a6b00f50` has independent
+component source/offline approval, not integration qualification. It is not
+part of this document's executable base. The finalizer's count
 check is only a lower bound. Therefore the **reader's actual set-inclusion check**
 is required; a same-sized registry of different secrets is not complete.
 No finalizer schema change or weakened gate is proposed. Any required

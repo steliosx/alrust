@@ -207,6 +207,27 @@ class PrivateSecretWriter:
         except (OSError, InventoryError, sj.JournalError, ValueError):
             self._refuse("secret_capture_failed")
 
+    def check_collecting(self):
+        """Check custody/lifetime before an operation that might obtain secrets.
+
+        This does not prove profile completeness or writer-generation exit.
+        No environment/path lookup chooses this already-entered writer.
+        """
+        self._owner()
+        self._require(self._entered and not self._finished and not self._closed
+                      and self._failed is None, "secret_writer_not_collecting")
+        try:
+            self._stage_active()
+            self._root_current()
+            self._events_current()
+        except (OSError, sj.JournalError, ValueError):
+            self._refuse("secret_capture_failed")
+
+    def abort(self):
+        """Permanently refuse completion after a capture/oracle failure."""
+        self._owner()
+        self._refuse("secret_capture_aborted")
+
     def finish(self):
         """Freeze private bytes; completion is recorded later on clean exit."""
         self._owner()
