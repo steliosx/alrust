@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 
 from .client import Response
 from .private_secret_writer import PrivateSecretWriter
+from .security_assertions import _ERROR_FIELDS
 
 
 class CaptureError(ValueError):
@@ -38,6 +39,7 @@ class ApiKeyCapture:
         self._client = client
         self._failed = False
         self._generated = set()
+        self._captured = set()
         try:
             base = client.base_url
             url = urlsplit(base)
@@ -99,6 +101,7 @@ class ApiKeyCapture:
         except BaseException:
             self._abort()
             raise
+        self._captured.add(secret)
 
     @contextmanager
     def oracle_scope(self):
@@ -130,11 +133,23 @@ class ApiKeyCapture:
             # prevents COMPLETE/export before any ordinary entity assertion.
             self._refuse("capture_href_invalid")
 
+    def _absence(self, body):
+        # Reuse the pinned reference error field set. This is the ApiError
+        # 'not found' path, not the HTTP routing-error handler. Raw diagnostic
+        # values remain private; the unchanged ordinary oracle still runs.
+        if (set(body) != _ERROR_FIELDS or body.get("status") != "error"
+                or type(body.get("code")) is not int or body["code"] != 404
+                or type(body.get("message")) is not str
+                or body.get("errors") is not None
+                or type(body.get("requestId")) is not str or not body["requestId"]):
+            self._refuse("capture_response_invalid")
+
     def request(self, method, path, payload=None, *, shape, expected):
         """Call the injected client, then capture before returning to oracle.
 
         Shapes: create (/key POST), entity (UUID GET/PUT), deleted (UUID
-        DELETE), absent (UUID GET/DELETE). The existing oracle still decides
+        DELETE), absent (UUID GET/DELETE), cleanup (UUID DELETE, 200/404).
+        The existing oracle still decides
         field values, customer/scopes/expiry and ownership; no secret path
         or extra endpoint is admitted here. Client parse/transport errors fail
         closed; body-size enforcement remains a future transport prerequisite.
@@ -147,10 +162,13 @@ class ApiKeyCapture:
         permitted = ((shape == "create" and method == "POST" and path == "/key")
                      or (shape == "entity" and method in ("GET", "PUT") and uuid_path)
                      or (shape == "deleted" and method == "DELETE" and uuid_path)
-                     or (shape == "absent" and method in ("GET", "DELETE") and uuid_path))
+                     or (shape == "absent" and method in ("GET", "DELETE") and uuid_path)
+                     or (shape == "cleanup" and method == "DELETE" and uuid_path))
         if (not permitted or type(expected) is not tuple or not expected
                 or any(type(s) is not int or not 100 <= s <= 599 for s in expected)):
             self._refuse("capture_request_invalid")
+        if uuid_path and path[5:] in self._captured:
+            self._refuse("capture_secret_path")
         if (shape == "create" and (type(payload) is not dict
                 or type(payload.get("key")) is not str
                 or payload["key"] not in self._generated)):
@@ -185,15 +203,17 @@ class ApiKeyCapture:
         elif shape == "deleted":
             if body != {"status": "ok"}:
                 self._refuse("capture_response_invalid")
-        else:
-            # Existing absence oracle permits diagnostic fields. Admit only
-            # the pinned standard error fields, never a key-bearing response.
-            if (not {"status", "code"} <= set(body)
-                    or not set(body) <= {"status", "code", "message"}
-                    or body["status"] != "error" or type(body["code"]) is not int
-                    or body["code"] != 404
-                    or ("message" in body and type(body["message"]) is not str)):
+        elif shape == "cleanup":
+            if type(response.status) is not int:
+                self._refuse("capture_status_invalid")
+            if response.status == 404:
+                self._absence(body)
+            elif response.status != 200 or body != {"status": "ok"}:
                 self._refuse("capture_response_invalid")
+        else:
+            if type(response.status) is not int or response.status != 404:
+                self._refuse("capture_status_invalid")
+            self._absence(body)
         if type(response.status) is not int or response.status not in expected:
             self._refuse("capture_status_invalid")
         return response

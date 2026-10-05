@@ -18,6 +18,8 @@ KEY = "generated-test-key-" + "g" * 24
 OTHER = "unexpected-returned-key-" + "r" * 24
 UUID = "12345678-1234-1234-1234-123456789abc"
 BASE = "http://127.0.0.1:18081"
+ABSENT = {"status": "error", "code": 404, "message": "not found",
+          "errors": None, "requestId": "synthetic-request-id"}
 
 
 def entity(key=KEY):
@@ -280,7 +282,7 @@ def test_invalid_client_base_fails_before_request(job, base):
 
 
 @pytest.mark.parametrize("shape,body", [
-    ("absent", {"status": "error", "code": 404, "message": "not found"}),
+    ("absent", ABSENT),
     ("deleted", {"status": "ok"}),
 ])
 def test_supported_cleanup_shapes_stay_capture_neutral(job, shape, body):
@@ -294,6 +296,92 @@ def test_supported_cleanup_shapes_stay_capture_neutral(job, shape, body):
             writer.finish()
     assert values(root) == [KEY]
     assert completion(root)[0]["count"] == 1
+
+
+@pytest.mark.parametrize("status,body", [(200, {"status": "ok"}), (404, ABSENT)])
+def test_cleanup_shape_handles_both_reference_outcomes(job, status, body):
+    root, core = job
+    with stage(root) as journal:
+        with w.PrivateSecretWriter(str(root), core, journal) as writer:
+            bridge, client = start(root, writer, [Response(status, body)])
+            bridge.generated(KEY)
+            response = bridge.request("DELETE", "/key/" + UUID, shape="cleanup",
+                                      expected=(200, 404))
+            assert response.status == status
+            assert client.calls == [("DELETE", "/key/" + UUID)]
+            writer.finish()
+    assert values(root) == [KEY] and completion(root)[0]["count"] == 1
+
+
+@pytest.mark.parametrize("shape", ["absent", "cleanup"])
+@pytest.mark.parametrize("fault", ["missing-errors", "missing-requestId", "extra-key",
+    "errors-list", "empty-requestId", "integer-requestId", "wrong-code", "bool-code",
+    "wrong-status", "nonstring-message", "wrong-http-status"])
+def test_error_envelope_refuses_invalid_private_response(job, shape, fault):
+    root, core = job
+    body = dict(ABSENT)
+    status = 404
+    if fault.startswith("missing-"):
+        del body[fault[8:]]
+    elif fault == "extra-key":
+        body["key"] = OTHER
+    elif fault == "errors-list":
+        body["errors"] = []
+    elif fault == "empty-requestId":
+        body["requestId"] = ""
+    elif fault == "integer-requestId":
+        body["requestId"] = 42
+    elif fault == "wrong-code":
+        body["code"] = 500
+    elif fault == "bool-code":
+        body["code"] = True
+    elif fault == "wrong-status":
+        body["status"] = "ok"
+    elif fault == "nonstring-message":
+        body["message"] = None
+    else:
+        status = 200
+    with pytest.raises(CaptureError):
+        with stage(root) as journal:
+            with w.PrivateSecretWriter(str(root), core, journal) as writer:
+                bridge, client = start(root, writer, [Response(status, body)])
+                bridge.generated(KEY)
+                bridge.request("DELETE", "/key/" + UUID, shape=shape, expected=(404,))
+    assert len(client.calls) == 1 and not completion(root)
+
+
+@pytest.mark.parametrize("method,shape", [("GET", "entity"), ("PUT", "entity"),
+    ("DELETE", "deleted"), ("GET", "absent"), ("DELETE", "cleanup")])
+@pytest.mark.parametrize("origin", ["generated", "create-top", "create-entity", "detail"])
+def test_uuid_shaped_secret_never_reaches_client_as_path(job, method, shape, origin):
+    root, core = job
+    with pytest.raises(w.SecretWriterError):
+        with stage(root) as journal:
+            with w.PrivateSecretWriter(str(root), core, journal) as writer:
+                bridge, client = start(root, writer, [])
+                bridge.generated(KEY)
+                if origin == "generated":
+                    bridge.generated(UUID)
+                else:
+                    # Deliberately unexpected returned values stay private;
+                    # no altered ordinary oracle approval is claimed.
+                    if origin == "detail":
+                        client.replies.append(Response(200, {"status": "ok", "total": 1,
+                                                              "key": entity(UUID)}))
+                        bridge.request("GET", "/key/" + UUID, shape="entity", expected=(200,))
+                    else:
+                        client.replies.append(Response(201, {"status": "ok",
+                            "key": UUID if origin == "create-top" else KEY,
+                            "data": entity(UUID if origin == "create-entity" else KEY)}))
+                        create(bridge)
+                assert UUID in values(root)
+                preceding_calls = list(client.calls)
+                with pytest.raises(CaptureError, match="capture_secret_path"):
+                    bridge.request(method, "/key/" + UUID, shape=shape, expected=(200,404))
+                assert client.calls == preceding_calls
+                with pytest.raises(w.SecretWriterError):
+                    writer.finish()
+    assert not completion(root)
 
 
 @pytest.mark.parametrize("state", ["not_entered", "finished", "closed", "foreign_thread"])

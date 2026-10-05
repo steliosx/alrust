@@ -23,8 +23,28 @@ ordinary entity assertion, and does not claim to recover an unknown href
 secret. Percent-encoded href also fails closed; that compatibility edge is
 explicitly covered in offline controls.
 
-Only declared create, entity, deleted and absent shapes are admitted, with
-explicit expected statuses and UUID-addressed key endpoints. The unchanged
+Only declared create, entity, deleted, absent and cleanup shapes are admitted,
+with explicit expected statuses and UUID-addressed key endpoints. A path
+whose UUID equals any generated or response-captured secret is refused before
+the injected client is called; UUID syntax alone cannot prove an identifier
+is not a secret. Unknown credential ownership still belongs to the caller.
+Absent responses require HTTP 404 and the same pinned five-field envelope
+used by the existing security predicates: `status`, `message`, `code`,
+`errors`, `requestId`. The API-key not-found path has `errors: null` and a
+nonempty request ID; three-field synthetic responses are insufficient.
+This is source-derived from pinned Alerta `f4312727783dad64198b62ed778bbca98a5144a3`
+at `alerta/views/keys.py:71`, `:162`, `alerta/exceptions.py:98` and
+`alerta/utils/tracing.py:18`; it is not a new reference HTTP run.
+
+The future `ApiKeySession.close()` bridge must declare `shape="cleanup"`
+and `expected=(200, 404)`. That shape validates the actual response status
+and accepts only the successful DELETE body at 200 or the standard ApiError
+not-found envelope at 404. It sends exactly one request, with no retry or
+adapter bypass. Ordinary `delete()` retains the strict `deleted` shape and
+200 expectation, followed by the `absent` GET and 404 expectation.
+The current session/fixture is unchanged and is not connected yet.
+
+The unchanged
 oracle must execute inside `oracle_scope()` so an oracle failure poisons
 completion even when caught outside the scope. Primary interrupts retain
 their identity; secondary abort failures cannot replace them. Transport or
