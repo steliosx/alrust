@@ -1016,3 +1016,80 @@ def test_reader_gate_refusal_opens_no_inventory(env, tmp_path, monkeypatch):
         run_reader(job, stub, ["database-create", "launch"])
     monkeypatch.undo()
     assert not any(p.endswith("entrypoint-secrets.json") for p in opened)
+
+
+# --- Q1R44-R1: the held root, bound to the validated core, after the gate ---
+
+def _swap_ancestor(job):
+    # Codex's independent control (f56aa58e): the same job inode, path
+    # spelling and bytes, reached through one symlinked owned ancestor.
+    ancestor = job.parent
+    backing = ancestor.with_name("reader-real")
+    ancestor.rename(backing)
+    ancestor.symlink_to(backing, target_is_directory=True)
+
+
+def _replace_root_with_copy(job):
+    import shutil
+    copy = job.with_name("job-copy")
+    shutil.copytree(job, copy, symlinks=True)
+    job.rename(job.with_name("job-original"))
+    copy.rename(job)
+
+
+def _symlink_root(job):
+    real = job.with_name("job-real")
+    job.rename(real)
+    job.symlink_to(real, target_is_directory=True)
+
+
+def _change_core(job):
+    core = job / "core-identity.json"
+    data = core.read_bytes()
+    core.chmod(0o600)
+    core.write_bytes(data.replace(b'"profile":"scaffold"', b'"profile":"scaffolx"'))
+
+
+@pytest.mark.parametrize("case,tamper", [
+    ("ancestor_symlink", _swap_ancestor),
+    ("root_replaced_by_copy", _replace_root_with_copy),
+    ("root_symlink", _symlink_root),
+    ("core_changed", _change_core),
+    ("root_mode", lambda job: job.chmod(0o750)),
+])
+def test_reader_refuses_a_root_changed_after_the_gate(env, tmp_path, monkeypatch, case, tamper):
+    from alrust_conformance import finalizer as fz
+    job, stub, prefix = reader_job(env, tmp_path, monkeypatch)
+    evidence = fz.writer_quiescence(str(job), prefix)     # the real gate passed
+    assert ds.read_inventory(str(job), evidence) == INVENTORY      # control
+    tamper(job)
+    with pytest.raises(ds.DatabaseStageError, match="^inventory_root_changed$"):
+        ds.read_inventory(str(job), evidence)
+
+
+@pytest.mark.parametrize("spelling", ["{}/", "{}/.", "{}/../job", "relative"])
+def test_reader_refuses_an_unnormalized_root(env, tmp_path, monkeypatch, spelling):
+    from alrust_conformance import finalizer as fz
+    job, stub, prefix = reader_job(env, tmp_path, monkeypatch)
+    evidence = fz.writer_quiescence(str(job), prefix)
+    with pytest.raises(ds.DatabaseStageError, match="^inventory_root_changed$"):
+        ds.read_inventory(spelling.format(job) if "{}" in spelling else "job", evidence)
+
+
+def test_root_change_refuses_the_registry_stage_before_any_query(env, tmp_path, monkeypatch):
+    # The swap lands after the gate and after the registry journal opened
+    # (a swap before that refuses earlier, in StageJournal's own root check).
+    job, stub, prefix = reader_job(env, tmp_path, monkeypatch)
+    real_read = ds.read_inventory
+
+    def swap_then_read(job_root, evidence):
+        _swap_ancestor(job)
+        return real_read(job_root, evidence)
+    monkeypatch.setattr(ds, "read_inventory", swap_then_read)
+    before = (stub / "received.log").read_bytes() if (stub / "received.log").exists() else b""
+    with pytest.raises(ds.DatabaseStageError, match="^inventory_root_changed$"):
+        run_reader(job, stub, prefix)
+    after = (stub / "received.log").read_bytes() if (stub / "received.log").exists() else b""
+    assert after == before
+    assert not (job / fz_registry_name()).exists()
+    assert registry_records(job)[-1]["payload"]["result"] == "FAILED"

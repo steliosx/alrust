@@ -702,6 +702,52 @@ def _run_stage(job_root, prefix, name, gate, action):
 INVENTORY_NAME = "entrypoint-secrets.json"
 
 
+def _open_bound_root(job_root, core_sha256):
+    """Q1R44-R1: open JOB_ROOT one component at a time from "/", each with
+    O_DIRECTORY|O_NOFOLLOW relative to the previous held directory, so a
+    symlink anywhere in the path (ancestors included) refuses at this
+    boundary. The held root must be a uid-owned 0700 directory whose
+    core-identity.json, read through it, has exactly the gate's validated
+    core digest and names this path, device and inode as its job root.
+    Returns the held descriptor; the caller closes it. Not a boundary
+    against a hostile same-uid writer."""
+    _require(type(job_root) is str and os.path.isabs(job_root)
+             and os.path.normpath(job_root) == job_root and job_root != "/",
+             "inventory_root_changed")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    try:
+        fd = os.open("/", flags)
+    except OSError:
+        raise DatabaseStageError("inventory_root_changed") from None
+    try:
+        for name in job_root.split("/")[1:]:
+            try:
+                child = os.open(name, flags, dir_fd=fd)
+            except OSError:
+                raise DatabaseStageError("inventory_root_changed") from None
+            os.close(fd)
+            fd = child
+        info = os.fstat(fd)
+        _require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid()
+                 and stat.S_IMODE(info.st_mode) == 0o700, "inventory_root_changed")
+        try:
+            core, _ = _read_private_file(sj.CORE_NAME, sj.MAX_CORE, dir_fd=fd)
+        except OSError:
+            raise DatabaseStageError("inventory_root_changed") from None
+        _require(hashlib.sha256(core).hexdigest() == core_sha256, "inventory_root_changed")
+        try:
+            bound = json.loads(core)["job_root"]
+        except (ValueError, TypeError, KeyError):
+            raise DatabaseStageError("inventory_root_changed") from None
+        _require(bound == {"path": job_root, "dev": info.st_dev, "ino": info.st_ino},
+                 "inventory_root_changed")
+        held, fd = fd, None
+        return held
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
 def read_inventory(job_root, evidence):
     """Q1 reader, steps 2 and 3 of the approved interface (6e2bfcc8), run
     only after writer_quiescence passed: EVIDENCE is that gate's validated
@@ -710,33 +756,35 @@ def read_inventory(job_root, evidence):
     private_secret_inventory record, in the entrypoint stage, with the exact
     payload {path, dev, ino, sha256, count} and the fixed path; then the
     snapshot, opened without following links relative to the job root held
-    open (itself opened O_NOFOLLOW; directories above it are not checked
-    here), must be a private regular single-link file of that identity and
-    digest, and decode against the independent core digest and count.
+    open by _open_bound_root (no symlinked component anywhere in the path;
+    bound to the validated core's digest and job-root device/inode), must be
+    a private regular single-link file of that identity and digest, and
+    decode against the independent core digest and count.
     Returns the private values; never log or repr them."""
     from . import finalizer as fz
     from . import private_secret_inventory as inventory
     aggregation = evidence["aggregation"]
-    found = [(stage, payload) for stage, kind, payload
-             in fz._journal_records(job_root, aggregation)
-             if kind == "private_secret_inventory"]
-    _require(len(found) == 1 and found[0][0] == "entrypoint",
-             "inventory_record_missing_or_repeated")
-    record = found[0][1]
-    path = os.path.join(job_root, INVENTORY_NAME)
-    _require(type(record) is dict and set(record) == {"path", "dev", "ino", "sha256", "count"}
-             and record["path"] == path
-             and all(type(record[k]) is int for k in ("dev", "ino", "count"))
-             and type(record["sha256"]) is str, "inventory_record_invalid")
+    root = _open_bound_root(job_root, aggregation["core_identity_sha256"])
     try:
-        root = os.open(job_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        found = [(stage, payload) for stage, kind, payload
+                 in fz._journal_records(job_root, aggregation)
+                 if kind == "private_secret_inventory"]
+        _require(len(found) == 1 and found[0][0] == "entrypoint",
+                 "inventory_record_missing_or_repeated")
+        record = found[0][1]
+        path = os.path.join(job_root, INVENTORY_NAME)
+        _require(type(record) is dict
+                 and set(record) == {"path", "dev", "ino", "sha256", "count"}
+                 and record["path"] == path
+                 and all(type(record[k]) is int for k in ("dev", "ino", "count"))
+                 and type(record["sha256"]) is str, "inventory_record_invalid")
         try:
             data, info = _read_private_file(INVENTORY_NAME, inventory.MAX_INVENTORY,
                                             dir_fd=root)
-        finally:
-            os.close(root)
-    except OSError:
-        raise DatabaseStageError("inventory_unreadable") from None
+        except OSError:
+            raise DatabaseStageError("inventory_unreadable") from None
+    finally:
+        os.close(root)
     _require(info.st_nlink == 1
              and (info.st_dev, info.st_ino) == (record["dev"], record["ino"])
              and hashlib.sha256(data).hexdigest() == record["sha256"], "inventory_changed")
