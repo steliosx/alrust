@@ -363,17 +363,13 @@ def generation_ended(pid, start_ticks, boot):
         os.close(fd)
 
 
-def _quiescence(job_root, records, core):
-    """Positive quiescence (section 9 step 1), from journal records only.
-
-    The stop_verdict record must be COMPLETE/tree_empty and must link the
-    launch and terminal receipts by sha256; both are re-read and re-hashed,
-    the terminal must be tree_empty for the launch receipt's supervisor
-    generation, and both must be on the core's boot. The database_drop record
-    must be COMPLETE with its database identity. DEFERRED: comparing that
-    identity with the database stage's receipt belongs to the database stage
-    head, which does not exist yet; until then the record's fields are only
-    type-checked. Returns the evidence."""
+def _stop_evidence(job_root, records, core):
+    """The stop half of positive quiescence (section 9 step 1), from journal
+    records only. The stop_verdict record must be COMPLETE/tree_empty and
+    link the launch and terminal receipts by sha256; both are re-read and
+    re-hashed, the terminal must be tree_empty for the launch receipt's
+    supervisor generation, both on the core's boot, and that generation must
+    be positively observed to have ended. Returns (stop record, generation)."""
     _, stop = _one(records, "stop_verdict")
     _require(type(stop) is dict and set(stop) == {
         "verdict", "reason", "launch_receipt_sha256", "terminal_receipt_sha256"}
@@ -403,13 +399,85 @@ def _quiescence(job_root, records, core):
     # positive observation that the supervisor generation actually ended.
     _require(generation_ended(launched[0], launched[1], core["boot_id"]),
              "supervisor_generation_live_or_unproven")
-    _, database = _one(records, "database_drop")
-    _require(type(database) is dict and set(database) == {
-        "verdict", "database", "oid", "system_identifier"}
-        and database["verdict"] == "COMPLETE" and type(database["database"]) is str
-        and type(database["oid"]) is int and type(database["system_identifier"]) is str,
-        "database_drop_not_proven")
-    return {"stop": stop, "database": database}
+    return stop, launched
+
+
+def _launch_handoff(records, aggregation, stop, launched):
+    """The launch counts only with a COMPLETE launch-confirm stage (LB4E-R2):
+    exactly one launch_handoff, recorded in launch-confirm, naming the
+    validated launch journal's sha256, the stop verdict's launch receipt and
+    the same supervisor generation."""
+    found = [(stage, payload) for stage, kind, payload in records if kind == "launch_handoff"]
+    _require(len(found) == 1 and found[0][0] == "launch-confirm", "launch_handoff_missing")
+    handoff = found[0][1]
+    hashes = {s["name"]: s["sha256"] for s in aggregation["stages"]}
+    _require(type(handoff) is dict and set(handoff) == {
+        "launch_journal_sha256", "receipt_sha256", "supervisor", "child",
+        "observed_monotonic_ns"}
+        and handoff["launch_journal_sha256"] == hashes.get("launch")
+        and handoff["receipt_sha256"] == stop["launch_receipt_sha256"]
+        and type(handoff["supervisor"]) is dict
+        and set(handoff["supervisor"]) == {"pid", "start_ticks"}
+        and all(type(v) is int for v in handoff["supervisor"].values())
+        and (handoff["supervisor"]["pid"], handoff["supervisor"]["start_ticks"]) == launched
+        and type(handoff["child"]) is dict and set(handoff["child"]) == {"pid", "start_ticks"},
+        "launch_handoff_mismatch")
+
+
+def writer_quiescence(job_root, stages, entrypoint_stage="entrypoint"):
+    """The writer gate for the registry and database-drop stages (database
+    design section 4, DBC023-R1). STAGES is the prefix written so far, ending
+    with the stage just before the caller's (at least through `stop`).
+    The prefix must contain database-create < launch, launch-confirm
+    immediately after launch, then the entrypoint stage, then stop
+    (DBFE-R1). Requires: aggregation over the prefix VALID (every journal
+    closed and COMPLETE, including database-create, launch, launch-confirm and
+    entrypoint); exactly one linked COMPLETE/tree_empty stop verdict whose
+    supervisor generation is positively observed to have ended; and the
+    launch-confirm hand-off. It reads only immutable proof inputs (core,
+    closed journals, launch and terminal receipts) and never the registry,
+    a credential, a log or the database (DBC023-N3). It does not require
+    database_drop. Raises FinalizerError or JournalError on refusal."""
+    _require(type(stages) is list and all(
+        name in stages for name in ("database-create", "launch", "launch-confirm",
+                                    entrypoint_stage, "stop"))
+        and stages.index("launch-confirm") == stages.index("launch") + 1
+        and stages.index("database-create") < stages.index("launch")
+        < stages.index(entrypoint_stage) < stages.index("stop"),
+        "writer_gate_stages_invalid")
+    aggregation = _sj.aggregate(job_root, stages)
+    _require(aggregation["verdict"] == "VALID", "writer_gate_" + aggregation["verdict"].lower())
+    core_bytes = read_bounded(os.path.join(job_root, _sj.CORE_NAME), _sj.MAX_CORE)
+    core = _sj.validate_core(core_bytes, job_root)
+    records = _journal_records(job_root, aggregation)
+    stop, launched = _stop_evidence(job_root, records, core)
+    _launch_handoff(records, aggregation, stop, launched)
+    return {"aggregation": aggregation, "stop": stop}
+
+
+_DATABASE_IDENTITY = ("oid", "role", "role_oid", "system_identifier", "postmaster_start_time")
+
+
+def _database_linkage(records):
+    """Closes the deferred database linkage (database design section 7):
+    exactly one database_created record, in database-create, and exactly one
+    database_drop record whose verdict is COMPLETE and whose identity equals
+    it. ROLE_ONLY_COMPLETE, NONE_ALLOCATED or UNPROVEN refuse."""
+    created = [(stage, payload) for stage, kind, payload in records
+               if kind == "database_created"]
+    _require(len(created) == 1 and created[0][0] == "database-create",
+             "database_created_missing_or_repeated")
+    _, drop = _one(records, "database_drop")
+    created = created[0][1]
+    _require(type(created) is dict and type(drop) is dict and set(drop) == {
+        "verdict", "reason", "database", "oid", "role", "role_oid",
+        "system_identifier", "postmaster_start_time"}
+        and drop["verdict"] == "COMPLETE", "database_drop_not_proven")
+    _require(drop["database"] == created.get("name")
+             and all(drop[key] == created.get(key) for key in _DATABASE_IDENTITY)
+             and type(drop["oid"]) is int and type(drop["role_oid"]) is int,
+             "database_linkage_mismatch")
+    return drop
 
 
 def finalize(job_root, stages, entrypoint_stage="entrypoint"):
@@ -438,7 +506,9 @@ def finalize(job_root, stages, entrypoint_stage="entrypoint"):
         core_bytes = read_bounded(os.path.join(job_root, _sj.CORE_NAME), _sj.MAX_CORE)
         core = _sj.validate_core(core_bytes, job_root)
         records = _journal_records(job_root, aggregation)
-        evidence = _quiescence(job_root, records, core)
+        stop, launched = _stop_evidence(job_root, records, core)
+        _launch_handoff(records, aggregation, stop, launched)
+        evidence = {"stop": stop, "database": _database_linkage(records)}
         _, registry = _one(records, "credential_registry")
         _require(type(registry) is dict and set(registry) == {"path", "dev", "ino", "sha256"}
                  and registry["path"] == os.path.join(job_root, REGISTRY_NAME)
