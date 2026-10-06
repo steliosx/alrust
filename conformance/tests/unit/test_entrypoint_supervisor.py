@@ -277,7 +277,7 @@ def test_not_group_leader_is_refused(tmp_path):
                                "--core-sha256", digest, "--script", str(script),
                                "--entrypoint-journal", str(journal),
                                "--deadline-monotonic-ns", str(deadline), "--",
-                               sys.executable, str(script), str(journal), "complete"],
+                               sys.executable, "-I", str(script), str(journal), "complete"],
                          capture_output=True, timeout=30)
     assert out.returncode == sup.EXIT_SETUP
     assert not (tmp_path / "r.json").exists()
@@ -358,7 +358,7 @@ def run_mocked(tmp_path, reap_batches, scan, source=None):
             str(tmp_path / "terminal.json"), "--core", str(core), "--core-sha256", digest,
             "--script", str(script), "--entrypoint-journal", str(journal),
             "--deadline-monotonic-ns", str(time.monotonic_ns() + 60 * 10**9),
-            "--", sys.executable, str(script)]
+            "--", sys.executable, "-I", str(script)]
     records, kills, batches = {}, [], iter(reap_batches)
 
     def write(path, obj):

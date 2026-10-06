@@ -1,11 +1,13 @@
 """Core identity /2 entrypoint pins (R-EP gate plan P1). Pure: private
 temporary files only; no subprocess, git, fork or signal. The supervisor
-script is imported as a module, never run."""
+script is imported as a module; its main() is called in-process only with
+fork, signal registration, prctl and group leadership replaced."""
 import copy
 import hashlib
 import importlib.util
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -230,3 +232,89 @@ def test_supervisor_pin_mismatches(tmp_path, which, expected):
 def test_supervisor_requires_v2_pins(core):
     with pytest.raises(ValueError):
         sup.core_pins(core)
+
+
+# Invocation grammar (P1-SOURCE-R1): the pinned script must be Python's
+# execution target, not an argument of -c, -m or another target.
+SCRIPT = "/job/entrypoint.py"
+REFUSED = [
+    ["/py", SCRIPT],                                    # -I missing
+    ["/py", "-S", "-I", SCRIPT],                        # -I not first
+    ["/py", "-I", "-c", "pass", SCRIPT],
+    ["/py", "-I", "-S", "-B", "-c", "pass", SCRIPT],
+    ["/py", "-I", "-m", "json.tool", SCRIPT],
+    ["/py", "-I", "-", SCRIPT],
+    ["/py", "-I", "-X", "dev", SCRIPT],
+    ["/py", "-I", "-W", "error", SCRIPT],
+    ["/py", "-I", "-IS", SCRIPT],                       # combined flags
+    ["/py", "-I", "-I", SCRIPT],
+    ["/py", "-I", "-B", "-B", SCRIPT],                  # repeated flag
+    ["/py", "-I", "--", SCRIPT],
+    ["/py", "-I", "/job/other.py", SCRIPT],             # another target first
+    ["/py", "-I", "-S"],                                # no target
+    ["/py", "-I"],
+]
+
+
+@pytest.mark.parametrize("command", [
+    ["/py", "-I", SCRIPT],
+    ["/py", "-I", "-S", "-B", SCRIPT, "journal", "complete"],
+    ["/py", "-I", "-u", "-B", "-S", SCRIPT, "-c", "pass"],  # after S: script argv
+])
+def test_invocation_grammar_accepts(command):
+    assert sup.check_invocation(command, SCRIPT) is None
+
+
+@pytest.mark.parametrize("command", REFUSED)
+def test_invocation_grammar_refuses(command):
+    assert sup.check_invocation(command, SCRIPT) is not None
+
+
+def _main_fixture(tmp_path, monkeypatch):
+    """Real files and pins; fork, signal registration, prctl and group
+    leadership are replaced, so nothing is started or signalled."""
+    script = tmp_path / "entrypoint.py"
+    script.write_bytes(b"# synthetic entrypoint\n")
+    resolved = os.path.realpath(sys.executable)
+    pins = {"supervisor": {"path": str(SUPERVISOR), "sha256": sj.file_sha256(str(SUPERVISOR))},
+            "entrypoint_script": {"path": str(script), "sha256": sj.file_sha256(str(script))},
+            "interpreter": {"path": sys.executable, "resolved_path": resolved,
+                            "measured_sha256": sj.file_sha256(resolved)}}
+    core = tmp_path / "core.json"
+    core.write_bytes(_core_bytes(pins))
+    events = []
+
+    class ForkReached(Exception):
+        pass
+
+    def fork():
+        events.append("fork")
+        raise ForkReached()
+    monkeypatch.setattr(sup.os, "fork", fork)
+    monkeypatch.setattr(sup.os, "getpgid", lambda pid: os.getpid())
+    monkeypatch.setattr(sup.signal, "signal", lambda *a: events.append("signal"))
+    monkeypatch.setattr(sup, "set_subreaper", lambda: events.append("prctl") or 1)
+    argv = ["--receipt", str(tmp_path / "launch.json"), "--terminal",
+            str(tmp_path / "terminal.json"), "--core", str(core), "--core-sha256",
+            hashlib.sha256(core.read_bytes()).hexdigest(), "--script", str(script),
+            "--entrypoint-journal", str(tmp_path / "journal.jsonl"),
+            "--deadline-monotonic-ns", str(sup.time.monotonic_ns() + 60 * 10**9), "--"]
+    return argv, str(script), events, ForkReached
+
+
+def test_main_legitimate_invocation_reaches_fork(tmp_path, monkeypatch):
+    argv, script, events, reached = _main_fixture(tmp_path, monkeypatch)
+    with pytest.raises(reached):
+        sup.main(argv + [sys.executable, "-I", "-S", "-B", script, "arg"])
+    assert events[-1] == "fork"
+
+
+@pytest.mark.parametrize("command", REFUSED)
+def test_main_refuses_before_fork(tmp_path, monkeypatch, command):
+    argv, script, events, reached = _main_fixture(tmp_path, monkeypatch)
+    command = [sys.executable if c == "/py" else script if c == SCRIPT else c
+               for c in command]
+    with pytest.raises(SystemExit) as exit_:
+        sup.main(argv + command)
+    assert exit_.value.code == sup.EXIT_USAGE and events == []
+    assert not (tmp_path / "launch.json").exists()

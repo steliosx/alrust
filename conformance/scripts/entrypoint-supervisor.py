@@ -12,7 +12,11 @@ ECHILD) is the same; the differences are listed in the design, section 2.
 Run as `python3 -I -S -B entrypoint-supervisor.py --receipt R --terminal T
 --core C --core-sha256 H --script S --entrypoint-journal J
 --deadline-monotonic-ns D -- COMMAND...` from a step that made this process
-the leader of its own process group. COMMAND must name S as one argument.
+the leader of its own process group. COMMAND must be exactly
+`INTERPRETER -I [-S] [-B] [-u] S [ARG...]`: -I first, the other flags at most
+once each as separate tokens, then S as the execution target (P1-SOURCE-R1).
+Anything else, such as -c, -m, -, -X, -W or combined flags, is refused
+before the fork, so S cannot be reduced to an argument of another target.
 
 - It checks, before the fork: group leadership, absent receipts, the core
   file against the independently supplied H, and that the deadline D
@@ -85,6 +89,23 @@ OPTIONS = ("--receipt", "--terminal", "--core", "--core-sha256", "--script",
 PATHS = ("--receipt", "--terminal", "--core", "--script", "--entrypoint-journal")
 
 
+INTERPRETER_FLAGS = ("-S", "-B", "-u")
+
+
+def check_invocation(command, script_path):
+    """The reviewed invocation grammar. Returns an error string, or None
+    when COMMAND runs script_path as Python's execution target."""
+    if len(command) < 3 or command[1] != "-I":
+        return "COMMAND must be INTERPRETER -I [-S] [-B] [-u] SCRIPT [ARG...]"
+    i = 2
+    while i < len(command) and command[i] in INTERPRETER_FLAGS \
+            and command[i] not in command[2:i]:
+        i += 1
+    if i >= len(command) or command[i] != script_path:
+        return "COMMAND must run --script as its target after the allowed flags"
+    return None
+
+
 def parse_args(argv):
     opts = dict.fromkeys(OPTIONS)
     i = 0
@@ -110,8 +131,9 @@ def parse_args(argv):
     if not deadline.isdigit() or len(deadline) > 20:
         fail(EXIT_USAGE, "--deadline-monotonic-ns must be a decimal integer")
     opts["--deadline-monotonic-ns"] = int(deadline)
-    if command[1:].count(opts["--script"]) != 1:
-        fail(EXIT_USAGE, "COMMAND must name --script exactly once")
+    invalid = check_invocation(command, opts["--script"])
+    if invalid is not None:
+        fail(EXIT_USAGE, invalid)
     return opts, command
 
 
