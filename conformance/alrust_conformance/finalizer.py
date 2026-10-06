@@ -581,7 +581,8 @@ def writer_quiescence(job_root, stages, expected, required, entrypoint_stage="en
     _launch_handoff(records, aggregation, stop, launched)
     proofs = gate_exit_proofs(job_root, aggregation, records, expected, required, core_bytes,
                               entrypoint_stage)
-    return {"aggregation": aggregation, "stop": stop, "proofs": proofs}
+    return {"aggregation": aggregation, "stop": stop, "proofs": proofs, "core": core,
+            "records": records}
 
 
 def failed_entrypoint_quiescence(job_root, stages, expected, entrypoint_stage="entrypoint"):

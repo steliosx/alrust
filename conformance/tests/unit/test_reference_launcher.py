@@ -22,6 +22,8 @@ import time
 
 import pytest
 
+import exit_fixtures as xf
+
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPTS = ROOT / "conformance/scripts"
 PY = [sys.executable, "-I", "-S", "-B"]
@@ -95,7 +97,33 @@ def alive(pid):
         return False
 
 
-def make_job(tmp_path, mode="healthy", name="job", interpreter=None):
+def prepare_stage(job, previous=True):
+    """P3c: what the workflow prepares before a launch: a /3 core, the
+    journal directory and, with PREVIOUS, database-create (index 0) closed
+    with its database_created record and the database directory as an owned
+    resource, then database-create-exit (index 1) with the holder's verdict
+    (synthetic ended P_T; exit_fixtures). Also the expected-pins file."""
+    ref = "e" * 40
+    sj.write_core_identity(str(job), profile="scaffold", event_head_sha="a" * 40,
+                           checkout_sha="b" * 40, reference_sha=ref, reference_pin=ref,
+                           lock_sha256={"build": "c" * 64}, lock_pins={"build": "c" * 64},
+                           manifest_sha256="d" * 64, manifest_pin="d" * 64, env=CORE_ENV,
+                           **xf.core_pins())
+    sj.prepare_journal_dir(str(job))
+    (job.parent / "pins.json").write_text(json.dumps(xf.EXPECTED))
+    if previous:
+        database = job / "database"
+        info = os.lstat(database)
+        with sj.StageJournal(str(job), 0, "database-create") as journal:
+            journal.record("owned_resource", {"path": str(database), "dev": info.st_dev,
+                                              "ino": info.st_ino, "type": "dir"})
+            journal.record("database_created", {"name": TEST_ROLE, "role": TEST_ROLE})
+        with sj.StageJournal(str(job), 1, "database-create-exit", "database-create") as journal:
+            journal.record("tool_exit_verdict", xf.tool_verdict(job, "database-create", 0))
+    return job
+
+
+def make_job(tmp_path, mode="healthy", name="job", interpreter=None, stage=True):
     job = tmp_path / name
     job.mkdir(mode=0o700)
     bin_dir = job / "venv" / "bin"
@@ -118,12 +146,15 @@ def make_job(tmp_path, mode="healthy", name="job", interpreter=None):
     alertad = bin_dir / "alertad"
     alertad.write_text("#!%s\n%s" % (shebang, SERVER % mode))
     alertad.chmod(0o755)
+    if stage:
+        prepare_stage(job)
     return job
 
 
 def secret_args(job):
-    """Paths and the database port only (P2c)."""
-    return ["--secret-key-file", str(job / "secret-key"), "--database-port", str(TEST_DB_PORT)]
+    """Paths and the database port only (P2c), and the expected pins (P3c)."""
+    return ["--secret-key-file", str(job / "secret-key"), "--database-port", str(TEST_DB_PORT),
+            "--expected-pins", str(job.parent / "pins.json")]
 
 
 def launch(job, port, timeout=15, scripts=None, env=None, **kw):
@@ -132,7 +163,7 @@ def launch(job, port, timeout=15, scripts=None, env=None, **kw):
     scripts = scripts or copy_scripts(job.parent)
     args = PY + [str(scripts / "launch-reference.py"), "--job-root", str(job),
                  "--venv", str(job / "venv"), "--port", str(port),
-                 "--ready-timeout", str(timeout)] + secret_args(job)
+                 "--ready-timeout", str(timeout)] + secret_args(job) + STAGE_ARGS
     env = dict(env or ENV)
     env.setdefault("HOME", str(job / "home"))
     return subprocess.Popen(args, env=env, stdout=subprocess.PIPE,
@@ -381,7 +412,7 @@ def test_closed_output_is_a_failure_with_cleanup(tmp_path):
         PY + [str(copy_scripts(tmp_path) / "launch-reference.py"),
               "--job-root", str(job),
               "--venv", str(job / "venv"), "--port", str(port),
-              "--ready-timeout", "15"] + secret_args(job),
+              "--ready-timeout", "15"] + secret_args(job) + STAGE_ARGS,
         env=dict(ENV, HOME=str(job / "home")), stdout=write_end,
         stderr=subprocess.PIPE, text=True)
     os.close(write_end)
@@ -421,10 +452,11 @@ def test_job_root_and_venv_checks(tmp_path, variant):
         venv = outside
     args = PY + [str(copy_scripts(tmp_path) / "launch-reference.py"),
                  "--job-root", str(job), "--venv", str(venv),
-                 "--port", str(port), "--ready-timeout", "5"] + secret_args(job)
+                 "--port", str(port), "--ready-timeout", "5"] + secret_args(job) + STAGE_ARGS
     out = subprocess.run(args, env=dict(ENV, HOME=str(job / "home")),
                          capture_output=True, text=True, timeout=30)
     assert out.returncode == 1 and "refused" in out.stderr
+    assert "stage context" not in out.stderr      # the check under test refused
 
 
 def test_busy_port_is_refused(tmp_path):
@@ -476,8 +508,10 @@ def copy_scripts(tmp_path, supervisor_source=None, external_config=None,
     # The stage-journal package that stage mode imports (stdlib only).
     package = repo / "conformance" / "alrust_conformance"
     package.mkdir()
-    for name in ("__init__.py", "stage_journal.py", "security_evidence.py"):
-        shutil.copy(SCRIPTS.parent / "alrust_conformance" / name, package / name)
+    # P3c: the launch gate imports database_stage and through it the
+    # finalizer, tool_exit and entrypoint_exit; copy the whole package.
+    for source in sorted((SCRIPTS.parent / "alrust_conformance").glob("*.py")):
+        shutil.copy(source, package / source.name)
     if journal_patch is not None:
         text = (package / "stage_journal.py").read_text()
         assert text.count(journal_patch[0]) == 1
@@ -764,7 +798,7 @@ def test_launch_rechecks_home(tmp_path, variant):
     proc = subprocess.Popen(
         PY + [str(copy_scripts(tmp_path) / "launch-reference.py"),
               "--job-root", str(job), "--venv", str(job / "venv"),
-              "--port", str(port), "--ready-timeout", "5"] + secret_args(job),
+              "--port", str(port), "--ready-timeout", "5"] + secret_args(job) + STAGE_ARGS,
         env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     rc, out, err = finish(proc)
     assert rc == 1 and "HOME" in err
@@ -821,7 +855,8 @@ def launch_with(job, port, extra, timeout=15, scripts=None, env=None):
     scripts = scripts or copy_scripts(job.parent)
     args = PY + [str(scripts / "launch-reference.py"), "--job-root", str(job),
                  "--venv", str(job / "venv"), "--port", str(port),
-                 "--ready-timeout", str(timeout)] + secret_args(job) + extra
+                 "--ready-timeout", str(timeout)] + secret_args(job) + extra \
+        + ([] if "--stage-index" in extra or "--previous-stage" in extra else STAGE_ARGS)
     env = dict(env or ENV, HOME=str(job / "home"))
     return subprocess.Popen(args, env=env, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True)
@@ -954,10 +989,12 @@ def test_observer_module_refusals(tmp_path, variant):
     proc = subprocess.run(
         PY + [str(copy_scripts(tmp_path) / "launch-reference.py"),
               "--job-root", str(job), "--venv", str(job / "venv"),
-              "--port", str(port), "--ready-timeout", "5"] + secret_args(job) + extra,
+              "--port", str(port), "--ready-timeout", "5"] + secret_args(job) + extra
+        + STAGE_ARGS,
         env=dict(ENV, HOME=str(job / "home")), capture_output=True,
         text=True, timeout=30)
     assert proc.returncode == 1 and "refused" in proc.stderr, proc.stderr
+    assert "stage context" not in proc.stderr
     assert not (job / "reference" / "launch.json").exists()
     assert not (site_dir(job) / "alrust_observer.py").exists()
     if variant != "existing_destination":
@@ -1033,7 +1070,7 @@ def test_failed_activation_leaves_the_server_without_an_observer(tmp_path):
 # Stage mode (BP71-N1/N2): the launch runs inside its own stage journal.
 from alrust_conformance import stage_journal as sj  # noqa: E402
 
-STAGE_ARGS = ["--stage-index", "1", "--previous-stage", "database-create"]
+STAGE_ARGS = ["--stage-index", "2", "--previous-stage", "database-create-exit"]   # P3c
 CORE_ENV = {"GITHUB_REPOSITORY": "steliosx/alrust", "GITHUB_RUN_ID": "1",
             "GITHUB_RUN_ATTEMPT": "1", "GITHUB_JOB": "reference",
             "ImageOS": "ubuntu24", "ImageVersion": "20261001.1"}
@@ -1042,21 +1079,12 @@ CORE_ENV = {"GITHUB_REPOSITORY": "steliosx/alrust", "GITHUB_RUN_ID": "1",
 def stage_job(tmp_path, mode="healthy", previous=True):
     """A job root with a core identity and, optionally, a closed previous
     stage (database-create), as the workflow will prepare it."""
-    job = make_job(tmp_path, mode)
-    ref = "e" * 40
-    sj.write_core_identity(str(job), profile="scaffold", event_head_sha="a" * 40,
-                           checkout_sha="b" * 40, reference_sha=ref, reference_pin=ref,
-                           lock_sha256={"build": "c" * 64}, lock_pins={"build": "c" * 64},
-                           manifest_sha256="d" * 64, manifest_pin="d" * 64, env=CORE_ENV)
-    sj.prepare_journal_dir(str(job))
-    if previous:
-        with sj.StageJournal(str(job), 0, "database-create"):
-            pass
-    return job
+    job = make_job(tmp_path, mode, stage=False)
+    return prepare_stage(job, previous)
 
 
 def stage_records(job):
-    data = Path(sj.journal_path(str(job), 1, "launch")).read_bytes()
+    data = Path(sj.journal_path(str(job), 2, "launch")).read_bytes()
     return [json.loads(line)["evidence"] for line in data.splitlines()]
 
 
@@ -1180,7 +1208,7 @@ def test_stage_preflight_refuses_before_the_build(tmp_path, variant):
     job = stage_job(tmp_path, previous=variant != "no_previous") \
         if variant != "no_core" else make_job(tmp_path)
     if variant == "launch_exists":
-        Path(sj.journal_path(str(job), 1, "launch")).write_text("")
+        Path(sj.journal_path(str(job), 2, "launch")).write_text("")
     shutil.rmtree(job / "venv")
     scripts = copy_scripts(job.parent)
     args = PY + [str(scripts / "launch-reference.py"), "--preflight",
@@ -1204,16 +1232,20 @@ def test_stage_option_usage(tmp_path, extra):
     rc, out, err = finish(launch_with(job, free_port(), extra))
     assert rc == 1 and "refused" in err
     assert not (job / "reference").exists()
-    assert not Path(sj.journal_path(str(job), 1, "launch")).exists()
+    assert not Path(sj.journal_path(str(job), 2, "launch")).exists()
 
 
-def test_without_stage_options_nothing_is_journaled(tmp_path):
+def test_without_stage_options_a_launch_is_refused(tmp_path):
+    # P3c: a launch reads the job role's URL and so needs the launch gate.
     job, port = stage_job(tmp_path), free_port()
-    rc, out, err = finish(launch_with(job, port, []))
-    assert rc == 0, err
-    m = READY.match(out.strip())
-    assert not Path(sj.journal_path(str(job), 1, "launch")).exists()
-    assert stop(Path(m[4]), m[5], job)[1]["verdict"] == "COMPLETE"
+    args = PY + [str(copy_scripts(job.parent) / "launch-reference.py"), "--job-root", str(job),
+                 "--venv", str(job / "venv"), "--port", str(port),
+                 "--ready-timeout", "5"] + secret_args(job)
+    out = subprocess.run(args, env=dict(ENV, HOME=str(job / "home")),
+                         capture_output=True, text=True, timeout=30)
+    assert out.returncode == 1 and "stage context" in out.stderr
+    assert not (job / "reference").exists()
+    assert not Path(sj.journal_path(str(job), 2, "launch")).exists()
 
 
 
@@ -1299,10 +1331,10 @@ _CLOSE_AFTER_WRITE_FAULT = (
     '                raise OSError("synthetic close fault after the write")\n')
 LATE_DURABILITY_FAULTS = {"fsync_after_write": (_APPEND_LINE, _FSYNC_FAULT),
                           "close_after_write": (_APPEND_LINE, _CLOSE_AFTER_WRITE_FAULT)}
-CONFIRM_STAGES = ["database-create", "launch", "launch-confirm"]
+CONFIRM_STAGES = ["database-create", "database-create-exit", "launch", "launch-confirm"]
 
 
-def confirm(job, digest, scripts=None, index="2"):
+def confirm(job, digest, scripts=None, index="3"):
     scripts = scripts or copy_scripts(job.parent)
     out = subprocess.run(PY + [str(scripts / "confirm-launch.py"), "--job-root", str(job),
                                "--stage-index", index, "--receipt-digest", digest],
@@ -1311,7 +1343,7 @@ def confirm(job, digest, scripts=None, index="2"):
 
 
 def confirm_records(job):
-    data = Path(sj.journal_path(str(job), 2, "launch-confirm")).read_bytes()
+    data = Path(sj.journal_path(str(job), 3, "launch-confirm")).read_bytes()
     return [json.loads(line)["evidence"] for line in data.splitlines()]
 
 
@@ -1326,7 +1358,7 @@ def test_confirm_records_a_live_hand_off(tmp_path):
     records = confirm_records(job)
     [handoff] = by_kind(records, "launch_handoff")
     launched = json.loads(receipt.read_text())
-    launch_bytes = Path(sj.journal_path(str(job), 1, "launch")).read_bytes()
+    launch_bytes = Path(sj.journal_path(str(job), 2, "launch")).read_bytes()
     assert handoff == {
         "launch_journal_sha256": hashlib.sha256(launch_bytes).hexdigest(),
         "receipt_sha256": digest,
@@ -1416,7 +1448,7 @@ def synthetic_launch(tmp_path, sup, child, *, complete=True, journal_digest=None
     class Synthetic(Exception):
         pass
     try:
-        with sj.StageJournal(str(job), 1, "launch", "database-create") as journal:
+        with sj.StageJournal(str(job), 2, "launch", "database-create-exit") as journal:
             journal.record("launch_receipt", {"path": str(receipt), "sha256": recorded})
             journal.record("launch_readiness", {"receipt_sha256": recorded})
             if not complete:

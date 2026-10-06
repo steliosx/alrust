@@ -653,12 +653,18 @@ def run_registry(job, stub, other=(), index=2):
     if not key_file.exists():
         key_file.write_text(SECRET_KEY + "\n")
         key_file.chmod(0o600)
+    # P3c: the binding the registry stage derives from the gate's evidence,
+    # here from this job's own create record and database directory.
+    created = [r["payload"] for r in records(create_bytes(job)) if r["kind"] == "database_created"]
+    info = os.stat(job / "database")
+    binding = {"role": created[0]["role"], "database_dir": {"dev": info.st_dev,
+                                                             "ino": info.st_ino}}
     with sj.StageJournal(str(job), index, "registry", ds.CREATE_STAGE if index == 1 else
                          "launch") as journal:
         return ds.build_registry(str(job), journal,
                                  secret_key_path=str(job / "secret-key"),
                                  other_secrets=list(other), port=5432,
-                                 psql_path=str(stub / "psql"),
+                                 psql_path=str(stub / "psql"), binding=binding,
                                  deadline_ns=__import__("time").monotonic_ns() + int(60e9))
 
 
@@ -818,7 +824,7 @@ def test_registry_runner_end_to_end_through_the_real_writer_gate(env, tmp_path, 
                 inventory=["provisioned-role-key-" + "r" * 24])
     (job / fz_registry_name()).unlink()          # the fixture's own registry
     prefix = STAGES[:STAGES.index("stop") + 1]
-    (job / "database").mkdir(mode=0o700)
+    (job / "database").mkdir(mode=0o700, exist_ok=True)  # build() made it (P3c)
     password = "f" * 64
     url = "postgresql://alrust_scaffold_123_1:%s@127.0.0.1:5432/alrust_scaffold_123_1" % password
     (job / "database" / "url").write_text(url + "\n")
@@ -846,7 +852,7 @@ def composed_drop(env, tmp_path, monkeypatch, upto):
     _, stub = env
     (tmp_path / "composed").mkdir()
     job = build(tmp_path / "composed", monkeypatch, upto=upto)
-    (job / "database").mkdir(mode=0o700)
+    (job / "database").mkdir(mode=0o700, exist_ok=True)  # build() made it (P3c)
     name = "alrust_scaffold_123_1"
     set_state(stub, cluster=dict(CLUSTER, system_identifier=DB_IDENTITY["system_identifier"],
                                  postmaster_start_time=DB_IDENTITY["postmaster_start_time"]),
@@ -882,7 +888,7 @@ def test_launched_drop_refuses_a_failed_registry_stage(env, tmp_path, monkeypatc
     # Replace the job with one whose registry stage closed FAILED.
     (tmp_path / "failed").mkdir()
     job = build(tmp_path / "failed", monkeypatch, upto="registry", fail_stage="registry")
-    (job / "database").mkdir(mode=0o700)
+    (job / "database").mkdir(mode=0o700, exist_ok=True)  # build() made it (P3c)
     with pytest.raises(ds.DatabaseStageError, match="writer_gate_failed"):
         ds.run_drop_stage(str(job), STAGES[:STAGES.index("registry") + 1], launched=True,
                           expected=EXPECTED, **kw(stub))
@@ -908,7 +914,7 @@ def test_launched_drop_refuses_a_registry_frozen_before_stop(env, tmp_path, monk
     _, stub = env
     (tmp_path / "early").mkdir()
     job = tf.build(tmp_path / "early", monkeypatch, upto="stop")
-    (job / "database").mkdir(mode=0o700)
+    (job / "database").mkdir(mode=0o700, exist_ok=True)  # build() made it (P3c)
     with pytest.raises(ds.DatabaseStageError, match="registry_not_frozen"):
         ds.run_drop_stage(str(job), order, launched=True, expected=EXPECTED, **kw(stub))
 
@@ -926,7 +932,7 @@ def reader_job(env, tmp_path, monkeypatch, inventory=INVENTORY, mutate=None, **b
     job = build(tmp_path / "reader", monkeypatch, upto="stop", inventory=inventory,
                 **build_kwargs)
     (job / fz_registry_name()).unlink()
-    (job / "database").mkdir(mode=0o700)
+    (job / "database").mkdir(mode=0o700, exist_ok=True)  # build() made it (P3c)
     url = "postgresql://alrust_scaffold_123_1:%s@127.0.0.1:5432/alrust_scaffold_123_1" % ("f" * 64)
     (job / "database" / "url").write_text(url + "\n")
     (job / "database" / "url").chmod(0o600)

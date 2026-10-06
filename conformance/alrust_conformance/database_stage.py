@@ -601,6 +601,58 @@ def no_launch_quiescence(job_root, prefix, expected):
     return {"aggregation": aggregation}
 
 
+def _created_binding(job_root, records, core):
+    """P3c: the job role and database directory every secret reader expects,
+    from the closed database-create stage and the core: exactly one
+    database_created (in database-create) whose name and role both equal
+    database_name(core profile, run_id, run_attempt), and exactly one
+    owned_resource for <job_root>/database of type dir. database_created
+    precedes the URL write and binds no URL bytes; the binding is the fixed
+    private path in this recorded directory object, the expected role and
+    the port. Returns {"role", "database_dir": {"dev", "ino"}}."""
+    expected = database_name(core["profile"], core["run_id"], core["run_attempt"])
+    created = [payload for stage, kind, payload in records
+               if kind == "database_created" and stage == CREATE_STAGE]
+    _require(len(created) == 1 and type(created[0]) is dict
+             and created[0].get("name") == expected and created[0].get("role") == expected,
+             "database_role_unexpected")
+    path = os.path.join(job_root, DATABASE_DIR)
+    owned = [payload for stage, kind, payload in records
+             if kind == "owned_resource" and stage == CREATE_STAGE
+             and type(payload) is dict and payload.get("path") == path]
+    _require(len(owned) == 1 and owned[0].get("type") == "dir"
+             and type(owned[0].get("dev")) is int and type(owned[0].get("ino")) is int,
+             "database_dir_unrecorded")
+    return {"role": expected, "database_dir": {"dev": owned[0]["dev"], "ino": owned[0]["ino"]}}
+
+
+def launch_prerequisites(job_root, prefix, expected):
+    """P3c: the launch gate, evaluated by the launcher before its own journal
+    opens and before the supervisor exists. PREFIX is exactly
+    [database-create, database-create-exit], closed VALID (a failed
+    allocation never launches); one core snapshot bound to the aggregation,
+    /3, with the caller's pins; the database-create holder's exit proof on
+    that snapshot; then the created binding (_created_binding). Returns
+    {"role", "database_dir", "aggregation"}. Reads only immutable proof
+    inputs, never the URL or key."""
+    from . import finalizer as fz
+    from . import tool_exit as te
+    _require(prefix == [CREATE_STAGE, te.exit_stage(CREATE_STAGE)], "launch_prefix_invalid")
+    aggregation = sj.aggregate(job_root, prefix)
+    _require(aggregation["verdict"] == "VALID", "launch_prefix_not_complete")
+    try:
+        core_bytes, core = fz._gate_core(job_root, aggregation, expected)
+        records = fz._journal_records(job_root, aggregation)
+    except fz.FinalizerError as error:
+        raise DatabaseStageError(str(error)) from None
+    try:
+        te.holder_proofs(job_root, aggregation, records, (CREATE_STAGE,), expected["tools"],
+                         core_bytes)
+    except te.HolderError as error:
+        raise DatabaseStageError(str(error)) from None
+    return dict(_created_binding(job_root, records, core), aggregation=aggregation)
+
+
 SQL_KEYS = """-- alrust:op=registry_keys
 SELECT json_build_object('keys', coalesce(json_agg(key), '[]'::json))
 FROM (SELECT key FROM keys ORDER BY key LIMIT :limit) AS k;
@@ -625,7 +677,7 @@ def _read_private_file(path, limit, dir_fd=None):
 
 
 def build_registry(job_root, journal, *, secret_key_path, other_secrets, port,
-                   psql_path, deadline_ns):
+                   psql_path, deadline_ns, binding):
     """The registry stage (contract section 9 step 2), inside the open
     `registry` StageJournal, which run_registry_stage opens only after
     writer_quiescence passed: before any private file is opened or any key
@@ -637,11 +689,15 @@ def build_registry(job_root, journal, *, secret_key_path, other_secrets, port,
     their file interface is Codex's and not yet approved, Q1). The registry
     is written in the finalizer's format, 0600, exclusively, and recorded."""
     from . import finalizer as fz
-    directory, _ = _database_dir(job_root, create=False)
+    directory, info = _database_dir(job_root, create=False)
+    # P3c: the directory recorded by database-create, and the expected role.
+    _require(type(binding) is dict and (info.st_dev, info.st_ino) == (
+        binding["database_dir"]["dev"], binding["database_dir"]["ino"]), "database_dir_not_bound")
     url_bytes, _ = _read_private_file(os.path.join(directory, URL_NAME), 1024)
     url = url_bytes.decode("ascii", "replace").rstrip("\n")
     match = _URL.fullmatch(url)
     _require(match and match[1] == match[4] and int(match[3]) == port, "url_invalid")
+    _require(match[1] == binding["role"], "database_role_unexpected")
     role, password = match[1], match[2]
     key_bytes, key_info = _read_private_file(secret_key_path, fz.MAX_SECRET)
     journal.record("owned_resource", {"path": secret_key_path, "dev": key_info.st_dev,
@@ -846,7 +902,10 @@ def run_registry_stage(job_root, prefix, *, expected, **kwargs):
     def action(journal, evidence):
         values = read_inventory(job_root, evidence)
         extra = list(kwargs.pop("other_secrets", []))
-        path = build_registry(job_root, journal, other_secrets=extra + values, **kwargs)
+        # P3c: the expected role and directory, from the gate's own evidence.
+        binding = _created_binding(job_root, evidence["records"], evidence["core"])
+        path = build_registry(job_root, journal, other_secrets=extra + values, binding=binding,
+                              **kwargs)
         data, _ = _read_private_file(path, fz.MAX_REGISTRY)
         digest = hashlib.sha256(data).hexdigest()
         try:

@@ -30,6 +30,15 @@ passes P only the fixed URL file <J>/database/url, the 0600 key file K
 (which must lie under J) and the database port D. P's served child reads
 them after P's launch receipt exists (reference-supervisor.py).
 
+Launch gate (R-EP plan P3c): only stage mode launches, at index 2 after
+database-create-exit, with --expected-pins P (a JSON file, not a secret).
+Before its journal opens and before P exists, the launcher runs
+database_stage.launch_prerequisites: the closed VALID create and
+create-exit stages, the database-create holder's exit proof on one core
+snapshot with those pins, and the job role and database directory derived
+from the core and database_created. It passes P --expected-role and
+--database-dir-identity; P's child checks both against the URL it reads.
+
 On any failure, or on TERM or INT, it signals only P, its own unreaped child,
 waits a bounded time for P's exit, and reports the stop helper's verdict. It
 never signals a group or any other process.
@@ -146,6 +155,39 @@ class LaunchFailed(Exception):
         self.rc = rc
 
 
+MAX_PINS = 1 << 16
+LAUNCH_PREFIX = ["database-create", "database-create-exit"]
+
+
+def database_stage_module():
+    """The reviewed database-stage package of this checkout (stdlib only),
+    for the launch gate (P3c)."""
+    stage_journal_module()
+    from alrust_conformance import database_stage
+    return database_stage
+
+
+def read_pins(path):
+    """The expected-pins JSON object: a regular file (checked on the opened
+    descriptor), not followed if a link, bounded. Not a secret."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise Refused("expected pins are not a regular file")
+        data = os.read(fd, MAX_PINS + 1)
+    finally:
+        os.close(fd)
+    if len(data) > MAX_PINS:
+        raise Refused("expected pins too large")
+    try:
+        value = json.loads(data)
+    except ValueError:
+        raise Refused("expected pins are not JSON") from None
+    if type(value) is not dict:
+        raise Refused("expected pins are not an object")
+    return value
+
+
 def stage_journal_module():
     """The reviewed stage-journal module of this checkout (stdlib only). With
     -I only this script's directory is on sys.path, so the conformance
@@ -178,7 +220,7 @@ def parse_args(argv):
     optionally --stage-index N and, for N > 0, --previous-stage NAME."""
     opts = {"--job-root": None, "--venv": None, "--port": None,
             "--ready-timeout": None, "--stage-index": None, "--previous-stage": None,
-            "--secret-key-file": None, "--database-port": None}
+            "--secret-key-file": None, "--database-port": None, "--expected-pins": None}
     files, i = [], 0
     while i < len(argv):
         name = argv[i]
@@ -193,6 +235,10 @@ def parse_args(argv):
                           "--secret-key-file K --database-port D "
                           "[--observer-file NAME SHA256 PATH]... "
                           "[--stage-index N [--previous-stage NAME]]")
+    if opts["--expected-pins"] is not None and not (
+            os.path.isabs(opts["--expected-pins"])
+            and os.path.normpath(opts["--expected-pins"]) == opts["--expected-pins"]):
+        raise Refused("--expected-pins must be an absolute normalized path")
     for name in ("--job-root", "--venv", "--secret-key-file"):
         if opts[name] is None or not os.path.isabs(opts[name]) \
                 or os.path.normpath(opts[name]) != opts[name]:
@@ -225,7 +271,8 @@ def parse_args(argv):
         stage = (int(index), previous)
     secrets = {"url": os.path.join(opts["--job-root"], "database", "url"),
                "key": opts["--secret-key-file"],
-               "database_port": int(opts["--database-port"])}
+               "database_port": int(opts["--database-port"]),
+               "pins": opts["--expected-pins"]}
     return (opts["--job-root"], opts["--venv"], int(opts["--port"]),
             int(opts["--ready-timeout"]), sorted(files) or None, stage, secrets)
 
@@ -578,6 +625,11 @@ def main(argv):
     try:
         job_root, venv, port, ready_timeout, observer, stage, secrets = \
             parse_args(argv[preflight:])
+        if stage is None and not preflight:
+            # P3c: a launch reads the job role's URL, so it must pass the
+            # launch gate, which needs the stage context. No fallback.
+            raise Refused("a launch needs the stage context (--stage-index 2 "
+                          "--previous-stage database-create-exit)")
         check_environment()
         check_external_config()
         check_job_root(job_root)
@@ -586,6 +638,19 @@ def main(argv):
         if stage is not None:
             sj = stage_journal_module()
             check_stage(sj, job_root, stage)
+        if stage is not None and not preflight:
+            if stage != (2, LAUNCH_PREFIX[-1]) or secrets["pins"] is None:
+                raise Refused("a launch follows database-create-exit at index 2, "
+                              "with --expected-pins")
+            ds = database_stage_module()
+            try:
+                # Before the launch journal opens and before P exists.
+                binding = ds.launch_prerequisites(job_root, LAUNCH_PREFIX,
+                                                  read_pins(secrets["pins"]))
+            except ds.DatabaseStageError as error:
+                raise Refused("launch gate: %s" % error.code)
+            secrets = dict(secrets, role=binding["role"],
+                           database_dir=binding["database_dir"])
         if preflight:
             check_venv_path(job_root, venv)
             if os.path.lexists(venv):
@@ -628,7 +693,10 @@ def supervisor_argv(receipt, terminal, venv, secrets, observer_record, command):
     return ([sys.executable, "-I", "-S", "-B", SUPERVISOR, "--receipt", receipt,
              "--terminal", terminal, "--venv", venv,
              "--database-url-file", secrets["url"], "--secret-key-file", secrets["key"],
-             "--database-port", str(secrets["database_port"])]
+             "--database-port", str(secrets["database_port"]),
+             "--expected-role", secrets["role"],
+             "--database-dir-identity", "%d:%d" % (secrets["database_dir"]["dev"],
+                                                   secrets["database_dir"]["ino"])]
             + ([] if observer_record is None else
                ["--observer-socket", observer_record["socket"],
                 "--observer-manifest", observer_record["manifest"],

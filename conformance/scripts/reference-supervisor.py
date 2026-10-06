@@ -18,7 +18,8 @@ paths. The served child C reads them itself, and only after a barrier:
   If R cannot be written, P closes the pipe unwritten, and C exits (126)
   without opening either file;
 - after the byte, C opens each path one component at a time from "/"
-  without following links. Each file must be a private (no group or other
+  without following links; the URL file's directory must be the object
+  --database-dir-identity names, and its role --expected-role (P3c). Each file must be a private (no group or other
   bits) regular single-link file of this uid, bounded. The URL must be the
   job role's postgresql://NAME:PASSWORD@127.0.0.1:N/NAME with N the given
   port. The key must be 16..4096 bytes of printable text. Any refusal exits
@@ -61,7 +62,10 @@ PR_GET_CHILD_SUBREAPER = 37
 TERM_SECONDS = 10.0
 KILL_SECONDS = 5.0
 POLL_SECONDS = 0.05
-SECRET_OPTIONS = ("--database-url-file", "--secret-key-file", "--database-port")
+SECRET_OPTIONS = ("--database-url-file", "--secret-key-file", "--database-port",
+                  "--expected-role", "--database-dir-identity")
+_ROLE = re.compile(r"alrust_[a-z0-9_]{1,56}\Z")
+_IDENTITY = re.compile(r"(0|[1-9][0-9]{0,19}):(0|[1-9][0-9]{0,19})\Z")
 SECRET_VARIABLES = ("DATABASE_URL", "SECRET_KEY", "PGPASSWORD")
 MAX_URL = 1024
 MIN_KEY, MAX_KEY = 16, 4096
@@ -118,6 +122,7 @@ def parse_args(argv):
                           ("--receipt", "--terminal", "--venv") + SECRET_OPTIONS):
         fail(EXIT_USAGE, "usage: --receipt R --terminal T --venv V "
                          "--database-url-file U --secret-key-file K --database-port N "
+                         "--expected-role ROLE --database-dir-identity DEV:INO "
                          "[--observer-socket S --observer-manifest M "
                          "--observer-manifest-sha256 H] -- COMMAND...")
     for name in ("--receipt", "--terminal", "--venv", "--observer-socket",
@@ -132,6 +137,14 @@ def parse_args(argv):
     if not port.isdigit() or port != str(int(port)) or not 1 <= int(port) <= 65535:
         fail(EXIT_USAGE, "--database-port must be 1..65535")
     opts["--database-port"] = int(port)
+    # P3c: the job role and the URL file's directory object, both derived by
+    # the launcher's gate from the core and the closed database-create stage.
+    if not _ROLE.fullmatch(opts["--expected-role"]):
+        fail(EXIT_USAGE, "--expected-role must be a job role name")
+    identity = _IDENTITY.fullmatch(opts["--database-dir-identity"])
+    if not identity:
+        fail(EXIT_USAGE, "--database-dir-identity must be DEV:INO")
+    opts["--database-dir-identity"] = (int(identity[1]), int(identity[2]))
     given = [opts[name] is not None for name in OBSERVER_OPTIONS]
     if any(given) and not all(given):
         fail(EXIT_USAGE, "the three observer options go together")
@@ -145,10 +158,11 @@ class SecretRefused(Exception):
     """A fixed code; never a value or a path."""
 
 
-def read_private(path, limit):
+def read_private(path, limit, parent_identity=None):
     """The bytes of PATH, opened one component at a time from "/" without
     following links, only if it is a private regular single-link file of
-    this uid of at most LIMIT bytes."""
+    this uid of at most LIMIT bytes. With PARENT_IDENTITY (dev, ino), the
+    held parent directory must be exactly that object (P3c)."""
     names = path.split("/")[1:]
     flags = os.O_RDONLY | os.O_CLOEXEC
     try:
@@ -163,6 +177,10 @@ def read_private(path, limit):
                 raise SecretRefused("secret_path_unreadable") from None
             os.close(fd)
             fd = child
+        if parent_identity is not None:
+            info = os.fstat(fd)
+            if (info.st_dev, info.st_ino) != parent_identity:
+                raise SecretRefused("secret_dir_not_bound")
         try:
             leaf = os.open(names[-1], flags | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY,
                            dir_fd=fd)
@@ -196,10 +214,13 @@ def _one_line(data):
     return data[:-1] if data.endswith(b"\n") else data
 
 
-def child_secrets(url_path, key_path, port):
+def child_secrets(url_path, key_path, port, role, dir_identity):
     """The two values, read and validated by the served child after the
-    barrier. Returns {"DATABASE_URL", "SECRET_KEY"}; raises SecretRefused."""
-    url = _one_line(read_private(url_path, MAX_URL))
+    barrier. The expectation (ROLE, DIR_IDENTITY, PORT) is fixed before the
+    read; the URL must be in that directory object and name that role and
+    port, which is checked after the read and before exec (P3c). Returns
+    {"DATABASE_URL", "SECRET_KEY"}; raises SecretRefused."""
+    url = _one_line(read_private(url_path, MAX_URL, dir_identity))
     try:
         url = url.decode("ascii")
     except UnicodeError:
@@ -207,6 +228,8 @@ def child_secrets(url_path, key_path, port):
     match = _URL.fullmatch(url)
     if not match or int(match[3]) != port:
         raise SecretRefused("database_url_invalid")
+    if match[1] != role:
+        raise SecretRefused("database_role_unexpected")
     key = _one_line(read_private(key_path, MAX_KEY + 1))
     try:
         text = key.decode("utf-8")
@@ -401,7 +424,9 @@ def main(argv):
                 os._exit(EXIT_CHILD_BARRIER)
             try:
                 env.update(child_secrets(opts["--database-url-file"],
-                                         opts["--secret-key-file"], opts["--database-port"]))
+                                         opts["--secret-key-file"], opts["--database-port"],
+                                         opts["--expected-role"],
+                                         opts["--database-dir-identity"]))
             except SecretRefused as refused:
                 os.write(2, b"reference-supervisor: child: secrets refused: %s\n"
                          % str(refused).encode("ascii", "replace"))

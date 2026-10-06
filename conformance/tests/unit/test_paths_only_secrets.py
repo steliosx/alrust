@@ -44,6 +44,11 @@ def files(tmp_path):
             private(tmp_path / "job" / "secret-key", (KEY + "\n").encode()))
 
 
+def dir_identity(url_path):
+    info = os.stat(os.path.dirname(url_path))
+    return (info.st_dev, info.st_ino)
+
+
 # --- the barrier --------------------------------------------------------------
 
 def test_await_release_only_for_the_byte():
@@ -86,7 +91,7 @@ def test_release_write_failure_still_closes(monkeypatch):
 
 def test_child_secrets_positive(files):
     url, key = files
-    assert sup.child_secrets(url, key, 5432) == {"DATABASE_URL": URL, "SECRET_KEY": KEY}
+    assert sup.child_secrets(url, key, 5432, ROLE, dir_identity(url)) == {"DATABASE_URL": URL, "SECRET_KEY": KEY}
 
 
 @pytest.mark.parametrize("make,code", [
@@ -99,7 +104,7 @@ def test_reader_refuses_non_private_files(files, make, code):
     url, key = files
     make(Path(url))
     with pytest.raises(sup.SecretRefused, match=code):
-        sup.child_secrets(url, key, 5432)
+        sup.child_secrets(url, key, 5432, ROLE, dir_identity(url))
 
 
 def test_reader_refuses_a_final_symlink(files, tmp_path):
@@ -146,7 +151,7 @@ def test_url_refusals(tmp_path, files, url):
     _, key = files
     path = private(tmp_path / "u2", url.encode())
     with pytest.raises(sup.SecretRefused, match="database_url_invalid"):
-        sup.child_secrets(path, key, 5432)
+        sup.child_secrets(path, key, 5432, ROLE, dir_identity(path))
 
 
 @pytest.mark.parametrize("data", [b"short", b"x" * 15, ("k" * 4097).encode(),
@@ -156,7 +161,7 @@ def test_key_refusals(tmp_path, files, data):
     url, _ = files
     path = private(tmp_path / "k2", data)
     with pytest.raises(sup.SecretRefused):
-        sup.child_secrets(url, path, 5432)
+        sup.child_secrets(url, path, 5432, ROLE, dir_identity(url))
 
 
 # --- the supervisor's main(), in-process ---------------------------------------
@@ -170,13 +175,15 @@ class Exec(BaseException):
     pass
 
 
-def base_argv(tmp_path, files, port="5432"):
+def base_argv(tmp_path, files, port="5432", role=ROLE, identity=None):
     url, key = files
     venv = tmp_path / "venv"
     venv.mkdir(exist_ok=True)
+    identity = identity or "%d:%d" % dir_identity(url)
     return ["--receipt", str(tmp_path / "launch.json"), "--terminal",
             str(tmp_path / "terminal.json"), "--venv", str(venv),
             "--database-url-file", url, "--secret-key-file", key, "--database-port", port,
+            "--expected-role", role, "--database-dir-identity", identity,
             "--", "/venv/bin/alertad", "run"]
 
 
@@ -213,7 +220,8 @@ def test_parent_refuses_secret_value_variables_before_any_fork(tmp_path, files, 
 
 
 @pytest.mark.parametrize("drop", ["--database-url-file", "--secret-key-file",
-                                  "--database-port"])
+                                  "--database-port", "--expected-role",
+                                  "--database-dir-identity"])
 def test_missing_secret_options_are_usage(tmp_path, files, harness, drop):
     argv = base_argv(tmp_path, files)
     i = argv.index(drop)
@@ -324,7 +332,7 @@ LAUNCH = ["--job-root", "/job", "--venv", "/job/venv", "--port", "18081",
 def test_launcher_parses_paths_only():
     *_, secrets = lr.parse_args(LAUNCH)
     assert secrets == {"url": "/job/database/url", "key": "/job/secret-key",
-                       "database_port": 5432}
+                       "database_port": 5432, "pins": None}
 
 
 @pytest.mark.parametrize("change", [
@@ -356,10 +364,79 @@ def test_launcher_allowlist_has_no_value_variables():
 
 
 def test_supervisor_argv_passes_paths_and_port_only():
-    secrets = {"url": "/job/database/url", "key": "/job/secret-key", "database_port": 5432}
+    secrets = {"url": "/job/database/url", "key": "/job/secret-key", "database_port": 5432,
+               "role": "alrust_scaffold_1_1", "database_dir": {"dev": 7, "ino": 9}}
     argv = lr.supervisor_argv("/job/reference/launch.json", "/job/reference/terminal.json",
                               "/job/venv", secrets, None, ["/job/venv/bin/alertad", "run"])
     i = argv.index("--database-url-file")
-    assert argv[i:i + 6] == ["--database-url-file", "/job/database/url", "--secret-key-file",
-                             "/job/secret-key", "--database-port", "5432"]
+    assert argv[i:i + 10] == ["--database-url-file", "/job/database/url", "--secret-key-file",
+                              "/job/secret-key", "--database-port", "5432",
+                              "--expected-role", "alrust_scaffold_1_1",
+                              "--database-dir-identity", "7:9"]
     assert argv[argv.index("--") + 1:] == ["/job/venv/bin/alertad", "run"]
+
+
+
+# --- P3c: the expected role and the URL file's directory object ------------------------
+
+def test_child_secrets_refuses_another_role(files):
+    url, key = files
+    with pytest.raises(sup.SecretRefused, match="database_role_unexpected"):
+        sup.child_secrets(url, key, 5432, "alrust_scaffold_999_1", dir_identity(url))
+
+
+def test_child_secrets_refuses_another_directory_object(files, tmp_path):
+    url, key = files
+    other = os.stat(tmp_path)
+    with pytest.raises(sup.SecretRefused, match="secret_dir_not_bound"):
+        sup.child_secrets(url, key, 5432, ROLE, (other.st_dev, other.st_ino))
+
+
+def test_child_secrets_refuses_a_replaced_directory(files, tmp_path):
+    url, key = files
+    before = dir_identity(url)
+    database = Path(url).parent
+    os.rename(database, tmp_path / "old-database")
+    database.mkdir(mode=0o700)
+    private(database / "url", (URL + "\n").encode())        # same path, new object
+    with pytest.raises(sup.SecretRefused, match="secret_dir_not_bound"):
+        sup.child_secrets(url, key, 5432, ROLE, before)
+
+
+@pytest.mark.parametrize("role,identity", [("postgres", None), ("alrust_x", "12"),
+                                           ("alrust_x", "a:b"), ("alrust_x", "1:2:3"),
+                                           ("alrust_x", "01:2"), ("alrust_x", "1:02")])
+def test_bad_role_or_identity_is_usage(tmp_path, files, harness, role, identity):
+    with pytest.raises(SystemExit) as exit_:
+        sup.main(base_argv(tmp_path, files, role=role, identity=identity))
+    assert exit_.value.code == sup.EXIT_USAGE
+
+
+def test_child_with_another_role_exits_before_exec(tmp_path, files, harness, monkeypatch,
+                                                   capfd):
+    _child(monkeypatch, harness, True)
+    with pytest.raises(Exit):
+        sup.main(base_argv(tmp_path, files, role="alrust_scaffold_999_1"))
+    assert harness["exits"][0] == sup.EXIT_CHILD_SECRET and harness["exec"] is None
+    err = capfd.readouterr().err
+    assert "database_role_unexpected" in err and PASSWORD not in err
+
+
+def test_launcher_refuses_a_non_stage_launch_before_anything(monkeypatch, capsys):
+    started = []
+    monkeypatch.setattr(lr.subprocess, "Popen", lambda *a, **k: started.append(a))
+    monkeypatch.setattr(lr, "check_environment", lambda: started.append("env"))
+    assert lr.main(LAUNCH) == 1
+    assert started == []
+    assert "stage context" in capsys.readouterr().err
+
+
+def test_launcher_requires_index_two_and_pins(monkeypatch):
+    for argv in (LAUNCH + ["--stage-index", "1", "--previous-stage", "database-create"],
+                 LAUNCH + ["--stage-index", "2", "--previous-stage", "database-create-exit"]):
+        *_, stage, secrets = lr.parse_args(argv)
+        assert stage is not None
+    *_, secrets = lr.parse_args(LAUNCH + ["--expected-pins", "/job/pins.json"])
+    assert secrets["pins"] == "/job/pins.json"
+    with pytest.raises(lr.Refused):
+        lr.parse_args(LAUNCH + ["--expected-pins", "pins.json"])

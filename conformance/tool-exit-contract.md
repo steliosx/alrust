@@ -320,10 +320,8 @@ reference supervisor `P` never hold `DATABASE_URL` or `SECRET_KEY` values.
   of printable UTF-8. A refusal exits 125 with a fixed code only.
 - `C` then execs `COMMAND` with the two values added to its own
   environment. The launch receipt is unchanged.
-- Residual: the URL's role is not yet bound to the core's
-  `database_name(profile, run_id, attempt)`. `P` is not given the core, so
-  that binding is left to the gates (P3), which already read
-  `database_created`.
+- Residual at P2c, closed by P3c below: the URL's role was not yet bound to
+  the core's `database_name(profile, run_id, attempt)`.
 
 **Declared consequence.** With values no longer accepted, today's hosted
 scaffold launch path (`run-reference.sh` exporting `DATABASE_URL` and a
@@ -332,6 +330,80 @@ cannot launch at this head. That URL would be refused anyway, since it is
 not a job-role URL. Wiring the workflow to the database stage, with paths
 only, is the workflow head's change (design section 8, item 4). This head
 is stacked and unpublished, so `main` is unaffected.
+
+**As implemented (P3c): the job-role binding before the first secret read.**
+
+What `database_created` does and does not bind: the record precedes the
+URL write and binds no URL bytes (there is no URL digest). No secret-file
+byte binding is inferred from it. The binding is instead:
+- the fixed private path `<J>/database/url`;
+- inside the directory object (`dev`, `ino`) that database-create recorded
+  as its `owned_resource` when it created `<J>/database`;
+- naming the expected role, `database_name(core profile, run_id,
+  run_attempt)`, which `database_created` must also name (both `name` and
+  `role`);
+- and the database port `D`.
+
+The expectation is fixed before any read; each reader compares the URL to it
+after reading and before using it.
+
+- **Launch gate** (`database_stage.launch_prerequisites`), run by the
+  launcher before its journal opens and before `P` exists:
+  - the prefix is exactly `[database-create, database-create-exit]`, closed
+    VALID (a failed allocation never launches);
+  - one core snapshot bound to the aggregation, `/3`, with the caller's pins
+    (`--expected-pins`, the same bounded regular-file reader as the driver);
+  - the database-create holder's exit proof (`holder_proofs`) on that
+    snapshot;
+  - exactly one `database_created` naming the expected role, and exactly one
+    `owned_resource` of type `dir` for `<J>/database`.
+  It reads only proof inputs, never the URL or the key. Refusals carry fixed
+  codes: `launch_prefix_invalid`, `launch_prefix_not_complete`, the gate and
+  holder codes, `database_role_unexpected`, `database_dir_unrecorded`.
+- **Launcher.** Only stage mode launches: index 2 after
+  `database-create-exit`, with `--expected-pins`. A launch without the stage
+  context is refused right after argument parsing, before any check, journal
+  or process; there is no fallback. `--preflight` starts nothing and reads
+  no secret, so it still works without stage arguments. The launcher passes
+  `P` `--expected-role ROLE --database-dir-identity DEV:INO`.
+- **`P` and `C`.** Both options are required (usage exit 64 otherwise, or if
+  malformed). `C`'s private reader `fstat`s the held parent directory of the
+  URL file and requires that exact (`dev`, `ino`) (`secret_dir_not_bound`).
+  After the read and before exec, the URL's role must equal
+  `--expected-role` (`database_role_unexpected`), in addition to the P2c
+  checks. A refusal still exits 125 with a fixed code only.
+- **Registry.** `run_registry_stage` derives the same binding from the
+  writer gate's evidence (its aggregation's records and core snapshot).
+  `build_registry` requires it: before `Psql` is constructed, the database
+  directory must be the recorded object (`database_dir_not_bound`) and the
+  URL's role must be the expected one (`database_role_unexpected`).
+- **Residuals** (declared, not addressed in P3c):
+  - `create_database` derives the name from its own `--profile`,
+    `--run-id` and `--attempt` arguments, not from the core. A mismatch is
+    now refused at the launch and registry gates, never used. A later head
+    may take those three from the validated core.
+  - The secret key file's parent (the job root) is not identity-bound: no
+    stage records the job root as an owned resource, so `C` reads the key
+    with no parent identity. The P2c checks on the key file still apply.
+  - The launch journal does not record the expectation the launcher handed
+    `P` (role, directory identity, gate aggregation digest), so a later
+    gate cannot yet recheck what `P` was told.
+  - The launcher reads the core three times: in `check_stage`, in the
+    gate's `_gate_core`, and when its `StageJournal` begins (recording that
+    read's digest). From the source: every journal in an aggregation is
+    validated against one core digest, so a launch journal begun under a
+    different core is refused by every later gate. The three reads are not
+    one snapshot.
+
+**Declared consequence (P3c).** This reopens `launch-reference.py` and
+`reference-supervisor.py`. The P2c consequence stands: the hosted scaffold
+cannot launch at this head. In addition, no launch is possible without a
+closed database-create and database-create-exit and their holder receipts.
+The launcher process tests (`test_reference_launcher.py`) now prepare
+those (synthetic ended `P_T`, `exit_fixtures`) and launch at index 2;
+`confirm-launch.py` moves to index 3. Codex's
+`observer_launch_interoperability.py`, which launches at index 1 after
+`database-create` with no pins file, needs a further adaptation (hers).
 
 **Q-P2c-1, the finalizer's failure record.** `failure_record` takes the two
 values from its caller in order to scan its output for them, so the

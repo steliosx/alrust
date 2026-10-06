@@ -97,6 +97,8 @@ def build(tmp_path, monkeypatch, *, report=b'{"result": "passed"}\n',
     (job / "venv" / "lib").mkdir(parents=True)
     (job / "venv" / "lib" / "m.py").write_text("x")
     (job / "settings.py").write_text("DEBUG = False\n")
+    # The private database directory database-create records (P3c binding).
+    (job / "database").mkdir(mode=0o700)
     reference = job / "reference"
     reference.mkdir(mode=0o700)
     pid, ticks = generation if generation is not None else ended_generation()
@@ -165,6 +167,7 @@ def build(tmp_path, monkeypatch, *, report=b'{"result": "passed"}\n',
         launch_records.append(("owned_resource", stat_record(leak, "dir")))
     per_stage = {
         "database-create": [
+            ("owned_resource", stat_record(job / "database", "dir")),
             ("database_role_attempted", {"role": DB_IDENTITY["role"]}),
             ("database_role_created", {k: DB_IDENTITY[k] for k in (
                 "role", "role_oid", "system_identifier", "postmaster_start_time")}),

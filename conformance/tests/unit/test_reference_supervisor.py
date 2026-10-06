@@ -63,7 +63,8 @@ def alive(pid):
 SECRET_URL = "postgresql://alrust_scaffold_1_1:%s@127.0.0.1:5432/alrust_scaffold_1_1" % ("7a" * 32)
 SECRET_KEY_VALUE = "synthetic-supervisor-test-key-" + "z" * 16
 SECRET_USAGE = ["--database-url-file", "/u", "--secret-key-file", "/k",
-                "--database-port", "5432"]
+                "--database-port", "5432", "--expected-role", "alrust_scaffold_1_1",
+                "--database-dir-identity", "1:2"]
 
 
 def secret_args(tmp_path):
@@ -73,8 +74,11 @@ def secret_args(tmp_path):
         for name, value in (("url", SECRET_URL), ("key", SECRET_KEY_VALUE)):
             (folder / name).write_text(value + "\n")
             (folder / name).chmod(0o600)
+    info = os.stat(folder)
     return ["--database-url-file", str(folder / "url"), "--secret-key-file",
-            str(folder / "key"), "--database-port", "5432"]
+            str(folder / "key"), "--database-port", "5432",
+            "--expected-role", "alrust_scaffold_1_1",                    # P3c
+            "--database-dir-identity", "%d:%d" % (info.st_dev, info.st_ino)]
 
 
 # Custody (P2C-WINDOW-R1): every supervisor Popen is registered as soon as it
