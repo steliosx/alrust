@@ -585,6 +585,28 @@ def finalize(job_root, stages, entrypoint_stage="entrypoint"):
     return report
 
 
+def _unaccounted_root_entries(job_root, root_identity):
+    """HOOK8-N1: count what is left in the job root after the removals,
+    other than the retained export directory. Names are never recorded (a
+    name could carry anything). The listing goes through a handle bound to
+    the core's recorded root identity; any failure returns None, which the
+    caller treats as not proven."""
+    try:
+        fd = os.open(job_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError:
+        return None
+    try:
+        info = os.fstat(fd)
+        if (info.st_dev, info.st_ino) != root_identity:
+            return None
+        names = os.listdir(fd)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    return sum(1 for name in names if name != EXPORT_DIR)
+
+
 def _sealing_steps(job_root, aggregation, core_bytes, records, evidence, registry,
                    secrets, candidates, root_identity, export, journal):
     """Steps 3-8 after the gate; always returns a report dict."""
@@ -628,14 +650,18 @@ def _sealing_steps(job_root, aggregation, core_bytes, records, evidence, registr
                               "type": kind})
         removals = [remove_owned(job_root, resource, root_identity)
                     for resource in inventory]
-        cleanup = "COMPLETE" if all(r["outcome"] == "REMOVED" for r in removals) \
-            else "UNPROVEN"
+        # An entry nobody recorded is never removed (no glob deletion), but
+        # it must not let the verdict read COMPLETE either (HOOK8-N1).
+        unaccounted = _unaccounted_root_entries(job_root, root_identity)
+        cleanup = "COMPLETE" if (all(r["outcome"] == "REMOVED" for r in removals)
+                                 and unaccounted == 0) else "UNPROVEN"
         receipt = {"schema": SCHEMA_TERMINAL_RECEIPT,
                    "core_identity_sha256": hashlib.sha256(core_bytes).hexdigest(),
                    "aggregation": {"verdict": aggregation["verdict"],
                                    "stages": aggregation["stages"]},
                    "stop": evidence["stop"], "database": evidence["database"],
-                   "candidates": copied, "removals": removals, "cleanup": cleanup}
+                   "candidates": copied, "removals": removals,
+                   "unaccounted_root_entries": unaccounted, "cleanup": cleanup}
         receipt_bytes = (json.dumps(receipt, sort_keys=True) + "\n").encode()
         fd = os.open(os.path.join(export, "terminal-cleanup.json"),
                      os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,

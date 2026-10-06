@@ -217,6 +217,7 @@ def test_sealed_export_with_complete_cleanup(tmp_path, monkeypatch):
     receipt = json.loads((export / "terminal-cleanup.json").read_text())
     assert receipt["cleanup"] == "COMPLETE"
     assert all(r["outcome"] == "REMOVED" for r in receipt["removals"])
+    assert receipt["unaccounted_root_entries"] == 0
     assert hashlib.sha256((export / "terminal-cleanup.json").read_bytes()).hexdigest() \
         == manifest["terminal_receipt_sha256"]
     # Everything owned is gone; only the sealed export remains.
@@ -426,6 +427,49 @@ def test_removal_mismatch_is_unproven_but_sealed(tmp_path, monkeypatch):
     reasons = {r["reason"] for r in receipt["removals"]}
     assert "identity_mismatch" in reasons
     assert settings.read_text() == "replacement\n"
+
+
+@pytest.mark.parametrize("kind", ["file", "dir", "symlink"])
+def test_unaccounted_root_entry_is_unproven_and_left_in_place(tmp_path, monkeypatch, kind):
+    # HOOK8-N1: an entry nobody recorded (for example a secret file a
+    # component forgot to record) is never removed, and the cleanup verdict
+    # cannot read COMPLETE while it is there. Only a count is recorded.
+    job = build(tmp_path, monkeypatch)
+    stray = job / "stray-unrecorded-entry"
+    if kind == "file":
+        stray.write_bytes(b"left behind\n")
+    elif kind == "dir":
+        stray.mkdir()
+    else:
+        stray.symlink_to(job / "missing-target")
+    report = fz.finalize(str(job), STAGES)
+    assert (report["outcome"], report["cleanup"]) == ("SEALED", "UNPROVEN")
+    receipt_bytes = (job / "export" / "terminal-cleanup.json").read_bytes()
+    receipt = json.loads(receipt_bytes)
+    assert all(r["outcome"] == "REMOVED" for r in receipt["removals"])
+    assert receipt["unaccounted_root_entries"] == 1
+    assert receipt["cleanup"] == "UNPROVEN"
+    assert b"stray-unrecorded-entry" not in receipt_bytes
+    assert os.path.lexists(stray)
+    assert sorted(p.name for p in job.iterdir()) == ["export", "stray-unrecorded-entry"]
+
+
+def test_unlistable_root_is_unproven(tmp_path, monkeypatch):
+    # A listing failure is never read as an empty root.
+    job = build(tmp_path, monkeypatch)
+    real_listdir = os.listdir
+
+    def listdir(path):
+        if type(path) is int:
+            raise PermissionError("synthetic listing failure")
+        return real_listdir(path)
+
+    monkeypatch.setattr(fz.os, "listdir", listdir)
+    report = fz.finalize(str(job), STAGES)
+    assert (report["outcome"], report["cleanup"]) == ("SEALED", "UNPROVEN")
+    receipt = json.loads((job / "export" / "terminal-cleanup.json").read_text())
+    assert receipt["unaccounted_root_entries"] is None
+    assert receipt["cleanup"] == "UNPROVEN"
 
 
 def test_export_directory_must_not_exist(tmp_path, monkeypatch):

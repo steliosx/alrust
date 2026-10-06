@@ -300,6 +300,10 @@ Rules:
 - No glob deletion.
 - No path outside the job root is touched.
 - A pre-existing or unowned path is never removed.
+- An entry left in the job root that no record names (other than the
+  retained `export/`) is not removed either, but it keeps the cleanup
+  verdict at UNPROVEN. The terminal receipt records only how many such
+  entries there are, never their names (HOOK8-N1).
 - Discarding the machine is never counted as proof.
 - Codex's per-case cleanup proof, recorded in its own journal, stays
   separate from this job teardown.

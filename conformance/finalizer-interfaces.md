@@ -88,8 +88,11 @@ no-launch cleanup never needs a registry.
   - `terminal-cleanup.json`, written after every removal: each removal's
     outcome, the stop and database evidence, the aggregation with every
     stage hash, the copied candidates (name, size, sha256, source stage),
+    the number of entries left in the job root other than `export/`
+    (`unaccounted_root_entries`: a count, never names; `null` if the root
+    could not be listed through a handle bound to its recorded identity),
     and the cleanup verdict (`COMPLETE` only if every removal is
-    `REMOVED`);
+    `REMOVED` and that count is 0);
   - the allowlisted candidates, copied byte for byte;
   - `manifest.json`, written only after every file above was read once,
     scanned and hashed from the same bytes, and only if nothing matched.
