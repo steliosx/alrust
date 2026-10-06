@@ -110,11 +110,18 @@ def test_launch_gate_never_reads_the_url_or_key(job, monkeypatch):
 class FakePsql:
     calls = []
 
-    def __init__(self, *a, user=None, **k):
+    passwords = []
+
+    def __init__(self, *a, user=None, password=None, **k):
         FakePsql.calls.append(("psql", user))
+        FakePsql.passwords.append(password)
 
     def query_json(self, sql, database, params):
         return {"keys": []}
+
+
+def _url(role, password):
+    return "postgresql://%s:%s@127.0.0.1:5432/%s\n" % (role, password, role)
 
 
 def _registry_job(job, url_role=ROLE):
@@ -137,6 +144,7 @@ def _run_registry(root):
 @pytest.fixture
 def fake_psql(monkeypatch):
     FakePsql.calls = []
+    FakePsql.passwords = []
     monkeypatch.setattr(ds, "Psql", FakePsql)
     return FakePsql.calls
 
@@ -275,3 +283,163 @@ def test_malformed_pins_refuse_with_a_fixed_message(tmp_path, monkeypatch, capsy
     started = _main_until_popen(monkeypatch, lr)
     assert lr.main(_launch_argv(job)) == 1 and started == []
     assert "expected pins are not" in capsys.readouterr().err
+
+
+
+# --- P3C-DIR-R1: the read goes through the held, recorded directory -------------------
+
+@pytest.mark.parametrize("symlink", [False, True])
+def test_registry_swap_after_the_check_never_uses_substituted_bytes(job, fake_psql,
+                                                                     monkeypatch, symlink):
+    # Codex's 7be77962 scenario: the database directory is replaced (renamed
+    # away, then a new directory or a symlink to one takes its path) at the
+    # moment the URL is read. The read stays on the held, recorded object, so
+    # the original password is used, or the stage refuses; the substituted
+    # one never reaches Psql.
+    root = _registry_job(job)
+    original = "f" * 64
+    real_read = ds._read_private_file
+    swapped = []
+
+    def swap_then_read(path, limit, dir_fd=None):
+        if path == ds.URL_NAME and not swapped:
+            os.rename(root / "database", root / "original-database")
+            replacement = root / ("replacement-database" if symlink else "database")
+            replacement.mkdir(mode=0o700)
+            (replacement / "url").write_text(_url(ROLE, "b" * 64))
+            (replacement / "url").chmod(0o600)
+            if symlink:
+                (root / "database").symlink_to(replacement, target_is_directory=True)
+            swapped.append(True)
+        return real_read(path, limit, dir_fd=dir_fd)
+    monkeypatch.setattr(ds, "_read_private_file", swap_then_read)
+    try:
+        _run_registry(root)
+    except ds.DatabaseStageError:
+        assert FakePsql.passwords == []
+    else:
+        assert FakePsql.passwords == [original]
+    assert swapped == [True] and "b" * 64 not in FakePsql.passwords
+
+
+def test_registry_refuses_a_symlinked_database_directory(job, fake_psql, tmp_path):
+    root = _registry_job(job)
+    os.rename(root / "database", tmp_path / "moved-database")
+    (root / "database").symlink_to(tmp_path / "moved-database", target_is_directory=True)
+    with pytest.raises(ds.DatabaseStageError, match="database_dir_not_bound"):
+        _run_registry(root)
+    assert fake_psql == []
+
+
+def test_registry_refuses_a_symlinked_url_file(job, fake_psql, tmp_path):
+    root = _registry_job(job)
+    os.rename(root / "database" / "url", tmp_path / "url")
+    (root / "database" / "url").symlink_to(tmp_path / "url")
+    with pytest.raises(ds.DatabaseStageError, match="url_invalid"):
+        _run_registry(root)
+    assert fake_psql == []
+
+
+# --- P3C-FIXTURE-R2: each stage-preflight variant refuses for its own reason ----------
+
+@pytest.mark.parametrize("variant,expected", [
+    ("no_core", sj.CORE_NAME),
+    ("no_previous", "previous stage journal missing"),
+    ("launch_exists", "launch stage journal already exists"),
+    ("valid", None),
+])
+def test_stage_preflight_variants_in_process(tmp_path, monkeypatch, capsys, variant, expected):
+    # In-process twin of test_reference_launcher's (NOT_RUN) preflight variants.
+    from test_paths_only_secrets import lr
+    if variant == "no_core":
+        job = trl.make_job(tmp_path, stage=False)
+        assert not (job / sj.CORE_NAME).exists()
+    else:
+        job = trl.stage_job(tmp_path, previous=variant != "no_previous")
+    if variant == "launch_exists":
+        open(sj.journal_path(str(job), 2, "launch"), "w").close()
+    shutil.rmtree(job / "venv")
+    started = _main_until_popen(monkeypatch, lr)
+    rc = lr.main(["--preflight"] + _launch_argv(job))
+    err = capsys.readouterr().err
+    assert started == []
+    if expected is None:
+        assert rc == 0, err                 # the positive control: nothing else refuses
+    else:
+        assert rc == 1 and expected in err, err
+
+
+@pytest.mark.parametrize("symlink", [False, True])
+def test_bound_url_read_returns_the_held_directory_bytes(job, monkeypatch, symlink):
+    # The read itself (before the Psql path recheck): swapped at the moment
+    # of the URL open, it still returns the recorded directory's bytes.
+    root = _registry_job(job)
+    info = os.stat(root / "database")
+    core = (root / sj.CORE_NAME).read_bytes()
+    binding = {"role": ROLE, "database_dir": {"dev": info.st_dev, "ino": info.st_ino},
+               "core_sha256": __import__("hashlib").sha256(core).hexdigest()}
+    real_read = ds._read_private_file
+
+    swapped = []
+
+    def swap_then_read(path, limit, dir_fd=None):
+        if path == ds.URL_NAME:                 # the URL open, after the directory check
+            os.rename(root / "database", root / "original-database")
+            replacement = root / ("replacement-database" if symlink else "database")
+            replacement.mkdir(mode=0o700)
+            (replacement / "url").write_text(_url(ROLE, "b" * 64))
+            (replacement / "url").chmod(0o600)
+            if symlink:
+                (root / "database").symlink_to(replacement, target_is_directory=True)
+            swapped.append(True)
+        return real_read(path, limit, dir_fd=dir_fd)
+    monkeypatch.setattr(ds, "_read_private_file", swap_then_read)
+    assert ds._read_bound_url(str(root), binding).decode() == _url(ROLE, "f" * 64)
+    assert swapped == [True]
+
+
+def test_bound_url_read_refuses_another_core(job):
+    root = _registry_job(job)
+    info = os.stat(root / "database")
+    binding = {"role": ROLE, "database_dir": {"dev": info.st_dev, "ino": info.st_ino},
+               "core_sha256": "0" * 64}
+    with pytest.raises(ds.DatabaseStageError, match="inventory_root_changed"):
+        ds._read_bound_url(str(root), binding)
+
+
+def test_registry_rechecks_the_psql_directory_after_the_read(job, fake_psql, monkeypatch,
+                                                             tmp_path):
+    # Replaced after the bound read, before Psql's passfile path is used.
+    root = _registry_job(job)
+    real = ds._read_bound_url
+
+    def read_then_swap(job_root, binding):
+        data = real(job_root, binding)
+        os.rename(root / "database", tmp_path / "old-database")
+        (root / "database").mkdir(mode=0o700)
+        return data
+    monkeypatch.setattr(ds, "_read_bound_url", read_then_swap)
+    with pytest.raises(ds.DatabaseStageError, match="database_dir_not_bound"):
+        _run_registry(root)
+    assert fake_psql == []
+
+
+def test_held_directory_identity_is_checked_not_only_the_later_path(job, fake_psql,
+                                                                    monkeypatch):
+    # An unbound directory holds the path at the read and the recorded one is
+    # put back before the path recheck: only the held fstat check refuses.
+    root = _registry_job(job)
+    os.rename(root / "database", root / "original-database")
+    (root / "database").mkdir(mode=0o700)
+    (root / "database" / "url").write_text(_url(ROLE, "b" * 64))
+    (root / "database" / "url").chmod(0o600)
+    real = ds._database_dir
+
+    def restore_then_check(job_root, create):
+        os.rename(root / "database", root / "unbound-database")
+        os.rename(root / "original-database", root / "database")
+        return real(job_root, create)
+    monkeypatch.setattr(ds, "_database_dir", restore_then_check)
+    with pytest.raises(ds.DatabaseStageError, match="database_dir_not_bound"):
+        _run_registry(root)
+    assert "b" * 64 not in FakePsql.passwords and fake_psql == []

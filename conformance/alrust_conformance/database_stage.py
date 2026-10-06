@@ -676,6 +676,40 @@ def _read_private_file(path, limit, dir_fd=None):
         os.close(fd)
 
 
+def _read_bound_url(job_root, binding):
+    """P3c (P3C-DIR-R1): the URL bytes, read through one held directory. The
+    job root is opened component by component without following links and
+    bound to the gate's core (_open_bound_root); <J>/database is opened
+    relative to it with O_DIRECTORY|O_NOFOLLOW, and that held object must
+    be the uid-owned 0700 directory database-create recorded; the URL file
+    is opened relative to the same descriptor. A rename or symlink swap
+    after the check cannot redirect the read: it either reads the bound
+    directory's bytes or refuses."""
+    root = _open_bound_root(job_root, binding["core_sha256"])
+    try:
+        try:
+            held = os.open(DATABASE_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+                           | os.O_CLOEXEC, dir_fd=root)
+        except OSError:
+            raise DatabaseStageError("database_dir_not_bound") from None
+    finally:
+        os.close(root)
+    try:
+        info = os.fstat(held)
+        _require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid()
+                 and stat.S_IMODE(info.st_mode) == 0o700
+                 and (info.st_dev, info.st_ino) == (binding["database_dir"]["dev"],
+                                                    binding["database_dir"]["ino"]),
+                 "database_dir_not_bound")
+        try:
+            data, _ = _read_private_file(URL_NAME, 1024, dir_fd=held)
+        except OSError:
+            raise DatabaseStageError("url_invalid") from None
+        return data
+    finally:
+        os.close(held)
+
+
 def build_registry(job_root, journal, *, secret_key_path, other_secrets, port,
                    psql_path, deadline_ns, binding):
     """The registry stage (contract section 9 step 2), inside the open
@@ -689,11 +723,16 @@ def build_registry(job_root, journal, *, secret_key_path, other_secrets, port,
     their file interface is Codex's and not yet approved, Q1). The registry
     is written in the finalizer's format, 0600, exclusively, and recorded."""
     from . import finalizer as fz
+    _require(type(binding) is dict, "database_dir_not_bound")
+    url_bytes = _read_bound_url(job_root, binding)
+    # Psql's passfile is written by path (psql opens PGPASSFILE by name), so
+    # the path is rechecked against the recorded object; a swap after this
+    # check is a declared residual (it could misplace the bound password,
+    # never substitute another).
     directory, info = _database_dir(job_root, create=False)
-    # P3c: the directory recorded by database-create, and the expected role.
-    _require(type(binding) is dict and (info.st_dev, info.st_ino) == (
-        binding["database_dir"]["dev"], binding["database_dir"]["ino"]), "database_dir_not_bound")
-    url_bytes, _ = _read_private_file(os.path.join(directory, URL_NAME), 1024)
+    _require((info.st_dev, info.st_ino) == (binding["database_dir"]["dev"],
+                                            binding["database_dir"]["ino"]),
+             "database_dir_not_bound")
     url = url_bytes.decode("ascii", "replace").rstrip("\n")
     match = _URL.fullmatch(url)
     _require(match and match[1] == match[4] and int(match[3]) == port, "url_invalid")
@@ -903,7 +942,8 @@ def run_registry_stage(job_root, prefix, *, expected, **kwargs):
         values = read_inventory(job_root, evidence)
         extra = list(kwargs.pop("other_secrets", []))
         # P3c: the expected role and directory, from the gate's own evidence.
-        binding = _created_binding(job_root, evidence["records"], evidence["core"])
+        binding = dict(_created_binding(job_root, evidence["records"], evidence["core"]),
+                       core_sha256=evidence["aggregation"]["core_identity_sha256"])
         path = build_registry(job_root, journal, other_secrets=extra + values, binding=binding,
                               **kwargs)
         data, _ = _read_private_file(path, fz.MAX_REGISTRY)

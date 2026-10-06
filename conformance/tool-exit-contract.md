@@ -373,10 +373,23 @@ after reading and before using it.
   `--expected-role` (`database_role_unexpected`), in addition to the P2c
   checks. A refusal still exits 125 with a fixed code only.
 - **Registry.** `run_registry_stage` derives the same binding from the
-  writer gate's evidence (its aggregation's records and core snapshot).
-  `build_registry` requires it: before `Psql` is constructed, the database
-  directory must be the recorded object (`database_dir_not_bound`) and the
-  URL's role must be the expected one (`database_role_unexpected`).
+  writer gate's evidence (its aggregation's records and core snapshot) and
+  adds the gate's core digest. `build_registry` requires it, and before
+  `Psql` is constructed:
+  - the URL is read through one held directory (`_read_bound_url`,
+    P3C-DIR-R1). The job root is opened component by component without
+    following links and bound to that core (`_open_bound_root`, refusing
+    with `inventory_root_changed`). `database` is opened relative to it
+    with `O_DIRECTORY|O_NOFOLLOW`, and the held object must be the
+    uid-owned 0700 directory with the recorded (`dev`, `ino`)
+    (`database_dir_not_bound`). `url` is opened relative to that same
+    descriptor (`url_invalid` if absent or a link). A rename or symlink
+    swap after the check reads the bound bytes or refuses; it never
+    substitutes others;
+  - the URL's role must be the expected one (`database_role_unexpected`);
+  - `Psql`'s passfile is written by path, because `psql` opens
+    `PGPASSFILE` by name. The path `<J>/database` is therefore rechecked
+    against the recorded object after the read (`database_dir_not_bound`).
 - **Residuals** (declared, not addressed in P3c):
   - `create_database` derives the name from its own `--profile`,
     `--run-id` and `--attempt` arguments, not from the core. A mismatch is
@@ -385,6 +398,11 @@ after reading and before using it.
   - The secret key file's parent (the job root) is not identity-bound: no
     stage records the job root as an owned resource, so `C` reads the key
     with no parent identity. The P2c checks on the key file still apply.
+  - `Psql`'s passfile (registry, and as before create and drop) is written
+    by path in `<J>/database`. A swap after the registry's recheck could
+    place the bound password's passfile in another directory; it cannot
+    make a substituted password be used. An fd-held passfile is a later
+    change.
   - The launch journal does not record the expectation the launcher handed
     `P` (role, directory identity, gate aggregation digest), so a later
     gate cannot yet recheck what `P` was told.

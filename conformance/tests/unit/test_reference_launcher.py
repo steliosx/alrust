@@ -1205,8 +1205,11 @@ def test_stage_mode_interpreter_swap_before_the_record_is_refused(tmp_path):
 
 @pytest.mark.parametrize("variant", ["no_core", "no_previous", "launch_exists"])
 def test_stage_preflight_refuses_before_the_build(tmp_path, variant):
+    # P3C-FIXTURE-R2: no_core must have no core (make_job prepares one by default).
     job = stage_job(tmp_path, previous=variant != "no_previous") \
-        if variant != "no_core" else make_job(tmp_path)
+        if variant != "no_core" else make_job(tmp_path, stage=False)
+    if variant == "no_core":
+        assert not (job / sj.CORE_NAME).exists()
     if variant == "launch_exists":
         Path(sj.journal_path(str(job), 2, "launch")).write_text("")
     shutil.rmtree(job / "venv")
@@ -1217,6 +1220,9 @@ def test_stage_preflight_refuses_before_the_build(tmp_path, variant):
     out = subprocess.run(args, env=dict(ENV, HOME=str(job / "home")),
                          capture_output=True, text=True, timeout=60)
     assert out.returncode == 1 and "refused" in out.stderr
+    expected = {"no_core": sj.CORE_NAME, "no_previous": "previous stage journal missing",
+                "launch_exists": "launch stage journal already exists"}[variant]
+    assert expected in out.stderr       # the variant's own refusal, not another check's
 
 
 @pytest.mark.parametrize("extra", [

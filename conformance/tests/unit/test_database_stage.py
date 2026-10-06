@@ -658,7 +658,8 @@ def run_registry(job, stub, other=(), index=2):
     created = [r["payload"] for r in records(create_bytes(job)) if r["kind"] == "database_created"]
     info = os.stat(job / "database")
     binding = {"role": created[0]["role"], "database_dir": {"dev": info.st_dev,
-                                                             "ino": info.st_ino}}
+                                                             "ino": info.st_ino},
+               "core_sha256": hashlib.sha256((job / sj.CORE_NAME).read_bytes()).hexdigest()}
     with sj.StageJournal(str(job), index, "registry", ds.CREATE_STAGE if index == 1 else
                          "launch") as journal:
         return ds.build_registry(str(job), journal,
