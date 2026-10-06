@@ -43,15 +43,28 @@ def unseal_after(tmp_path):
                     entry.chmod(0o600)
 
 
+REAP_WAIT_S = 10.0
+
+
 def ended_generation():
     """(pid, start_ticks) of a real child that has exited and been reaped,
-    so the finalizer's positive exit observation has a genuine subject."""
+    so the finalizer's positive exit observation has a genuine subject.
+    From the spawn, the kill and a bounded reap go through the owned handle
+    on every path, even if reading /proc fails (P2B2-WINDOW-R1)."""
     import subprocess
+    import owned_process
     child = subprocess.Popen(["/bin/sleep", "30"])
-    with open("/proc/%d/stat" % child.pid, "rb") as f:
-        ticks = int(f.read().rsplit(b")", 1)[1].split()[19])
-    child.kill()
-    child.wait()
+    primary = None
+    try:
+        with open("/proc/%d/stat" % child.pid, "rb") as f:
+            ticks = int(f.read().rsplit(b")", 1)[1].split()[19])
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        owned_process.run_steps(
+            [lambda: owned_process.kill_and_reap(child, REAP_WAIT_S)], primary,
+            "ended_generation cleanup failed")
     return child.pid, ticks
 
 

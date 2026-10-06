@@ -17,6 +17,8 @@ import time
 
 import pytest
 
+import owned_process
+
 ROOT = Path(__file__).resolve().parents[3]
 SUPERVISOR = ROOT / "conformance/scripts/entrypoint-supervisor.py"
 PY = [sys.executable, "-I", "-S", "-B"]
@@ -111,6 +113,34 @@ def setup(tmp_path):
     return core, hashlib.sha256(core.read_bytes()).hexdigest(), script
 
 
+# Custody of every supervisor these tests start (P2B2-WINDOW-R1): each Popen
+# is registered as soon as it exists, and the autouse fixture stops any that
+# is still running after its test, through the owned handle only.
+TEARDOWN_S = 16.0          # entrypoint-supervisor.py TEARDOWN_BUDGET_NS
+MARGIN_S = 5.0
+MAX_STDERR = 1 << 16
+_OWNED = []
+
+
+@pytest.fixture(autouse=True)
+def custody():
+    del _OWNED[:]
+    try:
+        yield
+    finally:
+        procs, _OWNED[:] = list(_OWNED), []
+        owned_process.run_steps(
+            [lambda p=p: owned_process.stop_owned(p, TEARDOWN_S + MARGIN_S, MARGIN_S)
+             for p in procs], label="supervisor custody cleanup failed")
+
+
+def stderr_of(proc):
+    """At most MAX_STDERR bytes from the supervisor's stderr file (a file,
+    never a pipe, so a surviving writer cannot block the read)."""
+    with open(proc.alrust_stderr, "rb") as f:
+        return f.read(MAX_STDERR)
+
+
 def start(tmp_path, mode, *, deadline_s=60.0, core_sha=None, extra_args=(),
           script_in_command=True):
     core, digest, script = setup(tmp_path)
@@ -125,12 +155,20 @@ def start(tmp_path, mode, *, deadline_s=60.0, core_sha=None, extra_args=(),
                  "--core", str(core), "--core-sha256", core_sha or digest,
                  "--script", str(script), "--entrypoint-journal", str(journal),
                  "--deadline-monotonic-ns", str(deadline)] + list(extra_args) + ["--"] + command
-    proc = subprocess.Popen(args, process_group=0, stdin=subprocess.DEVNULL,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    err_path = tmp_path / "supervisor-stderr.txt"
+    with open(err_path, "wb") as err:
+        proc = subprocess.Popen(args, process_group=0, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=err)
+        _OWNED.append(proc)
+    proc.alrust_stderr, proc.alrust_deadline_s = err_path, deadline_s
     return proc, receipt, terminal, journal, digest, script
 
 
-def finish(proc, terminal, timeout=60):
+def finish(proc, terminal, timeout=None):
+    """Wait for the supervisor: by default its deadline D plus its teardown
+    budget B plus a margin. A failure leaves it to the custody fixture."""
+    if timeout is None:
+        timeout = proc.alrust_deadline_s + TEARDOWN_S + MARGIN_S
     rc = proc.wait(timeout=timeout)
     return rc, json.loads(terminal.read_text())
 
@@ -220,7 +258,7 @@ def test_deadline_too_close_refuses_before_fork(tmp_path):
                                                              deadline_s=5)
     rc = proc.wait(timeout=10)
     assert rc == sup.EXIT_SETUP
-    assert b"teardown budget" in proc.stderr.read()
+    assert b"teardown budget" in stderr_of(proc)
     assert not receipt.exists() and not terminal.exists() and not journal.exists()
 
 
