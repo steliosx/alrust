@@ -17,6 +17,7 @@ records offered, and every verdict is recomputed from the receipts and
 compared whole. This module only reads immutable proof inputs and /proc.
 It never signals.
 """
+import hashlib
 import json
 import os
 
@@ -72,12 +73,20 @@ def _expected_ok(expected):
             and os.path.isabs(expected["interpreter_path"]))
 
 
-def verify_tool_exit(job_root, tool, stage_index, expected):
+def _read_core(job_root):
+    return _sj.read_bounded(os.path.join(job_root, _sj.CORE_NAME), _sj.MAX_CORE)
+
+
+def verify_tool_exit(job_root, tool, stage_index, expected, core_bytes=None):
     """Return one tool_exit_verdict record for the run of TOOL whose stage
     journal has index STAGE_INDEX. EXPECTED holds the workflow head's pins
     for this tool: {"driver_sha256", "interpreter_path"}. verdict is
     COMPLETE (closure proven), FAILED (tree_not_empty, valid linkage) or
-    UNPROVEN, as for the entrypoint."""
+    UNPROVEN, as for the entrypoint.
+
+    The core is read once (or CORE_BYTES, the caller's snapshot, is used),
+    and the /3 pin checks and every receipt check use those same bytes
+    (P2B1-SOURCE-R1)."""
     record = {"verdict": "UNPROVEN", "reason": "expected_pins_invalid", "tool": tool,
               "stage_index": stage_index, "launch_receipt_sha256": None,
               "terminal_receipt_sha256": None, "stage_journal_sha256": None,
@@ -92,8 +101,9 @@ def verify_tool_exit(job_root, tool, stage_index, expected):
     # here, and the caller's pins must equal the core's (the driver's and the
     # interpreter's), so neither side alone selects the expectation.
     try:
-        core = _sj.validate_core(_sj.read_bounded(
-            os.path.join(job_root, _sj.CORE_NAME), _sj.MAX_CORE), job_root)
+        if core_bytes is None:
+            core_bytes = _read_core(job_root)
+        core = _sj.validate_core(core_bytes, job_root)
     except (_sj.JournalError, OSError):
         record["reason"] = "evidence_unreadable"
         return record
@@ -109,7 +119,7 @@ def verify_tool_exit(job_root, tool, stage_index, expected):
     shared = verify_receipts(job_root, spec(tool, stage_index),
                              _sj.journal_path(job_root, stage_index, tool),
                              launch_path, terminal_path, expected["driver_sha256"],
-                             expected["interpreter_path"])
+                             expected["interpreter_path"], core_bytes=core_bytes)
     record.update({key: shared[key] for key in (
         "verdict", "reason", "launch_receipt_sha256", "terminal_receipt_sha256",
         "execution", "trigger")})
@@ -207,12 +217,20 @@ def holder_proofs(job_root, aggregation, records, required, expected):
     recomputed now from the receipts, and COMPLETE; and the recomputed tool
     journal digest equal to the aggregation's. No tool_exit_verdict may
     appear anywhere else. The core must be /3 and EXPECTED equal to its
-    tool_pins (through verify_tool_exit; P2b). Returns the verified
-    records; raises HolderError."""
+    tool_pins (through verify_tool_exit; P2b). The core is read once here,
+    must hash to the aggregation's core_identity_sha256, and that one
+    snapshot is used for every recomputation (P2B1-SOURCE-R1). Returns the
+    verified records; raises HolderError."""
     _require(type(expected) is dict and set(expected) == set(HOLDER_TOOLS)
              and all(_expected_ok(expected[t]) for t in HOLDER_TOOLS),
              "holder_pins_invalid")
     _require(aggregation.get("verdict") in ("VALID", "FAILED"), "holder_aggregation_incomplete")
+    try:
+        core_bytes = _read_core(job_root)
+    except (_sj.JournalError, OSError):
+        raise HolderError("holder_core_unreadable") from None
+    _require(hashlib.sha256(core_bytes).hexdigest() == aggregation.get("core_identity_sha256"),
+             "holder_core_changed")
     stages = aggregation["stages"]
     names = [stage["name"] for stage in stages]
     _require([stage["index"] for stage in stages] == list(range(len(stages))),
@@ -227,7 +245,7 @@ def holder_proofs(job_root, aggregation, records, required, expected):
         _require(stages[index + 1]["result"] == "COMPLETE", "holder_exit_stage_not_complete")
         payload = [p for stage, p in offered if stage == exit_stage(tool)][0]
         _typed_verdict(payload)
-        fresh = verify_tool_exit(job_root, tool, index, expected[tool])
+        fresh = verify_tool_exit(job_root, tool, index, expected[tool], core_bytes)
         _typed_verdict(fresh)
         _require(_canonical(fresh) == _canonical(payload), "holder_verdict_mismatch")
         _require(fresh["verdict"] == "COMPLETE", "holder_exit_not_proven")

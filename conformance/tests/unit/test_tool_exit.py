@@ -619,3 +619,72 @@ def test_holder_proofs_refuse_on_a_legacy_core(tmp_path, monkeypatch):
     records = fz._journal_records(str(root), aggregation)
     with pytest.raises(te.HolderError, match="holder_exit_stage_not_complete"):
         te.holder_proofs(str(root), aggregation, records, ("database-create",), PINS)
+
+
+# --- P2B1-SOURCE-R1: one core snapshot for the pin and receipt checks ------
+
+def _cores(root):
+    """(A, B): A pins the driver C (as the caller and receipts do); B pins
+    F. Receipts and the tool journal are made while B is on disk."""
+    core_path = root / sj.CORE_NAME
+    a = core_path.read_bytes()
+    data = json.loads(a)
+    data["tool_pins"]["database-create"]["driver"]["sha256"] = "f" * 64
+    b = sj._dumps(data)
+    core_path.write_bytes(b)
+    tool_stage(root, 0, "database-create", None)
+    receipts(root, "database-create", 0)
+    return a, b
+
+
+def test_unchanged_core_positive_and_static_mismatch(job):
+    root, core = job
+    a, b = _cores(root)
+    assert verify(root)["reason"] == "tool_pins_mismatch"            # B, caller C
+    (root / sj.CORE_NAME).write_bytes(a)
+    assert verify(root)["reason"] == "core_mismatch"                 # receipts bound to B
+
+
+def test_core_replaced_between_pin_and_receipt_checks_refuses(job, monkeypatch):
+    root, core = job
+    a, b = _cores(root)
+    (root / sj.CORE_NAME).write_bytes(a)
+    real = te.verify_receipts
+
+    def swap_then_verify(*args, **kwargs):
+        # The actual core file changes to B right before the shared checks.
+        (root / sj.CORE_NAME).write_bytes(b)
+        return real(*args, **kwargs)
+    monkeypatch.setattr(te, "verify_receipts", swap_then_verify)
+    record = verify(root)
+    assert (record["verdict"], record["reason"]) == ("UNPROVEN", "core_mismatch")
+    # The stage closes FAILED, and the gate refuses.
+    (root / sj.CORE_NAME).write_bytes(a)
+    record = te.run_tool_exit_stage(str(root), ["database-create"], "database-create",
+                                    EXPECTED)
+    assert record["verdict"] == "UNPROVEN"
+
+
+def test_holder_proofs_refuse_a_core_changed_since_aggregation(job):
+    root, core = job
+    aggregation, records = two_holders(root)
+    data = json.loads((root / sj.CORE_NAME).read_bytes())
+    data["captured_utc_ns"] += 1
+    (root / sj.CORE_NAME).write_bytes(sj._dumps(data))
+    with pytest.raises(te.HolderError, match="holder_core_changed"):
+        te.holder_proofs(str(root), aggregation, records, ("database-create",), PINS)
+
+
+def test_holder_proofs_use_one_snapshot(job, monkeypatch):
+    root, core = job
+    aggregation, records = two_holders(root)
+    core_reads = []
+    real = sj.read_bounded
+
+    def read_bounded(path, limit):
+        if str(path).endswith(sj.CORE_NAME):
+            core_reads.append(path)
+        return real(path, limit)
+    monkeypatch.setattr(sj, "read_bounded", read_bounded)
+    te.holder_proofs(str(root), aggregation, records, ("database-create", "registry"), PINS)
+    assert len(core_reads) == 1      # two holders recomputed from one snapshot

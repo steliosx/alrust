@@ -222,19 +222,25 @@ def receipt_paths(job_root):
 
 
 def verify_receipts(job_root, spec, journal, launch_path, terminal_path,
-                    script_sha256, interpreter_path):
+                    script_sha256, interpreter_path, core_bytes=None):
     """The receipt verification shared by the entrypoint-exit and tool-exit
     stages. SCRIPT_SHA256 and INTERPRETER_PATH are the caller's validated
     pins; JOURNAL and the receipt paths are derived by the caller from the
     job root and stage index, never from a receipt. Returns {"verdict",
     "reason", "launch_receipt_sha256", "terminal_receipt_sha256",
-    "journal_sha256", "journal_state", "execution", "trigger"}."""
+    "journal_sha256", "journal_state", "execution", "trigger"}.
+
+    CORE_BYTES, when given, is the caller's single core snapshot: every core
+    check here then uses those exact bytes, never a second read
+    (P2B1-SOURCE-R1). The entrypoint stage passes none and reads it once."""
     record = {"verdict": "UNPROVEN", "reason": "not_checked",
               "launch_receipt_sha256": None, "terminal_receipt_sha256": None,
               "journal_sha256": None, "journal_state": None,
               "execution": "FAIL", "trigger": None}
     try:
-        core_bytes = _sj.read_bounded(os.path.join(job_root, _sj.CORE_NAME), _sj.MAX_CORE)
+        if core_bytes is None:
+            core_bytes = _sj.read_bounded(os.path.join(job_root, _sj.CORE_NAME),
+                                          _sj.MAX_CORE)
         core = _sj.validate_core(core_bytes, job_root)
         core_sha256 = hashlib.sha256(core_bytes).hexdigest()
         try:
