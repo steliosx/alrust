@@ -644,3 +644,46 @@ def test_core_cli_entrypoint_pin_refusals(job, tmp_path, monkeypatch, capsys, wh
     assert code == (64 if which == "partial" else 2)
     assert json.loads(capsys.readouterr().out)["reason"] == reason
     assert not (job / "core-identity.json").exists()
+
+
+def test_core_cli_writes_v3_with_tool_pins(job, tmp_path, monkeypatch, capsys):
+    """P2b-1: the git-backed CLI writes /3 with both tool driver pins."""
+    for k, v in ENV.items():
+        monkeypatch.setenv(k, v)
+    repo, head, ref_head = cli_repo(tmp_path)
+    s_sha, e_sha = _entry_files(repo)
+    driver = repo / "conformance/scripts/stage-tool.py"
+    driver.write_bytes(b"# synthetic stage-tool driver\n")
+    d_sha = hashlib.sha256(driver.read_bytes()).hexdigest()
+    import sys as _sys
+    args = cli_args(repo, job, ref_head) + [
+        "--supervisor-pin", "conformance/scripts/entrypoint-supervisor.py=" + s_sha,
+        "--entrypoint-script-pin", "conformance/entrypoint.py=" + e_sha,
+        "--interpreter", _sys.executable,
+        "--tool-pin", "database-create=conformance/scripts/stage-tool.py=" + d_sha,
+        "--tool-pin", "registry=conformance/scripts/stage-tool.py=" + d_sha]
+    assert sj.main(args) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "WRITTEN"
+    record = json.loads((job / "core-identity.json").read_text())
+    assert record["schema"] == sj.SCHEMA_CORE_V3
+    assert record["tool_pins"] == {t: {"driver": {"path": str(driver), "sha256": d_sha}}
+                                   for t in sj.TOOL_PIN_NAMES}
+
+
+def test_core_cli_refuses_a_changed_tool_driver(job, tmp_path, monkeypatch, capsys):
+    for k, v in ENV.items():
+        monkeypatch.setenv(k, v)
+    repo, head, ref_head = cli_repo(tmp_path)
+    s_sha, e_sha = _entry_files(repo)
+    driver = repo / "conformance/scripts/stage-tool.py"
+    driver.write_bytes(b"# synthetic stage-tool driver\n")
+    import sys as _sys
+    args = cli_args(repo, job, ref_head) + [
+        "--supervisor-pin", "conformance/scripts/entrypoint-supervisor.py=" + s_sha,
+        "--entrypoint-script-pin", "conformance/entrypoint.py=" + e_sha,
+        "--interpreter", _sys.executable,
+        "--tool-pin", "database-create=conformance/scripts/stage-tool.py=" + "0" * 64,
+        "--tool-pin", "registry=conformance/scripts/stage-tool.py=" + "0" * 64]
+    assert sj.main(args) == 2
+    assert json.loads(capsys.readouterr().out)["reason"] == "tool_not_pinned"
+    assert not (job / "core-identity.json").exists()

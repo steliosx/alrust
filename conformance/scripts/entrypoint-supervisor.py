@@ -32,6 +32,19 @@ before the fork, so S cannot be reduced to an argument of another target.
 - Only after ECHILD does it read the closed entrypoint journal J (bounded,
   read-only). It then writes the terminal receipt T exclusively.
 
+Tool mode (R-EP plan P2b-2, conformance/tool-exit-contract.md section 3):
+with `--tool NAME --stage-index N` (both or neither), one generation P_T
+supervises one credential-holding stage tool run, and S is that tool's
+driver. The core must then be /3. S must match tool_pins[NAME].driver
+(the supervisor and interpreter pins are the entrypoint_pins ones). R, T
+and J must be exactly <job_root>/tools/<NN>-<NAME>/launch.json,
+terminal.json and <job_root>/journal/<NN>-<NAME>.jsonl, from the core's
+job root. The run directory is created exclusively just before the fork,
+so a second run for the same stage refuses. The receipts use the tool
+schemas, name the journal stage_journal, and carry tool {name,
+stage_index}. Everything else, from the fork to the terminal receipt, is
+the same algorithm.
+
 Rules, as in reference-supervisor.py: signal handlers only set a flag;
 SIGCHLD keeps its default action and nothing else reaps; between scanning
 /proc for children and signalling them nothing is reaped.
@@ -60,6 +73,11 @@ MAX_SCRIPT = 1 << 22
 MAX_JOURNAL = 1 << 20
 MAX_PINNED_FILE = 1 << 27
 SCHEMA_CORE_V2 = "alrust-hosted-core/2"
+SCHEMA_CORE_V3 = "alrust-hosted-core/3"
+SCHEMA_TOOL_LAUNCH = "alrust-tool-launch/1"
+SCHEMA_TOOL_TERMINAL = "alrust-tool-terminal/1"
+TOOL_NAMES = ("database-create", "registry")
+MAX_TOOL_INDEX = 30   # the exit stage needs index + 1 below 32 stages
 
 EXIT_TREE_EMPTY = 0
 EXIT_USAGE = 64
@@ -86,6 +104,7 @@ def is_sha256(value):
 
 OPTIONS = ("--receipt", "--terminal", "--core", "--core-sha256", "--script",
            "--entrypoint-journal", "--deadline-monotonic-ns")
+TOOL_OPTIONS = ("--tool", "--stage-index")
 PATHS = ("--receipt", "--terminal", "--core", "--script", "--entrypoint-journal")
 
 
@@ -107,7 +126,7 @@ def check_invocation(command, script_path):
 
 
 def parse_args(argv):
-    opts = dict.fromkeys(OPTIONS)
+    opts = dict.fromkeys(OPTIONS + TOOL_OPTIONS)
     i = 0
     while i < len(argv) and argv[i] != "--":
         name = argv[i]
@@ -131,6 +150,16 @@ def parse_args(argv):
     if not deadline.isdigit() or len(deadline) > 20:
         fail(EXIT_USAGE, "--deadline-monotonic-ns must be a decimal integer")
     opts["--deadline-monotonic-ns"] = int(deadline)
+    tool, index = opts["--tool"], opts["--stage-index"]
+    if (tool is None) != (index is None):
+        fail(EXIT_USAGE, "--tool and --stage-index go together")
+    if tool is not None:
+        if tool not in TOOL_NAMES:
+            fail(EXIT_USAGE, "--tool must be one of %s" % ", ".join(TOOL_NAMES))
+        if not index.isdigit() or len(index) > 2 or int(index) > MAX_TOOL_INDEX \
+                or index != str(int(index)):
+            fail(EXIT_USAGE, "--stage-index must be 0..%d" % MAX_TOOL_INDEX)
+        opts["--stage-index"] = int(index)
     invalid = check_invocation(command, opts["--script"])
     if invalid is not None:
         fail(EXIT_USAGE, invalid)
@@ -199,13 +228,16 @@ def file_sha256(path, limit=MAX_PINNED_FILE):
         os.close(fd)
 
 
-def core_pins(core_bytes):
-    """entrypoint_pins from a /2 core (gate plan P1). The core's own sha256
-    has already been checked against --core-sha256; full validation of the
-    core is the verifier's. Raises ValueError on any shape error."""
+def core_pins(core_bytes, tool=None):
+    """entrypoint_pins from a /2 core (gate plan P1), or, for TOOL, from a
+    /3 core with that tool's driver pin in place of the entrypoint script
+    (P2b-2). The core's own sha256 has already been checked against
+    --core-sha256; full validation of the core is the verifier's. Raises
+    ValueError on any shape error."""
     core = json.loads(core_bytes)
-    if type(core) is not dict or core.get("schema") != SCHEMA_CORE_V2:
-        raise ValueError("core is not /2")
+    wanted = SCHEMA_CORE_V2 if tool is None else SCHEMA_CORE_V3
+    if type(core) is not dict or core.get("schema") != wanted:
+        raise ValueError("core is not %s" % wanted.rsplit("-", 1)[-1])
     pins = core.get("entrypoint_pins")
     if type(pins) is not dict or set(pins) != {"supervisor", "entrypoint_script",
                                                "interpreter"}:
@@ -222,7 +254,30 @@ def core_pins(core_bytes):
             or type(interp["measured_sha256"]) is not str \
             or not is_sha256(interp["measured_sha256"]):
         raise ValueError("interpreter pin malformed")
-    return pins
+    if tool is None:
+        return pins
+    tools = core.get("tool_pins")
+    if type(tools) is not dict or set(tools) != set(TOOL_NAMES):
+        raise ValueError("tool_pins malformed")
+    entry = tools[tool]
+    driver = entry.get("driver") if type(entry) is dict and set(entry) == {"driver"} else None
+    if type(driver) is not dict or set(driver) != {"path", "sha256"} \
+            or type(driver["path"]) is not str or type(driver["sha256"]) is not str \
+            or not is_sha256(driver["sha256"]):
+        raise ValueError("%s driver pin malformed" % tool)
+    root = core.get("job_root")
+    if type(root) is not dict or type(root.get("path")) is not str \
+            or not os.path.isabs(root["path"]):
+        raise ValueError("job_root malformed")
+    # The driver takes the entrypoint script's place in check_pins.
+    return dict(pins, entrypoint_script=dict(driver), job_root=root["path"])
+
+
+def tool_paths(job_root, tool, index):
+    """(run directory, launch receipt, terminal receipt, stage journal)."""
+    run = os.path.join(job_root, "tools", "%02d-%s" % (index, tool))
+    return (run, os.path.join(run, "launch.json"), os.path.join(run, "terminal.json"),
+            os.path.join(job_root, "journal", "%02d-%s.jsonl" % (index, tool)))
 
 
 def check_pins(pins, own_path, script_path, script_bytes, command):
@@ -235,7 +290,8 @@ def check_pins(pins, own_path, script_path, script_bytes, command):
     entry = pins["entrypoint_script"]
     if script_path != entry["path"] or \
             hashlib.sha256(script_bytes).hexdigest() != entry["sha256"]:
-        return "entrypoint script does not match its pin"
+        return ("entrypoint script" if "job_root" not in pins else "tool driver") \
+            + " does not match its pin"
     interp = pins["interpreter"]
     resolved = os.path.realpath(command[0])
     if command[0] != interp["path"] or resolved != interp["resolved_path"] \
@@ -419,17 +475,31 @@ def main(argv):
     core_sha256 = hashlib.sha256(core).hexdigest()
     if core_sha256 != opts["--core-sha256"]:
         fail(EXIT_SETUP, "core identity does not match --core-sha256")
+    tool, index = opts["--tool"], opts["--stage-index"]
     try:
-        pins = core_pins(core)
+        pins = core_pins(core, tool)
         mismatch = check_pins(pins, os.path.abspath(__file__), opts["--script"],
                               script, command)
     except (OSError, ValueError) as error:
-        fail(EXIT_SETUP, "entrypoint pins: %s" % error)
+        fail(EXIT_SETUP, "%s pins: %s" % ("entrypoint" if tool is None else "tool", error))
     if mismatch is not None:
         fail(EXIT_SETUP, mismatch)
+    if tool is not None:
+        run_dir, launch_path, terminal_path, journal_path = tool_paths(
+            pins["job_root"], tool, index)
+        if (opts["--receipt"], opts["--terminal"], opts["--entrypoint-journal"]) != \
+                (launch_path, terminal_path, journal_path):
+            fail(EXIT_SETUP, "tool receipt or journal paths are not the fixed ones")
     deadline = opts["--deadline-monotonic-ns"]
     if deadline < time.monotonic_ns() + TEARDOWN_BUDGET_NS:
         fail(EXIT_SETUP, "deadline leaves less than the teardown budget")
+    if tool is not None:
+        # Exclusive per-run directory: an earlier run for this stage refuses.
+        try:
+            os.makedirs(os.path.dirname(run_dir), mode=0o700, exist_ok=True)
+            os.mkdir(run_dir, 0o700)
+        except OSError as error:
+            fail(EXIT_SETUP, "tool run directory: %s" % error)
 
     child = os.fork()
     if child == 0:
@@ -447,8 +517,10 @@ def main(argv):
     log = {"signals": 0, "reaped": 0, "child_signalled": False,
            "other_signals": 0, "other_reaped": 0, "child_status": None}
     argv_digest = hashlib.sha256(json.dumps(command).encode()).hexdigest()
+    journal_key = "entrypoint_journal" if tool is None else "stage_journal"
+    binding = None if tool is None else {"name": tool, "stage_index": index}
     receipt = {
-        "schema": SCHEMA_LAUNCH,
+        "schema": SCHEMA_LAUNCH if tool is None else SCHEMA_TOOL_LAUNCH,
         "supervisor": {"pid": me, "pgid": os.getpgid(0),
                        "start_ticks": my_stat[1], "uid": os.getuid(),
                        "subreaper": readback},
@@ -464,13 +536,15 @@ def main(argv):
                        "ino": script_info.st_ino,
                        "sha256": hashlib.sha256(script).hexdigest()},
         },
-        "entrypoint_journal": opts["--entrypoint-journal"],
+        journal_key: opts["--entrypoint-journal"],
         "terminal_receipt": opts["--terminal"],
         "deadline": {"monotonic_ns": deadline,
                      "teardown_budget_ns": TEARDOWN_BUDGET_NS, "boot_id": boot},
         "launched_utc_ns": time.time_ns(),
         "monotonic_ns": time.monotonic_ns(),
     }
+    if binding is not None:
+        receipt["tool"] = dict(binding)
     receipt_ok = True
     launch_sha256 = None
     try:
@@ -512,7 +586,7 @@ def main(argv):
         and not log["child_signalled"]
         and journal is not None and journal["state"] == "COMPLETE") else "FAIL"
     terminal = {
-        "schema": SCHEMA_TERMINAL,
+        "schema": SCHEMA_TERMINAL if tool is None else SCHEMA_TOOL_TERMINAL,
         "result": "tree_empty" if empty else "tree_not_empty",
         "supervisor": {"pid": me, "start_ticks": my_stat[1]},
         "boot_id": boot,
@@ -522,7 +596,7 @@ def main(argv):
         "child_signalled": log["child_signalled"],
         "other_descendant_signals": log["other_signals"],
         "other_descendants_reaped": log["other_reaped"],
-        "entrypoint_journal": journal,
+        journal_key: journal,
         "execution": execution,
         "signals_sent": log["signals"],
         "children_reaped": log["reaped"],
@@ -530,6 +604,8 @@ def main(argv):
         "finished_utc_ns": time.time_ns(),
         "finished_monotonic_ns": time.monotonic_ns(),
     }
+    if binding is not None:
+        terminal["tool"] = dict(binding)
     try:
         write_exclusive(opts["--terminal"], terminal)
     except OSError as error:

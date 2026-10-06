@@ -664,6 +664,20 @@ def build_registry(job_root, journal, *, secret_key_path, other_secrets, port,
 # ---------------------------------------------------------------------------
 # Stage runners: gate first, then the journal, then the action
 
+def run_create_stage(job_root, **kwargs):
+    """The `database-create` stage, journal index 0 (R-EP plan P2b-2). Run
+    only inside its tool supervisor P_T (contract tool-exit-contract.md):
+    the job role's password is generated here, in this process, after P_T
+    exists. The stage closes FAILED with the fixed code on any refusal.
+    Returns the URL file's path, never the URL."""
+    with sj.StageJournal(job_root, 0, CREATE_STAGE) as journal:
+        try:
+            return create_database(job_root, journal, **kwargs)
+        except DatabaseStageError as error:
+            journal.fail(error.code)
+            raise
+
+
 def _gate_code(error):
     if isinstance(error, DatabaseStageError):
         return error.code

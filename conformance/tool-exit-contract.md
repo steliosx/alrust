@@ -6,8 +6,10 @@ contract, the tool-exit verifier and stage, and the gates' holder check in
 `tool_exit.py`) is approved at `c593b5ea`, offline source only.
 
 P2b-1 (core /3 tool pins, required by the verifier and the holder check)
-builds on P2a. P2b-2 adds the supervisor's tool mode and the pinned
-stage-tool driver; P2c the paths-only server secrets (section 10). P3 wires
+builds on P2a. P2b-2 adds the supervisor's tool mode
+(`entrypoint-supervisor.py --tool NAME --stage-index N`), the pinned
+stage-tool driver (`scripts/stage-tool.py`) and `run_create_stage`. P2c
+adds the paths-only server secrets (section 10). P3 wires
 `holder_proofs()` into the gates; P4 adds the timeout stop helper.
 
 ## 1. Rule
@@ -33,11 +35,13 @@ holder it requires lacks a COMPLETE, freshly recomputed exit verdict.
 | launcher's stop helper | today: the launcher's whole environment (`subprocess.run` with no `env`); agreed: paths only | the launcher, on a failed launch | waited by the launcher | its own exit only, which is not proof that no descendant holds a value; hence paths only |
 | workflow shell | today: whatever it places in the launcher's environment; agreed: paths only | the workflow | the step | workflow review: no read, export, command substitution or logging of the values |
 
-The drivers' entry points: the database-create stage runner (to be added in
-P2b: `run_create_stage` opening the stage journal and calling
-`create_database`) and `run_registry_stage`. Today neither is called by the
-workflow, so no unsupervised holder is wired; P2b's driver is the only
-caller.
+The drivers' entry points: `run_create_stage` (P2b-2; journal index 0,
+calling `create_database`) and `run_registry_stage`. Their only caller is
+`scripts/stage-tool.py`, run as `C_T`. The workflow does not call either
+yet, so no unsupervised holder is wired. The driver takes no secret value
+in argv or the environment; the only password in argv is the public
+service superuser's. It prints one JSON line with the result and, on
+failure, the fixed code only, never a value or a traceback.
 
 ## 3. Supervision of a tool run (P2b)
 
@@ -50,6 +54,11 @@ caller.
   `P_T` exists, and never before.
 - Secrets never appear in `C_T`'s argv or environment. Only file paths, the
   port and the public superuser password are passed in.
+- Before the fork, tool mode also requires: `NAME` is one of the two tools;
+  `N` is 0..30 (canonical decimal); and the receipt, terminal and journal
+  paths are exactly the fixed ones under the core's `job_root`. It then
+  creates the run directory `tools/<NN>-<NAME>` exclusively, so a second
+  run for the same stage refuses.
 - Pins, checked pre-fork: the supervisor file and the interpreter as for the
   entrypoint (`entrypoint_pins`), plus the driver from core /3
   `tool_pins[NAME].driver` (`{path, sha256}`, equal to the measured file
