@@ -604,8 +604,11 @@ def failed_entrypoint_quiescence(job_root, stages, expected, entrypoint_stage="e
     registry in the prefix refuses. Returns {"aggregation", "stop", "case",
     "proofs"}; raises FinalizerError or JournalError."""
     from . import tool_exit as _te
-    _require_order(stages, "stop", entrypoint_stage)
-    _require(stages[-1] == "stop", "failed_gate_prefix_invalid")
+    # P3B-PREFIX-R1: exactly the A2 prefix; no registry or registry-exit
+    # anywhere, in any order.
+    _require(stages == ["database-create", "database-create-exit", "launch", "launch-confirm",
+                        entrypoint_stage, ENTRYPOINT_EXIT_STAGE, "stop"],
+             "failed_gate_prefix_invalid")
     aggregation = _sj.aggregate(job_root, stages)
     _require(aggregation["verdict"] in ("VALID", "FAILED"), "failed_gate_incomplete")
     results = {stage["name"]: stage["result"] for stage in aggregation["stages"]}

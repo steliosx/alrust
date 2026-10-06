@@ -598,6 +598,7 @@ def no_launch_quiescence(job_root, prefix, expected):
         except FileNotFoundError:
             continue
         raise DatabaseStageError("launch_evidence_present")
+    return {"aggregation": aggregation}
 
 
 SQL_KEYS = """-- alrust:op=registry_keys
@@ -888,6 +889,11 @@ def registry_frozen(job_root, evidence):
              and hashlib.sha256(data).hexdigest() == record["sha256"], "registry_changed")
 
 
+def _create_snapshot(job_root, prefix):
+    return sj.read_bounded(sj.journal_path(job_root, prefix.index(CREATE_STAGE), CREATE_STAGE),
+                           sj.MAX_JOURNAL)
+
+
 def run_drop_stage(job_root, prefix, *, launched, expected, **kwargs):
     """The `database-drop` stage. The gate comes from the evidence in PREFIX
     (LAUNCHED must agree with it, P3a):
@@ -904,8 +910,6 @@ def run_drop_stage(job_root, prefix, *, launched, expected, **kwargs):
     # P3a: the path comes from the evidence; a caller flag that disagrees
     # refuses (it can never select the cheaper gate).
     _require(launched is ("launch" in prefix), "drop_path_mismatch")
-    create = sj.read_bounded(sj.journal_path(job_root, prefix.index(CREATE_STAGE),
-                                             CREATE_STAGE), sj.MAX_JOURNAL)
     if launched and "registry" not in prefix:
         def gate():
             # P3b (A2): the failed-entrypoint path; the gate admits F1 or F2
@@ -915,14 +919,25 @@ def run_drop_stage(job_root, prefix, *, launched, expected, **kwargs):
     elif launched:
         def gate():
             # The registry check runs only after the writer gate passed.
-            registry_frozen(job_root, fz.writer_quiescence(
-                job_root, prefix, expected, (CREATE_STAGE, "registry")))
+            evidence = fz.writer_quiescence(job_root, prefix, expected,
+                                            (CREATE_STAGE, "registry"))
+            registry_frozen(job_root, evidence)
+            return evidence
     else:
         def gate():
             # A positively proven no-launch cleanup never needs a registry.
-            no_launch_quiescence(job_root, prefix, expected)
+            return no_launch_quiescence(job_root, prefix, expected)
 
     def action(journal, evidence):
+        # P3B-ALLOCATION-R2: the allocation the drop consumes is read only
+        # now, after the gate, and must be exactly the create journal the
+        # gate proved (its aggregation digest, which the create holder's
+        # proof also binds). Otherwise no SQL is sent.
+        create = _create_snapshot(job_root, prefix)
+        proven = [stage["sha256"] for stage in evidence["aggregation"]["stages"]
+                  if stage["name"] == CREATE_STAGE]
+        _require(len(proven) == 1
+                 and hashlib.sha256(create).hexdigest() == proven[0], "drop_allocation_changed")
         if type(evidence) is dict and "case" in evidence:
             # Which gate admitted this drop (d6bc7e80 section 4), as its own
             # record; the approved database_drop record is unchanged.

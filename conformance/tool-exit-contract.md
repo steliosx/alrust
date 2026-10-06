@@ -221,7 +221,9 @@ runners.
 **As implemented (P3b): A2, `failed_entrypoint_quiescence(job_root,
 stages, expected)`.** It is the gate for database-drop alone after a failed
 entrypoint (designs `d6bc7e80` section 4 and `409eabfa` section 5). Its
-prefix ends at `stop`; the registry is never built on this path. It has
+prefix is exactly database-create, database-create-exit, launch,
+launch-confirm, entrypoint, entrypoint-exit, stop (P3B-PREFIX-R1): no
+registry or registry-exit anywhere, in any order. It has
 the same order, core snapshot, pins, stop proof and launch hand-off as the
 writer gate, plus the database-create holder. It admits exactly:
 - **F1:** the entrypoint journal closed FAILED; the aggregation FAILED
@@ -242,7 +244,11 @@ It refuses:
 
 `run_drop_stage` selects it from the evidence (launched, no registry in
 the prefix) and records `drop_gate {gate: "failed_entrypoint", case}`
-before the drop. That is a separate record: the approved `database_drop`
+before the drop. On every drop path (normal, A2, no-launch), the
+allocation bytes the drop consumes are read only after the gate passed,
+and must hash to the gate's aggregation digest of `database-create`, which
+the create holder's proof also binds. Otherwise the result is
+`drop_allocation_changed`, with no SQL (P3B-ALLOCATION-R2). That is a separate record: the approved `database_drop`
 record is unchanged, so the `d6bc7e80` "gate field" is carried this way.
 The registry gate and `finalize()` refuse both cases. Profile FAIL and job
 cleanup UNPROVEN are unchanged.

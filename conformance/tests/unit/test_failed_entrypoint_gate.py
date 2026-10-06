@@ -215,3 +215,81 @@ def test_drop_refused_by_the_failed_entrypoint_gate_sends_nothing(job, recorder)
     assert recorder == []
     assert _drop_records(root)[-1]["payload"] == {"result": "FAILED",
                                                    "code": "entrypoint_not_failed"}
+
+
+# --- P3B-PREFIX-R1: no registry anywhere in the A2 prefix -----------------------------
+
+REORDERED = ["database-create", "database-create-exit", "launch", "launch-confirm",
+             "registry", "registry-exit", "entrypoint", "entrypoint-exit", "stop"]
+
+
+@pytest.mark.parametrize("build_kw", [{"fail_stage": "entrypoint"}, {"entrypoint_exit": DEADLINE}])
+def test_a_registry_before_the_entrypoint_is_refused(job, monkeypatch, build_kw):
+    import test_finalizer_orchestration as tf
+    monkeypatch.setattr(tf, "STAGES", REORDERED)
+    root = job(**build_kw)
+    agg = sj.aggregate(str(root), REORDERED)
+    assert agg["verdict"] in ("VALID", "FAILED")              # real, chained journals
+    with pytest.raises(fz.FinalizerError, match="failed_gate_prefix_invalid"):
+        gate(root, REORDERED)
+
+
+# --- P3B-ALLOCATION-R2: the consumed allocation is the proven one ---------------------
+
+def _altered(real):
+    def snapshot(job_root, prefix):
+        return real(job_root, prefix) + b'{"sequence": 99}\n'
+    return snapshot
+
+
+def test_a2_drop_refuses_an_unproven_allocation_snapshot(job, recorder, monkeypatch):
+    root = job(fail_stage="entrypoint")
+    monkeypatch.setattr(ds, "_create_snapshot", _altered(ds._create_snapshot))
+    with pytest.raises(ds.DatabaseStageError, match="drop_allocation_changed"):
+        ds.run_drop_stage(str(root), PREFIX, launched=True, expected=EXPECTED, **DROP_KW)
+    assert recorder == []
+
+
+def test_launched_normal_drop_binds_the_allocation(tmp_path, monkeypatch, recorder):
+    root = build(tmp_path, monkeypatch, generation=SYNTHETIC_SUPERVISOR, upto="registry-exit")
+    prefix = STAGES[:STAGES.index("registry-exit") + 1]
+    seen = []
+    real_drop = ds.drop_database
+
+    def drop(job_root, journal, **kwargs):
+        seen.append(kwargs["create_journal_bytes"])
+        return real_drop(job_root, journal, **kwargs)
+    monkeypatch.setattr(ds, "drop_database", drop)
+    assert ds.run_drop_stage(str(root), prefix, launched=True, expected=EXPECTED,
+                             **DROP_KW) == "COMPLETE"
+    assert seen == [open(sj.journal_path(str(root), 0, "database-create"), "rb").read()]
+    (tmp_path / "two").mkdir()
+    root = build(tmp_path / "two", monkeypatch, generation=SYNTHETIC_SUPERVISOR,
+                 upto="registry-exit")
+    monkeypatch.setattr(ds, "_create_snapshot", _altered(ds._create_snapshot))
+    with pytest.raises(ds.DatabaseStageError, match="drop_allocation_changed"):
+        ds.run_drop_stage(str(root), prefix, launched=True, expected=EXPECTED, **DROP_KW)
+    assert recorder == ["drop"]                               # only the first, bound drop
+
+
+def test_no_launch_drop_binds_the_allocation(tmp_path, monkeypatch, recorder):
+    import shutil
+    root = build(tmp_path, monkeypatch, generation=SYNTHETIC_SUPERVISOR,
+                 upto="database-create-exit")
+    shutil.rmtree(root / "reference")
+    no_launch = ["database-create", "database-create-exit"]
+    monkeypatch.setattr(ds, "_create_snapshot", _altered(ds._create_snapshot))
+    with pytest.raises(ds.DatabaseStageError, match="drop_allocation_changed"):
+        ds.run_drop_stage(str(root), no_launch, launched=False, expected=EXPECTED, **DROP_KW)
+    assert recorder == []
+    monkeypatch.undo()
+    monkeypatch.setattr(ds, "drop_database", lambda *a, **k: recorder.append("drop") or "COMPLETE")
+    monkeypatch.setattr(sj, "EXTERNAL_CONFIG", str(tmp_path / "no-alertad.conf"))
+    # A fresh drop journal index is taken by the refused attempt; use a new job.
+    (tmp_path / "two").mkdir()
+    root = build(tmp_path / "two", monkeypatch, generation=SYNTHETIC_SUPERVISOR,
+                 upto="database-create-exit")
+    shutil.rmtree(root / "reference")
+    assert ds.run_drop_stage(str(root), no_launch, launched=False, expected=EXPECTED,
+                             **DROP_KW) == "COMPLETE"
+    assert recorder == ["drop"]
