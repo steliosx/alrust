@@ -53,6 +53,12 @@ STOP_VERDICTS = frozenset({("COMPLETE", "tree_empty"), ("FAILED", "tree_not_empt
         "self_unreadable", "refused_own_process", "boot_mismatch", "boot_unreadable",
         "pidfd_open_failed", "generation_unreadable", "uid_mismatch", "signal_failed")})
 
+# P3d (P3D-STAGE-R1): the only stage names a failure record may carry (the
+# pipeline's; the A2 drop path uses a subset without the registry stages).
+FAILURE_STAGES = ("database-create", "database-create-exit", "launch", "launch-confirm",
+                  "entrypoint", "entrypoint-exit", "stop", "registry", "registry-exit",
+                  "database-drop")
+
 GENERIC_PATTERNS = (
     re.compile(rb"SYNTHETIC-[0-9a-f]{48}"),
     re.compile(rb"postgres(?:ql)?://[^\s\"']+:[^\s\"'@]+@"),
@@ -956,12 +962,17 @@ def failure_record(job_root, stages):
     P3d (Q-P2c-1): it is not a secret holder. It takes no secret value and
     no secret path: every field is a fixed code from a closed set
     (STOP_VERDICTS for the stop, complete/stage_failed for the aggregation,
-    COMPLETE/FAILED stage results), a stage name of at most 32 characters
-    from the caller's fixed list, an index, or a sha256. So no field can
+    COMPLETE/FAILED stage results), a stage name from FAILURE_STAGES
+    (P3D-STAGE-R1), an index, or a sha256. So no field can
     carry a secret value, and the value scan the caller's secrets enabled
     is replaced by that schema; the generic patterns are still scanned, and
     any match writes nothing. Returns the record path, or None."""
     try:
+        # P3D-STAGE-R1: stage names are serialized, so they must be fixed
+        # pipeline names, never caller text.
+        _require(type(stages) is list
+                 and all(type(n) is str and n in FAILURE_STAGES for n in stages),
+                 "failure_stages_invalid")
         core_bytes = read_bounded(os.path.join(job_root, _sj.CORE_NAME), _sj.MAX_CORE)
         _sj.validate_core(core_bytes, job_root)
         launch_bytes = read_bounded(os.path.join(job_root, "reference", "launch.json"),

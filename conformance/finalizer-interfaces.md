@@ -125,9 +125,9 @@ no-launch cleanup never needs a registry.
     receipt; its terminal digest is null or must link the terminal receipt.
 
   It takes no secret value or path (P3d, Q-P2c-1): every field is a fixed
-  code from a closed set, a stage name of at most 32 characters, an index
-  or a sha256, so no field can carry a secret value. The generic patterns
-  are still scanned.
+  code from a closed set, a stage name from `finalizer.FAILURE_STAGES`
+  (P3D-STAGE-R1), an index or a sha256. The
+  generic patterns are still scanned.
 
   If any input is missing, repeated or malformed, nothing is written; the
   record never says `"stop": null`. It holds the outcome, the stop verdict

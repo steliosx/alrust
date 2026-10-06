@@ -129,3 +129,40 @@ def test_a_failed_stage_is_still_recorded(job):
     record = json.loads(Path(fz.failure_record(str(root), STAGES)).read_text())
     assert (record["aggregation"]["verdict"], record["aggregation"]["reason"]) == (
         "FAILED", "stage_failed")
+
+
+# --- P3D-STAGE-R1: stage names come from a fixed set -----------------------------------
+
+SYNTHETIC_KEY_NAME = "synthetic-signing-token"       # a valid _STAGE name, labelled synthetic
+
+
+def test_a_validly_chained_extra_stage_named_like_a_secret_writes_nothing(job):
+    # Codex's f73cd1a3 reproducer shape: a genuine closed journal chained after
+    # database-drop, VALID/complete, with linked stop and launch receipts.
+    root = job(stop_change=_stop())
+    (root / "secret-key").write_text(SYNTHETIC_KEY_NAME)
+    assert sj._STAGE.fullmatch(SYNTHETIC_KEY_NAME)
+    with sj.StageJournal(str(root), len(STAGES), SYNTHETIC_KEY_NAME, STAGES[-1]):
+        pass
+    stages = STAGES + [SYNTHETIC_KEY_NAME]
+    aggregation = sj.aggregate(str(root), stages)
+    assert (aggregation["verdict"], aggregation["reason"]) == ("VALID", "complete")
+    _nothing_written_for(root, stages)
+
+
+def _nothing_written_for(root, stages):
+    assert fz.failure_record(str(root), stages) is None
+    assert not (root / fz.EXPORT_DIR).exists()
+
+
+def test_the_failure_stage_set_is_the_pipeline():
+    assert list(fz.FAILURE_STAGES) == STAGES
+
+
+def test_the_a2_drop_path_without_registry_is_admitted(job):
+    # A launched drop with no registry (A2): not a prefix, but in order.
+    a2 = [s for s in STAGES if s not in ("registry", "registry-exit")]
+    root = job(stop_change=_stop(), upto="stop")
+    with sj.StageJournal(str(root), len(a2) - 1, "database-drop", "stop"):
+        pass
+    assert fz.failure_record(str(root), a2) is not None

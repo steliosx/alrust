@@ -438,9 +438,14 @@ secret value:
   whose first character is a letter (a-f) satisfies;
 - the aggregation must be (`VALID`, `complete`) or (`FAILED`,
   `stage_failed`), and every stage result `COMPLETE` or `FAILED`;
-- stage names come from the caller's fixed list and are at most 32
-  characters; indices are integers; every other field is a sha256 or a
-  fixed string.
+- every stage name must be one of `finalizer.FAILURE_STAGES`, the ten
+  pipeline names; otherwise nothing is written (`failure_stages_invalid`).
+  Order and repeats are left to the aggregation, since a fixed name
+  carries no secret whatever its position. At e3867203 this read
+  "come from the caller's fixed list and are at most 32 characters", which
+  closed nothing: Codex's P3D-STAGE-R1 exported a 23-character synthetic
+  key through an extra, validly chained stage name. Indices are integers;
+  every other field is a sha256 or a fixed string.
 The generic patterns are still scanned, and any match writes nothing.
 
 Why not a supervised tool run:
