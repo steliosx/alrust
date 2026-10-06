@@ -9,6 +9,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import select
 import signal
 import subprocess
 import sys
@@ -246,19 +247,61 @@ def test_stop_request_is_execution_fail(tmp_path):
     assert final["child_signalled"] is True and final["execution"] == "FAIL"
 
 
+def hold_child(launch):
+    """A pidfd for the launch receipt's child generation (P1-TEST-CLEANUP-R2).
+
+    The descriptor is opened first and then checked against the receipt's
+    start_ticks: that generation existed before the open, so a match after
+    it proves the descriptor names it, even if the PID is later reused. An
+    unknown or different generation fails the test and signals nothing."""
+    child = launch["child"]
+    if not isinstance(child.get("start_ticks"), int):
+        pytest.fail("receipt has no child generation: HOLD, nothing signalled")
+    try:
+        fd = os.pidfd_open(child["pid"])
+    except ProcessLookupError:
+        pytest.fail("receipt child gone before it was held: HOLD, nothing signalled")
+    try:
+        current = sup.read_stat(child["pid"])
+    except BaseException:
+        os.close(fd)
+        raise
+    if current is None or current[1] != child["start_ticks"]:
+        os.close(fd)
+        pytest.fail("PID %d is not the receipt's generation: HOLD, nothing signalled"
+                    % child["pid"])
+    return fd
+
+
+def kill_held(fd, seconds=10):
+    """SIGKILL the held generation through its pidfd only, prove it exited
+    (the pidfd becomes readable), then close the descriptor."""
+    try:
+        try:
+            signal.pidfd_send_signal(fd, signal.SIGKILL)
+        except ProcessLookupError:
+            pass  # that exact generation has already exited
+        poller = select.poll()
+        poller.register(fd, select.POLLIN)
+        if not poller.poll(int(seconds * 1000)):
+            pytest.fail("held child did not exit")
+    finally:
+        os.close(fd)
+
+
 def test_outside_kill_leaves_no_terminal_receipt(tmp_path):
     proc, receipt, terminal, journal, digest, script = start(tmp_path, "sleep")
     launch = json.loads(wait_for(lambda: receipt.exists() and receipt.stat().st_size > 0
                                  and receipt.read_text()))
-    os.kill(proc.pid, signal.SIGKILL)
-    proc.wait(timeout=10)
-    assert not terminal.exists()
-    # The orphan left supervision; the gates read this as UNPROVEN.
-    child = launch["child"]["pid"]
+    # Hold C_E's generation while it is still P_E's child, before P_E dies.
+    held = hold_child(launch)
     try:
-        os.kill(child, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+        proc.kill()  # P_E is this test's own unreaped child
+        proc.wait(timeout=10)
+        assert not terminal.exists()
+        # The orphan left supervision; the gates read this as UNPROVEN.
+    finally:
+        kill_held(held)
 
 
 def test_existing_receipt_is_refused(tmp_path):
