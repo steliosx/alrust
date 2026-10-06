@@ -34,6 +34,7 @@ class PrivateRawResponseSink:
         self._root_identity = None
         self._used = self._responses = self._response_bytes = 0
         self._failed = self._closed = False
+        self._client = None
         try:
             self._require(type(writer) is PrivateSecretWriter
                           and type(stage) is sj.StageJournal
@@ -223,6 +224,25 @@ class PrivateRawResponseSink:
             self._binding()
             self._root_current()
             self._require(self._fd is None, "raw_sink_response_pending")
+        except BaseException as error:
+            self._raise_failure(error)
+
+    def register_client(self, client):
+        """Bind one exact client generation; no interchangeable callbacks."""
+        from .custodied_capture_client import CustodiedCaptureClient
+        try:
+            self.require_idle()
+            self._require(type(client) is CustodiedCaptureClient
+                          and self._client is None,
+                          "raw_sink_client_binding_invalid")
+            self._client = client
+        except BaseException as error:
+            self._raise_failure(error)
+
+    def check_client_binding(self, client):
+        try:
+            self._require(client is self._client, "raw_sink_client_changed")
+            self.require_idle()
         except BaseException as error:
             self._raise_failure(error)
 
