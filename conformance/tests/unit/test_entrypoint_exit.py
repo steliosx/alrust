@@ -283,3 +283,62 @@ def test_stage_prefix_must_end_with_the_single_entrypoint(job, prefix):
     build(root)
     with pytest.raises(sj.JournalError):
         ee.run_entrypoint_exit_stage(str(root), prefix, EXPECTED)
+
+
+# REP4-R1 (Codex's counterexamples, b1a4a738): the receipt's journal state
+# and code must equal what the current bytes say, not only its sha256.
+@pytest.mark.parametrize("journal_state,claim", [
+    ("FAILED", {"state": "COMPLETE", "code": None, "execution": "PASS"}),
+    ("INCOMPLETE", {"state": "COMPLETE", "code": None, "execution": "PASS"}),
+    ("COMPLETE", {"state": "INCOMPLETE", "code": None, "execution": "FAIL"}),
+    ("FAILED", {"state": "FAILED", "code": "other", "execution": "FAIL"}),
+])
+def test_journal_state_and_code_come_from_the_bytes(job, journal_state, claim):
+    root, core = job
+
+    def mutate(t):
+        t["entrypoint_journal"].update(state=claim["state"], code=claim["code"])
+        t["execution"] = claim["execution"]
+
+    build(root, journal_state=journal_state, execution="FAIL", mutate_terminal=mutate)
+    record = verify(root)
+    assert (record["verdict"], record["reason"], record["execution"]) == \
+        ("UNPROVEN", "journal_changed", "FAIL")
+
+
+@pytest.mark.parametrize("journal_state,execution", [
+    ("COMPLETE", "PASS"), ("FAILED", "FAIL"), ("INCOMPLETE", "FAIL")])
+def test_matching_observation_controls(job, journal_state, execution):
+    root, core = job
+    build(root, journal_state=journal_state, execution=execution)
+    record = verify(root)
+    assert (record["verdict"], record["entrypoint_state"], record["execution"]) == \
+        ("COMPLETE", journal_state, execution)
+
+
+def test_journal_now_matches_the_supervisor_rules(tmp_path):
+    import importlib.util
+    from pathlib import Path
+    script = Path(__file__).resolve().parents[3] / "conformance/scripts/entrypoint-supervisor.py"
+    spec = importlib.util.spec_from_file_location("ep_sup_rules", script)
+    sup = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sup)
+
+    def line(seq, kind, payload):
+        return (json.dumps({"sequence": seq, "evidence": {"kind": kind, "payload": payload}})
+                + "\n").encode()
+    samples = [
+        line(0, "stage_begin", {}) + line(1, "stage_complete", {"result": "COMPLETE"}),
+        line(0, "stage_begin", {}) + line(1, "stage_complete",
+                                          {"result": "FAILED", "code": "c"}),
+        line(0, "stage_begin", {}),
+        line(0, "stage_complete", {"result": "COMPLETE", "x": 1}),
+        b"[1]\n", b"not json\n", b'{"sequence": 0}', b"",
+        line(0, "stage_complete", {"result": "FAILED", "code": 3}),
+    ]
+    for i, data in enumerate(samples):
+        path = tmp_path / ("j%d" % i)
+        path.write_bytes(data)
+        assert ee._journal_now(str(path)) == sup.journal_observation(str(path)), data
+    assert ee._journal_now(str(tmp_path / "absent")) == \
+        sup.journal_observation(str(tmp_path / "absent"))

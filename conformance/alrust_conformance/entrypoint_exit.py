@@ -14,6 +14,7 @@ UNPROVEN here. (The design's "TERM via pidfd" row for a timed-out step is a
 separate, later stop helper.)
 """
 import hashlib
+import json
 import os
 
 from . import stage_journal as _sj
@@ -134,6 +135,40 @@ def _check_terminal_schema(terminal):
     _need(_is_int(terminal["child_wait_status"], 0, 65535), "receipt_contradiction")
 
 
+def _journal_now(path):
+    """The supervisor's journal observation, derived here from the current
+    bytes (same rules as journal_observation() in entrypoint-supervisor.py):
+    COMPLETE or FAILED only from a well-formed final stage_complete record,
+    otherwise INCOMPLETE; a missing journal is (None, INCOMPLETE, None).
+    A journal that exists but cannot be read is never treated as absent."""
+    if not os.path.lexists(path):
+        return {"sha256": None, "state": "INCOMPLETE", "code": None}
+    try:
+        data = _sj.read_bounded(path, _sj.MAX_JOURNAL)
+    except (OSError, _sj.JournalError):
+        raise _Refusal("UNPROVEN", "journal_changed") from None
+    digest = hashlib.sha256(data).hexdigest()
+    incomplete = {"sha256": digest, "state": "INCOMPLETE", "code": None}
+    if not data.endswith(b"\n"):
+        return incomplete
+    try:
+        last = json.loads(data[:-1].split(b"\n")[-1])
+        if type(last) is not dict or set(last) != {"sequence", "evidence"}:
+            return incomplete
+        evidence = last["evidence"]
+        if type(evidence) is not dict or evidence.get("kind") != "stage_complete":
+            return incomplete
+        payload = evidence.get("payload")
+    except (ValueError, KeyError, TypeError, IndexError):
+        return incomplete
+    if payload == {"result": "COMPLETE"}:
+        return {"sha256": digest, "state": "COMPLETE", "code": None}
+    if (type(payload) is dict and set(payload) == {"result", "code"}
+            and payload["result"] == "FAILED" and type(payload["code"]) is str):
+        return {"sha256": digest, "state": "FAILED", "code": payload["code"]}
+    return incomplete
+
+
 def _derived_execution(terminal):
     """Execution from the evidence, never from the terminal's own label."""
     status = terminal["child_wait_status"]
@@ -224,7 +259,11 @@ def verify_entrypoint_exit(job_root, journal_index, expected):
         record["trigger"] = terminal.get("trigger")
         if terminal.get("result") == "tree_not_empty":
             raise _Refusal("FAILED", "tree_not_empty")
+        # REP4-R1: the whole (sha256, state, code) tuple is derived from the
+        # current journal bytes and must equal the receipt's observation;
+        # only then is it used to derive execution.
         observed = terminal["entrypoint_journal"]
+        _need(_journal_now(journal) == observed, "journal_changed")
         # C_E is signalled only before its status is collected, so a child
         # that exited on its own was never signalled (REP1-R1 fix).
         _need(not (terminal["trigger"] == "child_exited" and terminal["child_signalled"]),
@@ -232,17 +271,7 @@ def verify_entrypoint_exit(job_root, journal_index, expected):
         _need(terminal["execution"] == _derived_execution(terminal),
               "execution_contradiction")
         record["entrypoint_state"] = observed["state"]
-        if observed["sha256"] is not None:
-            _need(_sha(observed["sha256"]), "journal_observation_invalid")
-            try:
-                current = _sj.read_bounded(journal, _sj.MAX_JOURNAL)
-            except (OSError, _sj.JournalError):
-                raise _Refusal("UNPROVEN", "journal_changed") from None
-            _need(hashlib.sha256(current).hexdigest() == observed["sha256"], "journal_changed")
-            record["entrypoint_journal_sha256"] = observed["sha256"]
-        else:
-            _need(observed["state"] == "INCOMPLETE" and not os.path.lexists(journal),
-                  "journal_changed")
+        record["entrypoint_journal_sha256"] = observed["sha256"]
         # The receipts are expected bindings; this is the positive observation.
         _need(generation_ended(launched[0], launched[1], core["boot_id"]),
               "supervisor_generation_live_or_unproven")
