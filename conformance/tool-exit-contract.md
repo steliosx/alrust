@@ -30,9 +30,11 @@ holder it requires lacks a COMPLETE, freshly recomputed exit verdict.
 | psql children of either driver | role password (passfile in the 0600 database directory; registry only) | started by the driver's `Psql` | bounded by `_bounded_run`; descendants of `C_T` | covered by the driver's `P_T` (`ECHILD` over the whole tree) |
 | database-drop | none | connects only as the service superuser, whose password is public | n/a | not a holder; it stays one only while that is true |
 | entrypoint `C_E` | its secrets, anything it generates | `P_E` at fork | `P_E` tree | `entrypoint-exit` (approved design, P1) |
-| reference server `C` | `DATABASE_URL`, `SECRET_KEY` | supervisor `P` at fork | `P` tree | stop verdict (approved) |
-| launcher | `DATABASE_URL`, `SECRET_KEY` | its environment | until it exits after the ready line; `P` outlives it by design | open question Q-P2-1 |
-| workflow shell | whatever it places in the launcher's environment | the workflow | the step | open question Q-P2-2 |
+| reference server `C` | `DATABASE_URL`, `SECRET_KEY` | today: `P` at fork; agreed: `C`'s own pre-exec reader (section 10) | `P` tree | stop verdict (approved) |
+| reference supervisor `P` | today: its environment, copied for `C` (`reference-supervisor.py:231`); agreed: paths only | the launcher's `Popen` (inherited environment) | until stop | stop verdict: `P`'s tree, `ECHILD`, generation ended |
+| launcher | today: `DATABASE_URL`, `SECRET_KEY` in its environment; agreed: paths only | the workflow step | until it exits after the ready line; `P` outlives it by design | section 10 |
+| launcher's stop helper | today: the launcher's whole environment (`subprocess.run` with no `env`); agreed: paths only | the launcher, on a failed launch | waited by the launcher | its own exit only, which is not proof that no descendant holds a value; hence paths only |
+| workflow shell | today: whatever it places in the launcher's environment; agreed: paths only | the workflow | the step | workflow review: no read, export, command substitution or logging of the values |
 
 The drivers' entry points: the database-create stage runner (to be added in
 P2b: `run_create_stage` opening the stage journal and calling
@@ -171,26 +173,31 @@ An outside kill of `P_T` leaves no terminal receipt: UNPROVEN, and the gates
 refuse. Stopping a live `P_T` uses only a held, generation-checked pidfd
 (P4's reviewed helper), never a bare PID. Unknown state is FAIL or HOLD.
 
-## 10. Open questions
+## 10. Server secrets: paths only (Q-P2-1 and Q-P2-2, agreed in `c860b652`)
 
-- **Q-P2-1, the launcher as a holder.** `launch-reference.py` receives
-  `DATABASE_URL` and `SECRET_KEY` in its environment. Its long-lived child
-  `P` outlives it by design, so a `P_T` over the launcher could not reach
-  `ECHILD` before stop. Proposed composition:
-  - the launcher's own exit is observed by its caller (a direct child);
-  - `P`'s tree is covered by the stop verdict;
-  - its transient children (the stop helper on a failed launch) are
-    `subprocess.run` calls, reaped before it exits.
-
-  The last point is a source-review property, not an `ECHILD` proof, and is
-  the residual. Alternative: give the launcher a path to the URL and key
-  files instead of the values, so that only `C` (inside `P`) reads them.
-  Review requested.
-- **Q-P2-2, the workflow shell.** Once the database stage is wired, the
-  value of `DATABASE_URL` comes from the URL file. If the shell reads it,
-  the shell is a holder. Proposal: no shell step ever reads the URL file or
-  the `SECRET_KEY` file; it passes paths only, which ties into the Q-P2-1
-  alternative. This is a workflow-review property.
+The workflow shell, the launcher, the launcher's stop helper and the
+reference supervisor `P` never hold `DATABASE_URL` or `SECRET_KEY` values.
+- They receive and pass only the fixed paths: the job's 0600 URL file
+  (`<job_root>/database/url`) and the 0600 `SECRET_KEY` file.
+- The shell does no read, export, command substitution or logging of
+  either value.
+- The launcher's allowlist replaces the two value variables with path
+  variables. It refuses if a value variable is present.
+- **First reader:** `C`, after `P` has forked it and written its launch
+  receipt, so after supervision exists. A small reviewed pre-exec step in
+  `C` opens each fixed path without following links, checks that it is a
+  private regular single-link file owned by the job uid, reads it bounded,
+  validates the URL against the job's database name and port, and places
+  the values in its own environment. It then execs `alertad` exactly as
+  today. The application sees the same values, so behaviour is unchanged.
+- **Every future holder:** `C` (the reference server) and its descendants,
+  all inside `P`'s tree and covered by the stop verdict. Nothing outside a
+  supervised tree reads a value. The database-create driver (the URL file's
+  writer) and the registry driver (a reader) are the `P_T` runs above.
+- This changes no authentication, data or behaviour contract; it only moves
+  where the unchanged values are first read. It touches the approved
+  launcher and supervisor, so it is a separate reviewed head (P2c), before
+  the database stage is wired into the workflow.
 
 ## 11. Controls in this head (pure)
 
@@ -215,7 +222,12 @@ process stands in for a live one. It covers:
   digest that differs from the aggregation's; pin refusals and an
   independent pin mismatch; a required holder that is absent.
 - a missing launch receipt; a tool binding index beyond the last possible
-  tool index.
+  tool index;
+- P2A-SOURCE-R1: an offered verdict written through the actual
+  StageJournal into a VALID chained aggregation. Exact int `stage_index` is
+  accepted; `false`, `0.0`, `"0"` and other mistyped fields refuse as
+  `holder_verdict_malformed`. The comparison with the recomputed verdict is
+  type-sensitive (canonical JSON).
 
 Mutants run on this head: dropping the receipt's tool-binding check,
 trusting the offered verdict instead of recomputing it, and dropping the

@@ -17,6 +17,7 @@ records offered, and every verdict is recomputed from the receipts and
 compared whole. This module only reads immutable proof inputs and /proc.
 It never signals.
 """
+import json
 import os
 
 from . import stage_journal as _sj
@@ -121,6 +122,35 @@ def run_tool_exit_stage(job_root, prefix, tool, expected):
     return record
 
 
+_VERDICTS = ("COMPLETE", "FAILED", "UNPROVEN")
+_STATES = ("COMPLETE", "FAILED", "INCOMPLETE")
+
+
+def _typed_verdict(payload):
+    """Exact keys and exact JSON types of an offered tool_exit_verdict
+    (P2A-SOURCE-R1): bool is not an int and a float is not an int, so a
+    record cannot match a recomputed one through Python's loose equality."""
+    _require(type(payload) is dict and set(payload) == VERDICT_KEYS,
+             "holder_verdict_malformed")
+    hashes = ("launch_receipt_sha256", "terminal_receipt_sha256", "stage_journal_sha256")
+    _require(type(payload["verdict"]) is str and payload["verdict"] in _VERDICTS
+             and type(payload["reason"]) is str and type(payload["tool"]) is str
+             and type(payload["stage_index"]) is int
+             and all(payload[k] is None or _sha(payload[k]) for k in hashes)
+             and (payload["stage_state"] is None
+                  or (type(payload["stage_state"]) is str
+                      and payload["stage_state"] in _STATES))
+             and type(payload["execution"]) is str
+             and payload["execution"] in ("PASS", "FAIL")
+             and (payload["trigger"] is None or type(payload["trigger"]) is str),
+             "holder_verdict_malformed")
+
+
+def _canonical(record):
+    """Type-sensitive comparison form: JSON keeps false, 0 and 0.0 distinct."""
+    return json.dumps(record, sort_keys=True, separators=(",", ":"))
+
+
 def required_holders(stage_names, required):
     """[(tool, stage_index)] for every holder tool in STAGE_NAMES, from the
     names alone. REQUIRED lists the tools the calling gate needs (for
@@ -154,7 +184,8 @@ def holder_proofs(job_root, aggregation, records, required, expected):
     The aggregation must be structurally complete (VALID, or FAILED on the
     failed-entrypoint path), never INCOMPLETE. For every required holder:
     its exit stage closed COMPLETE in that aggregation; exactly one
-    tool_exit_verdict, in its exit stage, equal as a whole to a verdict
+    tool_exit_verdict, in its exit stage, exactly typed and equal as a whole
+    (type-sensitive) to a verdict
     recomputed now from the receipts, and COMPLETE; and the recomputed tool
     journal digest equal to the aggregation's. No tool_exit_verdict may
     appear anywhere else. P2a takes the pins from the caller only; P2b also
@@ -177,10 +208,10 @@ def holder_proofs(job_root, aggregation, records, required, expected):
     for tool, index in holders:
         _require(stages[index + 1]["result"] == "COMPLETE", "holder_exit_stage_not_complete")
         payload = [p for stage, p in offered if stage == exit_stage(tool)][0]
-        _require(type(payload) is dict and set(payload) == VERDICT_KEYS,
-                 "holder_verdict_malformed")
+        _typed_verdict(payload)
         fresh = verify_tool_exit(job_root, tool, index, expected[tool])
-        _require(fresh == payload, "holder_verdict_mismatch")
+        _typed_verdict(fresh)
+        _require(_canonical(fresh) == _canonical(payload), "holder_verdict_mismatch")
         _require(fresh["verdict"] == "COMPLETE", "holder_exit_not_proven")
         _require(fresh["stage_journal_sha256"] == stages[index]["sha256"],
                  "holder_journal_mismatch")

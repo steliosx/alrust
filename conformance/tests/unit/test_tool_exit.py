@@ -497,3 +497,56 @@ def test_holder_proofs_required_registry_absent(job):
     with pytest.raises(te.HolderError, match="holder_stage_missing"):
         te.holder_proofs(str(root), aggregation, records,
                          ("database-create", "registry"), PINS)
+
+
+# --- P2A-SOURCE-R1: the offered verdict is typed, through real journals ----
+
+def _exit_stage_with(root, index, tool, payload):
+    """Record PAYLOAD as the exit stage's single verdict through the actual
+    StageJournal, as a forger with write access to the exit stage could."""
+    with sj.StageJournal(str(root), index + 1, te.exit_stage(tool), tool) as journal:
+        journal.record("tool_exit_verdict", payload)
+
+
+def _typed_case(root, change):
+    tool_stage(root, 0, "database-create", None)
+    receipts(root, "database-create", 0)
+    payload = te.verify_tool_exit(str(root), "database-create", 0, EXPECTED)
+    assert payload["verdict"] == "COMPLETE"
+    change(payload)
+    _exit_stage_with(root, 0, "database-create", payload)
+    aggregation = sj.aggregate(str(root), ["database-create", "database-create-exit"])
+    assert aggregation["verdict"] == "VALID"
+    return aggregation, fz._journal_records(str(root), aggregation)
+
+
+def test_typed_offered_verdict_with_exact_int_index_is_accepted(job):
+    root, core = job
+    aggregation, records = _typed_case(root, lambda p: None)
+    assert type([p for s, k, p in records if k == "tool_exit_verdict"][0]["stage_index"]) is int
+    assert len(te.holder_proofs(str(root), aggregation, records, ("database-create",),
+                                PINS)) == 1
+
+
+@pytest.mark.parametrize("change", [
+    lambda p: p.update(stage_index=False),
+    lambda p: p.update(stage_index=0.0),
+    lambda p: p.update(stage_index="0"),
+    lambda p: p.update(verdict="complete"),
+    lambda p: p.update(execution=None),
+    lambda p: p.update(stage_state="DONE"),
+    lambda p: p.update(trigger=1),
+    lambda p: p.update(launch_receipt_sha256="A" * 64),
+    lambda p: p.update(tool=["database-create"]),
+])
+def test_loosely_equal_or_mistyped_offered_verdict_refuses(job, change):
+    root, core = job
+    aggregation, records = _typed_case(root, change)
+    with pytest.raises(te.HolderError, match="holder_verdict_malformed"):
+        te.holder_proofs(str(root), aggregation, records, ("database-create",), PINS)
+
+
+def test_canonical_comparison_is_type_sensitive():
+    assert te._canonical({"a": 0}) != te._canonical({"a": False})
+    assert te._canonical({"a": 0}) != te._canonical({"a": 0.0})
+    assert te._canonical({"a": 1, "b": 2}) == te._canonical({"b": 2, "a": 1})
