@@ -42,6 +42,17 @@ MAX_SCANNED_FILE = 16 << 20
 
 # Generic credential shapes, matched on raw bytes. Indexes are reported,
 # never the matched text.
+# P3d (Q-P2c-1): the exact (verdict, reason) pairs stop-reference.py can
+# emit; the failure record admits no other stop text (test_failure_record
+# keeps this in step with that script's verdict() calls).
+STOP_VERDICTS = frozenset({("COMPLETE", "tree_empty"), ("FAILED", "tree_not_empty")} | {
+    ("UNPROVEN", reason) for reason in (
+        "supervisor_did_not_exit", "terminal_receipt_invalid", "no_terminal_receipt",
+        "usage", "job_root_invalid", "outside_job_root", "pidfd_unsupported",
+        "receipt_unreadable", "receipt_hash_mismatch", "receipt_malformed",
+        "self_unreadable", "refused_own_process", "boot_mismatch", "boot_unreadable",
+        "pidfd_open_failed", "generation_unreadable", "uid_mismatch", "signal_failed")})
+
 GENERIC_PATTERNS = (
     re.compile(rb"SYNTHETIC-[0-9a-f]{48}"),
     re.compile(rb"postgres(?:ql)?://[^\s\"']+:[^\s\"'@]+@"),
@@ -926,7 +937,7 @@ def _sealing_steps(job_root, aggregation, core_bytes, records, evidence, registr
         return {"outcome": "FAILED", "cleanup": cleanup, "reason": "finalizer_step_malformed"}
 
 
-def failure_record(job_root, stages, env):
+def failure_record(job_root, stages):
     """The bounded failure-only record (section 9 step 1a).
 
     Used when finalize() returned NOT_FINALIZED. Required inputs, each
@@ -940,18 +951,17 @@ def failure_record(job_root, stages, env):
     repeated or malformed, nothing is written. The record holds the outcome,
     the stop verdict and reason, the aggregation outcome, and the inputs'
     hashes; only fixed identifiers, never payload, path or log content. It
-    never builds the registry. It is scanned against SECRET_KEY and
-    DATABASE_URL from ENV (each valid UTF-8 of at least MIN_SECRET bytes)
-    plus the generic patterns; if they are unavailable or anything matches,
-    nothing is written. Returns the record path, or None."""
+    never builds the registry.
+
+    P3d (Q-P2c-1): it is not a secret holder. It takes no secret value and
+    no secret path: every field is a fixed code from a closed set
+    (STOP_VERDICTS for the stop, complete/stage_failed for the aggregation,
+    COMPLETE/FAILED stage results), a stage name of at most 32 characters
+    from the caller's fixed list, an index, or a sha256. So no field can
+    carry a secret value, and the value scan the caller's secrets enabled
+    is replaced by that schema; the generic patterns are still scanned, and
+    any match writes nothing. Returns the record path, or None."""
     try:
-        secrets = []
-        for key in ("SECRET_KEY", "DATABASE_URL"):
-            value = env.get(key)
-            _require(type(value) is str, "failure_secret_unavailable")
-            encoded = value.encode("utf-8")
-            _require(len(encoded) >= MIN_SECRET, "failure_secret_unavailable")
-            secrets.append(encoded)
         core_bytes = read_bounded(os.path.join(job_root, _sj.CORE_NAME), _sj.MAX_CORE)
         _sj.validate_core(core_bytes, job_root)
         launch_bytes = read_bounded(os.path.join(job_root, "reference", "launch.json"),
@@ -961,9 +971,8 @@ def failure_record(job_root, stages, env):
         _, payload = _one(_journal_records(job_root, aggregation), "stop_verdict")
         _require(type(payload) is dict and set(payload) == {
             "verdict", "reason", "launch_receipt_sha256", "terminal_receipt_sha256"}
-            and payload["verdict"] in ("COMPLETE", "FAILED", "UNPROVEN")
-            and type(payload["reason"]) is str
-            and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", payload["reason"]) is not None
+            and type(payload["verdict"]) is str and type(payload["reason"]) is str
+            and (payload["verdict"], payload["reason"]) in STOP_VERDICTS
             and payload["launch_receipt_sha256"] == hashlib.sha256(launch_bytes).hexdigest()
             and (payload["terminal_receipt_sha256"] is None
                  or _sha(payload["terminal_receipt_sha256"])),
@@ -976,6 +985,10 @@ def failure_record(job_root, stages, env):
             _require(hashlib.sha256(terminal_bytes).hexdigest()
                      == payload["terminal_receipt_sha256"], "failure_stop_unavailable")
             hashes["terminal_receipt"] = payload["terminal_receipt_sha256"]
+        _require((aggregation["verdict"], aggregation["reason"]) in (
+            ("VALID", "complete"), ("FAILED", "stage_failed")), "failure_journals_unavailable")
+        _require(all(s["result"] in ("COMPLETE", "FAILED") for s in aggregation["stages"]),
+                 "failure_journals_unavailable")
         stop = {"verdict": payload["verdict"], "reason": payload["reason"]}
         record = {"schema": SCHEMA_FAILURE, "outcome": "FAIL", "cleanup": "UNPROVEN",
                   "stop": stop,
@@ -986,7 +999,7 @@ def failure_record(job_root, stages, env):
                                              for s in aggregation["stages"]]},
                   "hashes": hashes}
         data = (json.dumps(record, sort_keys=True) + "\n").encode()
-        if scan_bytes(data, secrets):
+        if scan_bytes(data, []):
             return None
         export = os.path.join(job_root, EXPORT_DIR)
         os.mkdir(export, 0o700)

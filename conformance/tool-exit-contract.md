@@ -34,7 +34,7 @@ holder it requires lacks a COMPLETE, freshly recomputed exit verdict.
 | launcher | today: `DATABASE_URL`, `SECRET_KEY` in its environment; agreed: paths only | the workflow step | until it exits after the ready line; `P` outlives it by design | section 10 |
 | launcher's stop helper | today: the launcher's whole environment (`subprocess.run` with no `env`); agreed: paths only | the launcher, on a failed launch | waited by the launcher | its own exit only, which is not proof that no descendant holds a value; hence paths only |
 | workflow shell | today: whatever it places in the launcher's environment; agreed: paths only | the workflow | the step | workflow review: no read, export, command substitution or logging of the values |
-| finalizer failure record (`finalizer.failure_record(job_root, stages, env)`) | `SECRET_KEY` and `DATABASE_URL` values, passed in `env` by its caller to scan the record for leaks | its caller (the workflow's failure step) | the call | open item Q-P2c-1 (section 10) |
+| finalizer failure record (`finalizer.failure_record(job_root, stages)`) | none (P3d): it takes no secret value or path | n/a | n/a | not a holder: its record admits only fixed codes and hashes (section 10, Q-P2c-1) |
 
 The drivers' entry points: `run_create_stage` (P2b-2; journal index 0,
 calling `create_database`) and `run_registry_stage`. Their only caller is
@@ -423,13 +423,40 @@ those (synthetic ended `P_T`, `exit_fixtures`) and launch at index 2;
 `observer_launch_interoperability.py`, which launches at index 1 after
 `database-create` with no pins file, needs a further adaptation (hers).
 
-**Q-P2c-1, the finalizer's failure record.** `failure_record` takes the two
-values from its caller in order to scan its output for them, so the
-caller is a holder outside a supervised tree. Proposed: it takes the two
-fixed paths instead and reads them itself, with the same private reader.
-The failure step then runs as one more tool run under its own `P_T` (or a
-pure in-process call inside an already supervised step). For your
-decision; not implemented here.
+**Q-P2c-1, the finalizer's failure record.** At P2c, `failure_record`
+took the two values from its caller in order to scan its output for them,
+so the caller was a holder outside a supervised tree.
+
+**As implemented (P3d): not a holder; the core schema is /3, unchanged.**
+`failure_record(job_root, stages)` takes no secret value and no secret
+path. The value scan is replaced by a record schema that cannot carry a
+secret value:
+- the stop (verdict, reason) must be one of the exact pairs
+  `stop-reference.py` emits (`finalizer.STOP_VERDICTS`, kept equal to that
+  script's `verdict(...)` literals by a pure control). Before P3d any
+  `[a-z][a-z0-9_]{0,63}` reason was admitted, which a 64-hex password
+  whose first character is a letter (a-f) satisfies;
+- the aggregation must be (`VALID`, `complete`) or (`FAILED`,
+  `stage_failed`), and every stage result `COMPLETE` or `FAILED`;
+- stage names come from the caller's fixed list and are at most 32
+  characters; indices are integers; every other field is a sha256 or a
+  fixed string.
+The generic patterns are still scanned, and any match writes nothing.
+
+Why not a supervised tool run:
+- nothing calls `finalize()` or `failure_record()` yet (no script and no
+  workflow), so there is no supervised step to host an in-process call;
+- a third holder tool cannot be added inside /3: `TOOL_PIN_NAMES` is part
+  of what an approved /3 core means, and changing it would invalidate
+  every /3 core already written;
+- a /4 core would reopen every /3-requiring site (46 references in 12
+  files) for a terminal step that no gate consumes.
+If the value scan itself is wanted back, /4 with a `failure-record` holder
+tool (paths only, through the P3c bound reader) is the fallback.
+
+What this does not change: the record still requires the launch receipt
+and exactly one linked stop verdict, so a job that fails before launch
+still gets no failure record (unchanged since F2FE89-R4).
 
 ## 11. Controls in this head (pure)
 

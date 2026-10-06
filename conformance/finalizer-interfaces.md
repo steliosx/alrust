@@ -112,19 +112,22 @@ no-launch cleanup never needs a registry.
   `terminal-cleanup.json`; only allowlisted other names; the
   terminal-receipt link; and every file present and re-hashed, with nothing
   extra.
-- `failure_record(job_root, stages, env)` (section 9.1a) is written only
+- `failure_record(job_root, stages)` (section 9.1a) is written only
   when every input is available and independently closed:
   - the core identity, validated for this job root;
   - the launch receipt;
   - a structurally complete set of closed stage journals: aggregation
     `VALID` or `FAILED` (a closed `FAILED` stage is failure evidence;
     `INCOMPLETE` means unavailable);
-  - exactly one `stop_verdict` record, of the exact shape above, with a
-    verdict of `COMPLETE`, `FAILED` or `UNPROVEN` and a fixed-code reason.
-    Its launch digest must link the launch receipt; its terminal digest is
-    null or must link the terminal receipt;
-  - `SECRET_KEY` and `DATABASE_URL` (valid UTF-8 of at least 16 bytes) in
-    the environment.
+  - exactly one `stop_verdict` record, of the exact shape above, whose
+    (verdict, reason) is one of the pairs `stop-reference.py` emits
+    (`finalizer.STOP_VERDICTS`). Its launch digest must link the launch
+    receipt; its terminal digest is null or must link the terminal receipt.
+
+  It takes no secret value or path (P3d, Q-P2c-1): every field is a fixed
+  code from a closed set, a stage name of at most 32 characters, an index
+  or a sha256, so no field can carry a secret value. The generic patterns
+  are still scanned.
 
   If any input is missing, repeated or malformed, nothing is written; the
   record never says `"stop": null`. It holds the outcome, the stop verdict

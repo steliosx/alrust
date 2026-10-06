@@ -536,8 +536,7 @@ def test_failure_record_reads_only_hashes(tmp_path, monkeypatch):
     job = build(tmp_path, monkeypatch, stop_change=lambda s: s.update(
         verdict="UNPROVEN", reason="no_terminal_receipt"))
     assert fz.finalize(str(job), STAGES, EXPECTED)["outcome"] == "NOT_FINALIZED"
-    env = {"SECRET_KEY": SIGNING, "DATABASE_URL": DB_URL}
-    path = fz.failure_record(str(job), STAGES, env)
+    path = fz.failure_record(str(job), STAGES)          # P3d: no secret input
     assert path == str(job / "export" / "failure-record.json")
     record = json.loads(Path(path).read_text())
     assert record["outcome"] == "FAIL" and record["cleanup"] == "UNPROVEN"
@@ -552,11 +551,11 @@ def test_failure_record_reads_only_hashes(tmp_path, monkeypatch):
     assert (job / fz.REGISTRY_NAME).exists() and (job / "venv").exists()
 
 
-def test_failure_record_needs_the_scan_secrets(tmp_path, monkeypatch):
+def test_failure_record_takes_no_secret_input(tmp_path, monkeypatch):
+    # P3d (Q-P2c-1): the caller passes no values; the old third argument is gone.
     job = build(tmp_path, monkeypatch)
-    assert fz.failure_record(str(job), STAGES, {"SECRET_KEY": SIGNING}) is None
-    assert fz.failure_record(str(job), STAGES, {"SECRET_KEY": "short",
-                                                 "DATABASE_URL": DB_URL}) is None
+    with pytest.raises(TypeError):
+        fz.failure_record(str(job), STAGES, {"SECRET_KEY": SIGNING, "DATABASE_URL": DB_URL})
     assert not (job / "export").exists()
 
 
@@ -669,8 +668,7 @@ def test_failure_record_requires_its_inputs(tmp_path, monkeypatch, missing):
     job = build(tmp_path, monkeypatch, stop_change=lambda s: s.update(
         verdict="UNPROVEN", reason="no_terminal_receipt"))
     (job / missing).unlink()
-    env = {"SECRET_KEY": SIGNING, "DATABASE_URL": DB_URL}
-    assert fz.failure_record(str(job), STAGES, env) is None
+    assert fz.failure_record(str(job), STAGES) is None
     assert not (job / "export").exists()
 
 
@@ -680,12 +678,6 @@ def test_candidate_name_of_wrong_type(tmp_path, monkeypatch):
     report = fz.finalize(str(job), STAGES, EXPECTED)
     assert (report["outcome"], report["reason"]) == ("NOT_FINALIZED",
                                                      "candidate_record_invalid")
-
-
-def test_failure_record_env_with_surrogate(tmp_path, monkeypatch):
-    job = build(tmp_path, monkeypatch)
-    env = {"SECRET_KEY": "x" * 20 + "\ud800", "DATABASE_URL": DB_URL}
-    assert fz.failure_record(str(job), STAGES, env) is None
 
 
 def test_verify_manifest_requires_the_mandatory_evidence(tmp_path, monkeypatch):
@@ -708,12 +700,11 @@ def test_verify_manifest_requires_the_mandatory_evidence(tmp_path, monkeypatch):
 
 # F2FE89-R4a: the failure record needs complete closed journals and exactly
 # one linked stop verdict; "stop": null never satisfies section 9.1a.
-FAILURE_ENV = {"SECRET_KEY": SIGNING, "DATABASE_URL": DB_URL}
 UNPROVEN_STOP = dict(verdict="UNPROVEN", reason="no_terminal_receipt")
 
 
 def _no_failure_output(job):
-    assert fz.failure_record(str(job), STAGES, FAILURE_ENV) is None
+    assert fz.failure_record(str(job), STAGES) is None
     assert not (job / "export").exists()
 
 
@@ -772,7 +763,7 @@ def test_failure_record_without_a_terminal_receipt(tmp_path, monkeypatch):
     job = build(tmp_path, monkeypatch, stop_change=lambda s: s.update(
         UNPROVEN_STOP, terminal_receipt_sha256=None))
     (job / "reference" / "terminal.json").unlink()
-    path = fz.failure_record(str(job), STAGES, FAILURE_ENV)
+    path = fz.failure_record(str(job), STAGES)
     record = json.loads(Path(path).read_text())
     assert record["stop"] == UNPROVEN_STOP
     assert set(record["hashes"]) == {"core_identity", "launch_receipt"}
@@ -783,7 +774,7 @@ def test_failure_record_from_a_closed_failed_stage(tmp_path, monkeypatch):
     job = build(tmp_path, monkeypatch, fail_stage="database-drop",
                 stop_change=lambda s: s.update(UNPROVEN_STOP))
     assert sj.aggregate(str(job), STAGES)["verdict"] == "FAILED"
-    path = fz.failure_record(str(job), STAGES, FAILURE_ENV)
+    path = fz.failure_record(str(job), STAGES)
     record = json.loads(Path(path).read_text())
     assert record["aggregation"]["verdict"] == "FAILED"
     assert set(record["hashes"]) == {"core_identity", "launch_receipt", "terminal_receipt"}
