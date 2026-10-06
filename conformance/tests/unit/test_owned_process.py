@@ -206,3 +206,129 @@ def test_ended_generation_keeps_the_primary_when_cleanup_fails(monkeypatch):
         tfo.ended_generation()
     assert type(group.value.exceptions[0]) is PermissionError
     assert log == [("p", "kill"), ("p", "wait", tfo.REAP_WAIT_S)]
+
+
+# --- P2C-WINDOW-R1: held generations and the reference-supervisor tests -------
+
+import inspect                                             # noqa: E402
+import os                                                  # noqa: E402
+
+import test_reference_supervisor as trs                    # noqa: E402
+
+
+@pytest.fixture
+def pidfd(monkeypatch):
+    log = []
+    monkeypatch.setattr(op.os, "pidfd_open", lambda pid: log.append(("open", pid)) or 55)
+    monkeypatch.setattr(op.os, "close", lambda fd: log.append(("close", fd)))
+    monkeypatch.setattr(op.signal, "pidfd_send_signal",
+                        lambda fd, sig: log.append(("pidfd_signal", fd, sig)))
+
+    class Poll:
+        def register(self, fd, mask):
+            log.append(("register", fd))
+
+        def poll(self, ms):
+            return [(55, 1)]
+    monkeypatch.setattr(op.select, "poll", Poll)
+    return log
+
+
+def test_hold_matching_generation_then_kill_through_pidfd(monkeypatch, pidfd):
+    monkeypatch.setattr(op, "read_generation", lambda pid: (10, 123))
+    fd = op.hold_generation(777, 10, 123)
+    op.kill_held(fd, 10)
+    assert pidfd == [("open", 777), ("pidfd_signal", 55, signal.SIGKILL), ("register", 55),
+                     ("close", 55)]
+
+
+@pytest.mark.parametrize("current", [(10, 456), (1, 123), None])
+def test_hold_refuses_other_generations_and_signals_nothing(monkeypatch, pidfd, current):
+    monkeypatch.setattr(op, "read_generation", lambda pid: current)
+    with pytest.raises(op.HoldRefused):
+        op.hold_generation(777, 10, 123)
+    assert pidfd == [("open", 777), ("close", 55)]
+
+
+def test_hold_refuses_a_gone_pid(monkeypatch, pidfd):
+    monkeypatch.setattr(op.os, "pidfd_open", lambda pid: (_ for _ in ()).throw(
+        ProcessLookupError(3, "x")))
+    with pytest.raises(op.HoldRefused):
+        op.hold_generation(777, 10, 123)
+
+
+def test_kill_held_without_exit_still_closes(monkeypatch, pidfd):
+    class Silent:
+        def register(self, fd, mask):
+            pass
+
+        def poll(self, ms):
+            return []
+    monkeypatch.setattr(op.select, "poll", Silent)
+    with pytest.raises(TimeoutError):
+        op.kill_held(55, 10)
+    assert pidfd[-1] == ("close", 55)
+
+
+def test_release_all_is_independent_across_kinds(monkeypatch):
+    log = []
+    monkeypatch.setattr(op, "kill_held", lambda fd, s: log.append(("held", fd))
+                        or (_ for _ in ()).throw(OSError("held failed")))
+    procs = [Fake(log, [-9], name="a", kill_error=OSError("kill")), Fake(log, [-9], name="b")]
+    with pytest.raises(BaseExceptionGroup) as group:
+        op.release_all([procs[0], op.Held(55), procs[1]], 10, 10)
+    assert log == [("a", "kill"), ("a", "wait", 10), ("held", 55), ("b", "kill"),
+                   ("b", "wait", 10)]
+    assert len(group.value.exceptions) == 2
+
+
+def test_supervisor_cleanup_fixture_releases_everything():
+    log = []
+    gen = trs.cleanup.__wrapped__()
+    items = next(gen)
+    items.extend([Fake(log, [-9], name="leaf"), Fake(log, running=False, name="done")])
+    with pytest.raises(StopIteration):
+        next(gen)
+    assert log == [("leaf", "kill"), ("leaf", "wait", 10.0)]
+
+
+def test_supervisor_spawn_registers_before_the_stderr_file_closes(tmp_path, monkeypatch):
+    log = []
+    monkeypatch.setattr(trs.subprocess, "Popen", lambda args, **kw: Fake(log))
+
+    class ClosingFails:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            raise OSError("synthetic close failure")
+    monkeypatch.setattr(trs, "open", ClosingFails, raising=False)
+    del trs._OWNED[:]
+    with pytest.raises(OSError):
+        trs.spawn(tmp_path, ["/x"])
+    assert len(trs._OWNED) == 1
+    del trs._OWNED[:]
+
+
+def test_supervisor_custody_stops_leftovers_independently():
+    log = []
+    gen = trs.custody.__wrapped__()
+    next(gen)
+    trs._OWNED.extend([Fake(log, [KeyboardInterrupt(), 0], name="a", term_error=OSError("t")),
+                       Fake(log, [-15], name="b")])
+    with pytest.raises(BaseExceptionGroup):
+        next(gen)
+    assert ("b", "signal", signal.SIGTERM) in log and ("b", "wait", 20.0) in log
+
+
+def test_supervisor_test_sources_hold_custody():
+    source = inspect.getsource(trs)
+    assert "os.kill(" not in source and "stderr=subprocess.PIPE" not in source
+    orphan = inspect.getsource(trs.test_external_kill_of_supervisor_is_unproven_and_orphan_untouched)
+    assert orphan.index("hold_generation(") < orphan.index("proc.kill()")
+    interrupted = inspect.getsource(trs.test_interrupted_launch_receipt_tears_down)
+    assert "no release, nothing read" not in interrupted and "not marker.exists()" in interrupted
+    assert trs.TEARDOWN_S == trs.sup_mod.TERM_SECONDS + trs.sup_mod.KILL_SECONDS

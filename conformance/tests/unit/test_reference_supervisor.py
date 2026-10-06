@@ -16,6 +16,8 @@ import time
 
 import pytest
 
+import owned_process
+
 ROOT = Path(__file__).resolve().parents[3]
 SUPERVISOR = ROOT / "conformance/scripts/reference-supervisor.py"
 STOP = ROOT / "conformance/scripts/stop-reference.py"
@@ -75,6 +77,45 @@ def secret_args(tmp_path):
             str(folder / "key"), "--database-port", "5432"]
 
 
+# Custody (P2C-WINDOW-R1): every supervisor Popen is registered as soon as it
+# exists, and this fixture stops any still running after its test, through
+# the owned handle only (TERM, a wait of the supervisor's TERM and KILL
+# phases plus a margin, then KILL and a bounded reap, each attempted).
+TEARDOWN_S = 15.0          # reference-supervisor.py TERM_SECONDS + KILL_SECONDS
+MARGIN_S = 5.0
+MAX_STDERR = 1 << 16
+_OWNED = []
+
+
+@pytest.fixture(autouse=True)
+def custody():
+    del _OWNED[:]
+    try:
+        yield
+    finally:
+        procs, _OWNED[:] = list(_OWNED), []
+        owned_process.run_steps(
+            [lambda p=p: owned_process.stop_owned(p, TEARDOWN_S + MARGIN_S, MARGIN_S)
+             for p in procs], label="supervisor custody cleanup failed")
+
+
+def spawn(tmp_path, args, **kw):
+    """An owned supervisor Popen, registered before its stderr file closes;
+    stderr goes to a file read bounded by stderr_of()."""
+    err_path = tmp_path / ("supervisor-stderr-%d.txt" % len(list(tmp_path.glob(
+        "supervisor-stderr-*.txt"))))
+    with open(err_path, "wb") as err:
+        proc = subprocess.Popen(args, stderr=err, **kw)
+        _OWNED.append(proc)
+    proc.alrust_stderr = err_path
+    return proc
+
+
+def stderr_of(proc):
+    with open(proc.alrust_stderr, "rb") as f:
+        return f.read(MAX_STDERR)
+
+
 def start(tmp_path, command, observer=False, extra=()):
     receipt, terminal = tmp_path / "launch.json", tmp_path / "terminal.json"
     args = PY + [str(SUPERVISOR), "--receipt", str(receipt), "--terminal",
@@ -84,8 +125,8 @@ def start(tmp_path, command, observer=False, extra=()):
                  "--observer-manifest", str(tmp_path / "observer-install.json"),
                  "--observer-manifest-sha256", "a" * 64]
     args += secret_args(tmp_path) + list(extra) + ["--"] + command
-    proc = subprocess.Popen(args, process_group=0, stdin=subprocess.DEVNULL,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    proc = spawn(tmp_path, args, process_group=0, stdin=subprocess.DEVNULL,
+                 stdout=subprocess.DEVNULL)
     return proc, receipt, terminal
 
 
@@ -110,13 +151,14 @@ def write_script(tmp_path, name, body):
 
 @pytest.fixture
 def cleanup():
-    pids = []
-    yield pids
-    for pid in pids:
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+    """Owned Popen children and Held orphan generations this test created;
+    each is released independently (owned handle or held pidfd only, never
+    a saved bare PID)."""
+    items = []
+    try:
+        yield items
+    finally:
+        owned_process.release_all(items, 10.0, 10.0)
 
 
 def test_normal_stop_complete_and_receipts(tmp_path):
@@ -172,7 +214,7 @@ def test_invalid_secret_file_stops_the_child_before_exec(tmp_path):
     assert os.WIFEXITED(final["child_wait_status"])
     assert os.WEXITSTATUS(final["child_wait_status"]) == sup_mod.EXIT_CHILD_SECRET
     assert not mark.exists()
-    err = proc.stderr.read().decode()
+    err = stderr_of(proc).decode()
     assert "database_url_invalid" in err and "7a" * 32 not in err
 
 
@@ -204,11 +246,10 @@ def test_inherited_observer_variables_are_dropped_without_option(tmp_path):
     receipt, terminal = tmp_path / "launch.json", tmp_path / "terminal.json"
     env = dict(os.environ, ALRUST_OBSERVER_SOCKET="/tmp/x",
                ALRUST_OBSERVER_PARENT="1")
-    proc = subprocess.Popen(PY + [str(SUPERVISOR), "--receipt", str(receipt),
+    proc = spawn(tmp_path, PY + [str(SUPERVISOR), "--receipt", str(receipt),
                                   "--terminal", str(terminal), "--venv",
                                   str(tmp_path)] + secret_args(tmp_path) + ["--", script],
-                            process_group=0, env=env,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                 process_group=0, env=env, stdout=subprocess.DEVNULL)
     record, digest = started(proc, receipt)
     wait_for(lambda: dump.exists() and dump.stat().st_size > 0)
     assert "ALRUST_OBSERVER" not in dump.read_text()
@@ -276,8 +317,12 @@ def test_external_kill_of_supervisor_is_unproven_and_orphan_untouched(
     record, digest = started(proc, receipt)
     child = int(wait_for(lambda: pidfile.exists() and
                          pidfile.read_text().strip()))
-    cleanup.append(child)
-    os.kill(proc.pid, signal.SIGKILL)
+    # Hold the orphan-to-be while it is still P's child, before P is killed.
+    generation = owned_process.read_generation(child)
+    assert generation is not None and generation[0] == proc.pid
+    cleanup.append(owned_process.Held(
+        owned_process.hold_generation(child, proc.pid, generation[1])))
+    proc.kill()                                        # P is our own unreaped child
     proc.wait(timeout=10)
     rc, out = stop(receipt, digest)
     assert (rc, out["verdict"], out["reason"]) == (
@@ -290,7 +335,7 @@ def test_reused_pid_is_never_signalled(tmp_path, cleanup):
     # A live process whose PID appears in a receipt with another
     # start_ticks stands for a reused PID (Codex's trace in 04ec376b).
     foreign = subprocess.Popen(["/bin/sleep", "300"], process_group=0)
-    cleanup.append(foreign.pid)
+    cleanup.append(foreign)
     ticks, uid = stop_mod.read_generation(foreign.pid)
     receipt = tmp_path / "launch.json"
     data = json.dumps({
@@ -325,7 +370,7 @@ def test_caller_is_refused(tmp_path, cleanup):
     # receipt names the helper's own group, so the helper must refuse.
     # A defect would TERM the sacrificial process, not this test run.
     leader = subprocess.Popen(["/bin/sleep", "300"], process_group=0)
-    cleanup.append(leader.pid)
+    cleanup.append(leader)
     path, digest = fake_receipt(tmp_path, leader.pid)
     out = subprocess.run(PY + [str(STOP), str(path), digest],
                          capture_output=True, text=True, timeout=60,
@@ -340,7 +385,7 @@ def test_tree_empty_without_supervisor_exit_is_unproven(tmp_path, cleanup):
     # supervisor exit. This process never exits, so the verdict stays
     # UNPROVEN after the bounded wait, and it is not signalled.
     other = subprocess.Popen(["/bin/sleep", "300"], process_group=0)
-    cleanup.append(other.pid)
+    cleanup.append(other)
     path, digest = fake_receipt(tmp_path, other.pid)
     ticks, _ = stop_mod.read_generation(other.pid)
     (tmp_path / "terminal.json").write_text(json.dumps({
@@ -354,7 +399,7 @@ def test_tree_empty_without_supervisor_exit_is_unproven(tmp_path, cleanup):
 
 def test_boot_mismatch_is_refused(tmp_path, cleanup):
     other = subprocess.Popen(["/bin/sleep", "300"], process_group=0)
-    cleanup.append(other.pid)
+    cleanup.append(other)
     path, digest = fake_receipt(tmp_path, other.pid, boot_id="0" * 36)
     rc, out = stop(path, digest)
     assert (rc, out["reason"]) == (2, "boot_mismatch")
@@ -363,7 +408,7 @@ def test_boot_mismatch_is_refused(tmp_path, cleanup):
 
 def test_group_mismatch_is_malformed(tmp_path, cleanup):
     other = subprocess.Popen(["/bin/sleep", "300"])
-    cleanup.append(other.pid)
+    cleanup.append(other)
     ticks, uid = stop_mod.read_generation(other.pid)
     path, digest = fake_receipt(tmp_path, other.pid, supervisor={
         "pid": other.pid, "pgid": os.getpgid(0), "start_ticks": ticks,
@@ -381,7 +426,7 @@ def test_group_mismatch_is_malformed(tmp_path, cleanup):
 ])
 def test_unauthorized_or_bad_input(tmp_path, cleanup, mutate, reason):
     other = subprocess.Popen(["/bin/sleep", "300"], process_group=0)
-    cleanup.append(other.pid)
+    cleanup.append(other)
     path, digest = fake_receipt(tmp_path, other.pid)
     path, digest = mutate(path, digest)
     rc, out = stop(path, digest)
@@ -391,7 +436,7 @@ def test_unauthorized_or_bad_input(tmp_path, cleanup, mutate, reason):
 
 def test_symlinked_receipt_is_refused(tmp_path, cleanup):
     other = subprocess.Popen(["/bin/sleep", "300"], process_group=0)
-    cleanup.append(other.pid)
+    cleanup.append(other)
     path, digest = fake_receipt(tmp_path, other.pid)
     link = tmp_path / "link.json"
     link.symlink_to(path)
@@ -401,7 +446,7 @@ def test_symlinked_receipt_is_refused(tmp_path, cleanup):
 
 def test_terminal_tree_not_empty_is_failed(tmp_path, cleanup):
     other = subprocess.Popen(["/bin/sleep", "300"], process_group=0)
-    cleanup.append(other.pid)
+    cleanup.append(other)
     path, digest = fake_receipt(tmp_path, other.pid)
     ticks, _ = stop_mod.read_generation(other.pid)
     (tmp_path / "terminal.json").write_text(json.dumps({
@@ -409,14 +454,14 @@ def test_terminal_tree_not_empty_is_failed(tmp_path, cleanup):
         "supervisor": {"pid": other.pid, "start_ticks": ticks},
         "boot_id": stop_mod.boot_id()}))
     other.kill()
-    other.wait()
+    other.wait(timeout=10)
     rc, out = stop(path, digest)
     assert (rc, out["verdict"]) == (1, "FAILED")
 
 
 def test_terminal_of_another_generation_is_invalid(tmp_path, cleanup):
     other = subprocess.Popen(["/bin/sleep", "300"], process_group=0)
-    cleanup.append(other.pid)
+    cleanup.append(other)
     path, digest = fake_receipt(tmp_path, other.pid)
     ticks, _ = stop_mod.read_generation(other.pid)
     (tmp_path / "terminal.json").write_text(json.dumps({
@@ -424,7 +469,7 @@ def test_terminal_of_another_generation_is_invalid(tmp_path, cleanup):
         "supervisor": {"pid": other.pid, "start_ticks": ticks + 1},
         "boot_id": stop_mod.boot_id()}))
     other.kill()
-    other.wait()
+    other.wait(timeout=10)
     rc, out = stop(path, digest)
     assert (rc, out["reason"]) == (2, "terminal_receipt_invalid")
 
@@ -470,26 +515,31 @@ def test_supervisor_usage(args):
 def test_interrupted_launch_receipt_tears_down(tmp_path):
     receipt = tmp_path / "missing-dir" / "launch.json"
     terminal = tmp_path / "terminal.json"
-    proc = subprocess.Popen(PY + [str(SUPERVISOR), "--receipt", str(receipt),
-                                  "--terminal", str(terminal), "--venv",
-                                  str(tmp_path)] + secret_args(tmp_path) + ["--", "/bin/sleep", "300"],
-                            process_group=0, stderr=subprocess.PIPE)
-    assert proc.wait(timeout=20) == 4
+    marker = tmp_path / "command-ran"
+    script = write_script(tmp_path, "served.sh", "#!/bin/sh\ntouch %s\nexec /bin/sleep 300\n"
+                          % marker)
+    proc = spawn(tmp_path, PY + [str(SUPERVISOR), "--receipt", str(receipt),
+                                 "--terminal", str(terminal), "--venv",
+                                 str(tmp_path)] + secret_args(tmp_path) + ["--", script],
+                 process_group=0)
+    assert proc.wait(timeout=TEARDOWN_S + MARGIN_S) == 4
     final = json.loads(terminal.read_text())
     assert (final["trigger"], final["result"]) == ("receipt_failed",
                                                    "tree_empty")
-    # P2c: without a receipt the barrier never released, so C exited before
-    # reading anything (it never reached the command).
-    assert b"no release, nothing read" in proc.stderr.read()
+    # P2c (P2C-WINDOW-R2): without a receipt the barrier never releases, so
+    # C never reaches the command, whether it exits on EOF or is TERMed by
+    # P's teardown first. The marker is the guaranteed observation; the
+    # child's stderr line is not (it can be TERMed before printing it).
+    assert not marker.exists()
 
 
 def test_unwritable_terminal_leaves_no_terminal_and_stop_is_unproven(tmp_path):
     receipt = tmp_path / "launch.json"
     terminal = tmp_path / "missing-dir" / "terminal.json"
-    proc = subprocess.Popen(PY + [str(SUPERVISOR), "--receipt", str(receipt),
+    proc = spawn(tmp_path, PY + [str(SUPERVISOR), "--receipt", str(receipt),
                                   "--terminal", str(terminal), "--venv",
                                   str(tmp_path)] + secret_args(tmp_path) + ["--", "/bin/sleep", "300"],
-                            process_group=0, stderr=subprocess.PIPE)
+                 process_group=0)
     record, digest = started(proc, receipt)
     rc, out = stop(receipt, digest)
     assert (rc, out["reason"]) == (2, "no_terminal_receipt")
@@ -499,7 +549,7 @@ def test_unwritable_terminal_leaves_no_terminal_and_stop_is_unproven(tmp_path):
 def test_sigint_also_stops(tmp_path):
     proc, receipt, terminal = start(tmp_path, ["/bin/sleep", "300"])
     record, digest = started(proc, receipt)
-    os.kill(proc.pid, signal.SIGINT)
+    proc.send_signal(signal.SIGINT)                    # our own unreaped child
     assert proc.wait(timeout=20) == 0
     assert json.loads(terminal.read_text())["result"] == "tree_empty"
     assert stop(receipt, digest)[1]["verdict"] == "COMPLETE"
@@ -526,7 +576,7 @@ def run_in_process(capsys, path, digest):
 def test_unreadable_generation_is_unproven(tmp_path, cleanup, monkeypatch,
                                            capsys):
     other = subprocess.Popen(["/bin/sleep", "300"], process_group=0)
-    cleanup.append(other.pid)
+    cleanup.append(other)
     path, digest = fake_receipt(tmp_path, other.pid)
 
     def unreadable(pid):
@@ -540,7 +590,7 @@ def test_unreadable_generation_is_unproven(tmp_path, cleanup, monkeypatch,
 def test_unreadable_boot_id_is_unproven(tmp_path, cleanup, monkeypatch,
                                         capsys):
     other = subprocess.Popen(["/bin/sleep", "300"], process_group=0)
-    cleanup.append(other.pid)
+    cleanup.append(other)
     path, digest = fake_receipt(tmp_path, other.pid)
 
     def unreadable():
@@ -553,7 +603,7 @@ def test_unreadable_boot_id_is_unproven(tmp_path, cleanup, monkeypatch,
 
 def test_truncated_receipt_with_matching_hash_is_malformed(tmp_path, cleanup):
     other = subprocess.Popen(["/bin/sleep", "300"], process_group=0)
-    cleanup.append(other.pid)
+    cleanup.append(other)
     path, _ = fake_receipt(tmp_path, other.pid)
     data = path.read_bytes()[:-20]
     path.write_bytes(data)
@@ -581,8 +631,7 @@ def test_emptiness_comes_from_echild_not_from_the_scan(monkeypatch):
                                     log) is False
         assert log["signals"] == 0
     finally:
-        child.kill()
-        child.wait()
+        owned_process.kill_and_reap(child, 10.0)
 
 
 def live_terminal(tmp_path, pid, **owner):
@@ -597,7 +646,7 @@ def test_wrong_receipt_uid_is_unproven_not_exit(tmp_path, cleanup):
     # SS-R1: live P with matching start_ticks, receipt uid differs, and a
     # generation-bound tree_empty terminal. Not an exit: UNPROVEN, no signal.
     other = subprocess.Popen(["/bin/sleep", "300"], process_group=0)
-    cleanup.append(other.pid)
+    cleanup.append(other)
     ticks, uid = stop_mod.read_generation(other.pid)
     path, digest = fake_receipt(tmp_path, other.pid, supervisor={
         "pid": other.pid, "pgid": other.pid, "start_ticks": ticks,
@@ -612,7 +661,7 @@ def test_wrong_receipt_uid_is_unproven_not_exit(tmp_path, cleanup):
 def test_uid_observation_fault_is_unproven(tmp_path, cleanup, monkeypatch,
                                            capsys):
     other = subprocess.Popen(["/bin/sleep", "300"], process_group=0)
-    cleanup.append(other.pid)
+    cleanup.append(other)
     path, digest = fake_receipt(tmp_path, other.pid)
     live_terminal(tmp_path, other.pid)
     ticks, uid = stop_mod.read_generation(other.pid)
@@ -634,7 +683,7 @@ def test_launch_receipt_fifo_does_not_block(tmp_path):
 
 def test_terminal_receipt_fifo_does_not_block(tmp_path, cleanup):
     other = subprocess.Popen(["/bin/sleep", "300"], process_group=0)
-    cleanup.append(other.pid)
+    cleanup.append(other)
     path, digest = fake_receipt(tmp_path, other.pid)
     os.mkfifo(tmp_path / "terminal.json", 0o600)
     began = time.monotonic()
@@ -661,13 +710,13 @@ def test_launch_receipt_directory_is_refused(tmp_path):
                                    {"pid": 1, "start_ticks": True}])
 def test_malformed_terminal_owner_is_invalid(tmp_path, cleanup, owner):
     other = subprocess.Popen(["/bin/sleep", "300"], process_group=0)
-    cleanup.append(other.pid)
+    cleanup.append(other)
     path, digest = fake_receipt(tmp_path, other.pid)
     (tmp_path / "terminal.json").write_text(json.dumps({
         "schema": stop_mod.SCHEMA_TERMINAL, "result": "tree_empty",
         "supervisor": owner, "boot_id": stop_mod.boot_id()}))
     other.kill()
-    other.wait()
+    other.wait(timeout=10)
     rc, out = stop(path, digest)
     assert (rc, out["verdict"], out["reason"]) == (
         2, "UNPROVEN", "terminal_receipt_invalid")
@@ -683,7 +732,7 @@ def deep_json(record):
 
 def test_deeply_nested_launch_receipt_is_malformed(tmp_path, cleanup):
     other = subprocess.Popen(["/bin/sleep", "300"], process_group=0)
-    cleanup.append(other.pid)
+    cleanup.append(other)
     path, _ = fake_receipt(tmp_path, other.pid)
     data = deep_json(json.loads(path.read_bytes()))
     path.write_bytes(data)
@@ -695,7 +744,7 @@ def test_deeply_nested_launch_receipt_is_malformed(tmp_path, cleanup):
 
 def test_deeply_nested_terminal_receipt_is_invalid(tmp_path, cleanup):
     other = subprocess.Popen(["/bin/sleep", "300"], process_group=0)
-    cleanup.append(other.pid)
+    cleanup.append(other)
     path, digest = fake_receipt(tmp_path, other.pid)
     ticks, _ = stop_mod.read_generation(other.pid)
     (tmp_path / "terminal.json").write_bytes(deep_json({
@@ -703,7 +752,7 @@ def test_deeply_nested_terminal_receipt_is_invalid(tmp_path, cleanup):
         "supervisor": {"pid": other.pid, "start_ticks": ticks},
         "boot_id": stop_mod.boot_id()}))
     other.kill()
-    other.wait()
+    other.wait(timeout=10)
     rc, out = stop(path, digest)
     assert (rc, out["verdict"], out["reason"]) == (
         2, "UNPROVEN", "terminal_receipt_invalid")
