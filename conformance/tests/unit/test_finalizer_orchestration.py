@@ -66,7 +66,8 @@ def build(tmp_path, monkeypatch, *, report=b'{"result": "passed"}\n',
           terminal_change=None, obtained_change=None, leaky_dir=False,
           generation=None, omit_stop=False, created_change=None, handoff_change=None,
           omit_handoff=False, upto=None, inventory=None, obtained_stage="registry",
-          inventory_core=None, inventory_record_change=None, inventory_stage="entrypoint"):
+          inventory_core=None, inventory_record_change=None, inventory_stage="entrypoint",
+          container_change=None, container_stage="database-create", drop_stage="database-drop"):
     monkeypatch.setattr(sj, "EXTERNAL_CONFIG", str(tmp_path / "no-alertad.conf"))
     job = tmp_path / "job"
     job.mkdir(mode=0o700)
@@ -143,6 +144,13 @@ def build(tmp_path, monkeypatch, *, report=b'{"result": "passed"}\n',
         leak = job / ("dir-" + SIGNING)
         leak.mkdir()
         launch_records.append(("owned_resource", stat_record(leak, "dir")))
+    # PR #100 review: the service container's evidence, binding port 5432.
+    container = {"container_id": "0123456789abcdef0123", "image_id": "sha256:" + "a" * 64,
+                 "repo_digests": ["postgres@sha256:" + "b" * 64],
+                 "port": [{"container": "5432/tcp", "host_ip": "0.0.0.0", "host_port": "5432"}],
+                 "database_port": 5432}
+    if container_change:
+        container_change(container)
     per_stage = {
         "database-create": [
             ("database_role_attempted", {"role": DB_IDENTITY["role"]}),
@@ -160,6 +168,11 @@ def build(tmp_path, monkeypatch, *, report=b'{"result": "passed"}\n',
                      ("obtained_secret_count", obtained)],
         "database-drop": [("database_drop", database)],
     }
+    if container_stage is not None:
+        per_stage[container_stage].append(("database_container", container))
+    if drop_stage != "database-drop":
+        per_stage["database-drop"] = []
+        per_stage[drop_stage].append(("database_drop", database))
     if omit_stop:
         per_stage["stop"] = []
     if obtained_stage != "registry":

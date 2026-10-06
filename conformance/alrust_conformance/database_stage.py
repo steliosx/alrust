@@ -363,9 +363,20 @@ def _oid(value):
 # ---------------------------------------------------------------------------
 # Container identity (docker inspect of the workflow-supplied service id)
 
-def container_identity(docker_path, container_id, deadline_ns):
+# The host addresses through which a client on 127.0.0.1 reaches a published
+# port (PR #100 review, comment 4174199627).
+ENDPOINT_HOSTS = ("0.0.0.0", "127.0.0.1")
+
+
+def container_identity(docker_path, container_id, deadline_ns, port):
+    """The service container's identity, and proof from `docker inspect` that
+    it publishes 5432/tcp on PORT, the port every SQL call of this stage
+    uses, on an IPv4 address reachable from 127.0.0.1. Refuses
+    container_port_mismatch otherwise. That is published-mapping evidence,
+    not proof that the TCP peer at 127.0.0.1:PORT is this container."""
     _require(type(container_id) is str and _CONTAINER.fullmatch(container_id),
              "container_id_invalid")
+    _require(type(port) is int and 0 < port < 65536, "container_port_mismatch")
 
     def run(args):
         left = (deadline_ns - time.monotonic_ns()) / 1e9
@@ -385,16 +396,20 @@ def container_identity(docker_path, container_id, deadline_ns):
              and re.fullmatch(r"sha256:[0-9a-f]{64}", container["Image"]), "docker_output_invalid")
     ports = (container.get("NetworkSettings") or {}).get("Ports") or {}
     mapping = ports.get("5432/tcp")
-    _require(type(mapping) is list and len(mapping) >= 1 and all(
-        type(m) is dict and type(m.get("HostIp")) is str and type(m.get("HostPort")) is str
+    _require(type(mapping) is list and 1 <= len(mapping) <= 16 and all(
+        type(m) is dict and type(m.get("HostIp")) is str and len(m["HostIp"]) <= 45
+        and type(m.get("HostPort")) is str and re.fullmatch(r"[0-9]{1,5}", m["HostPort"])
         for m in mapping), "docker_output_invalid")
+    _require(any(m["HostPort"] == str(port) and m["HostIp"] in ENDPOINT_HOSTS
+                 for m in mapping), "container_port_mismatch")
     digests = run(["image", "inspect", "--format", "{{json .RepoDigests}}", container["Image"]])
     _require(type(digests) is list and all(type(d) is str and len(d) <= 256 for d in digests)
              and len(digests) <= 16, "docker_output_invalid")
     return {"container_id": container_id, "image_id": container["Image"],
             "repo_digests": sorted(digests),
             "port": [{"container": "5432/tcp", "host_ip": m["HostIp"],
-                      "host_port": m["HostPort"]} for m in mapping]}
+                      "host_port": m["HostPort"]} for m in mapping],
+            "database_port": port}
 
 
 # ---------------------------------------------------------------------------
@@ -411,6 +426,10 @@ def create_database(job_root, journal, *, profile, run_id, attempt, port, superu
     directory, info = _database_dir(job_root, create=True)
     journal.record("owned_resource", {"path": directory, "dev": info.st_dev,
                                       "ino": info.st_ino, "type": "dir"})
+    # Before any SQL: the port every query below uses must be the one the
+    # service container publishes (PR #100 review, comment 4174199627).
+    journal.record("database_container", container_identity(docker_path, container_id,
+                                                             deadline_ns, port))
     admin = Psql(psql_path, port=port, user=superuser, password=superuser_password,
                  database_dir=directory, deadline_ns=deadline_ns)
     client = {"path": psql_path, "version": admin.version()}
@@ -442,8 +461,6 @@ def create_database(job_root, journal, *, profile, run_id, attempt, port, superu
         identity, name=name, oid=database["oid"], role=name, role_oid=role["oid"],
         server_version_num=cluster["server_version_num"], version=cluster["version"],
         psql=client))
-    journal.record("database_container", container_identity(docker_path, container_id,
-                                                             deadline_ns))
     url_path = os.path.join(directory, URL_NAME)
     _write_private(url_path, ("postgresql://%s:%s@127.0.0.1:%d/%s\n"
                               % (name, password, port, name)).encode())
