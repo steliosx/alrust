@@ -45,7 +45,8 @@ def build(root, *, journal_state="COMPLETE", result="tree_empty", execution="PAS
     if write_journal:
         data = (json.dumps({"sequence": 0, "evidence": {"kind": "stage_begin"}}) + "\n"
                 + json.dumps({"sequence": 1, "evidence": {
-                    "kind": "stage_complete", "payload": {"result": journal_state}}})
+                    "kind": "stage_complete", "payload": {"result": journal_state} if
+                    journal_state != "FAILED" else {"result": "FAILED", "code": "x"}}})
                 + "\n").encode()
         with open(journal, "wb") as f:
             f.write(data)
@@ -77,7 +78,8 @@ def build(root, *, journal_state="COMPLETE", result="tree_empty", execution="PAS
         "other_descendants_reaped": 0,
         "entrypoint_journal": None if result != "tree_empty" else {
             "sha256": journal_sha,
-            "state": journal_state if write_journal else "INCOMPLETE", "code": None},
+            "state": journal_state if write_journal else "INCOMPLETE",
+            "code": "x" if (write_journal and journal_state == "FAILED") else None},
         "execution": execution, "signals_sent": 0, "children_reaped": 1,
         "teardown_ns": 1, "finished_utc_ns": 2, "finished_monotonic_ns": 2}
     if mutate_terminal:
@@ -127,6 +129,23 @@ def test_missing_journal_observed_incomplete_is_accepted_only_if_still_absent(jo
     assert verify(root)["reason"] == "journal_changed"
 
 
+@pytest.mark.parametrize("kwargs", [
+    {"execution": "FAIL", "trigger": "deadline",
+     "mutate_terminal": lambda t: t.update(child_signalled=True, child_wait_status=15)},
+    {"execution": "FAIL", "mutate_terminal": lambda t: t.update(child_wait_status=256)},
+    {"execution": "FAIL", "trigger": "stop_requested",
+     "mutate_terminal": lambda t: t.update(child_signalled=True, child_wait_status=9)},
+    {"execution": "FAIL", "journal_state": "INCOMPLETE"},
+])
+def test_legitimate_fail_evidence_keeps_closure(job, kwargs):
+    # A deadline, a nonzero or signal status, a stop request or an
+    # incomplete journal: closure COMPLETE, execution FAIL (REP3-R1 scope).
+    root, core = job
+    build(root, **kwargs)
+    record = verify(root)
+    assert (record["verdict"], record["execution"]) == ("COMPLETE", "FAIL")
+
+
 def test_tree_not_empty_is_failed(job):
     root, core = job
     build(root, result="tree_not_empty", execution="FAIL")
@@ -159,8 +178,30 @@ def test_tree_not_empty_is_failed(job):
      "supervisor_identity_invalid"),
     ({"mutate_launch": lambda l: l.update(schema="alrust-reference-launch/1")},
      "launch_receipt_malformed"),
-    ({"mutate_terminal": lambda t: t.update(result="maybe")}, "terminal_result_invalid"),
-    ({"mutate_terminal": lambda t: t.update(execution="OK")}, "terminal_execution_invalid"),
+    ({"mutate_terminal": lambda t: t.update(result="maybe")}, "terminal_receipt_malformed"),
+    ({"mutate_terminal": lambda t: t.update(execution="OK")}, "terminal_receipt_malformed"),
+    # REP3-R1 (Codex's counterexamples, 4182a0e8): contradictory or malformed
+    # receipts never become COMPLETE/PASS.
+    ({"mutate_terminal": lambda t: t.update(trigger="deadline")}, "execution_contradiction"),
+    ({"mutate_terminal": lambda t: t.update(child_wait_status=256)}, "execution_contradiction"),
+    ({"mutate_terminal": lambda t: t.update(child_signalled=True)}, "receipt_contradiction"),
+    ({"mutate_terminal": lambda t: t.update(trigger="nonsense")}, "terminal_receipt_malformed"),
+    ({"mutate_terminal": lambda t: [t.pop(k) for k in (
+        "trigger", "child_wait_status", "child_signalled", "other_descendant_signals",
+        "other_descendants_reaped", "signals_sent", "children_reaped", "teardown_ns",
+        "finished_utc_ns", "finished_monotonic_ns")]}, "terminal_receipt_malformed"),
+    ({"mutate_launch": lambda l: l.pop("child")}, "launch_receipt_malformed"),
+    ({"mutate_launch": lambda l: l["supervisor"].update(subreaper=True)},
+     "launch_receipt_malformed"),
+    ({"mutate_terminal": lambda t: t.update(child_wait_status=None)}, "receipt_contradiction"),
+    ({"mutate_terminal": lambda t: t.update(signals_sent=False)}, "terminal_receipt_malformed"),
+    ({"mutate_terminal": lambda t: t.update(trigger="receipt_failed")},
+     "terminal_receipt_malformed"),
+    ({"mutate_terminal": lambda t: t.update(extra=1)}, "terminal_receipt_malformed"),
+    ({"mutate_launch": lambda l: l.update(extra=1)}, "launch_receipt_malformed"),
+    ({"mutate_terminal": lambda t: t["entrypoint_journal"].update(code="x")},
+     "journal_observation_invalid"),
+    ({"execution": "FAIL"}, "execution_contradiction"),
     ({"mutate_terminal": lambda t: t["entrypoint_journal"].update(state="DONE")},
      "journal_observation_invalid"),
 ])
