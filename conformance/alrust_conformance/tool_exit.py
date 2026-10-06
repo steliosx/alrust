@@ -32,6 +32,7 @@ EXIT_SUFFIX = "-exit"
 # connects only as the service superuser, whose password is public, so it is
 # not a holder.
 HOLDER_TOOLS = ("database-create", "registry")
+assert HOLDER_TOOLS == _sj.TOOL_PIN_NAMES
 EXPECTED_KEYS = frozenset({"driver_sha256", "interpreter_path"})
 VERDICT_KEYS = frozenset({"verdict", "reason", "tool", "stage_index",
                           "launch_receipt_sha256", "terminal_receipt_sha256",
@@ -86,6 +87,23 @@ def verify_tool_exit(job_root, tool, stage_index, expected):
         record["reason"] = "tool_invalid"
         return record
     if not _expected_ok(expected):
+        return record
+    # P2b: only a /3 core carries tool pins. A /1 or /2 core is a legacy core
+    # here, and the caller's pins must equal the core's (the driver's and the
+    # interpreter's), so neither side alone selects the expectation.
+    try:
+        core = _sj.validate_core(_sj.read_bounded(
+            os.path.join(job_root, _sj.CORE_NAME), _sj.MAX_CORE), job_root)
+    except (_sj.JournalError, OSError):
+        record["reason"] = "evidence_unreadable"
+        return record
+    if core["schema"] != _sj.SCHEMA_CORE_V3:
+        record["reason"] = "legacy_core"
+        return record
+    if (core["tool_pins"][tool]["driver"]["sha256"] != expected["driver_sha256"]
+            or core["entrypoint_pins"]["interpreter"]["path"]
+            != expected["interpreter_path"]):
+        record["reason"] = "tool_pins_mismatch"
         return record
     launch_path, terminal_path = receipt_paths(job_root, tool, stage_index)
     shared = verify_receipts(job_root, spec(tool, stage_index),
@@ -188,9 +206,9 @@ def holder_proofs(job_root, aggregation, records, required, expected):
     (type-sensitive) to a verdict
     recomputed now from the receipts, and COMPLETE; and the recomputed tool
     journal digest equal to the aggregation's. No tool_exit_verdict may
-    appear anywhere else. P2a takes the pins from the caller only; P2b also
-    requires core /3 and EXPECTED equal to its tool_pins. Returns the
-    verified records; raises HolderError."""
+    appear anywhere else. The core must be /3 and EXPECTED equal to its
+    tool_pins (through verify_tool_exit; P2b). Returns the verified
+    records; raises HolderError."""
     _require(type(expected) is dict and set(expected) == set(HOLDER_TOOLS)
              and all(_expected_ok(expected[t]) for t in HOLDER_TOOLS),
              "holder_pins_invalid")

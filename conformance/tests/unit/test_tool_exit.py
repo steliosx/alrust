@@ -16,13 +16,50 @@ from alrust_conformance import entrypoint_exit as ee
 from alrust_conformance import finalizer as fz
 from alrust_conformance import stage_journal as sj
 from alrust_conformance import tool_exit as te
-from test_private_secret_writer import job
 
 DRIVER_SHA = "c" * 64
 PYTHON = "/usr/bin/python3"
 EXPECTED = {"driver_sha256": DRIVER_SHA, "interpreter_path": PYTHON}
 PINS = {tool: dict(EXPECTED) for tool in te.HOLDER_TOOLS}
 ENDED = {"database-create": 4194301, "registry": 4194299}
+
+
+ENTRY_PINS = {"supervisor": {"path": "/job/sup.py", "sha256": "a" * 64},
+              "entrypoint_script": {"path": "/job/entry.py", "sha256": "b" * 64},
+              "interpreter": {"path": PYTHON, "resolved_path": "/usr/bin/python3.12"}}
+ENTRY_MEASURED = {"supervisor": "a" * 64, "entrypoint_script": "b" * 64,
+                  "interpreter": "e" * 64}
+TOOL_PINS = {tool: {"driver": {"path": "/job/stage-tool.py", "sha256": DRIVER_SHA}}
+             for tool in ("database-create", "registry")}
+TOOL_MEASURED = {tool: DRIVER_SHA for tool in ("database-create", "registry")}
+
+
+def make_job(tmp_path, monkeypatch, schema=3):
+    """A job root with a real core identity: /3 by default (P2b-1)."""
+    monkeypatch.setattr(sj, "EXTERNAL_CONFIG", str(tmp_path / "absent.conf"))
+    root = tmp_path / "job"
+    root.mkdir(mode=0o700)
+    sha = "a" * 64
+    extra = {}
+    if schema >= 2:
+        extra.update(entrypoint_pins=ENTRY_PINS, entrypoint_measured=ENTRY_MEASURED)
+    if schema >= 3:
+        extra.update(tool_pins=TOOL_PINS, tool_measured=TOOL_MEASURED)
+    core = sj.write_core_identity(
+        str(root), profile="scaffold", event_head_sha="b" * 40,
+        checkout_sha="b" * 40, reference_sha="c" * 40, reference_pin="c" * 40,
+        lock_sha256={"lock": sha}, lock_pins={"lock": sha},
+        manifest_sha256=sha, manifest_pin=sha,
+        env={"GITHUB_REPOSITORY": "steliosx/alrust", "GITHUB_RUN_ID": "123",
+             "GITHUB_RUN_ATTEMPT": "1", "GITHUB_JOB": "profile",
+             "ImageOS": "ubuntu24", "ImageVersion": "20261001.1"}, **extra)
+    sj.prepare_journal_dir(str(root))
+    return root, core
+
+
+@pytest.fixture
+def job(tmp_path, monkeypatch):
+    return make_job(tmp_path, monkeypatch)
 
 
 def _dump(path, obj):
@@ -550,3 +587,35 @@ def test_canonical_comparison_is_type_sensitive():
     assert te._canonical({"a": 0}) != te._canonical({"a": False})
     assert te._canonical({"a": 0}) != te._canonical({"a": 0.0})
     assert te._canonical({"a": 1, "b": 2}) == te._canonical({"b": 2, "a": 1})
+
+
+# --- P2b-1: core /3 and pins equal to the core's ---------------------------
+
+@pytest.mark.parametrize("schema", [1, 2])
+def test_legacy_core_is_unproven(tmp_path, monkeypatch, schema):
+    root, core = make_job(tmp_path, monkeypatch, schema)
+    tool_stage(root, 0, "database-create", None)
+    receipts(root, "database-create", 0)
+    record = verify(root)
+    assert (record["verdict"], record["reason"]) == ("UNPROVEN", "legacy_core")
+
+
+@pytest.mark.parametrize("expected", [
+    dict(EXPECTED, driver_sha256="f" * 64),
+    dict(EXPECTED, interpreter_path="/usr/bin/python3.12"),
+])
+def test_caller_pins_must_equal_the_cores(create_run, expected):
+    # The receipts would match these caller pins; the core's pins decide.
+    record = verify(create_run, expected=expected)
+    assert (record["verdict"], record["reason"]) == ("UNPROVEN", "tool_pins_mismatch")
+
+
+def test_holder_proofs_refuse_on_a_legacy_core(tmp_path, monkeypatch):
+    root, core = make_job(tmp_path, monkeypatch, 2)
+    tool_stage(root, 0, "database-create", None)
+    receipts(root, "database-create", 0)
+    te.run_tool_exit_stage(str(root), ["database-create"], "database-create", EXPECTED)
+    aggregation = sj.aggregate(str(root), ["database-create", "database-create-exit"])
+    records = fz._journal_records(str(root), aggregation)
+    with pytest.raises(te.HolderError, match="holder_exit_stage_not_complete"):
+        te.holder_proofs(str(root), aggregation, records, ("database-create",), PINS)

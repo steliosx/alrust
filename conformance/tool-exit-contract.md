@@ -1,17 +1,14 @@
 # Stage-tool exit proofs: the credential-holder contract (R-EP plan P2)
 
-Status: proposal for review. Plan agreed in `c35732da` (P1, then P2, P3,
-P4); design `409eabfa` section 6. P1 (core /2 entrypoint pins) is approved
-at `27aafc3d`; this head builds on it.
+Status: plan agreed in `c35732da` (P1, then P2, P3, P4); design `409eabfa`
+section 6. P1 (core /2 entrypoint pins) is approved at `27aafc3d`. P2a (this
+contract, the tool-exit verifier and stage, and the gates' holder check in
+`tool_exit.py`) is approved at `c593b5ea`, offline source only.
 
-This head (P2a) adds this contract, the tool-exit verifier and stage, the
-gates' holder check (`tool_exit.py`), and pure controls. The receipt checks
-are shared with the approved entrypoint verifier through a receipt spec;
-the entrypoint path's checks, reasons and records are unchanged.
-
-The next head (P2b) adds core /3 tool pins, the supervisor's tool mode and
-the pinned stage-tool driver. P3 wires `holder_proofs()` into the gates; P4
-adds the timeout stop helper.
+P2b-1 (core /3 tool pins, required by the verifier and the holder check)
+builds on P2a. P2b-2 adds the supervisor's tool mode and the pinned
+stage-tool driver; P2c the paths-only server secrets (section 10). P3 wires
+`holder_proofs()` into the gates; P4 adds the timeout stop helper.
 
 ## 1. Rule
 
@@ -152,12 +149,15 @@ closed COMPLETE in it, and the recomputed `stage_journal_sha256` must equal
 the aggregation's digest of the tool stage. So neither the aggregation's
 label nor the offered record is trusted alone.
 
-**Pins and legacy cores.** In this head the verifier takes the pins from the
-caller only, and accepts any valid core (/1, /2), because /3 does not exist
-yet. P2b requires core /3 in both the verifier and `holder_proofs`, with the
-caller's `expected[tool]` equal to the core's `tool_pins[tool]` (driver
-sha256) and its interpreter pin. A /1 or /2 core then refuses as a legacy
-core. This is a known P2b dependency, not a P2a guarantee.
+**Pins and legacy cores (P2b-1).** `verify_tool_exit`, and so
+`holder_proofs`, requires a /3 core. A /1 or /2 core gives UNPROVEN
+`legacy_core`. The caller's `expected[tool]` must equal the core's
+`tool_pins[tool].driver.sha256` and its `entrypoint_pins.interpreter.path`,
+otherwise UNPROVEN `tool_pins_mismatch`. Both values come from the workflow
+head: the core's when it is written (checked equal to the measured files),
+and the caller's when the gate runs. Neither alone selects the expectation.
+The producer side, P2b-2's supervisor tool mode, refuses a legacy core or a
+driver mismatch pre-fork.
 
 ## 8. Deadlines
 
