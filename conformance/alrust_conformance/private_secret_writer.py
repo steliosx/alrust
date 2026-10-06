@@ -38,6 +38,7 @@ class PrivateSecretWriter:
         self._root_fd = self._events_fd = None
         self._root_identity = self._events_identity = None
         self._snapshot = None
+        self._raw_response_sink = None
         self._values = []
         self._failed = None
         self._entered = self._finished = self._closed = False
@@ -239,6 +240,20 @@ class PrivateSecretWriter:
         except (OSError, sj.JournalError, ValueError):
             self._refuse("secret_binding_invalid")
 
+    def check_stage_binding(self, stage, job_root, core_sha256):
+        """Require the caller's actual live journal, not an equivalent journal."""
+        self._require(stage is self._stage, "secret_stage_binding_mismatch")
+        self.check_binding(job_root, core_sha256)
+
+    def register_raw_response_sink(self, sink):
+        """One concrete custody component; arbitrary idle callbacks refuse."""
+        from .private_raw_response_sink import PrivateRawResponseSink
+        self.check_collecting()
+        self._require(type(sink) is PrivateRawResponseSink
+                      and sink.writer is self and self._raw_response_sink is None,
+                      "secret_raw_sink_binding_invalid")
+        self._raw_response_sink = sink
+
     def abort(self):
         """Permanently refuse completion after a capture/oracle failure."""
         self._owner()
@@ -254,6 +269,10 @@ class PrivateSecretWriter:
             self._stage_active()
             self._root_current()
             self._events_current()
+            if self._raw_response_sink is not None:
+                # Closing the sink is explicit: idle alone leaves its root
+                # descriptor open. No inventory snapshot precedes this check.
+                self._raw_response_sink.require_closed()
             data = encode_inventory(self._core_sha256, list(self._values))
             fd = self._create(SNAPSHOT_NAME)
             info = os.fstat(fd)
