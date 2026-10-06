@@ -34,6 +34,7 @@ holder it requires lacks a COMPLETE, freshly recomputed exit verdict.
 | launcher | today: `DATABASE_URL`, `SECRET_KEY` in its environment; agreed: paths only | the workflow step | until it exits after the ready line; `P` outlives it by design | section 10 |
 | launcher's stop helper | today: the launcher's whole environment (`subprocess.run` with no `env`); agreed: paths only | the launcher, on a failed launch | waited by the launcher | its own exit only, which is not proof that no descendant holds a value; hence paths only |
 | workflow shell | today: whatever it places in the launcher's environment; agreed: paths only | the workflow | the step | workflow review: no read, export, command substitution or logging of the values |
+| finalizer failure record (`finalizer.failure_record(job_root, stages, env)`) | `SECRET_KEY` and `DATABASE_URL` values, passed in `env` by its caller to scan the record for leaks | its caller (the workflow's failure step) | the call | open item Q-P2c-1 (section 10) |
 
 The drivers' entry points: `run_create_stage` (P2b-2; journal index 0,
 calling `create_database`) and `run_registry_stage`. Their only caller is
@@ -214,6 +215,51 @@ reference supervisor `P` never hold `DATABASE_URL` or `SECRET_KEY` values.
   where the unchanged values are first read. It touches the approved
   launcher and supervisor, so it is a separate reviewed head (P2c), before
   the database stage is wired into the workflow.
+
+**As implemented (P2c).**
+- `launch-reference.py` no longer allows `DATABASE_URL` or `SECRET_KEY` in
+  its environment. It requires `--secret-key-file K` (absolute, normalized,
+  under the job root) and `--database-port D`, and passes `P` only
+  `--database-url-file <J>/database/url --secret-key-file K
+  --database-port D` (`supervisor_argv`). There is no value mode, no mixed
+  mode and no fallback.
+- `reference-supervisor.py` (`P`) refuses to start if `DATABASE_URL`,
+  `SECRET_KEY` or `PGPASSWORD` is in its environment, never opens either
+  file, and requires the three options. The barrier:
+  - `P` creates a pipe before the fork;
+  - `C` closes the write end and blocks on a one-byte read;
+  - `P` writes the byte only after `write_exclusive` has written and synced
+    the launch receipt; if the receipt fails, it closes the pipe unwritten,
+    and `C` exits 126 having opened nothing.
+- After the byte, `C` reads both files: each path component opened from
+  `/` with `O_NOFOLLOW` (directories `O_DIRECTORY`); the leaf must be a
+  regular file of this uid with no group or other bits, one link, and
+  bounded size. The URL must match the job role's
+  `postgresql://NAME:<64 hex>@127.0.0.1:D/NAME`, with the database name
+  equal to the role and `D` the given port. The key must be 16..4096 bytes
+  of printable UTF-8. A refusal exits 125 with a fixed code only.
+- `C` then execs `COMMAND` with the two values added to its own
+  environment. The launch receipt is unchanged.
+- Residual: the URL's role is not yet bound to the core's
+  `database_name(profile, run_id, attempt)`. `P` is not given the core, so
+  that binding is left to the gates (P3), which already read
+  `database_created`.
+
+**Declared consequence.** With values no longer accepted, today's hosted
+scaffold launch path (`run-reference.sh` exporting `DATABASE_URL` and a
+`SECRET_KEY` default, and `ci.yml` passing the service superuser URL)
+cannot launch at this head. That URL would be refused anyway, since it is
+not a job-role URL. Wiring the workflow to the database stage, with paths
+only, is the workflow head's change (design section 8, item 4). This head
+is stacked and unpublished, so `main` is unaffected.
+
+**Q-P2c-1, the finalizer's failure record.** `failure_record` takes the two
+values from its caller in order to scan its output for them, so the
+caller is a holder outside a supervised tree. Proposed: it takes the two
+fixed paths instead and reads them itself, with the same private reader.
+The failure step then runs as one more tool run under its own `P_T` (or a
+pure in-process call inside an already supervised step). For your
+decision; not implemented here.
 
 ## 11. Controls in this head (pure)
 

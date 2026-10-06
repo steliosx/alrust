@@ -55,6 +55,26 @@ def alive(pid):
     return state != b"Z"
 
 
+# Paths-only server secrets (P2c): private synthetic files; P is given only
+# their paths and the database port, and the served child reads them after
+# P's launch receipt exists.
+SECRET_URL = "postgresql://alrust_scaffold_1_1:%s@127.0.0.1:5432/alrust_scaffold_1_1" % ("7a" * 32)
+SECRET_KEY_VALUE = "synthetic-supervisor-test-key-" + "z" * 16
+SECRET_USAGE = ["--database-url-file", "/u", "--secret-key-file", "/k",
+                "--database-port", "5432"]
+
+
+def secret_args(tmp_path):
+    folder = tmp_path / "secrets"
+    if not folder.exists():
+        folder.mkdir(mode=0o700)
+        for name, value in (("url", SECRET_URL), ("key", SECRET_KEY_VALUE)):
+            (folder / name).write_text(value + "\n")
+            (folder / name).chmod(0o600)
+    return ["--database-url-file", str(folder / "url"), "--secret-key-file",
+            str(folder / "key"), "--database-port", "5432"]
+
+
 def start(tmp_path, command, observer=False, extra=()):
     receipt, terminal = tmp_path / "launch.json", tmp_path / "terminal.json"
     args = PY + [str(SUPERVISOR), "--receipt", str(receipt), "--terminal",
@@ -63,7 +83,7 @@ def start(tmp_path, command, observer=False, extra=()):
         args += ["--observer-socket", str(tmp_path / "observer.sock"),
                  "--observer-manifest", str(tmp_path / "observer-install.json"),
                  "--observer-manifest-sha256", "a" * 64]
-    args += list(extra) + ["--"] + command
+    args += secret_args(tmp_path) + list(extra) + ["--"] + command
     proc = subprocess.Popen(args, process_group=0, stdin=subprocess.DEVNULL,
                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     return proc, receipt, terminal
@@ -117,6 +137,45 @@ def test_normal_stop_complete_and_receipts(tmp_path):
     assert not alive(record["child"]["pid"])
 
 
+def test_served_child_reads_secrets_only_after_the_receipt(tmp_path):
+    """P2c: C is released only after P's launch receipt exists, then execs
+    the command with exactly the two values; P never holds them."""
+    mark = tmp_path / "served"
+    receipt_path = tmp_path / "launch.json"
+    script = write_script(tmp_path, "served.sh", (
+        "#!/bin/sh\n"
+        "if [ -s %s ]; then echo receipt-present > %s; else echo receipt-absent > %s; fi\n"
+        "printf '%%s\\n%%s\\n' \"$DATABASE_URL\" \"$SECRET_KEY\" >> %s\n"
+        "exec /bin/sleep 300\n") % (receipt_path, mark, mark, mark))
+    proc, receipt, terminal = start(tmp_path, [script])
+    record, digest = started(proc, receipt)
+    wait_for(lambda: mark.exists() and len(mark.read_text().splitlines()) == 3)
+    assert mark.read_text().splitlines() == ["receipt-present", SECRET_URL, SECRET_KEY_VALUE]
+    with open("/proc/%d/environ" % proc.pid, "rb") as f:
+        parent_env = f.read()
+    assert SECRET_URL.encode() not in parent_env and SECRET_KEY_VALUE.encode() not in parent_env
+    rc, out = stop(receipt, digest)
+    assert (rc, out["verdict"]) == (0, "COMPLETE")
+    assert proc.wait(timeout=10) == 0
+
+
+def test_invalid_secret_file_stops_the_child_before_exec(tmp_path):
+    mark = tmp_path / "served"
+    secret_args(tmp_path)
+    (tmp_path / "secrets" / "url").write_text(SECRET_URL.replace(":5432/", ":5433/") + "\n")
+    script = write_script(tmp_path, "served.sh", "#!/bin/sh\ntouch %s\nexec /bin/sleep 300\n"
+                          % mark)
+    proc, receipt, terminal = start(tmp_path, [script])
+    assert proc.wait(timeout=30) == 0               # C exited; the tree was emptied
+    final = json.loads(terminal.read_text())
+    assert final["trigger"] == "child_exited" and final["result"] == "tree_empty"
+    assert os.WIFEXITED(final["child_wait_status"])
+    assert os.WEXITSTATUS(final["child_wait_status"]) == sup_mod.EXIT_CHILD_SECRET
+    assert not mark.exists()
+    err = proc.stderr.read().decode()
+    assert "database_url_invalid" in err and "7a" * 32 not in err
+
+
 def test_observer_variables_only_in_child(tmp_path):
     dump = tmp_path / "child-env"
     script = write_script(tmp_path, "child.sh",
@@ -147,7 +206,7 @@ def test_inherited_observer_variables_are_dropped_without_option(tmp_path):
                ALRUST_OBSERVER_PARENT="1")
     proc = subprocess.Popen(PY + [str(SUPERVISOR), "--receipt", str(receipt),
                                   "--terminal", str(terminal), "--venv",
-                                  str(tmp_path), "--", script],
+                                  str(tmp_path)] + secret_args(tmp_path) + ["--", script],
                             process_group=0, env=env,
                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     record, digest = started(proc, receipt)
@@ -381,21 +440,21 @@ def test_supervisor_refuses_when_not_group_leader(tmp_path):
     receipt, terminal = tmp_path / "launch.json", tmp_path / "terminal.json"
     proc = subprocess.run(PY + [str(SUPERVISOR), "--receipt", str(receipt),
                                 "--terminal", str(terminal), "--venv",
-                                str(tmp_path), "--", "/bin/sleep", "300"],
+                                str(tmp_path)] + secret_args(tmp_path) + ["--", "/bin/sleep", "300"],
                           capture_output=True, timeout=10)
     assert proc.returncode == 70
     assert not receipt.exists()
 
 
 @pytest.mark.parametrize("args", [
-    [], ["--receipt", "relative", "--terminal", "/t", "--venv", "/v", "--",
+    [], ["--receipt", "relative", "--terminal", "/t", "--venv", "/v", *SECRET_USAGE, "--",
          "/bin/true"],
-    ["--receipt", "/r", "--terminal", "/t", "--venv", "/v",
+    ["--receipt", "/r", "--terminal", "/t", "--venv", "/v", *SECRET_USAGE,
      "--observer-socket", "/s", "--", "/bin/true"],
-    ["--receipt", "/r", "--terminal", "/t", "--venv", "/v",
+    ["--receipt", "/r", "--terminal", "/t", "--venv", "/v", *SECRET_USAGE,
      "--observer-socket", "/s", "--observer-manifest", "/m",
      "--observer-manifest-sha256", "A" * 64, "--", "/bin/true"],
-    ["--receipt", "/r", "--terminal", "/t", "--venv", "/v",
+    ["--receipt", "/r", "--terminal", "/t", "--venv", "/v", *SECRET_USAGE,
      "--observer-socket", "/s", "--observer-manifest", "relative",
      "--observer-manifest-sha256", "a" * 64, "--", "/bin/true"],
     ["--receipt", "/r", "--terminal", "/t", "--venv", "/v"],
@@ -413,12 +472,15 @@ def test_interrupted_launch_receipt_tears_down(tmp_path):
     terminal = tmp_path / "terminal.json"
     proc = subprocess.Popen(PY + [str(SUPERVISOR), "--receipt", str(receipt),
                                   "--terminal", str(terminal), "--venv",
-                                  str(tmp_path), "--", "/bin/sleep", "300"],
+                                  str(tmp_path)] + secret_args(tmp_path) + ["--", "/bin/sleep", "300"],
                             process_group=0, stderr=subprocess.PIPE)
     assert proc.wait(timeout=20) == 4
     final = json.loads(terminal.read_text())
     assert (final["trigger"], final["result"]) == ("receipt_failed",
                                                    "tree_empty")
+    # P2c: without a receipt the barrier never released, so C exited before
+    # reading anything (it never reached the command).
+    assert b"no release, nothing read" in proc.stderr.read()
 
 
 def test_unwritable_terminal_leaves_no_terminal_and_stop_is_unproven(tmp_path):
@@ -426,7 +488,7 @@ def test_unwritable_terminal_leaves_no_terminal_and_stop_is_unproven(tmp_path):
     terminal = tmp_path / "missing-dir" / "terminal.json"
     proc = subprocess.Popen(PY + [str(SUPERVISOR), "--receipt", str(receipt),
                                   "--terminal", str(terminal), "--venv",
-                                  str(tmp_path), "--", "/bin/sleep", "300"],
+                                  str(tmp_path)] + secret_args(tmp_path) + ["--", "/bin/sleep", "300"],
                             process_group=0, stderr=subprocess.PIPE)
     record, digest = started(proc, receipt)
     rc, out = stop(receipt, digest)
@@ -448,7 +510,7 @@ def test_supervisor_missing_venv_fails_before_fork(tmp_path):
     marker = tmp_path / "child-ran"
     proc = subprocess.run(PY + [str(SUPERVISOR), "--receipt", str(receipt),
                                 "--terminal", str(terminal), "--venv",
-                                str(tmp_path / "no-venv"), "--", "/bin/sh",
+                                str(tmp_path / "no-venv")] + secret_args(tmp_path) + ["--", "/bin/sh",
                                 "-c", "touch %s" % marker],
                           capture_output=True, timeout=10, process_group=0)
     assert proc.returncode == 70

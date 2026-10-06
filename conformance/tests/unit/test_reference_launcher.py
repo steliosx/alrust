@@ -32,9 +32,25 @@ READY = re.compile(r"^reference alerta \S+ up on :(\d+) \(supervisor (\d+), "
 pytestmark = pytest.mark.skipif(not sys.platform.startswith("linux"),
                                 reason="Linux /proc, prctl and pidfd")
 
+# Synthetic server secrets (P2c): written by make_job as the job's private
+# URL and key files; the stub checks it received exactly these.
+TEST_DB_PORT = 5432
+TEST_ROLE = "alrust_scaffold_1_1"
+TEST_URL = "postgresql://%s:%s@127.0.0.1:%d/%s" % (TEST_ROLE, "5e" * 32, TEST_DB_PORT, TEST_ROLE)
+TEST_KEY = "synthetic-launcher-test-key-" + "q" * 20
+
 SERVER = '''
 import http.server, os, sys
 port = int(sys.argv[sys.argv.index("--port") + 1])
+# P2c: the served child reads the secrets only after the launch receipt
+# exists, and execs this server with exactly the job's values.
+_job = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(sys.argv[0]))))
+if not os.path.exists(os.path.join(_job, "reference", "launch.json")):
+    sys.exit(6)
+if (os.environ.get("DATABASE_URL"), os.environ.get("SECRET_KEY")) != (
+        "postgresql://alrust_scaffold_1_1:5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e@127.0.0.1:5432/alrust_scaffold_1_1",
+        "synthetic-launcher-test-key-qqqqqqqqqqqqqqqqqqqq"):
+    sys.exit(5)
 assert "--no-reload" in sys.argv and "--no-debugger" in sys.argv
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -93,11 +109,21 @@ def make_job(tmp_path, mode="healthy", name="job", interpreter=None):
         % ((os.path.dirname(real),) + tuple(sys.version_info[:3])))
     (job / "venv" / "lib" / ("python%d.%d" % sys.version_info[:2])
      / "site-packages").mkdir(parents=True)
+    database = job / "database"
+    database.mkdir(mode=0o700)
+    for path, value in ((database / "url", TEST_URL), (job / "secret-key", TEST_KEY)):
+        path.write_text(value + "\n")
+        path.chmod(0o600)
     shebang = interpreter or str(bin_dir / "python3")
     alertad = bin_dir / "alertad"
     alertad.write_text("#!%s\n%s" % (shebang, SERVER % mode))
     alertad.chmod(0o755)
     return job
+
+
+def secret_args(job):
+    """Paths and the database port only (P2c)."""
+    return ["--secret-key-file", str(job / "secret-key"), "--database-port", str(TEST_DB_PORT)]
 
 
 def launch(job, port, timeout=15, scripts=None, env=None, **kw):
@@ -106,7 +132,7 @@ def launch(job, port, timeout=15, scripts=None, env=None, **kw):
     scripts = scripts or copy_scripts(job.parent)
     args = PY + [str(scripts / "launch-reference.py"), "--job-root", str(job),
                  "--venv", str(job / "venv"), "--port", str(port),
-                 "--ready-timeout", str(timeout)]
+                 "--ready-timeout", str(timeout)] + secret_args(job)
     env = dict(env or ENV)
     env.setdefault("HOME", str(job / "home"))
     return subprocess.Popen(args, env=env, stdout=subprocess.PIPE,
@@ -355,7 +381,7 @@ def test_closed_output_is_a_failure_with_cleanup(tmp_path):
         PY + [str(copy_scripts(tmp_path) / "launch-reference.py"),
               "--job-root", str(job),
               "--venv", str(job / "venv"), "--port", str(port),
-              "--ready-timeout", "15"],
+              "--ready-timeout", "15"] + secret_args(job),
         env=dict(ENV, HOME=str(job / "home")), stdout=write_end,
         stderr=subprocess.PIPE, text=True)
     os.close(write_end)
@@ -395,7 +421,7 @@ def test_job_root_and_venv_checks(tmp_path, variant):
         venv = outside
     args = PY + [str(copy_scripts(tmp_path) / "launch-reference.py"),
                  "--job-root", str(job), "--venv", str(venv),
-                 "--port", str(port), "--ready-timeout", "5"]
+                 "--port", str(port), "--ready-timeout", "5"] + secret_args(job)
     out = subprocess.run(args, env=dict(ENV, HOME=str(job / "home")),
                          capture_output=True, text=True, timeout=30)
     assert out.returncode == 1 and "refused" in out.stderr
@@ -715,7 +741,7 @@ def test_preflight_alone_accepts_a_clean_job_root(tmp_path):
     out = subprocess.run(
         PY + [str(scripts / "launch-reference.py"), "--preflight",
               "--job-root", str(job), "--venv", str(job / "venv"),
-              "--port", str(free_port()), "--ready-timeout", "5"],
+              "--port", str(free_port()), "--ready-timeout", "5"] + secret_args(job),
         env=dict(ENV, HOME=str(job / "home")), capture_output=True,
         text=True, timeout=30)
     assert out.returncode == 0, out.stderr
@@ -738,7 +764,7 @@ def test_launch_rechecks_home(tmp_path, variant):
     proc = subprocess.Popen(
         PY + [str(copy_scripts(tmp_path) / "launch-reference.py"),
               "--job-root", str(job), "--venv", str(job / "venv"),
-              "--port", str(port), "--ready-timeout", "5"],
+              "--port", str(port), "--ready-timeout", "5"] + secret_args(job),
         env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     rc, out, err = finish(proc)
     assert rc == 1 and "HOME" in err
@@ -795,7 +821,7 @@ def launch_with(job, port, extra, timeout=15, scripts=None, env=None):
     scripts = scripts or copy_scripts(job.parent)
     args = PY + [str(scripts / "launch-reference.py"), "--job-root", str(job),
                  "--venv", str(job / "venv"), "--port", str(port),
-                 "--ready-timeout", str(timeout)] + extra
+                 "--ready-timeout", str(timeout)] + secret_args(job) + extra
     env = dict(env or ENV, HOME=str(job / "home"))
     return subprocess.Popen(args, env=env, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True)
@@ -915,7 +941,7 @@ def test_observer_module_refusals(tmp_path, variant):
     pre = subprocess.run(
         PY + [str(copy_scripts(tmp_path) / "launch-reference.py"), "--preflight",
               "--job-root", str(fresh), "--venv", str(fresh / "venv"),
-              "--port", str(port), "--ready-timeout", "5"] + extra,
+              "--port", str(port), "--ready-timeout", "5"] + secret_args(fresh) + extra,
         env=dict(ENV, HOME=str(fresh / "home")), capture_output=True,
         text=True, timeout=30)
     if variant == "existing_destination":
@@ -928,7 +954,7 @@ def test_observer_module_refusals(tmp_path, variant):
     proc = subprocess.run(
         PY + [str(copy_scripts(tmp_path) / "launch-reference.py"),
               "--job-root", str(job), "--venv", str(job / "venv"),
-              "--port", str(port), "--ready-timeout", "5"] + extra,
+              "--port", str(port), "--ready-timeout", "5"] + secret_args(job) + extra,
         env=dict(ENV, HOME=str(job / "home")), capture_output=True,
         text=True, timeout=30)
     assert proc.returncode == 1 and "refused" in proc.stderr, proc.stderr
@@ -1159,7 +1185,7 @@ def test_stage_preflight_refuses_before_the_build(tmp_path, variant):
     scripts = copy_scripts(job.parent)
     args = PY + [str(scripts / "launch-reference.py"), "--preflight",
                  "--job-root", str(job), "--venv", str(job / "venv"),
-                 "--port", str(free_port()), "--ready-timeout", "5"] + STAGE_ARGS
+                 "--port", str(free_port()), "--ready-timeout", "5"] + secret_args(job) + STAGE_ARGS
     out = subprocess.run(args, env=dict(ENV, HOME=str(job / "home")),
                          capture_output=True, text=True, timeout=60)
     assert out.returncode == 1 and "refused" in out.stderr
@@ -1243,7 +1269,7 @@ def test_stage_preflight_refuses_an_invalid_previous_stage_name(tmp_path):
     args = PY + [str(scripts / "launch-reference.py"), "--preflight",
                  "--job-root", str(job), "--venv", str(job / "venv"),
                  "--port", str(free_port()), "--ready-timeout", "5",
-                 "--stage-index", "1", "--previous-stage", "Bad_Name"]
+                 "--stage-index", "1", "--previous-stage", "Bad_Name"] + secret_args(job)
     out = subprocess.run(args, env=dict(ENV, HOME=str(job / "home")),
                          capture_output=True, text=True, timeout=60)
     assert out.returncode == 1 and "refused" in out.stderr
