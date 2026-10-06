@@ -6,6 +6,7 @@ and stop-reference.py. There is no reference install, database or network
 beyond 127.0.0.1. Every case checks that the launcher's process tree is gone
 afterwards and that unrelated processes stay alive.
 """
+import functools
 import hashlib
 import json
 import os
@@ -153,16 +154,37 @@ def stop_leftover_launches(tmp_path):
                        capture_output=True, text=True, timeout=60)
 
 
+def run_all(steps):
+    """Attempt every cleanup step even if earlier ones fail, then raise the
+    failure (an exception group if there were several), so one failed step
+    never skips the cleanup of other known children (LTC-SOURCE-R1)."""
+    errors = []
+    for step in steps:
+        try:
+            step()
+        except BaseException as error:
+            errors.append(error)
+    if len(errors) == 1:
+        raise errors[0]
+    if errors:
+        raise BaseExceptionGroup("%d cleanup steps failed" % len(errors), errors)
+
+
+def reap_steps(procs):
+    """kill() then wait() for each Popen, as independent steps. Each is the
+    test's own unreaped child, so neither can reach a reused PID."""
+    return [step for proc in procs
+            for step in (proc.kill, functools.partial(proc.wait, timeout=10))]
+
+
 @pytest.fixture
 def cleanup():
-    """Popen objects this test started. Each is still the test's own
-    unreaped child, so killing and then reaping it cannot reach a reused
-    PID (LAUNCHER-TEST-CLEANUP-N1)."""
+    """Popen objects this test started (LAUNCHER-TEST-CLEANUP-N1)."""
     procs = []
-    yield procs
-    for proc in procs:
-        proc.kill()
-        proc.wait(timeout=10)
+    try:
+        yield procs
+    finally:
+        run_all(reap_steps(procs))
 
 
 def read_generation(pid):
@@ -1381,11 +1403,15 @@ def synthetic_launch(tmp_path, sup, child, *, complete=True, journal_digest=None
 @pytest.fixture
 def owned_pair():
     """A parent P (a shell) with its own child C, plus an unrelated process."""
-    p = subprocess.Popen(["/bin/sh", "-c", "sleep 30 & wait"])
-    unrelated = subprocess.Popen(["/bin/sleep", "30"])
-    deadline = time.monotonic() + 10
-    child = held = None
+    procs, child, held = [], None, None
     try:
+        # Each Popen is registered as soon as it exists, so a failed later
+        # spawn still cleans up the earlier one.
+        p = subprocess.Popen(["/bin/sh", "-c", "sleep 30 & wait"])
+        procs.append(p)
+        unrelated = subprocess.Popen(["/bin/sleep", "30"])
+        procs.append(unrelated)
+        deadline = time.monotonic() + 10
         while child is None and time.monotonic() < deadline:
             for name in os.listdir("/proc"):
                 if name.isdigit():
@@ -1402,11 +1428,10 @@ def owned_pair():
             time.sleep(0.02)
         yield p.pid, child, unrelated
     finally:
-        if held is not None:
-            kill_held(held)
-        for proc in (p, unrelated):
-            proc.kill()
-            proc.wait(timeout=10)
+        # C first, through its held pidfd while P still exists; then each
+        # Popen, independently of any earlier failure.
+        steps = [functools.partial(kill_held, held)] if held is not None else []
+        run_all(steps + reap_steps(procs))
 
 
 def test_confirm_isolated_success(tmp_path, owned_pair):
