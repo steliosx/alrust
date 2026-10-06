@@ -30,6 +30,9 @@ import time
 from .security_evidence import PrivateJournal
 
 SCHEMA_CORE = "alrust-hosted-core/1"
+# /2 adds entrypoint_pins (R-EP gate plan P1, agreed with Codex in c35732da).
+SCHEMA_CORE_V2 = "alrust-hosted-core/2"
+MAX_PINNED_FILE = 1 << 27
 SCHEMA_RECORD = "alrust-stage-record/1"
 EXTERNAL_CONFIG = "/etc/alertad.conf"
 CORE_NAME = "core-identity.json"
@@ -51,6 +54,8 @@ CORE_KEYS = frozenset({
     "event_head_sha", "checkout_sha", "reference_sha", "lock_sha256",
     "manifest_sha256", "runner_image", "boot_id", "uid", "external_config",
     "job_root", "captured_utc_ns", "captured_monotonic_ns"})
+CORE_KEYS_V2 = CORE_KEYS | {"entrypoint_pins"}
+PIN_KEYS = frozenset({"supervisor", "entrypoint_script", "interpreter"})
 ENVELOPE_KEYS = frozenset({"schema", "kind", "stage", "utc_ns", "monotonic_ns",
                            "boot_id", "pid", "payload"})
 
@@ -127,6 +132,57 @@ def _int(value, low=0, high=MAX_INT):
     return type(value) is int and low <= value <= high
 
 
+def _abs_path(value):
+    return (type(value) is str and 0 < len(value) <= 4096 and os.path.isabs(value)
+            and os.path.normpath(value) == value and "\x00" not in value)
+
+
+def file_sha256(path, limit=MAX_PINNED_FILE):
+    """sha256 of a regular file, read in chunks without following a final
+    symlink or blocking; refuses anything larger than LIMIT."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+                 | os.O_NONBLOCK | os.O_NOCTTY)
+    try:
+        info = os.fstat(fd)
+        _require(stat.S_ISREG(info.st_mode) and info.st_size <= limit,
+                 "not_bounded_regular_file")
+        digest, size = hashlib.sha256(), 0
+        while True:
+            chunk = os.read(fd, 1 << 20)
+            if not chunk:
+                break
+            size += len(chunk)
+            _require(size <= limit, "not_bounded_regular_file")
+            digest.update(chunk)
+    finally:
+        os.close(fd)
+    return digest.hexdigest()
+
+
+def validate_entrypoint_pins(pins):
+    """The /2 entrypoint_pins object.
+
+    supervisor and entrypoint_script: absolute paths in the checkout and
+    the sha256 the workflow head pins (checked equal to the measured file
+    when the core is written). interpreter: the path the entrypoint runs
+    (from the workflow), its resolved path and the sha256 MEASURED at core
+    time. The interpreter is not a reviewed pin: it only binds the same job
+    to the same file."""
+    _require(type(pins) is dict and set(pins) == PIN_KEYS, "core_invalid")
+    for name in ("supervisor", "entrypoint_script"):
+        pin = pins[name]
+        _require(type(pin) is dict and set(pin) == {"path", "sha256"}
+                 and _abs_path(pin["path"]) and type(pin["sha256"]) is str
+                 and _SHA256.fullmatch(pin["sha256"]), "core_invalid")
+    interp = pins["interpreter"]
+    _require(type(interp) is dict and set(interp) == {"path", "resolved_path",
+                                                      "measured_sha256"}
+             and _abs_path(interp["path"]) and _abs_path(interp["resolved_path"])
+             and type(interp["measured_sha256"]) is str
+             and _SHA256.fullmatch(interp["measured_sha256"]), "core_invalid")
+    return pins
+
+
 def strict_json(data, code):
     """Parse JSON refusing duplicate members, non-finite numbers, invalid
     UTF-8 and over-deep nesting, all as the fixed CODE."""
@@ -157,8 +213,10 @@ def strict_json(data, code):
 def validate_core(data, job_root):
     """The core identity's bytes as a fully typed record for THIS job root."""
     core = strict_json(data, "core_invalid")
-    _require(type(core) is dict and set(core) == CORE_KEYS
-             and core["schema"] == SCHEMA_CORE, "core_invalid")
+    _require(type(core) is dict and (
+        (core.get("schema") == SCHEMA_CORE and set(core) == CORE_KEYS)
+        or (core.get("schema") == SCHEMA_CORE_V2 and set(core) == CORE_KEYS_V2)),
+        "core_invalid")
     for key in ("repository", "job"):
         _require(type(core[key]) is str and _TEXT.fullmatch(core[key]), "core_invalid")
     for key in ("run_id", "run_attempt"):
@@ -190,6 +248,8 @@ def validate_core(data, job_root):
              and root["path"] == job_root and _int(root["dev"]) and _int(root["ino"])
              and (root["dev"], root["ino"]) == (actual.st_dev, actual.st_ino),
              "core_job_root_mismatch")
+    if core["schema"] == SCHEMA_CORE_V2:
+        validate_entrypoint_pins(core["entrypoint_pins"])
     return core
 
 
@@ -200,11 +260,16 @@ def _dumps(value):
 
 def write_core_identity(job_root, *, profile, event_head_sha, checkout_sha,
                         reference_sha, reference_pin, lock_sha256, lock_pins,
-                        manifest_sha256, manifest_pin, env):
+                        manifest_sha256, manifest_pin, env, entrypoint_pins=None,
+                        entrypoint_measured=None):
     """Write the frozen core identity once (stage 0) and return its sha256.
 
     Every input is checked; any unset, malformed or unpinned value refuses,
     which is a NOT_RUN prerequisite failure. Nothing is written on refusal.
+    With ENTRYPOINT_PINS (from the workflow head) and ENTRYPOINT_MEASURED
+    (from the checkout and the interpreter), the core is /2: the supervisor
+    and entrypoint-script digests must equal their pins; the interpreter's
+    digest is recorded as measured. Without both, the core is /1.
     """
     root = _job_root(job_root)
     _require(type(profile) is str and _STAGE.fullmatch(profile), "profile_invalid")
@@ -236,8 +301,29 @@ def write_core_identity(job_root, *, profile, event_head_sha, checkout_sha,
         raise JournalError("external_config_unreadable") from None
     else:
         raise JournalError("external_config_present")
+    pins = None
+    if entrypoint_pins is not None or entrypoint_measured is not None:
+        _require(type(entrypoint_pins) is dict and type(entrypoint_measured) is dict
+                 and set(entrypoint_pins) == PIN_KEYS and set(entrypoint_measured) == PIN_KEYS,
+                 "entrypoint_pins_invalid")
+        for name in ("supervisor", "entrypoint_script"):
+            _require(type(entrypoint_pins[name]) is dict
+                     and entrypoint_pins[name].get("sha256") == entrypoint_measured[name],
+                     "entrypoint_not_pinned")
+        interp = entrypoint_pins["interpreter"]
+        _require(type(interp) is dict and set(interp) == {"path", "resolved_path"},
+                 "entrypoint_pins_invalid")
+        pins = {"supervisor": dict(entrypoint_pins["supervisor"]),
+                "entrypoint_script": dict(entrypoint_pins["entrypoint_script"]),
+                "interpreter": {"path": interp["path"],
+                                "resolved_path": interp["resolved_path"],
+                                "measured_sha256": entrypoint_measured["interpreter"]}}
+        try:
+            validate_entrypoint_pins(pins)
+        except JournalError:
+            raise JournalError("entrypoint_pins_invalid") from None
     record = {
-        "schema": SCHEMA_CORE,
+        "schema": SCHEMA_CORE if pins is None else SCHEMA_CORE_V2,
         "repository": github["GITHUB_REPOSITORY"],
         "run_id": github["GITHUB_RUN_ID"],
         "run_attempt": github["GITHUB_RUN_ATTEMPT"],
@@ -256,6 +342,8 @@ def write_core_identity(job_root, *, profile, event_head_sha, checkout_sha,
         "captured_utc_ns": time.time_ns(),
         "captured_monotonic_ns": time.monotonic_ns(),
     }
+    if pins is not None:
+        record["entrypoint_pins"] = pins
     data = _dumps(record)
     _write_exclusive(os.path.join(job_root, CORE_NAME), data)
     return hashlib.sha256(data).hexdigest()
@@ -481,6 +569,7 @@ def _git_head(directory):
 def core_main(argv):
     """core --repo-root R --job-root J --profile P --event-head-sha S
     --reference-pin S --manifest-pin H --lock-pin PATH=H [--lock-pin ...]
+    [--supervisor-pin PATH=H --entrypoint-script-pin PATH=H --interpreter ABS]
 
     Measures the checkout, the reference submodule, each pinned lock file and
     the profile manifest from the repository itself, then writes the core
@@ -488,6 +577,7 @@ def core_main(argv):
     opts, pins = {}, {}
     names = ("--repo-root", "--job-root", "--profile", "--event-head-sha",
              "--reference-pin", "--manifest-pin")
+    entry_names = ("--supervisor-pin", "--entrypoint-script-pin", "--interpreter")
     if len(argv) % 2:
         return _emit({"status": "NOT_RUN", "reason": "usage"}, 64)
     for name, value in zip(argv[0::2], argv[1::2]):
@@ -496,11 +586,13 @@ def core_main(argv):
             if path in pins:
                 return _emit({"status": "NOT_RUN", "reason": "usage"}, 64)
             pins[path] = digest
-        elif name in names and name not in opts:
+        elif (name in names or name in entry_names) and name not in opts:
             opts[name] = value
         else:
             return _emit({"status": "NOT_RUN", "reason": "usage"}, 64)
-    if set(opts) != set(names) or not pins:
+    given = [name in opts for name in entry_names]
+    if set(opts) - set(entry_names) != set(names) or not pins or (
+            any(given) and not all(given)):
         return _emit({"status": "NOT_RUN", "reason": "usage"}, 64)
     repo = opts["--repo-root"]
     try:
@@ -509,6 +601,22 @@ def core_main(argv):
         for path in pins:
             _require(_TEXT.fullmatch(path) and not path.startswith("/")
                      and ".." not in path.split("/"), "locks_invalid")
+        entry_pins = entry_measured = None
+        if all(given):
+            entry_pins, entry_measured = {}, {}
+            for key, opt in (("supervisor", "--supervisor-pin"),
+                             ("entrypoint_script", "--entrypoint-script-pin")):
+                rel, sep, pin = opts[opt].partition("=")
+                _require(sep and _TEXT.fullmatch(rel) and not rel.startswith("/")
+                         and ".." not in rel.split("/"), "entrypoint_pins_invalid")
+                path = os.path.join(repo, rel)
+                entry_pins[key] = {"path": path, "sha256": pin}
+                entry_measured[key] = file_sha256(path)
+            interp = opts["--interpreter"]
+            _require(_abs_path(interp), "entrypoint_pins_invalid")
+            resolved = os.path.realpath(interp)
+            entry_pins["interpreter"] = {"path": interp, "resolved_path": resolved}
+            entry_measured["interpreter"] = file_sha256(resolved)
         digest = write_core_identity(
             opts["--job-root"], profile=opts["--profile"],
             event_head_sha=opts["--event-head-sha"],
@@ -520,7 +628,8 @@ def core_main(argv):
             lock_pins=pins,
             manifest_sha256=hashlib.sha256(read_bounded(
                 os.path.join(repo, MANIFEST_PATH), MAX_JOURNAL)).hexdigest(),
-            manifest_pin=opts["--manifest-pin"], env=os.environ)
+            manifest_pin=opts["--manifest-pin"], env=os.environ,
+            entrypoint_pins=entry_pins, entrypoint_measured=entry_measured)
     except JournalError as error:
         return _emit({"status": "NOT_RUN", "reason": str(error)}, 2)
     except FileExistsError:

@@ -15,9 +15,12 @@ Run as `python3 -I -S -B entrypoint-supervisor.py --receipt R --terminal T
 the leader of its own process group. COMMAND must name S as one argument.
 
 - It checks, before the fork: group leadership, absent receipts, the core
-  file against the independently supplied H, the script's digest, and that
-  the deadline D leaves at least the teardown budget. Any failure exits
-  before a child exists.
+  file against the independently supplied H, and that the deadline D
+  leaves at least the teardown budget. The core must be /2 (gate plan P1):
+  its entrypoint_pins must match this supervisor file (path and sha256),
+  the entrypoint script S (path and sha256) and the interpreter
+  COMMAND[0] (path, resolved path and the sha256 measured when the core
+  was written). Any failure exits before a child exists.
 - It marks itself a child subreaper, forks C_E and writes the launch
   receipt R exclusively. Secrets reach C_E only through this fork.
 - On C_E's exit, on SIGTERM or SIGINT, or at D, it tears the tree down and
@@ -51,6 +54,8 @@ POLL_SECONDS = 0.05
 MAX_CORE = 1 << 16
 MAX_SCRIPT = 1 << 22
 MAX_JOURNAL = 1 << 20
+MAX_PINNED_FILE = 1 << 27
+SCHEMA_CORE_V2 = "alrust-hosted-core/2"
 
 EXIT_TREE_EMPTY = 0
 EXIT_USAGE = 64
@@ -149,6 +154,72 @@ def read_regular(path, limit):
         return b"".join(pieces), info
     finally:
         os.close(fd)
+
+
+def file_sha256(path, limit=MAX_PINNED_FILE):
+    """sha256 of a regular file (no final symlink, no FIFO block), bounded."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+            raise ValueError("not a bounded regular file")
+        digest, size = hashlib.sha256(), 0
+        while True:
+            chunk = os.read(fd, 1 << 20)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > limit:
+                raise ValueError("too large")
+            digest.update(chunk)
+        return digest.hexdigest()
+    finally:
+        os.close(fd)
+
+
+def core_pins(core_bytes):
+    """entrypoint_pins from a /2 core (gate plan P1). The core's own sha256
+    has already been checked against --core-sha256; full validation of the
+    core is the verifier's. Raises ValueError on any shape error."""
+    core = json.loads(core_bytes)
+    if type(core) is not dict or core.get("schema") != SCHEMA_CORE_V2:
+        raise ValueError("core is not /2")
+    pins = core.get("entrypoint_pins")
+    if type(pins) is not dict or set(pins) != {"supervisor", "entrypoint_script",
+                                               "interpreter"}:
+        raise ValueError("entrypoint_pins malformed")
+    for name in ("supervisor", "entrypoint_script"):
+        if type(pins[name]) is not dict or set(pins[name]) != {"path", "sha256"} \
+                or type(pins[name]["path"]) is not str or not is_sha256(
+                    pins[name]["sha256"] if type(pins[name]["sha256"]) is str else ""):
+            raise ValueError("%s pin malformed" % name)
+    interp = pins["interpreter"]
+    if type(interp) is not dict or set(interp) != {"path", "resolved_path",
+                                                   "measured_sha256"} \
+            or type(interp["path"]) is not str or type(interp["resolved_path"]) is not str \
+            or type(interp["measured_sha256"]) is not str \
+            or not is_sha256(interp["measured_sha256"]):
+        raise ValueError("interpreter pin malformed")
+    return pins
+
+
+def check_pins(pins, own_path, script_path, script_bytes, command):
+    """Expected-versus-measured checks before the fork. Returns an error
+    string, or None when every pin matches. Custody checking only: a
+    same-UID process could swap a file after it is hashed."""
+    sup = pins["supervisor"]
+    if own_path != sup["path"] or file_sha256(own_path) != sup["sha256"]:
+        return "supervisor does not match its pin"
+    entry = pins["entrypoint_script"]
+    if script_path != entry["path"] or \
+            hashlib.sha256(script_bytes).hexdigest() != entry["sha256"]:
+        return "entrypoint script does not match its pin"
+    interp = pins["interpreter"]
+    resolved = os.path.realpath(command[0])
+    if command[0] != interp["path"] or resolved != interp["resolved_path"] \
+            or file_sha256(resolved) != interp["measured_sha256"]:
+        return "interpreter does not match the core's measurement"
+    return None
 
 
 def write_exclusive(path, record):
@@ -326,6 +397,14 @@ def main(argv):
     core_sha256 = hashlib.sha256(core).hexdigest()
     if core_sha256 != opts["--core-sha256"]:
         fail(EXIT_SETUP, "core identity does not match --core-sha256")
+    try:
+        pins = core_pins(core)
+        mismatch = check_pins(pins, os.path.abspath(__file__), opts["--script"],
+                              script, command)
+    except (OSError, ValueError) as error:
+        fail(EXIT_SETUP, "entrypoint pins: %s" % error)
+    if mismatch is not None:
+        fail(EXIT_SETUP, mismatch)
     deadline = opts["--deadline-monotonic-ns"]
     if deadline < time.monotonic_ns() + TEARDOWN_BUDGET_NS:
         fail(EXIT_SETUP, "deadline leaves less than the teardown budget")

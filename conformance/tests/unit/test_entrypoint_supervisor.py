@@ -92,10 +92,21 @@ def alive(pid):
 
 
 def setup(tmp_path):
-    core = tmp_path / "core-identity.json"
-    core.write_bytes(b'{"synthetic": "core"}\n')
+    # A /2-shaped core (gate plan P1) whose entrypoint_pins match the real
+    # supervisor file, this entrypoint script and the test interpreter.
     script = tmp_path / "entrypoint.py"
     script.write_text(ENTRYPOINT)
+    resolved = os.path.realpath(sys.executable)
+    pins = {
+        "supervisor": {"path": str(SUPERVISOR),
+                       "sha256": hashlib.sha256(SUPERVISOR.read_bytes()).hexdigest()},
+        "entrypoint_script": {"path": str(script),
+                              "sha256": hashlib.sha256(script.read_bytes()).hexdigest()},
+        "interpreter": {"path": sys.executable, "resolved_path": resolved,
+                        "measured_sha256": sup.file_sha256(resolved)}}
+    core = tmp_path / "core-identity.json"
+    core.write_bytes(json.dumps({"schema": "alrust-hosted-core/2",
+                                 "entrypoint_pins": pins}).encode() + b"\n")
     return core, hashlib.sha256(core.read_bytes()).hexdigest(), script
 
 
@@ -337,6 +348,7 @@ def run_mocked(tmp_path, reap_batches, scan, source=None):
     else:
         spec = importlib.util.spec_from_loader("entrypoint_supervisor_mutant", loader=None)
         mod = importlib.util.module_from_spec(spec)
+        mod.__dict__["__file__"] = str(SUPERVISOR)  # the pinned path
         exec(compile(source, "mutant", "exec"), mod.__dict__)
     core, digest, script = setup(tmp_path)
     journal = tmp_path / "journal.jsonl"
