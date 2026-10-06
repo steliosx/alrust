@@ -29,8 +29,9 @@ are those observed when the resource was created. Integers are exact ints
 | `export_candidate` | `{"path", "dev", "ino", "name"}` | any, unique names | a file to publish; `name` must be in `EXPORT_ALLOWLIST`, whose fixed bound applies; the source stage is recorded in the receipt |
 | `stop_verdict` | `{"verdict": "COMPLETE", "reason": "tree_empty", "launch_receipt_sha256", "terminal_receipt_sha256"}` | exactly 1 | the stop helper's verdict and the receipts it was based on |
 | `database_created` | `{"name", "oid", "role", "role_oid", "system_identifier", "postmaster_start_time", "server_version_num", "version", "psql"}` | exactly 1, in stage `database-create` | the allocated database's identity (database_stage.py) |
+| `database_container` | `{"container_id", "image_id", "repo_digests", "port", "database_port"}` | exactly 1, in stage `database-create` | the service container (`docker inspect`), recorded before any SQL; `port` must include a `5432/tcp` mapping on host port `database_port` at `0.0.0.0` or `127.0.0.1` (PR #100 review) |
 | `launch_handoff` | `{"launch_journal_sha256", "receipt_sha256", "supervisor", "child", "observed_monotonic_ns"}` | exactly 1, in stage `launch-confirm` | the hand-off observed alive (confirm-launch.py) |
-| `database_drop` | `{"verdict", "reason", "database", "oid", "role", "role_oid", "system_identifier", "postmaster_start_time"}` | exactly 1 | the guarded drop's result; only `COMPLETE` with an identity equal to `database_created` counts |
+| `database_drop` | `{"verdict", "reason", "database", "oid", "role", "role_oid", "system_identifier", "postmaster_start_time"}` | exactly 1, in stage `database-drop` | the guarded drop's result; only `COMPLETE` with an identity equal to `database_created` counts |
 
 ## Quiescence (section 9.1), all before any read of the registry or any write
 
@@ -49,11 +50,21 @@ are those observed when the resource was created. Integers are exact ints
   receipt and the same supervisor generation (a COMPLETE launch journal
   alone is a syntactic record, LB4E-R2).
 - **Database linkage:** exactly one `database_created` in
-  `database-create` and one `database_drop` with verdict `COMPLETE` whose
-  `database`, `oid`, `role`, `role_oid`, `system_identifier` and
-  `postmaster_start_time` equal it. `ROLE_ONLY_COMPLETE`, `NONE_ALLOCATED`
-  and `UNPROVEN` refuse. This is offline evidence; no real PostgreSQL has
-  been exercised yet.
+  `database-create`; exactly one `database_container` there, of the exact
+  shape above, whose mappings include its `database_port` at `0.0.0.0` or
+  `127.0.0.1` (`database_container_missing_or_repeated`,
+  `database_container_invalid`, `database_endpoint_unbound`); and one
+  `database_drop`, in `database-drop` (`database_drop_misplaced`), with
+  verdict `COMPLETE` whose `database`, `oid`, `role`, `role_oid`,
+  `system_identifier` and `postmaster_start_time` equal it.
+  `ROLE_ONLY_COMPLETE`, `NONE_ALLOCATED` and `UNPROVEN` refuse. The
+  database-create stage checks the published port before any SQL
+  (`container_port_mismatch`). A published mapping is evidence about the
+  container's configuration, not proof that the TCP peer at
+  `127.0.0.1:<port>` is that container: for example, with Docker's userland
+  proxy disabled the publication is a NAT rule, not a listening socket, so
+  a host process could hold the port. This is offline evidence; no real
+  PostgreSQL has been exercised yet.
 
 ## Writer gate (registry and database-drop)
 
