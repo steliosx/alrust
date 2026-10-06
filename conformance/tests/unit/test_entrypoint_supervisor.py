@@ -324,3 +324,92 @@ def test_oversized_journal_is_incomplete(tmp_path):
     path = _journal(tmp_path, b"x" * (sup.MAX_JOURNAL + 1))
     assert sup.journal_observation(path) == \
         {"sha256": None, "state": "INCOMPLETE", "code": None}
+
+
+# REP1-R1 regression controls (Codex's counterexample, 20261006T065451Z
+# f645dca1). Synthetic: main() runs with fork, kill, signal handlers,
+# subreaper, /proc scans and reaping all mocked; no process is created.
+def run_mocked(tmp_path, reap_batches, scan, source=None):
+    import contextlib
+    from unittest import mock
+    if source is None:
+        mod = load(SUPERVISOR, "entrypoint_supervisor_mocked")
+    else:
+        spec = importlib.util.spec_from_loader("entrypoint_supervisor_mutant", loader=None)
+        mod = importlib.util.module_from_spec(spec)
+        exec(compile(source, "mutant", "exec"), mod.__dict__)
+    core, digest, script = setup(tmp_path)
+    journal = tmp_path / "journal.jsonl"
+    journal.write_bytes(_line(0, "stage_begin", {})
+                        + _line(1, "stage_complete", {"result": "COMPLETE"}))
+    argv = ["--receipt", str(tmp_path / "launch.json"), "--terminal",
+            str(tmp_path / "terminal.json"), "--core", str(core), "--core-sha256", digest,
+            "--script", str(script), "--entrypoint-journal", str(journal),
+            "--deadline-monotonic-ns", str(time.monotonic_ns() + 60 * 10**9),
+            "--", sys.executable, str(script)]
+    records, kills, batches = {}, [], iter(reap_batches)
+
+    def write(path, obj):
+        data = (json.dumps(obj, sort_keys=True) + "\n").encode()
+        records[Path(path).name] = json.loads(data)
+        return hashlib.sha256(data).hexdigest()
+
+    with contextlib.ExitStack() as stack:
+        for obj, name, value in [
+                (mod.os, "getpid", lambda: 999), (mod.os, "getpgid", lambda pid: 999),
+                (mod.os, "fork", lambda: 100), (mod.os, "kill", lambda p, s: kills.append(p)),
+                (mod.signal, "signal", lambda *a: None), (mod, "set_subreaper", lambda: 1),
+                (mod, "read_stat", lambda pid: (999, 123)), (mod, "boot_id", lambda: "boot"),
+                (mod, "children", lambda me: list(scan)),
+                (mod, "reap_all", lambda: next(batches)), (mod, "write_exclusive", write)]:
+            stack.enter_context(mock.patch.object(obj, name, value))
+        rc = mod.main(argv)
+    return rc, records["terminal.json"], kills
+
+
+def test_reused_pid_never_overwrites_the_original_status(tmp_path):
+    # Original C_E (PID 100) exits 1; later an adopted descendant that
+    # reused PID 100 is reaped with status 0. The original status stays.
+    rc, final, kills = run_mocked(tmp_path, [([(100, 256)], False), ([(100, 0)], True)], [])
+    assert final["child_wait_status"] == 256
+    assert final["execution"] == "FAIL"
+    assert final["other_descendants_reaped"] == 1
+
+
+def test_reused_pid_signalled_after_exit_is_another_descendant(tmp_path):
+    # Original C_E exits 0; in teardown PID 100 is held by a different
+    # process. Its signal counts as another descendant, never as C_E.
+    rc, final, kills = run_mocked(tmp_path, [([(100, 0)], False), ([(100, 9)], True)], [100])
+    assert kills == [100]
+    assert final["child_signalled"] is False
+    assert final["other_descendant_signals"] == 1
+    assert final["child_wait_status"] == 0
+    # Execution reflects C_E alone; the descendant count is for the gates.
+    assert final["execution"] == "PASS"
+
+
+def test_duplicate_pid_statuses_in_one_batch_keep_the_first(tmp_path):
+    rc, final, kills = run_mocked(tmp_path, [([(100, 256), (100, 0)], False), ([], True)], [])
+    assert final["child_wait_status"] == 256
+    assert final["other_descendants_reaped"] == 1
+    assert final["execution"] == "FAIL"
+
+
+def test_record_reaped_attribution():
+    log = {"child_status": None, "other_reaped": 0}
+    sup.record_reaped(log, 100, [(7, 0), (100, 256), (100, 0), (8, 0)])
+    assert log == {"child_status": 256, "other_reaped": 3}
+
+
+def test_child_signalled_condition_is_now_redundant_in_codex_scenario(tmp_path):
+    # REP1-N1: at f4c19067, removing "not child_signalled" changed the
+    # verdict in this scenario. With generation-aware attribution the
+    # original and the mutant agree, because a reused PID is never C_E.
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    original = run_mocked(tmp_path / "a", [([(100, 0)], False), ([(100, 9)], True)], [100])
+    source = SUPERVISOR.read_text()
+    assert source.count('and not log["child_signalled"]') == 1
+    mutant = run_mocked(tmp_path / "b", [([(100, 0)], False), ([(100, 9)], True)], [100],
+                        source=source.replace('and not log["child_signalled"]', "and True"))
+    assert original[1]["execution"] == mutant[1]["execution"] == "PASS"

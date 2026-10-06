@@ -215,6 +215,22 @@ def reap_all():
         reaped.append((pid, status))
 
 
+def record_reaped(log, child, reaped):
+    """Attribute reaped statuses (REP1-R1).
+
+    C_E's PID names the original generation only until that generation is
+    reaped: an unreaped zombie keeps its PID, so before then no other
+    process can hold it. Once C_E's status is collected, a later holder of
+    the same PID (an adopted descendant that reused it) is a different
+    process. The first collected status is kept and never overwritten,
+    also when two statuses for that PID arrive in one drained batch."""
+    for pid, status in reaped:
+        if pid == child and log["child_status"] is None:
+            log["child_status"] = status
+        else:
+            log["other_reaped"] += 1
+
+
 def signal_phase(me, sig, seconds, log, child):
     """Signal current children, then reap, until ECHILD or the deadline.
 
@@ -229,7 +245,8 @@ def signal_phase(me, sig, seconds, log, child):
             try:
                 os.kill(pid, sig)
                 log["signals"] += 1
-                if pid == child:
+                # Only the unreaped original generation is C_E (REP1-R1).
+                if pid == child and log["child_status"] is None:
                     log["child_signalled"] = True
                 else:
                     log["other_signals"] += 1
@@ -237,9 +254,7 @@ def signal_phase(me, sig, seconds, log, child):
                 pass
         reaped, empty = reap_all()
         log["reaped"] += len(reaped)
-        for pid, status in reaped:
-            if pid == child:
-                log["child_status"] = status
+        record_reaped(log, child, reaped)
         if empty:
             return True
         if time.monotonic() >= deadline:
@@ -329,7 +344,7 @@ def main(argv):
     except (OSError, ValueError):
         child_stat = None
     log = {"signals": 0, "reaped": 0, "child_signalled": False,
-           "other_signals": 0, "child_status": None}
+           "other_signals": 0, "other_reaped": 0, "child_status": None}
     argv_digest = hashlib.sha256(json.dumps(command).encode()).hexdigest()
     receipt = {
         "schema": SCHEMA_LAUNCH,
@@ -373,9 +388,7 @@ def main(argv):
             break
         reaped, _ = reap_all()
         log["reaped"] += len(reaped)
-        for pid, status in reaped:
-            if pid == child:
-                log["child_status"] = status
+        record_reaped(log, child, reaped)
         if log["child_status"] is not None:
             trigger = "child_exited"
             break
@@ -391,8 +404,10 @@ def main(argv):
     execution = "PASS" if (
         empty and trigger == "child_exited" and status is not None
         and os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
-        # Redundant with trigger == "child_exited" (the teardown that could
-        # signal C_E starts only after the trigger); kept as defence in depth.
+        # Kept as defence in depth. With the generation-aware attribution
+        # above, C_E can be signalled only before its status is collected,
+        # so on trigger "child_exited" this should not be needed; Codex
+        # showed (REP1-N1) that it was needed before that fix.
         and not log["child_signalled"]
         and journal is not None and journal["state"] == "COMPLETE") else "FAIL"
     terminal = {
@@ -405,6 +420,7 @@ def main(argv):
         "child_wait_status": status,
         "child_signalled": log["child_signalled"],
         "other_descendant_signals": log["other_signals"],
+        "other_descendants_reaped": log["other_reaped"],
         "entrypoint_journal": journal,
         "execution": execution,
         "signals_sent": log["signals"],
