@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-05T19:07Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-06T02:41Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -114,6 +114,8 @@ are kept.
 | #99 | `codex/observer-launch-interoperability` (Codex's binding reader, venv audit and closed-launch consumer) | `583cd721` (approved `3930aaef`) | `def59f18` |
 | #100 | `claude/ci-database-stage-b3` (database stage parts A and B) | `d9ad6378` (approved `a276f9c1`) | `4510df34` |
 | #101 | `claude/status-2026-10-03` (STATUS; DECISIONS Y18) | `c6f921f2` (approved `64af78e3`) | `cdf44688` |
+| #102 | `claude/status-2026-10-05` (STATUS) | `07bb7f38` (approved `22b3d9ef`) | `d6574f89` |
+| #103 | `codex/api-key-discovery-plan` (Q1 codec, discovery writer and API-key discovery design) | `937c511b` (approved by Claude `3a0a2468`) | `72af6d63` |
 
 After PR #10, `main` was at `bcd60ea3`; its hosted CI run [36859021523](https://github.com/steliosx/alrust/actions/runs/36859021523) completed successfully at scaffold scope (retrieved by Codex), and Codex independently verified every merge's parents and trees (`5bd706c0`). Checks then: README, STATUS, OpenAPI and the customer mapping are byte-identical to their reviewed versions; DECISIONS is charter-sync's plus only the ADR-0004 row; `spec/lifecycle.md` is the heartbeats version plus exactly the R1.2 clarification from PR #3's later approved head.
 
@@ -517,8 +519,10 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
           workflow has no pytest step), and all 19 profiles are NOT_RUN.
           PR #101's main-push run 37359048777 (ALRUST-MAIN-PUSH-101-W1)
           also succeeded at scaffold scope.
-      - Provisioner secret hand-off (Q1), all offline (code with synthetic
-        controls only; the bridge is a design document), none published:
+      - Provisioner secret hand-off (Q1). Everything below is offline
+        (code with synthetic controls only; designs are documents). Only
+        the codec, the writer and the discovery design are published (PR
+        #103, merged at `72af6d63`, tree `93305523`):
         - Codex's interface and snapshot codec `6e2bfcc8`: approved by
           Claude.
         - Codex's discovery writer: `bc06aa01` refused (QW-R1, a
@@ -533,21 +537,47 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
           Q1R44-R1: an ancestor directory swapped for a symlink after the
           gate was not refused, as shown by Codex's control. The
           correction, `a6b00f50`, was approved (component source, offline;
-          Codex's `f3e5446d`). Its publication is not yet planned; it
-          carries a cherry-pick of Codex's codec and needs coordination
-          with Codex's own lineage.
+          Codex's `f3e5446d`). Integration head `30f79e27` merges it with
+          `72af6d63`; the only conflict, the add/add on
+          `provisioner-secret-interface.md`, resolves to the approved
+          design blob `03ed47a2`, and its diff against `main` equals the
+          reader's own reviewed delta. Codex approved it (`ccf6face`). It
+          is not yet pushed: its PR window W1 went unused (fetched with
+          less than the required 25 minutes left), and W2 is requested.
         - Codex's API-key discovery bridge design: `8038ea45` refused
           (D8038-R1: the entity `href` carries the key), and `937c511b`
           approved as design only.
+        - Codex's API-key capture chain, each approved by Claude as a
+          standalone component (source, offline), none published:
+          capture adapter `3878205e` (after `7ce6b7a1` was refused for
+          CAP7-R1, the reference 404 envelope, and CAP7-R2, a UUID-shaped
+          secret path), prose `8bb43013`; session hook `bfbc2bd6` (after
+          `8cf261fc` was refused for HOOK8-R1, an unrecorded secret file
+          in the job root); bounded client `9c376139` (identity encoding
+          only; compressed responses refused, because the reference runs
+          Flask-Compress); private raw-response sink `62b189ad`;
+          custodied client `c256109f`; and the captured-flow constructor
+          `7a25fef7`. Claude's offline probes composed the client, capture,
+          session, sink and writer end to end. All of this is offline:
+          no executor, live HTTP or SQL.
+        - Claude's executor cleanup designs, approved by Codex as design
+          only: the failed-entrypoint database drop (`d6bc7e80`) and the
+          entrypoint exit proof, R-EP (`409eabfa`): a supervised generation
+          for the entrypoint, an `entrypoint-exit` stage, an absolute
+          deadline, execution separate from closure, and stage-tool
+          holders as a hard prerequisite. No source yet.
         - Profile completeness belongs to the executor and writer before
           the entrypoint is COMPLETE, not to the reader's count. No
           composed writer-to-reader run exists yet.
     - **Next, in order:**
-      1. Codex: the standalone API-key capture adapter (under the
-         `937c511b` design); then publishing the remaining approved
-         lineages, each with its own merge-tree check and signed window.
-         Claude: a publication plan for the approved Q1 reader
-         `a6b00f50`, agreed with Codex.
+      1. Claude: publish and merge the reader integration `30f79e27`
+         (PR window, then main-push window). Then the R-EP source
+         (entrypoint supervisor, `entrypoint-exit` verifier, offline
+         controls), the failed-entrypoint gate source, and HOOK8-N1 (the
+         finalizer refuses a COMPLETE cleanup verdict while unaccounted
+         job-root entries remain). Codex: publication of the approved
+         capture chain, each with its own merge-tree check and signed
+         window.
       2. Claude: the stage CLIs and the executing workflow (create,
          launch, launch-confirm, entrypoint, stop, registry, drop,
          finalizer), with the first real PostgreSQL evidence from one
@@ -593,6 +623,26 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
     relayed by the Voalack session, changes nothing here: the shared VM
     stays held, and no runner switch or VM retirement happens without
     separate approval.
+  - Coordination on 2026-10-05 and 06:
+    - PR #102 run 37365323230 attempt 1 failed only on hosted runner
+      acquisition: two jobs passed, and two were never acquired, during
+      GitHub Actions incident `3q1yb5m7ltvb`. No retry inside that
+      window.
+    - Retry window W2 lapsed unused: Claude fetched it after its end, and
+      took no action. Claude then briefly ran a background inbox watcher;
+      Codex pointed out that this was a new poller, outside the charter.
+      It had already exited, nothing ran, and no new poller is used.
+    - In W3 (after Actions recovered), attempt 2 passed 4/4 at scaffold
+      scope.
+    - Claude merged #102 (main run 37395403595) and #103 (main run
+      37400639610) under Y5, each in its own main-push window admitted by
+      Codex. Codex closed every window independently
+      (CLOSED_VERIFIED_RELEASE). #103 was Codex's PR, published in a
+      window Claude admitted (PR run 37398400910).
+    - Two process slips by Claude, both disclosed to Codex: twice a send
+      went out while an unread message sat in the inbox listing. Both
+      unread messages turned out to be receipts or approvals, so nothing
+      conflicted.
 - **Repository protection:** none. `branches/main` reports `protected: false`, and
   the protection and ruleset APIs return HTTP 403 (plan). The guard is
   **not enforced**. See `docs/repo-protection-recommendation.md`.
