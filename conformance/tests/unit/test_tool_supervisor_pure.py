@@ -271,10 +271,39 @@ def test_driver_other_errors_never_print_a_traceback(monkeypatch, capsys):
     def boom(*a, **k):
         raise RuntimeError("postgresql://alrust_x:SECRETVALUE@127.0.0.1:5432/alrust_x")
     monkeypatch.setattr(ds, "run_registry_stage", boom)
-    assert drv.main(REGISTRY) == 2
+    assert drv.main(REGISTRY) == 3
     captured = capsys.readouterr()
     assert "SECRETVALUE" not in captured.out + captured.err
-    assert json.loads(captured.out)["code"] == "driver_error"
+    # Not a FAILED claim: the journal says whether the stage closed.
+    assert json.loads(captured.out) == {"result": "UNKNOWN", "tool": "registry",
+                                        "code": "driver_error"}
+
+
+@pytest.mark.parametrize("error", [RuntimeError("SECRETVALUE"), ImportError("SECRETVALUE"),
+                                   SyntaxError("SECRETVALUE"), KeyboardInterrupt()])
+def test_driver_loader_failure_is_not_run_without_text(runners, monkeypatch, capsys, error):
+    """P2B2-SOURCE-R1: setup fails before any stage is opened."""
+    def fail():
+        raise error
+    monkeypatch.setattr(drv, "_modules", fail)
+    assert drv.main(CREATE) == 70
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {"result": "NOT_RUN", "reason": "driver_setup_failed"}
+    assert "SECRETVALUE" not in captured.out + captured.err and runners == []
+
+
+@pytest.mark.parametrize("name", ["DATABASE_URL", "SECRET_KEY", "PGPASSWORD"])
+def test_driver_refuses_a_secret_bearing_environment(runners, monkeypatch, capsys, name):
+    monkeypatch.setenv(name, "SECRETVALUE")
+    assert drv.main(CREATE) == 70
+    out = capsys.readouterr().out
+    assert json.loads(out) == {"result": "NOT_RUN", "reason": "secret_in_environment"}
+    assert "SECRETVALUE" not in out and runners == []
+
+
+def test_driver_positive_still_loads_the_real_module(runners, capsys):
+    assert drv._modules() is ds
+    assert drv.main(CREATE) == 0
 
 
 def test_run_create_stage_closes_failed_with_the_code(tmp_path, monkeypatch):
@@ -292,3 +321,115 @@ def test_run_create_stage_closes_failed_with_the_code(tmp_path, monkeypatch):
                            sj.MAX_JOURNAL).splitlines()[-1]
     assert json.loads(last)["evidence"]["payload"] == {"result": "FAILED",
                                                        "code": "name_already_exists"}
+
+
+# --- P2B2-TEST-R1: the process harness's run_tool, with a fake owned child ---
+
+import signal as _signal                                   # noqa: E402
+import subprocess as _subprocess                           # noqa: E402
+
+import test_tool_supervisor_process as tsp                 # noqa: E402
+
+
+class FakeProc:
+    """An owned Popen stand-in. WAITS lists what successive wait() calls do:
+    an int return code, or an exception to raise."""
+
+    def __init__(self, log, waits, signal_error=None, stderr=None, payload=b""):
+        self.log, self.waits, self.signal_error = log, list(waits), signal_error
+        self.returncode = None
+        if stderr is not None:
+            stderr.write(payload)
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        self.log.append(("wait", timeout))
+        step = self.waits.pop(0)
+        if isinstance(step, BaseException):
+            raise step
+        self.returncode = step
+        return step
+
+    def send_signal(self, sig):
+        self.log.append(("signal", sig))
+        if self.signal_error:
+            raise self.signal_error
+
+    def kill(self):
+        self.log.append(("kill",))
+
+
+@pytest.fixture
+def harness(tmp_path, monkeypatch):
+    log, plan = [], {"waits": [0], "signal_error": None, "payload": b""}
+    monkeypatch.setattr(tsp.subprocess, "Popen", lambda args, **kw: FakeProc(
+        log, plan["waits"], plan["signal_error"], kw.get("stderr"), plan["payload"]))
+    monkeypatch.setattr(os, "kill", lambda *a: log.append(("bare_kill",) + a))
+
+    def run():
+        return tsp.run_tool(tmp_path, "a" * 64, tmp_path / "driver.py", "complete", tmp_path)
+    return log, plan, run
+
+
+def test_budgets_cover_deadline_and_teardown():
+    assert tsp.TEARDOWN_S * 1e9 == sup.TEARDOWN_BUDGET_NS
+    assert tsp.WAIT_S > tsp.TOOL_DEADLINE_S + tsp.TEARDOWN_S
+
+
+def test_run_tool_positive_reads_bounded_stderr(harness):
+    log, plan, run = harness
+    plan["payload"] = b"x" * (tsp.MAX_STDERR + 100)
+    rc, err = run()
+    assert rc == 0 and len(err) == tsp.MAX_STDERR
+    assert log == [("wait", tsp.WAIT_S)]
+
+
+@pytest.mark.parametrize("error", [_subprocess.TimeoutExpired("sup", 51), KeyboardInterrupt()])
+def test_run_tool_timeout_or_interrupt_stops_the_owned_supervisor(harness, error):
+    log, plan, run = harness
+    plan["waits"] = [error, -15]
+    with pytest.raises(type(error)):
+        run()
+    assert log == [("wait", tsp.WAIT_S), ("signal", _signal.SIGTERM),
+                   ("wait", tsp.TEARDOWN_S + tsp.MARGIN_S)]
+
+
+def test_run_tool_kills_only_the_owned_handle_if_teardown_stalls(harness):
+    log, plan, run = harness
+    plan["waits"] = [_subprocess.TimeoutExpired("sup", 51),
+                     _subprocess.TimeoutExpired("sup", 21), -9]
+    with pytest.raises(_subprocess.TimeoutExpired):
+        run()
+    assert log == [("wait", tsp.WAIT_S), ("signal", _signal.SIGTERM),
+                   ("wait", tsp.TEARDOWN_S + tsp.MARGIN_S), ("kill",),
+                   ("wait", tsp.MARGIN_S)]
+    assert not any(e[0] == "bare_kill" for e in log)
+
+
+def test_run_tool_keeps_the_primary_failure_when_cleanup_fails(harness):
+    log, plan, run = harness
+    plan["waits"] = [KeyboardInterrupt()]
+    plan["signal_error"] = OSError("synthetic signal failure")
+    with pytest.raises(BaseExceptionGroup) as group:
+        run()
+    kinds = [type(e) for e in group.value.exceptions]
+    assert kinds == [KeyboardInterrupt, OSError]
+
+
+def test_run_tool_cleanup_failure_alone_is_raised(harness, monkeypatch):
+    log, plan, run = harness
+    plan["waits"] = [0]
+    monkeypatch.setattr(tsp, "stop_owned", lambda proc: (_ for _ in ()).throw(
+        OSError("synthetic cleanup failure")))
+    with pytest.raises(OSError, match="synthetic cleanup failure"):
+        run()
+
+
+def test_stop_owned_does_nothing_for_an_exited_child():
+    log = []
+    proc = FakeProc(log, [0])
+    proc.returncode = 0
+    tsp.stop_owned(proc)
+    assert log == []

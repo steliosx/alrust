@@ -8,8 +8,10 @@ real receipts are then verified with tool_exit, end to end. A process that
 outlives its test is never signalled by bare PID: it is reported, and the
 window's read-only check holds.
 """
+import itertools
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -25,6 +27,14 @@ ROOT = Path(__file__).resolve().parents[3]
 SUPERVISOR = ROOT / "conformance/scripts/entrypoint-supervisor.py"
 CONFORMANCE = ROOT / "conformance"
 PY = [sys.executable, "-I", "-S", "-B"]
+# Budgets (P2B2-TEST-R1): the supervisor ends by D plus its teardown budget B
+# on its own; the harness waits that long plus a margin, then stops it.
+TOOL_DEADLINE_S = 30.0
+TEARDOWN_S = 16.0          # entrypoint-supervisor.py TEARDOWN_BUDGET_NS
+MARGIN_S = 5.0
+WAIT_S = TOOL_DEADLINE_S + TEARDOWN_S + MARGIN_S
+MAX_STDERR = 1 << 16
+_runs = itertools.count()
 
 pytestmark = pytest.mark.skipif(not sys.platform.startswith("linux"),
                                 reason="Linux /proc and prctl")
@@ -87,7 +97,31 @@ def make_job(tmp_path, monkeypatch):
     return root, digest, driver, expected
 
 
-def run_tool(root, digest, driver, mode, tmp_path, deadline_s=60.0):
+def stop_owned(proc):
+    """Stop P_T, this test's own unreaped Popen child, if it is still
+    running: TERM asks it to tear its own tree down (its reviewed
+    teardown, within B); if it does not exit, KILL only P_T through the
+    owned handle and reap it. Any descendant that then survives is left
+    for the window's read-only check (HOLD); nothing is signalled by bare
+    PID."""
+    if proc.poll() is not None:
+        return
+    proc.send_signal(signal.SIGTERM)
+    try:
+        proc.wait(timeout=TEARDOWN_S + MARGIN_S)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=MARGIN_S)
+
+
+def read_stderr(path):
+    """At most MAX_STDERR bytes of a file the supervisor wrote; a file, not a
+    pipe, so a surviving writer can never block the read."""
+    with open(path, "rb") as f:
+        return f.read(MAX_STDERR).decode(errors="replace")
+
+
+def run_tool(root, digest, driver, mode, tmp_path, deadline_s=TOOL_DEADLINE_S):
     launch, terminal = te.receipt_paths(str(root), "database-create", 0)
     journal = sj.journal_path(str(root), 0, "database-create")
     args = PY + [str(SUPERVISOR), "--receipt", launch, "--terminal", terminal,
@@ -97,10 +131,27 @@ def run_tool(root, digest, driver, mode, tmp_path, deadline_s=60.0):
                  "--tool", "database-create", "--stage-index", "0", "--",
                  sys.executable, "-I", str(driver), str(root), mode,
                  str(tmp_path / "escaped.pid")]
-    proc = subprocess.Popen(args, process_group=0, stdin=subprocess.DEVNULL,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    rc = proc.wait(timeout=60)
-    return rc, proc.stderr.read().decode(errors="replace")
+    err_path = tmp_path / ("supervisor-stderr-%d.txt" % next(_runs))
+    with open(err_path, "wb") as err:
+        proc = subprocess.Popen(args, process_group=0, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=err)
+    # From the first successful spawn: every exit path stops P_T if needed;
+    # a cleanup failure never hides the original one.
+    primary = None
+    try:
+        rc = proc.wait(timeout=WAIT_S)
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        try:
+            stop_owned(proc)
+        except BaseException as cleanup:
+            if primary is None:
+                raise
+            raise BaseExceptionGroup("run_tool failed and its cleanup failed",
+                                     [primary, cleanup]) from None
+    return rc, read_stderr(err_path)
 
 
 def alive(pid):

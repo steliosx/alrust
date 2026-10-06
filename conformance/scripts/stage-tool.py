@@ -14,12 +14,24 @@ or read (registry) only inside the supervised tree, after P_T exists
   registry --job-root J --prefix a,b,c --secret-key-file F --port N
       --psql PATH --deadline-monotonic-ns D
 
-No secret value is accepted in argv or the environment: the only password
-in argv is the service superuser's, which is public (database design
-section 1). The registry reads SECRET_KEY from its 0600 file, the job
-role's URL from the 0600 URL file and the entrypoint values from the
-inventory. One JSON line on stdout names the stage result, never a value.
-Exit 0 COMPLETE, 2 the stage closed FAILED (code given), 64 usage.
+No secret value is accepted in argv: the only password in argv is the
+service superuser's, which is public (database design section 1). The
+environment is the caller's, inherited through P_T's execv: the caller
+must pass a minimal environment with no secret values (the window uses
+env -i; the workflow's paths-only wiring is P2c). The driver refuses to
+start if DATABASE_URL, SECRET_KEY or PGPASSWORD is present, but that
+does not make an arbitrary inherited environment safe (P2B2-SCOPE-N1).
+The registry reads SECRET_KEY from its 0600 file, the job role's URL from
+the 0600 URL file and the entrypoint values from the inventory.
+
+One JSON line on stdout names the outcome, never a value or exception
+text:
+  0  COMPLETE: the stage closed COMPLETE;
+  2  FAILED: the stage closed FAILED with the given fixed code;
+  3  UNKNOWN: an unexpected error after the runner started; the stage
+     journal, not this line, says whether and how it closed;
+  70 NOT_RUN: setup failed before any stage was opened;
+  64 NOT_RUN: usage.
 """
 import json
 import os
@@ -33,6 +45,7 @@ CREATE_OPTIONS = ("--job-root", "--profile", "--run-id", "--attempt", "--port",
 REGISTRY_OPTIONS = ("--job-root", "--prefix", "--secret-key-file", "--port", "--psql",
                     "--deadline-monotonic-ns")
 PATH_OPTIONS = ("--job-root", "--secret-key-file", "--psql", "--docker")
+SECRET_VARIABLES = ("DATABASE_URL", "SECRET_KEY", "PGPASSWORD")
 
 
 def _modules():
@@ -82,7 +95,12 @@ def main(argv):
     opts = parse(argv[1:], CREATE_OPTIONS if tool == "database-create" else REGISTRY_OPTIONS)
     if opts is None:
         return _emit({"result": "NOT_RUN", "reason": "usage"}, 64)
-    ds = _modules()
+    if any(name in os.environ for name in SECRET_VARIABLES):
+        return _emit({"result": "NOT_RUN", "reason": "secret_in_environment"}, 70)
+    try:
+        ds = _modules()
+    except BaseException:  # no stage was opened; never print the error text
+        return _emit({"result": "NOT_RUN", "reason": "driver_setup_failed"}, 70)
     try:
         if tool == "database-create":
             ds.run_create_stage(
@@ -101,7 +119,9 @@ def main(argv):
     except ds.DatabaseStageError as error:
         return _emit({"result": "FAILED", "tool": tool, "code": error.code}, 2)
     except Exception:  # never a traceback: it could carry a value
-        return _emit({"result": "FAILED", "tool": tool, "code": "driver_error"}, 2)
+        # The stage may or may not have been opened or closed; its journal
+        # is the record, so this line does not claim FAILED.
+        return _emit({"result": "UNKNOWN", "tool": tool, "code": "driver_error"}, 3)
     return _emit({"result": "COMPLETE", "tool": tool}, 0)
 
 

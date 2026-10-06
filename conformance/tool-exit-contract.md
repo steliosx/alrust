@@ -52,8 +52,15 @@ failure, the fixed code only, never a value or a traceback.
   `INTERPRETER -I [-S] [-B] [-u] DRIVER NAME ...` (the P1 invocation
   grammar). So the password is generated or read only inside `C_T`, after
   `P_T` exists, and never before.
-- Secrets never appear in `C_T`'s argv or environment. Only file paths, the
-  port and the public superuser password are passed in.
+- Secrets never appear in `C_T`'s argv. Only file paths, the port and the
+  public superuser password are passed in.
+- **Caller prerequisite (P2B2-SCOPE-N1).** `C_T` inherits the caller's
+  environment through `P_T`'s `execv`. The caller must start `P_T` with a
+  minimal environment holding no secret values: the local windows use
+  `env -i`, and the workflow's paths-only wiring is P2c. The driver
+  refuses to start if `DATABASE_URL`, `SECRET_KEY` or `PGPASSWORD` is
+  present. That is a check for the known names only; this component does
+  not make an arbitrary inherited environment safe.
 - Before the fork, tool mode also requires: `NAME` is one of the two tools;
   `N` is 0..30 (canonical decimal); and the receipt, terminal and journal
   paths are exactly the fixed ones under the core's `job_root`. It then
