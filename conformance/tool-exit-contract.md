@@ -176,6 +176,46 @@ and the caller's when the gate runs. Neither alone selects the expectation.
 The producer side, P2b-2's supervisor tool mode, refuses a legacy core or a
 driver mismatch pre-fork.
 
+**As implemented (P3a).** `finalizer.gate_exit_proofs` is shared by the
+writer gate and `finalize()`:
+- **One core snapshot.** It is read once, its sha256 must equal the
+  aggregation's `core_identity_sha256` (`gate_core_changed`), it must be
+  /3 (`gate_legacy_core`), and the caller's pins (`{"entrypoint", "tools"}`)
+  must equal the core's entrypoint pins (`gate_pins_mismatch`).
+  `verify_entrypoint_exit` and `holder_proofs` take that snapshot.
+- **A1.** There is exactly one `entrypoint_exit_verdict`, in
+  `entrypoint-exit`, which must be closed COMPLETE immediately after the
+  entrypoint. The record is typed and equal as a whole (canonical JSON) to
+  the verdict recomputed now; it must be COMPLETE, with its journal digest
+  equal to the aggregation's. On the normal path, execution must be PASS,
+  and the terminal receipt (read, then hashed to the verdict's digest)
+  must show `other_descendant_signals == 0`.
+- **Holders.** `holder_proofs` with the gate's required set.
+- **Order.** `database-create-exit`, `launch-confirm` and `entrypoint-exit`
+  each come immediately after their stage, and the order is
+  database-create < launch < entrypoint < stop (`gate_stages_invalid`).
+  `finalize()` also requires `registry-exit` immediately after `registry`.
+
+All of this runs before any mutable read, SQL, removal or export: before
+`load_registry`, the candidate checks and the export directory in
+`finalize()`, and before the registry or drop journal opens in the stage
+runners.
+- `run_registry_stage(..., expected=...)` requires (`database-create`).
+- `run_drop_stage(..., launched, expected=...)` takes its path from the
+  evidence: `launched` must equal `"launch" in prefix`, or
+  `drop_path_mismatch`.
+- The launched path uses the writer gate with both holders, then
+  `registry_frozen`. The no-launch path uses `no_launch_quiescence(job_root,
+  [database-create, database-create-exit], expected)`: the holder proof,
+  even when the create stage closed FAILED, and still no launch evidence.
+- The finalizer removes the `entrypoint/` and `tools/` receipt directories
+  as proof inputs, as it already does for `reference/`.
+- The stage-tool driver passes the expected pins from a JSON file
+  (`--expected-pins`).
+
+Not in P3a: A2 (`failed_entrypoint_quiescence`, P3b), the job-role binding
+before the first read (P3c), and the paths-only failure record (P3d).
+
 ## 8. Deadlines
 
 Each tool run gets its own `D` and `B` = 16 s in its launch receipt, as for

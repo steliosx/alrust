@@ -12,7 +12,11 @@ or read (registry) only inside the supervised tree, after P_T exists
       --superuser U --public-superuser-password W --container-id C
       --psql PATH --docker PATH --deadline-monotonic-ns D
   registry --job-root J --prefix a,b,c --secret-key-file F --port N
-      --psql PATH --deadline-monotonic-ns D
+      --psql PATH --deadline-monotonic-ns D --expected-pins P
+
+P is a JSON file (not a secret) holding the workflow head's pins,
+{"entrypoint": {...}, "tools": {...}}, which the registry stage's writer
+gate checks against the /3 core (R-EP plan P3a).
 
 No secret value is accepted in argv: the only password in argv is the
 service superuser's, which is public (database design section 1). The
@@ -43,8 +47,25 @@ CREATE_OPTIONS = ("--job-root", "--profile", "--run-id", "--attempt", "--port",
                   "--superuser", "--public-superuser-password", "--container-id",
                   "--psql", "--docker", "--deadline-monotonic-ns")
 REGISTRY_OPTIONS = ("--job-root", "--prefix", "--secret-key-file", "--port", "--psql",
-                    "--deadline-monotonic-ns")
-PATH_OPTIONS = ("--job-root", "--secret-key-file", "--psql", "--docker")
+                    "--deadline-monotonic-ns", "--expected-pins")
+PATH_OPTIONS = ("--job-root", "--secret-key-file", "--psql", "--docker", "--expected-pins")
+MAX_PINS = 1 << 16
+
+
+def read_pins(path):
+    """The expected-pins JSON object: a regular file read without following
+    a final link, bounded. Its shape is checked by the gate."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        data = os.read(fd, MAX_PINS + 1)
+    finally:
+        os.close(fd)
+    if len(data) > MAX_PINS:
+        raise ValueError("pins too large")
+    value = json.loads(data)
+    if type(value) is not dict:
+        raise ValueError("pins not an object")
+    return value
 SECRET_VARIABLES = ("DATABASE_URL", "SECRET_KEY", "PGPASSWORD")
 
 
@@ -99,6 +120,7 @@ def main(argv):
         return _emit({"result": "NOT_RUN", "reason": "secret_in_environment"}, 70)
     try:
         ds = _modules()
+        pins = read_pins(opts["--expected-pins"]) if tool == "registry" else None
     except BaseException:  # no stage was opened; never print the error text
         return _emit({"result": "NOT_RUN", "reason": "driver_setup_failed"}, 70)
     try:
@@ -115,7 +137,7 @@ def main(argv):
             ds.run_registry_stage(
                 opts["--job-root"], prefix, secret_key_path=opts["--secret-key-file"],
                 port=opts["--port"], psql_path=opts["--psql"],
-                deadline_ns=opts["--deadline-monotonic-ns"])
+                deadline_ns=opts["--deadline-monotonic-ns"], expected=pins)
     except ds.DatabaseStageError as error:
         return _emit({"result": "FAILED", "tool": tool, "code": error.code}, 2)
     except Exception:  # never a traceback: it could carry a value

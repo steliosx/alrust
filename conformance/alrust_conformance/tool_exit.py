@@ -204,7 +204,7 @@ def required_holders(stage_names, required):
     return holders
 
 
-def holder_proofs(job_root, aggregation, records, required, expected):
+def holder_proofs(job_root, aggregation, records, required, expected, core_bytes=None):
     """The gates' holder check (P3 wires it into writer_quiescence, finalize
     and failed_entrypoint_quiescence). AGGREGATION and RECORDS are the gate's
     own validated aggregation and its (stage, kind, payload) records;
@@ -219,16 +219,18 @@ def holder_proofs(job_root, aggregation, records, required, expected):
     appear anywhere else. The core must be /3 and EXPECTED equal to its
     tool_pins (through verify_tool_exit; P2b). The core is read once here,
     must hash to the aggregation's core_identity_sha256, and that one
-    snapshot is used for every recomputation (P2B1-SOURCE-R1). Returns the
-    verified records; raises HolderError."""
+    snapshot is used for every recomputation (P2B1-SOURCE-R1). A gate passes
+    its own snapshot as CORE_BYTES (P3a); it is still bound to the
+    aggregation. Returns the verified records; raises HolderError."""
     _require(type(expected) is dict and set(expected) == set(HOLDER_TOOLS)
              and all(_expected_ok(expected[t]) for t in HOLDER_TOOLS),
              "holder_pins_invalid")
     _require(aggregation.get("verdict") in ("VALID", "FAILED"), "holder_aggregation_incomplete")
-    try:
-        core_bytes = _read_core(job_root)
-    except (_sj.JournalError, OSError):
-        raise HolderError("holder_core_unreadable") from None
+    if core_bytes is None:
+        try:
+            core_bytes = _read_core(job_root)
+        except (_sj.JournalError, OSError):
+            raise HolderError("holder_core_unreadable") from None
     _require(hashlib.sha256(core_bytes).hexdigest() == aggregation.get("core_identity_sha256"),
              "holder_core_changed")
     stages = aggregation["stages"]

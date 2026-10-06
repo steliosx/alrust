@@ -424,7 +424,131 @@ def _launch_handoff(records, aggregation, stop, launched):
         "launch_handoff_mismatch")
 
 
-def writer_quiescence(job_root, stages, entrypoint_stage="entrypoint"):
+# ---------------------------------------------------------------------------
+# R-EP plan P3a: exit proofs in the gates (contract tool-exit-contract.md
+# section 7; design 409eabfa A1). Every gate reads the core once, binds that
+# snapshot to the aggregation, checks the caller's workflow-head pins against
+# the /3 core, recomputes the entrypoint-exit verdict and every required
+# holder's tool-exit verdict, and compares each with the recorded one, typed
+# and whole. All of this happens before any mutable read, SQL, removal or
+# export.
+
+EXPECTED_PIN_KEYS = frozenset({"entrypoint", "tools"})
+ENTRYPOINT_EXIT_STAGE = "entrypoint-exit"
+
+
+def _require_order(stages, through, entrypoint_stage):
+    """The prefix order through THROUGH ("stop" for the writer gate, the
+    full list for finalize): database-create immediately followed by its
+    exit stage, launch immediately followed by launch-confirm, the
+    entrypoint immediately followed by entrypoint-exit, then stop."""
+    names = ("database-create", "database-create-exit", "launch", "launch-confirm",
+             entrypoint_stage, ENTRYPOINT_EXIT_STAGE, "stop")
+    _require(type(stages) is list and all(n in stages for n in names)
+             and all(stages.count(n) == 1 for n in names)
+             and stages.index("database-create-exit") == stages.index("database-create") + 1
+             and stages.index("launch-confirm") == stages.index("launch") + 1
+             and stages.index(ENTRYPOINT_EXIT_STAGE) == stages.index(entrypoint_stage) + 1
+             and stages.index("database-create") < stages.index("launch")
+             < stages.index(entrypoint_stage) < stages.index("stop")
+             and through in stages, "gate_stages_invalid")
+
+
+def _gate_core(job_root, aggregation, expected):
+    """The single core snapshot for a gate: read once, its digest equal to
+    the aggregation's, valid, /3, and the caller's entrypoint pins equal to
+    its entrypoint_pins (tool pins are compared by holder_proofs)."""
+    core_bytes = read_bounded(os.path.join(job_root, _sj.CORE_NAME), _sj.MAX_CORE)
+    _require(hashlib.sha256(core_bytes).hexdigest() == aggregation.get("core_identity_sha256"),
+             "gate_core_changed")
+    core = _sj.validate_core(core_bytes, job_root)
+    _require(core["schema"] == _sj.SCHEMA_CORE_V3, "gate_legacy_core")
+    _require(type(expected) is dict and set(expected) == EXPECTED_PIN_KEYS
+             and type(expected["entrypoint"]) is dict
+             and set(expected["entrypoint"]) == {"entrypoint_script_sha256", "interpreter_path"},
+             "gate_pins_invalid")
+    pins = core["entrypoint_pins"]
+    _require(expected["entrypoint"]["entrypoint_script_sha256"]
+             == pins["entrypoint_script"]["sha256"]
+             and expected["entrypoint"]["interpreter_path"] == pins["interpreter"]["path"],
+             "gate_pins_mismatch")
+    return core_bytes, core
+
+
+def _typed_entrypoint_verdict(payload):
+    from . import entrypoint_exit as _ee
+    hashes = ("launch_receipt_sha256", "terminal_receipt_sha256", "entrypoint_journal_sha256")
+    _require(type(payload) is dict and set(payload) == _ee.VERDICT_KEYS
+             and type(payload["verdict"]) is str
+             and payload["verdict"] in ("COMPLETE", "FAILED", "UNPROVEN")
+             and type(payload["reason"]) is str
+             and all(payload[k] is None or _sha(payload[k]) for k in hashes)
+             and (payload["entrypoint_state"] is None
+                  or payload["entrypoint_state"] in ("COMPLETE", "FAILED", "INCOMPLETE"))
+             and payload["execution"] in ("PASS", "FAIL") and type(payload["execution"]) is str
+             and (payload["trigger"] is None or type(payload["trigger"]) is str),
+             "entrypoint_exit_verdict_malformed")
+
+
+def _canonical(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def entrypoint_exit_proof(job_root, aggregation, records, core_bytes, expected_entry,
+                          entrypoint_stage="entrypoint", require_pass=True):
+    """A1: exactly one entrypoint_exit_verdict, in entrypoint-exit (closed
+    COMPLETE, immediately after the entrypoint), typed, and equal as a whole
+    to the verdict recomputed now from the receipts with the gate's core
+    snapshot; COMPLETE; its journal digest equal to the aggregation's. With
+    REQUIRE_PASS (the normal path): execution PASS and no signal sent to any
+    other descendant (from the terminal receipt bytes the verdict names)."""
+    from . import entrypoint_exit as _ee
+    stages = aggregation["stages"]
+    names = [stage["name"] for stage in stages]
+    index = names.index(entrypoint_stage)
+    _require(index + 1 < len(names) and names[index + 1] == ENTRYPOINT_EXIT_STAGE
+             and stages[index + 1]["result"] == "COMPLETE", "entrypoint_exit_stage_not_complete")
+    offered = [(stage, payload) for stage, kind, payload in records
+               if kind == "entrypoint_exit_verdict"]
+    _require(len(offered) == 1 and offered[0][0] == ENTRYPOINT_EXIT_STAGE,
+             "entrypoint_exit_verdict_missing_or_repeated")
+    payload = offered[0][1]
+    _typed_entrypoint_verdict(payload)
+    fresh = _ee.verify_entrypoint_exit(job_root, index, expected_entry, core_bytes)
+    _typed_entrypoint_verdict(fresh)
+    _require(_canonical(fresh) == _canonical(payload), "entrypoint_exit_verdict_mismatch")
+    _require(fresh["verdict"] == "COMPLETE", "entrypoint_exit_not_proven")
+    _require(fresh["entrypoint_journal_sha256"] == stages[index]["sha256"],
+             "entrypoint_journal_mismatch")
+    if require_pass:
+        _require(fresh["execution"] == "PASS", "entrypoint_execution_failed")
+        terminal = read_bounded(_ee.receipt_paths(job_root)[1], _ee.MAX_RECEIPT)
+        _require(hashlib.sha256(terminal).hexdigest() == fresh["terminal_receipt_sha256"],
+                 "entrypoint_terminal_changed")
+        signals = _sj.strict_json(terminal, "entrypoint_terminal_changed").get(
+            "other_descendant_signals")
+        _require(type(signals) is int and signals == 0, "entrypoint_descendant_signalled")
+    return fresh
+
+
+def gate_exit_proofs(job_root, aggregation, records, expected, required,
+                     entrypoint_stage="entrypoint"):
+    """The P3a checks shared by the writer gate and finalize(): one core
+    snapshot, pins, A1 (normal path) and the required holders. Returns
+    {"entrypoint_exit", "holders"}."""
+    from . import tool_exit as _te
+    core_bytes, _ = _gate_core(job_root, aggregation, expected)
+    proof = entrypoint_exit_proof(job_root, aggregation, records, core_bytes,
+                                  expected["entrypoint"], entrypoint_stage)
+    try:
+        holders = _te.holder_proofs(job_root, aggregation, records, required,
+                                    expected["tools"], core_bytes)
+    except _te.HolderError as error:
+        raise FinalizerError(str(error)) from None
+    return {"entrypoint_exit": proof, "holders": holders}
+
+
+def writer_quiescence(job_root, stages, expected, required, entrypoint_stage="entrypoint"):
     """The writer gate for the registry and database-drop stages (database
     design section 4, DBC023-R1). STAGES is the prefix written so far, ending
     with the stage just before the caller's (at least through `stop`).
@@ -437,22 +561,23 @@ def writer_quiescence(job_root, stages, entrypoint_stage="entrypoint"):
     launch-confirm hand-off. It reads only immutable proof inputs (core,
     closed journals, launch and terminal receipts) and never the registry,
     a credential, a log or the database (DBC023-N3). It does not require
-    database_drop. Raises FinalizerError or JournalError on refusal."""
-    _require(type(stages) is list and all(
-        name in stages for name in ("database-create", "launch", "launch-confirm",
-                                    entrypoint_stage, "stop"))
-        and stages.index("launch-confirm") == stages.index("launch") + 1
-        and stages.index("database-create") < stages.index("launch")
-        < stages.index(entrypoint_stage) < stages.index("stop"),
-        "writer_gate_stages_invalid")
+    database_drop. Raises FinalizerError or JournalError on refusal.
+
+    P3a: EXPECTED holds the workflow head's pins ({"entrypoint": {...},
+    "tools": {tool: {...}}}) and REQUIRED the holder tools this gate needs
+    (("database-create",) before registry; both before the launched drop).
+    The A1 recheck and holder_proofs run on one core snapshot bound to the
+    aggregation, before the caller's first mutable read."""
+    _require_order(stages, "stop", entrypoint_stage)
     aggregation = _sj.aggregate(job_root, stages)
     _require(aggregation["verdict"] == "VALID", "writer_gate_" + aggregation["verdict"].lower())
-    core_bytes = read_bounded(os.path.join(job_root, _sj.CORE_NAME), _sj.MAX_CORE)
-    core = _sj.validate_core(core_bytes, job_root)
+    core_bytes, core = _gate_core(job_root, aggregation, expected)
     records = _journal_records(job_root, aggregation)
     stop, launched = _stop_evidence(job_root, records, core)
     _launch_handoff(records, aggregation, stop, launched)
-    return {"aggregation": aggregation, "stop": stop}
+    proofs = gate_exit_proofs(job_root, aggregation, records, expected, required,
+                              entrypoint_stage)
+    return {"aggregation": aggregation, "stop": stop, "proofs": proofs}
 
 
 _DATABASE_IDENTITY = ("oid", "role", "role_oid", "system_identifier", "postmaster_start_time")
@@ -480,7 +605,7 @@ def _database_linkage(records):
     return drop
 
 
-def finalize(job_root, stages, entrypoint_stage="entrypoint"):
+def finalize(job_root, stages, expected, entrypoint_stage="entrypoint"):
     """Run the finalizer for a closed job. Returns a report dict:
     {"outcome": "SEALED"|"FAILED"|"NOT_FINALIZED", "cleanup": ..., "reason"}.
 
@@ -488,7 +613,12 @@ def finalize(job_root, stages, entrypoint_stage="entrypoint"):
     was read, removed or exported, and the caller must take the failure-only
     path (failure_record). FAILED means the gate passed but a later step
     did not; no manifest exists. SEALED means the manifest was written after
-    a clean scan; "cleanup" says whether every removal was proven."""
+    a clean scan; "cleanup" says whether every removal was proven.
+
+    P3a: EXPECTED holds the workflow head's pins. Before the registry, any
+    candidate or the export directory is touched, the entrypoint-exit
+    verdict (execution PASS, no other descendant signalled) and both holder
+    tools' exit verdicts are recomputed on one core snapshot."""
     if type(stages) is not list or entrypoint_stage not in stages:
         return {"outcome": "NOT_FINALIZED", "cleanup": "UNPROVEN",
                 "reason": "entrypoint_stage_missing"}
@@ -503,11 +633,16 @@ def finalize(job_root, stages, entrypoint_stage="entrypoint"):
         return {"outcome": "NOT_FINALIZED", "cleanup": "UNPROVEN",
                 "reason": "aggregation_" + aggregation["verdict"].lower()}
     try:
-        core_bytes = read_bounded(os.path.join(job_root, _sj.CORE_NAME), _sj.MAX_CORE)
-        core = _sj.validate_core(core_bytes, job_root)
+        _require_order(stages, "stop", entrypoint_stage)
+        _require("registry" in stages and "registry-exit" in stages
+                 and stages.index("registry-exit") == stages.index("registry") + 1,
+                 "gate_stages_invalid")
+        core_bytes, core = _gate_core(job_root, aggregation, expected)
         records = _journal_records(job_root, aggregation)
         stop, launched = _stop_evidence(job_root, records, core)
         _launch_handoff(records, aggregation, stop, launched)
+        gate_exit_proofs(job_root, aggregation, records, expected,
+                         ("database-create", "registry"), entrypoint_stage)
         evidence = {"stop": stop, "database": _database_linkage(records)}
         _, registry = _one(records, "credential_registry")
         _require(type(registry) is dict and set(registry) == {"path", "dev", "ino", "sha256"}
@@ -642,7 +777,10 @@ def _sealing_steps(job_root, aggregation, core_bytes, records, evidence, registr
         inventory.extend(c.pop("source") for c in copied)
         inventory.append({"path": registry["path"], "dev": registry["dev"],
                           "ino": registry["ino"], "type": "file"})
+        # P3a: the entrypoint and stage-tool receipt directories are proof
+        # inputs too (their exit proofs passed before this point).
         for name, kind in ((_sj.JOURNAL_DIR, "dir"), ("reference", "dir"),
+                           ("entrypoint", "dir"), ("tools", "dir"),
                            (_sj.CORE_NAME, "file")):
             path = os.path.join(job_root, name)
             info = os.lstat(path)

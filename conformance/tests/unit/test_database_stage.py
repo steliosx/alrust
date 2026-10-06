@@ -20,6 +20,9 @@ import sys
 
 import pytest
 
+import exit_fixtures as xf
+from exit_fixtures import EXPECTED
+
 from alrust_conformance import database_stage as ds
 from alrust_conformance import stage_journal as sj
 
@@ -126,7 +129,8 @@ def env(tmp_path):
                            env={"GITHUB_REPOSITORY": "steliosx/alrust",
                                 "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1",
                                 "GITHUB_JOB": "reference", "ImageOS": "ubuntu24",
-                                "ImageVersion": "20261001.1"})
+                                "ImageVersion": "20261001.1"},
+                           **xf.core_pins())          # /3 (R-EP plan P3a)
     sj.prepare_journal_dir(str(job))
     stub = tmp_path / "stub"
     stub.mkdir()
@@ -174,6 +178,17 @@ def run_create(job, stub, index=0, deadline=60, **overrides):
     except ds.DatabaseStageError as failure:
         error, url = failure.code, None
     return url, error
+
+
+CREATE_EXIT = "database-create-exit"
+NO_LAUNCH = ["database-create", CREATE_EXIT]
+
+
+def close_create_exit(job, index=1):
+    """The database-create holder's exit stage, as run_tool_exit_stage would
+    record it (synthetic ended P_T generation; exit_fixtures)."""
+    with sj.StageJournal(str(job), index, CREATE_EXIT, ds.CREATE_STAGE) as journal:
+        journal.record("tool_exit_verdict", xf.tool_verdict(job, ds.CREATE_STAGE, index - 1))
 
 
 def create_bytes(job, index=0):
@@ -353,18 +368,34 @@ def test_drop_complete_after_a_full_create(env):
 
 
 def test_drop_runner_gates_before_any_sql(env):
-    # launched=True with a prefix that has no launch, launch-confirm or stop:
-    # writer_quiescence refuses, before the drop journal opens and before
-    # any SQL. The stage then closes FAILED with the gate's code.
+    # launched=True with a prefix that has launch but no launch-confirm,
+    # entrypoint or stop: writer_quiescence refuses, before the drop journal
+    # opens and before any SQL. The stage then closes FAILED with the code.
     job, stub = env
     run_create(job, stub)
+    close_create_exit(job)
+    with sj.StageJournal(str(job), 2, "launch", CREATE_EXIT):
+        pass
     before = (stub / "received.log").read_text()
-    with pytest.raises(ds.DatabaseStageError, match="writer_gate_stages_invalid"):
-        ds.run_drop_stage(str(job), [ds.CREATE_STAGE], launched=True, **kw(stub))
+    prefix = NO_LAUNCH + ["launch"]
+    with pytest.raises(ds.DatabaseStageError, match="gate_stages_invalid"):
+        ds.run_drop_stage(str(job), prefix, launched=True, expected=EXPECTED, **kw(stub))
     assert (stub / "received.log").read_text() == before
     assert state(stub)["databases"] and state(stub)["roles"]
-    last = records(Path(sj.journal_path(str(job), 1, ds.DROP_STAGE)).read_bytes())[-1]
-    assert last["payload"] == {"result": "FAILED", "code": "writer_gate_stages_invalid"}
+    last = records(Path(sj.journal_path(str(job), 3, ds.DROP_STAGE)).read_bytes())[-1]
+    assert last["payload"] == {"result": "FAILED", "code": "gate_stages_invalid"}
+
+
+def test_drop_runner_refuses_a_flag_that_disagrees_with_the_evidence(env):
+    # P3a: launched=True with no launch in the prefix cannot select the gate.
+    job, stub = env
+    run_create(job, stub)
+    close_create_exit(job)
+    before = (stub / "received.log").read_text()
+    with pytest.raises(ds.DatabaseStageError, match="drop_path_mismatch"):
+        ds.run_drop_stage(str(job), NO_LAUNCH, launched=True, expected=EXPECTED, **kw(stub))
+    assert (stub / "received.log").read_text() == before
+    assert not Path(sj.journal_path(str(job), 2, ds.DROP_STAGE)).exists()
 
 
 def test_drop_role_only_when_no_database_was_attempted(env, monkeypatch):
@@ -678,8 +709,8 @@ def test_registry_runner_gates_before_anything_is_read(env, monkeypatch):
         opened.append(str(path))
         return real_open(path, *args, **kwargs)
     monkeypatch.setattr(ds.os, "open", spy)
-    with pytest.raises(ds.DatabaseStageError, match="writer_gate_stages_invalid"):
-        ds.run_registry_stage(str(job), [ds.CREATE_STAGE, "launch"],
+    with pytest.raises(ds.DatabaseStageError, match="gate_stages_invalid"):
+        ds.run_registry_stage(str(job), [ds.CREATE_STAGE, "launch"], expected=EXPECTED,
                               secret_key_path=str(job / "secret-key"), other_secrets=[],
                               port=5432, psql_path=str(stub / "psql"),
                               deadline_ns=__import__("time").monotonic_ns() + int(60e9))
@@ -688,7 +719,7 @@ def test_registry_runner_gates_before_anything_is_read(env, monkeypatch):
     assert not any(p.endswith("/url") or p.endswith("secret-key") for p in opened)
     assert not (job / "credential-registry.json").exists()
     last = records(Path(sj.journal_path(str(job), 2, "registry")).read_bytes())[-1]
-    assert last["payload"] == {"result": "FAILED", "code": "writer_gate_stages_invalid"}
+    assert last["payload"] == {"result": "FAILED", "code": "gate_stages_invalid"}
 
 
 def test_registry_refuses_rather_than_truncates(env):
@@ -716,15 +747,16 @@ def failed_create(env):
     set_state(stub, faults={"create_database": "fail"})
     run_create(job, stub)
     set_state(stub, faults={})
+    close_create_exit(job)
     return job, stub
 
 
 def test_no_launch_gate_allows_cleanup_of_a_failed_allocation(env):
     job, stub = failed_create(env)
     with pytest.raises(ds.DatabaseStageError, match="drop_unproven"):
-        ds.run_drop_stage(str(job), [ds.CREATE_STAGE], launched=False, **kw(stub))
+        ds.run_drop_stage(str(job), NO_LAUNCH, launched=False, expected=EXPECTED, **kw(stub))
     assert state(stub)["roles"] == {}                  # the recorded role was dropped
-    recs = records(Path(sj.journal_path(str(job), 1, ds.DROP_STAGE)).read_bytes())
+    recs = records(Path(sj.journal_path(str(job), 2, ds.DROP_STAGE)).read_bytes())
     [drop] = [r["payload"] for r in recs if r["kind"] == "database_drop"]
     assert (drop["verdict"], drop["reason"]) == ("UNPROVEN",
                                                  "role_dropped_database_outcome_unknown")
@@ -742,8 +774,9 @@ def test_no_launch_role_only_closes_failed_but_records_the_cleanup(env, monkeypa
     monkeypatch.setattr(sj.StageJournal, "record", record)
     run_create(job, stub)
     monkeypatch.setattr(sj.StageJournal, "record", real)
+    close_create_exit(job)
     with pytest.raises(ds.DatabaseStageError, match="drop_role_only_complete"):
-        ds.run_drop_stage(str(job), [ds.CREATE_STAGE], launched=False, **kw(stub))
+        ds.run_drop_stage(str(job), NO_LAUNCH, launched=False, expected=EXPECTED, **kw(stub))
     assert state(stub)["roles"] == {}
 
 
@@ -751,12 +784,12 @@ def test_no_launch_role_only_closes_failed_but_records_the_cleanup(env, monkeypa
 def test_no_launch_gate_refuses_any_launch_evidence(env, evidence):
     job, stub = failed_create(env)
     if evidence == "launch_journal":
-        Path(sj.journal_path(str(job), 1, "launch")).write_text("")
+        Path(sj.journal_path(str(job), 2, "launch")).write_text("")
     else:
         (job / evidence).mkdir(mode=0o700)
     before = (stub / "received.log").read_text()
     with pytest.raises(ds.DatabaseStageError):
-        ds.run_drop_stage(str(job), [ds.CREATE_STAGE], launched=False, **kw(stub))
+        ds.run_drop_stage(str(job), NO_LAUNCH, launched=False, expected=EXPECTED, **kw(stub))
     assert (stub / "received.log").read_text() == before
     assert state(stub)["roles"]                        # nothing dropped
 
@@ -764,12 +797,13 @@ def test_no_launch_gate_refuses_any_launch_evidence(env, evidence):
 def test_no_launch_gate_refuses_an_unclosed_create_journal(env):
     job, stub = env
     run_create(job, stub)
+    close_create_exit(job)
     path = Path(sj.journal_path(str(job), 0, ds.CREATE_STAGE))
     data = path.read_bytes()
     path.chmod(0o600)
     path.write_bytes(b"\n".join(data.splitlines()[:-1]) + b"\n")
     with pytest.raises(ds.DatabaseStageError, match="no_launch_prefix_not_closed"):
-        ds.no_launch_quiescence(str(job), [ds.CREATE_STAGE])
+        ds.no_launch_quiescence(str(job), NO_LAUNCH, EXPECTED)
 
 
 def test_registry_runner_end_to_end_through_the_real_writer_gate(env, tmp_path, monkeypatch):
@@ -792,7 +826,8 @@ def test_registry_runner_end_to_end_through_the_real_writer_gate(env, tmp_path, 
     (job / "secret-key").write_text(SECRET_KEY)
     (job / "secret-key").chmod(0o600)
     set_state(stub, keys=["k" * 40])
-    path = ds.run_registry_stage(str(job), prefix, secret_key_path=str(job / "secret-key"),
+    path = ds.run_registry_stage(str(job), prefix, expected=EXPECTED,
+                                 secret_key_path=str(job / "secret-key"),
                                  other_secrets=[], port=5432, psql_path=str(stub / "psql"),
                                  deadline_ns=__import__("time").monotonic_ns() + int(60e9))
     assert Path(path).exists()
@@ -821,8 +856,9 @@ def composed_drop(env, tmp_path, monkeypatch, upto):
 
 
 def test_launched_drop_complete_after_the_registry(env, tmp_path, monkeypatch):
-    job, stub, prefix = composed_drop(env, tmp_path, monkeypatch, "registry")
-    assert ds.run_drop_stage(str(job), prefix, launched=True, **kw(stub)) == "COMPLETE"
+    job, stub, prefix = composed_drop(env, tmp_path, monkeypatch, "registry-exit")
+    assert ds.run_drop_stage(str(job), prefix, launched=True, expected=EXPECTED,
+                             **kw(stub)) == "COMPLETE"
     assert state(stub)["roles"] == {} and state(stub)["databases"] == {}
     assert sj.aggregate(str(job), prefix + [ds.DROP_STAGE])["verdict"] == "VALID"
 
@@ -832,7 +868,7 @@ def test_launched_drop_refuses_without_a_registry(env, tmp_path, monkeypatch):
     job, stub, prefix = composed_drop(env, tmp_path, monkeypatch, "stop")
     before = (stub / "received.log").read_bytes() if (stub / "received.log").exists() else b""
     with pytest.raises(ds.DatabaseStageError, match="registry_not_frozen"):
-        ds.run_drop_stage(str(job), prefix, launched=True, **kw(stub))
+        ds.run_drop_stage(str(job), prefix, launched=True, expected=EXPECTED, **kw(stub))
     after = (stub / "received.log").read_bytes() if (stub / "received.log").exists() else b""
     assert after == before                                   # no SQL at all
     assert state(stub)["roles"] and state(stub)["databases"]  # nothing dropped
@@ -847,31 +883,32 @@ def test_launched_drop_refuses_a_failed_registry_stage(env, tmp_path, monkeypatc
     (job / "database").mkdir(mode=0o700)
     with pytest.raises(ds.DatabaseStageError, match="writer_gate_failed"):
         ds.run_drop_stage(str(job), STAGES[:STAGES.index("registry") + 1], launched=True,
-                          **kw(stub))
+                          expected=EXPECTED, **kw(stub))
     assert state(stub)["databases"]
 
 
 def test_launched_drop_refuses_a_changed_registry(env, tmp_path, monkeypatch):
     from alrust_conformance import finalizer as fz
-    job, stub, prefix = composed_drop(env, tmp_path, monkeypatch, "registry")
+    job, stub, prefix = composed_drop(env, tmp_path, monkeypatch, "registry-exit")
     registry = job / fz.REGISTRY_NAME
     registry.write_text(registry.read_text().replace("SYNTHETIC", "CHANGED"))
     with pytest.raises(ds.DatabaseStageError, match="registry_changed"):
-        ds.run_drop_stage(str(job), prefix, launched=True, **kw(stub))
+        ds.run_drop_stage(str(job), prefix, launched=True, expected=EXPECTED, **kw(stub))
     assert state(stub)["databases"]
 
 
 def test_launched_drop_refuses_a_registry_frozen_before_stop(env, tmp_path, monkeypatch):
     # A registry written while the server might still run is not frozen.
     import test_finalizer_orchestration as tf
-    order = ["database-create", "launch", "launch-confirm", "entrypoint", "registry", "stop"]
+    order = ["database-create", "database-create-exit", "launch", "launch-confirm",
+             "entrypoint", "entrypoint-exit", "registry", "registry-exit", "stop"]
     monkeypatch.setattr(tf, "STAGES", order)
     _, stub = env
     (tmp_path / "early").mkdir()
     job = tf.build(tmp_path / "early", monkeypatch, upto="stop")
     (job / "database").mkdir(mode=0o700)
     with pytest.raises(ds.DatabaseStageError, match="registry_not_frozen"):
-        ds.run_drop_stage(str(job), order, launched=True, **kw(stub))
+        ds.run_drop_stage(str(job), order, launched=True, expected=EXPECTED, **kw(stub))
 
 
 
@@ -901,12 +938,13 @@ def reader_job(env, tmp_path, monkeypatch, inventory=INVENTORY, mutate=None, **b
 
 def run_reader(job, stub, prefix):
     import time as _time
-    return ds.run_registry_stage(str(job), prefix, secret_key_path=str(job / "secret-key"),
+    return ds.run_registry_stage(str(job), prefix, expected=EXPECTED,
+                                 secret_key_path=str(job / "secret-key"),
                                  other_secrets=[], port=5432, psql_path=str(stub / "psql"),
                                  deadline_ns=_time.monotonic_ns() + int(60e9))
 
 
-def registry_records(job, index=5):
+def registry_records(job, index=7):                  # STAGES.index("registry") (P3a)
     return records(Path(sj.journal_path(str(job), index, "registry")).read_bytes())
 
 
@@ -1060,7 +1098,7 @@ def _change_core(job):
 def test_reader_refuses_a_root_changed_after_the_gate(env, tmp_path, monkeypatch, case, tamper):
     from alrust_conformance import finalizer as fz
     job, stub, prefix = reader_job(env, tmp_path, monkeypatch)
-    evidence = fz.writer_quiescence(str(job), prefix)     # the real gate passed
+    evidence = fz.writer_quiescence(str(job), prefix, EXPECTED, ("database-create",))     # the real gate passed
     assert ds.read_inventory(str(job), evidence) == INVENTORY      # control
     tamper(job)
     with pytest.raises(ds.DatabaseStageError, match="^inventory_root_changed$"):
@@ -1071,7 +1109,7 @@ def test_reader_refuses_a_root_changed_after_the_gate(env, tmp_path, monkeypatch
 def test_reader_refuses_an_unnormalized_root(env, tmp_path, monkeypatch, spelling):
     from alrust_conformance import finalizer as fz
     job, stub, prefix = reader_job(env, tmp_path, monkeypatch)
-    evidence = fz.writer_quiescence(str(job), prefix)
+    evidence = fz.writer_quiescence(str(job), prefix, EXPECTED, ("database-create",))
     with pytest.raises(ds.DatabaseStageError, match="^inventory_root_changed$"):
         ds.read_inventory(spelling.format(job) if "{}" in spelling else "job", evidence)
 

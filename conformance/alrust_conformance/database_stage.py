@@ -559,18 +559,39 @@ def drop_database(job_root, journal, *, create_journal_bytes, port, superuser,
 # ---------------------------------------------------------------------------
 # Part B: the no-launch gate and the registry stage
 
-def no_launch_quiescence(job_root, prefix):
+def no_launch_quiescence(job_root, prefix, expected):
     """Gate for database-drop when nothing was launched (design section 4,
     DBC023-N4). Evaluated BEFORE the drop journal is opened. PREFIX is the
     stage list ending with database-create. Requires the prefix closed (VALID
     or FAILED, never INCOMPLETE), the journal directory holding exactly the
     prefix journals (aggregate's exact-set rule: no launch or later journal),
     and no reference/ or observer/ directory (no launch receipt, no observer
-    socket). Anything not positively established refuses."""
-    _require(type(prefix) is list and prefix and prefix[-1] == CREATE_STAGE,
-             "no_launch_prefix_invalid")
+    socket). Anything not positively established refuses.
+
+    P3a: PREFIX is exactly [database-create, database-create-exit], and the
+    database-create holder's exit proof is recomputed and COMPLETE (one
+    core snapshot, the caller's pins EXPECTED), before any SQL. The create
+    stage itself may have closed FAILED; its holder must still have exited."""
+    from . import finalizer as fz
+    from . import tool_exit as te
+    _require(prefix == [CREATE_STAGE, te.exit_stage(CREATE_STAGE)], "no_launch_prefix_invalid")
     aggregation = sj.aggregate(job_root, prefix)
     _require(aggregation["verdict"] in ("VALID", "FAILED"), "no_launch_prefix_not_closed")
+    try:
+        core_bytes = sj.read_bounded(os.path.join(job_root, sj.CORE_NAME), sj.MAX_CORE)
+    except OSError:
+        raise DatabaseStageError("gate_core_unreadable") from None
+    _require(hashlib.sha256(core_bytes).hexdigest() == aggregation.get("core_identity_sha256"),
+             "gate_core_changed")
+    core = sj.validate_core(core_bytes, job_root)
+    _require(core["schema"] == sj.SCHEMA_CORE_V3, "gate_legacy_core")
+    _require(type(expected) is dict and set(expected) == fz.EXPECTED_PIN_KEYS,
+             "gate_pins_invalid")
+    try:
+        te.holder_proofs(job_root, aggregation, fz._journal_records(job_root, aggregation),
+                         (CREATE_STAGE,), expected["tools"], core_bytes)
+    except te.HolderError as error:
+        raise DatabaseStageError(str(error)) from None
     for name in ("reference", "observer"):
         try:
             os.lstat(os.path.join(job_root, name))
@@ -810,7 +831,7 @@ def read_inventory(job_root, evidence):
         raise DatabaseStageError(str(error)) from None
 
 
-def run_registry_stage(job_root, prefix, **kwargs):
+def run_registry_stage(job_root, prefix, *, expected, **kwargs):
     """The `registry` stage, gated by the finalizer's writer_quiescence over
     PREFIX (through stop). After the gate: the entrypoint inventory is read
     (read_inventory) and its values join the registry as other secrets;
@@ -836,8 +857,11 @@ def run_registry_stage(job_root, prefix, **kwargs):
         journal.record("obtained_secret_count", {"count": len(values),
                                                  "registry_sha256": digest})
         return path, None
+    # P3a: the database-create holder must have exited (EXPECTED: the
+    # workflow head's pins).
     return _run_stage(job_root, prefix, "registry",
-                      lambda: fz.writer_quiescence(job_root, prefix), action)
+                      lambda: fz.writer_quiescence(job_root, prefix, expected, (CREATE_STAGE,)),
+                      action)
 
 
 def registry_frozen(job_root, evidence):
@@ -864,23 +888,27 @@ def registry_frozen(job_root, evidence):
              and hashlib.sha256(data).hexdigest() == record["sha256"], "registry_changed")
 
 
-def run_drop_stage(job_root, prefix, *, launched, **kwargs):
+def run_drop_stage(job_root, prefix, *, launched, expected, **kwargs):
     """The `database-drop` stage. LAUNCHED selects the gate: writer_quiescence
     over PREFIX followed by registry_frozen (DBFE-R2), or
     no_launch_quiescence for an allocation that never reached launch. The stage closes COMPLETE only for verdict COMPLETE; any other
     verdict is recorded, then the stage closes FAILED with that verdict."""
     from . import finalizer as fz
-    _require(CREATE_STAGE in prefix, "drop_prefix_invalid")
+    _require(type(prefix) is list and CREATE_STAGE in prefix, "drop_prefix_invalid")
+    # P3a: the path comes from the evidence; a caller flag that disagrees
+    # refuses (it can never select the cheaper gate).
+    _require(launched is ("launch" in prefix), "drop_path_mismatch")
     create = sj.read_bounded(sj.journal_path(job_root, prefix.index(CREATE_STAGE),
                                              CREATE_STAGE), sj.MAX_JOURNAL)
     if launched:
         def gate():
             # The registry check runs only after the writer gate passed.
-            registry_frozen(job_root, fz.writer_quiescence(job_root, prefix))
+            registry_frozen(job_root, fz.writer_quiescence(
+                job_root, prefix, expected, (CREATE_STAGE, "registry")))
     else:
         def gate():
             # A positively proven no-launch cleanup never needs a registry.
-            no_launch_quiescence(job_root, prefix)
+            no_launch_quiescence(job_root, prefix, expected)
 
     def action(journal, evidence):
         verdict = drop_database(job_root, journal, create_journal_bytes=create, **kwargs)

@@ -210,7 +210,10 @@ CREATE = ["database-create", "--job-root", "/job", "--profile", "scaffold", "--r
           "--deadline-monotonic-ns", "1000"]
 REGISTRY = ["registry", "--job-root", "/job", "--prefix", "database-create,stop",
             "--secret-key-file", "/job/secret-key", "--port", "5432", "--psql",
-            "/usr/bin/psql", "--deadline-monotonic-ns", "1000"]
+            "/usr/bin/psql", "--deadline-monotonic-ns", "1000", "--expected-pins",
+            "/job/pins.json"]
+PINS = {"entrypoint": {"entrypoint_script_sha256": "d" * 64, "interpreter_path": "/p"},
+        "tools": {}}
 
 
 @pytest.fixture
@@ -220,6 +223,7 @@ def runners(monkeypatch):
                         or "/job/database/url")
     monkeypatch.setattr(ds, "run_registry_stage", lambda *a, **k: calls.append(
         ("registry", a, k)) or "/job/credential-registry.json")
+    monkeypatch.setattr(drv, "read_pins", lambda path: calls.append(("pins", path)) or PINS)
     return calls
 
 
@@ -237,10 +241,11 @@ def test_driver_create_passes_exact_arguments(runners, capsys):
 
 def test_driver_registry_passes_paths_only(runners, capsys):
     assert drv.main(REGISTRY) == 0
-    (name, args, kwargs), = runners
+    pins, (name, args, kwargs) = runners
+    assert pins == ("pins", "/job/pins.json")
     assert args == ("/job", ["database-create", "stop"])
     assert kwargs == {"secret_key_path": "/job/secret-key", "port": 5432,
-                      "psql_path": "/usr/bin/psql", "deadline_ns": 1000}
+                      "psql_path": "/usr/bin/psql", "deadline_ns": 1000, "expected": PINS}
     out = capsys.readouterr().out
     assert "credential-registry" not in out and "url" not in out
 
@@ -271,6 +276,7 @@ def test_driver_other_errors_never_print_a_traceback(monkeypatch, capsys):
     def boom(*a, **k):
         raise RuntimeError("postgresql://alrust_x:SECRETVALUE@127.0.0.1:5432/alrust_x")
     monkeypatch.setattr(ds, "run_registry_stage", boom)
+    monkeypatch.setattr(drv, "read_pins", lambda path: PINS)
     assert drv.main(REGISTRY) == 3
     captured = capsys.readouterr()
     assert "SECRETVALUE" not in captured.out + captured.err
@@ -491,3 +497,34 @@ def test_stop_owned_does_nothing_for_an_exited_child():
     proc.returncode = 0
     tsp.stop_owned(proc)
     assert log == []
+
+
+def test_driver_registry_requires_expected_pins(runners, capsys):
+    argv = REGISTRY[:-2]                      # without --expected-pins
+    assert drv.main(argv) == 64 and runners == []
+
+
+def test_driver_pins_file_is_bounded_and_not_followed(tmp_path):
+    good = tmp_path / "pins.json"
+    good.write_text('{"entrypoint": {}, "tools": {}}')
+    assert drv.read_pins(str(good)) == {"entrypoint": {}, "tools": {}}
+    big = tmp_path / "big.json"
+    big.write_text("[" + "0," * drv.MAX_PINS + "0]")
+    with pytest.raises(ValueError):
+        drv.read_pins(str(big))
+    link = tmp_path / "link.json"
+    link.symlink_to(good)
+    with pytest.raises(OSError):
+        drv.read_pins(str(link))
+    (tmp_path / "list.json").write_text("[]")
+    with pytest.raises(ValueError):
+        drv.read_pins(str(tmp_path / "list.json"))
+
+
+def test_driver_unreadable_pins_are_not_run(runners, monkeypatch, capsys):
+    def fail(path):
+        raise OSError("synthetic")
+    monkeypatch.setattr(drv, "read_pins", fail)
+    assert drv.main(REGISTRY) == 70
+    assert json.loads(capsys.readouterr().out) == {"result": "NOT_RUN",
+                                                   "reason": "driver_setup_failed"}

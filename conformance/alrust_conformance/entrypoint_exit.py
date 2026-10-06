@@ -319,13 +319,14 @@ def verify_receipts(job_root, spec, journal, launch_path, terminal_path,
     return record
 
 
-def verify_entrypoint_exit(job_root, journal_index, expected):
+def verify_entrypoint_exit(job_root, journal_index, expected, core_bytes=None):
     """Return one entrypoint_exit_verdict record (design section 4).
 
     EXPECTED holds the workflow head's pins: {"entrypoint_script_sha256",
     "interpreter_path"}. verdict is COMPLETE (closure proven), FAILED
     (terminal tree_not_empty with valid linkage) or UNPROVEN. execution is
-    the terminal's value only when verdict is COMPLETE, otherwise FAIL."""
+    the terminal's value only when verdict is COMPLETE, otherwise FAIL.
+    CORE_BYTES, when given, is the caller's single core snapshot (P3a)."""
     if not (type(expected) is dict and set(expected) == {
             "entrypoint_script_sha256", "interpreter_path"}
             and _sha(expected["entrypoint_script_sha256"])
@@ -340,7 +341,7 @@ def verify_entrypoint_exit(job_root, journal_index, expected):
         shared = verify_receipts(
             job_root, ENTRYPOINT, _sj.journal_path(job_root, journal_index, ENTRYPOINT_STAGE),
             launch_path, terminal_path, expected["entrypoint_script_sha256"],
-            expected["interpreter_path"])
+            expected["interpreter_path"], core_bytes=core_bytes)
     record = {key: shared[key] for key in ("verdict", "reason", "launch_receipt_sha256",
                                            "terminal_receipt_sha256", "execution", "trigger")}
     record["entrypoint_journal_sha256"] = shared["journal_sha256"]
