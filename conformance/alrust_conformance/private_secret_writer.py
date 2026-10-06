@@ -38,6 +38,7 @@ class PrivateSecretWriter:
         self._root_fd = self._events_fd = None
         self._root_identity = self._events_identity = None
         self._snapshot = None
+        self._raw_response_sink = None
         self._values = []
         self._failed = None
         self._entered = self._finished = self._closed = False
@@ -207,6 +208,57 @@ class PrivateSecretWriter:
         except (OSError, InventoryError, sj.JournalError, ValueError):
             self._refuse("secret_capture_failed")
 
+    def check_collecting(self):
+        """Check custody/lifetime before an operation that might obtain secrets.
+
+        This does not prove profile completeness or writer-generation exit.
+        No environment/path lookup chooses this already-entered writer.
+        """
+        self._owner()
+        self._require(self._entered and not self._finished and not self._closed
+                      and self._failed is None, "secret_writer_not_collecting")
+        try:
+            self._stage_active()
+            self._root_current()
+            self._events_current()
+        except (OSError, sj.JournalError, ValueError):
+            self._refuse("secret_capture_failed")
+
+    def check_binding(self, job_root, core_sha256):
+        """Check an explicit caller pin against this live writer generation.
+
+        The root and exact core bytes must still match the active entrypoint.
+        This is custody checking, not proof of child exit or profile coverage.
+        """
+        self.check_collecting()
+        self._require(type(job_root) is str and job_root == self._root
+                      and type(core_sha256) is str
+                      and core_sha256 == self._core_sha256,
+                      "secret_binding_mismatch")
+        try:
+            self._read_core()
+        except (OSError, sj.JournalError, ValueError):
+            self._refuse("secret_binding_invalid")
+
+    def check_stage_binding(self, stage, job_root, core_sha256):
+        """Require the caller's actual live journal, not an equivalent journal."""
+        self._require(stage is self._stage, "secret_stage_binding_mismatch")
+        self.check_binding(job_root, core_sha256)
+
+    def register_raw_response_sink(self, sink):
+        """One concrete custody component; arbitrary idle callbacks refuse."""
+        from .private_raw_response_sink import PrivateRawResponseSink
+        self.check_collecting()
+        self._require(type(sink) is PrivateRawResponseSink
+                      and sink.writer is self and self._raw_response_sink is None,
+                      "secret_raw_sink_binding_invalid")
+        self._raw_response_sink = sink
+
+    def abort(self):
+        """Permanently refuse completion after a capture/oracle failure."""
+        self._owner()
+        self._refuse("secret_capture_aborted")
+
     def finish(self):
         """Freeze private bytes; completion is recorded later on clean exit."""
         self._owner()
@@ -217,6 +269,10 @@ class PrivateSecretWriter:
             self._stage_active()
             self._root_current()
             self._events_current()
+            if self._raw_response_sink is not None:
+                # Closing the sink is explicit: idle alone leaves its root
+                # descriptor open. No inventory snapshot precedes this check.
+                self._raw_response_sink.require_closed()
             data = encode_inventory(self._core_sha256, list(self._values))
             fd = self._create(SNAPSHOT_NAME)
             info = os.fstat(fd)
