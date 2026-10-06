@@ -65,7 +65,8 @@ def build(tmp_path, monkeypatch, *, report=b'{"result": "passed"}\n',
           extra_records=(), registry_secrets=None, fail_stage=None,
           terminal_change=None, obtained_change=None, leaky_dir=False,
           generation=None, omit_stop=False, created_change=None, handoff_change=None,
-          omit_handoff=False, upto=None):
+          omit_handoff=False, upto=None, inventory=None, obtained_stage="registry",
+          inventory_core=None, inventory_record_change=None, inventory_stage="entrypoint"):
     monkeypatch.setattr(sj, "EXTERNAL_CONFIG", str(tmp_path / "no-alertad.conf"))
     job = tmp_path / "job"
     job.mkdir(mode=0o700)
@@ -151,16 +152,36 @@ def build(tmp_path, monkeypatch, *, report=b'{"result": "passed"}\n',
             ("database_created", created)],
         "launch": launch_records,
         "launch-confirm": [] if omit_handoff else [("launch_handoff", handoff)],
-        "entrypoint": [("export_candidate", cand),
-                       ("obtained_secret_count", obtained)],
+        "entrypoint": [("export_candidate", cand)],
         "stop": [("stop_verdict", stop)],
         "registry": [("credential_registry", dict(
             {k: v for k, v in stat_record(registry, "file").items() if k != "type"},
-            sha256=registry_sha))],
+            sha256=registry_sha)),
+                     ("obtained_secret_count", obtained)],
         "database-drop": [("database_drop", database)],
     }
     if omit_stop:
         per_stage["stop"] = []
+    if obtained_stage != "registry":
+        per_stage["registry"] = [r for r in per_stage["registry"]
+                                 if r[0] != "obtained_secret_count"]
+        per_stage[obtained_stage].append(("obtained_secret_count", obtained))
+    if inventory is not None:
+        # Q1: the entrypoint's frozen private snapshot and its record.
+        from alrust_conformance import private_secret_inventory as inv
+        core_sha = inventory_core or hashlib.sha256(
+            (job / "core-identity.json").read_bytes()).hexdigest()
+        snapshot = job / "entrypoint-secrets.json"
+        data = inv.encode_inventory(core_sha, list(inventory))
+        snapshot.write_bytes(data)
+        snapshot.chmod(0o600)
+        info = os.lstat(snapshot)
+        record = {"path": str(snapshot), "dev": info.st_dev, "ino": info.st_ino,
+                  "sha256": hashlib.sha256(data).hexdigest(), "count": len(inventory)}
+        if inventory_record_change:
+            inventory_record_change(record)
+        per_stage["entrypoint"].append(("owned_resource", stat_record(snapshot, "file")))
+        per_stage[inventory_stage].append(("private_secret_inventory", record))
     for stage, kind, payload in extra_records:
         per_stage[stage].append((kind, payload))
     sj.prepare_journal_dir(str(job))
@@ -854,3 +875,22 @@ def test_writer_gate_requires_entrypoint_before_stop(tmp_path, monkeypatch):
     prefix = ["database-create", "launch", "launch-confirm", "stop", "entrypoint"]
     with pytest.raises(fz.FinalizerError, match="writer_gate_stages_invalid"):
         fz.writer_quiescence(str(tmp_path), prefix)
+
+
+
+def test_obtained_count_must_come_from_the_registry_stage(tmp_path, monkeypatch):
+    # Q1 (b): an entrypoint-authored count is refused, even if well formed.
+    job = build(tmp_path, monkeypatch, extra_records=[
+        ("entrypoint", "obtained_secret_count", {"count": 0, "registry_sha256": "0" * 64})])
+    report = fz.finalize(str(job), STAGES)
+    assert (report["outcome"], report["reason"]) == (
+        "NOT_FINALIZED", "obtained_secret_count_missing_or_repeated")
+
+
+def test_obtained_count_only_in_the_entrypoint_is_refused(tmp_path, monkeypatch):
+    # Q1 (b): the count authored by the entrypoint (the old layout) refuses.
+    job = build(tmp_path, monkeypatch, obtained_stage="entrypoint")
+    report = fz.finalize(str(job), STAGES)
+    assert (report["outcome"], report["reason"]) == (
+        "NOT_FINALIZED", "obtained_secret_count_not_from_registry")
+    assert not (job / "export").exists()

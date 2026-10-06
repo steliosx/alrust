@@ -780,7 +780,8 @@ def test_registry_runner_end_to_end_through_the_real_writer_gate(env, tmp_path, 
     from test_finalizer_orchestration import build, STAGES
     _, stub = env
     (tmp_path / "composed").mkdir()
-    job = build(tmp_path / "composed", monkeypatch, upto="stop")
+    job = build(tmp_path / "composed", monkeypatch, upto="stop",
+                inventory=["provisioned-role-key-" + "r" * 24])
     (job / fz_registry_name()).unlink()          # the fixture's own registry
     prefix = STAGES[:STAGES.index("stop") + 1]
     (job / "database").mkdir(mode=0o700)
@@ -871,3 +872,224 @@ def test_launched_drop_refuses_a_registry_frozen_before_stop(env, tmp_path, monk
     (job / "database").mkdir(mode=0o700)
     with pytest.raises(ds.DatabaseStageError, match="registry_not_frozen"):
         ds.run_drop_stage(str(job), order, launched=True, **kw(stub))
+
+
+
+# --- Q1 reader: inventory, inclusion gate, registry-authored count ------------
+
+INVENTORY = ["provisioned-role-key-" + "r" * 24, "revoked-test-key-" + "v" * 30]
+
+
+def reader_job(env, tmp_path, monkeypatch, inventory=INVENTORY, mutate=None, **build_kwargs):
+    from test_finalizer_orchestration import build, STAGES
+    _, stub = env
+    (tmp_path / "reader").mkdir()
+    job = build(tmp_path / "reader", monkeypatch, upto="stop", inventory=inventory,
+                **build_kwargs)
+    (job / fz_registry_name()).unlink()
+    (job / "database").mkdir(mode=0o700)
+    url = "postgresql://alrust_scaffold_123_1:%s@127.0.0.1:5432/alrust_scaffold_123_1" % ("f" * 64)
+    (job / "database" / "url").write_text(url + "\n")
+    (job / "database" / "url").chmod(0o600)
+    (job / "secret-key").write_text(SECRET_KEY)
+    (job / "secret-key").chmod(0o600)
+    set_state(stub, keys=["k" * 40])
+    if mutate:
+        mutate(job)
+    return job, stub, STAGES[:STAGES.index("stop") + 1]
+
+
+def run_reader(job, stub, prefix):
+    import time as _time
+    return ds.run_registry_stage(str(job), prefix, secret_key_path=str(job / "secret-key"),
+                                 other_secrets=[], port=5432, psql_path=str(stub / "psql"),
+                                 deadline_ns=_time.monotonic_ns() + int(60e9))
+
+
+def registry_records(job, index=5):
+    return records(Path(sj.journal_path(str(job), index, "registry")).read_bytes())
+
+
+def test_reader_includes_every_inventory_value_and_records_the_count(env, tmp_path, monkeypatch):
+    from alrust_conformance import finalizer as fz
+    job, stub, prefix = reader_job(env, tmp_path, monkeypatch)
+    path = run_reader(job, stub, prefix)
+    data = Path(path).read_bytes()
+    secrets = set(s.decode() for s in fz.load_registry(str(job), hashlib.sha256(data).hexdigest()))
+    assert set(INVENTORY) <= secrets
+    [count] = [r["payload"] for r in registry_records(job) if r["kind"] == "obtained_secret_count"]
+    assert count == {"count": 2, "registry_sha256": hashlib.sha256(data).hexdigest()}
+    assert sj.aggregate(str(job), prefix + ["registry"])["verdict"] == "VALID"
+
+
+def test_reader_explicit_empty_inventory(env, tmp_path, monkeypatch):
+    job, stub, prefix = reader_job(env, tmp_path, monkeypatch, inventory=[])
+    run_reader(job, stub, prefix)
+    [count] = [r["payload"] for r in registry_records(job) if r["kind"] == "obtained_secret_count"]
+    assert count["count"] == 0
+
+
+@pytest.mark.parametrize("case,code", [
+    ("missing_record", "inventory_record_missing_or_repeated"),
+    ("changed_file", "inventory_changed"),
+    ("replaced_file", "inventory_changed"),
+    ("wrong_core", "inventory_core_mismatch"),
+    ("wrong_count", "inventory_count_mismatch"),
+    ("wrong_path", "inventory_record_invalid"),
+    ("extra_key", "inventory_record_invalid"),
+    ("record_in_launch", "inventory_record_missing_or_repeated"),
+    ("symlinked_file", "inventory_unreadable"),
+    ("missing_file", "inventory_unreadable"),
+    ("group_readable", "private_file_invalid"),
+])
+def test_reader_refusals_before_any_registry(env, tmp_path, monkeypatch, case, code):
+    def mutate(job):
+        snapshot = job / "entrypoint-secrets.json"
+        if case == "changed_file":
+            data = snapshot.read_bytes().replace(b"r" * 24, b"x" * 24)
+            snapshot.write_bytes(data)
+        elif case == "replaced_file":
+            data = snapshot.read_bytes()
+            snapshot.unlink()
+            snapshot.write_bytes(data)
+            snapshot.chmod(0o600)
+        elif case == "symlinked_file":
+            moved = job / "elsewhere.json"
+            snapshot.rename(moved)          # same inode, reached only via a link
+            snapshot.symlink_to(moved)
+        elif case == "missing_file":
+            snapshot.unlink()
+        elif case == "group_readable":
+            snapshot.chmod(0o640)
+    record_changes = {"wrong_count": lambda r: r.update(count=3),
+                      "wrong_path": lambda r: r.update(path=r["path"] + ".other"),
+                      "extra_key": lambda r: r.update(note="x")}
+    if case == "missing_record":
+        job, stub, prefix = reader_job(env, tmp_path, monkeypatch, inventory=None)
+    elif case == "wrong_core":
+        # A self-consistent snapshot (record digest matches) bound to another job.
+        job, stub, prefix = reader_job(env, tmp_path, monkeypatch, inventory_core="0" * 64)
+    elif case == "record_in_launch":
+        job, stub, prefix = reader_job(env, tmp_path, monkeypatch, inventory_stage="launch")
+    elif case in record_changes:
+        job, stub, prefix = reader_job(env, tmp_path, monkeypatch,
+                                       inventory_record_change=record_changes[case])
+    else:
+        job, stub, prefix = reader_job(env, tmp_path, monkeypatch, mutate=mutate)
+    before = (stub / "received.log").read_bytes() if (stub / "received.log").exists() else b""
+    with pytest.raises(ds.DatabaseStageError, match=code):
+        run_reader(job, stub, prefix)
+    after = (stub / "received.log").read_bytes() if (stub / "received.log").exists() else b""
+    assert after == before                                  # no key query was sent
+    assert not (job / fz_registry_name()).exists()          # no registry written
+    assert registry_records(job)[-1]["payload"]["result"] == "FAILED"
+
+
+def test_reader_refuses_a_same_count_different_secret_registry(env, tmp_path, monkeypatch):
+    # The value-set inclusion gate: a buggy builder swaps one inventory value
+    # for another of the same size; the count still matches, but it refuses.
+    job, stub, prefix = reader_job(env, tmp_path, monkeypatch)
+    real = ds.build_registry
+
+    def swapped(job_root, journal, *, other_secrets, **kwargs):
+        other_secrets = ["substituted-secret-" + "z" * 30 if s == INVENTORY[1] else s
+                         for s in other_secrets]
+        return real(job_root, journal, other_secrets=other_secrets, **kwargs)
+    monkeypatch.setattr(ds, "build_registry", swapped)
+    with pytest.raises(ds.DatabaseStageError, match="registry_inclusion_failed"):
+        run_reader(job, stub, prefix)
+    kinds = [r["kind"] for r in registry_records(job)]
+    assert "obtained_secret_count" not in kinds
+    assert registry_records(job)[-1]["payload"]["result"] == "FAILED"
+
+
+def test_reader_gate_refusal_opens_no_inventory(env, tmp_path, monkeypatch):
+    job, stub, prefix = reader_job(env, tmp_path, monkeypatch)
+    opened = []
+    real_open = os.open
+
+    def spy(path, *args, **kwargs):
+        opened.append(str(path))
+        return real_open(path, *args, **kwargs)
+    monkeypatch.setattr(ds.os, "open", spy)
+    with pytest.raises(ds.DatabaseStageError, match="writer_gate_stages_invalid"):
+        run_reader(job, stub, ["database-create", "launch"])
+    monkeypatch.undo()
+    assert not any(p.endswith("entrypoint-secrets.json") for p in opened)
+
+
+# --- Q1R44-R1: the held root, bound to the validated core, after the gate ---
+
+def _swap_ancestor(job):
+    # Codex's independent control (f56aa58e): the same job inode, path
+    # spelling and bytes, reached through one symlinked owned ancestor.
+    ancestor = job.parent
+    backing = ancestor.with_name("reader-real")
+    ancestor.rename(backing)
+    ancestor.symlink_to(backing, target_is_directory=True)
+
+
+def _replace_root_with_copy(job):
+    import shutil
+    copy = job.with_name("job-copy")
+    shutil.copytree(job, copy, symlinks=True)
+    job.rename(job.with_name("job-original"))
+    copy.rename(job)
+
+
+def _symlink_root(job):
+    real = job.with_name("job-real")
+    job.rename(real)
+    job.symlink_to(real, target_is_directory=True)
+
+
+def _change_core(job):
+    core = job / "core-identity.json"
+    data = core.read_bytes()
+    core.chmod(0o600)
+    core.write_bytes(data.replace(b'"profile":"scaffold"', b'"profile":"scaffolx"'))
+
+
+@pytest.mark.parametrize("case,tamper", [
+    ("ancestor_symlink", _swap_ancestor),
+    ("root_replaced_by_copy", _replace_root_with_copy),
+    ("root_symlink", _symlink_root),
+    ("core_changed", _change_core),
+    ("root_mode", lambda job: job.chmod(0o750)),
+])
+def test_reader_refuses_a_root_changed_after_the_gate(env, tmp_path, monkeypatch, case, tamper):
+    from alrust_conformance import finalizer as fz
+    job, stub, prefix = reader_job(env, tmp_path, monkeypatch)
+    evidence = fz.writer_quiescence(str(job), prefix)     # the real gate passed
+    assert ds.read_inventory(str(job), evidence) == INVENTORY      # control
+    tamper(job)
+    with pytest.raises(ds.DatabaseStageError, match="^inventory_root_changed$"):
+        ds.read_inventory(str(job), evidence)
+
+
+@pytest.mark.parametrize("spelling", ["{}/", "{}/.", "{}/../job", "relative"])
+def test_reader_refuses_an_unnormalized_root(env, tmp_path, monkeypatch, spelling):
+    from alrust_conformance import finalizer as fz
+    job, stub, prefix = reader_job(env, tmp_path, monkeypatch)
+    evidence = fz.writer_quiescence(str(job), prefix)
+    with pytest.raises(ds.DatabaseStageError, match="^inventory_root_changed$"):
+        ds.read_inventory(spelling.format(job) if "{}" in spelling else "job", evidence)
+
+
+def test_root_change_refuses_the_registry_stage_before_any_query(env, tmp_path, monkeypatch):
+    # The swap lands after the gate and after the registry journal opened
+    # (a swap before that refuses earlier, in StageJournal's own root check).
+    job, stub, prefix = reader_job(env, tmp_path, monkeypatch)
+    real_read = ds.read_inventory
+
+    def swap_then_read(job_root, evidence):
+        _swap_ancestor(job)
+        return real_read(job_root, evidence)
+    monkeypatch.setattr(ds, "read_inventory", swap_then_read)
+    before = (stub / "received.log").read_bytes() if (stub / "received.log").exists() else b""
+    with pytest.raises(ds.DatabaseStageError, match="^inventory_root_changed$"):
+        run_reader(job, stub, prefix)
+    after = (stub / "received.log").read_bytes() if (stub / "received.log").exists() else b""
+    assert after == before
+    assert not (job / fz_registry_name()).exists()
+    assert registry_records(job)[-1]["payload"]["result"] == "FAILED"
