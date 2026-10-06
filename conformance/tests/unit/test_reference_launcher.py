@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import select
 import shutil
 import signal
 import socket
@@ -154,13 +155,59 @@ def stop_leftover_launches(tmp_path):
 
 @pytest.fixture
 def cleanup():
-    pids = []
-    yield pids
-    for pid in pids:
+    """Popen objects this test started. Each is still the test's own
+    unreaped child, so killing and then reaping it cannot reach a reused
+    PID (LAUNCHER-TEST-CLEANUP-N1)."""
+    procs = []
+    yield procs
+    for proc in procs:
+        proc.kill()
+        proc.wait(timeout=10)
+
+
+def read_generation(pid):
+    """(ppid, start_ticks) of PID, or None if it is gone."""
+    try:
+        with open("/proc/%d/stat" % pid, "rb") as f:
+            rest = f.read().rsplit(b")", 1)[1].split()
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    return int(rest[1]), int(rest[19])
+
+
+def hold_generation(pid, ppid, start_ticks):
+    """A pidfd for exactly the generation (PID, ppid, start_ticks), or a
+    test failure that signals nothing. The generation existed before the
+    open, so a match read after it proves the descriptor names it."""
+    try:
+        fd = os.pidfd_open(pid)
+    except ProcessLookupError:
+        pytest.fail("PID %d gone before it was held: HOLD, nothing signalled" % pid)
+    try:
+        current = read_generation(pid)
+    except BaseException:
+        os.close(fd)
+        raise
+    if current != (ppid, start_ticks):
+        os.close(fd)
+        pytest.fail("PID %d is not the expected generation: HOLD, nothing signalled" % pid)
+    return fd
+
+
+def kill_held(fd, seconds=10):
+    """SIGKILL through the held pidfd only, prove exit by polling it, and
+    close it."""
+    try:
         try:
-            os.kill(pid, signal.SIGKILL)
+            signal.pidfd_send_signal(fd, signal.SIGKILL)
         except ProcessLookupError:
-            pass
+            pass  # that exact generation has already exited
+        poller = select.poll()
+        poller.register(fd, select.POLLIN)
+        if not poller.poll(int(seconds * 1000)):
+            pytest.fail("held process did not exit")
+    finally:
+        os.close(fd)
 
 
 def started(tmp_path, mode="healthy", **kw):
@@ -204,7 +251,7 @@ def test_cross_job_receipt_is_refused(tmp_path):
 def test_forged_receipt_cannot_use_the_launcher_digest(tmp_path, cleanup):
     job, port, m = started(tmp_path)
     victim = subprocess.Popen(["/bin/sleep", "300"], process_group=0)
-    cleanup.append(victim.pid)
+    cleanup.append(victim)
     with open("/proc/%d/stat" % victim.pid, "rb") as f:
         ticks = int(f.read().rsplit(b")", 1)[1].split()[19])
     forged = json.loads(Path(m[4]).read_text())
@@ -1337,26 +1384,29 @@ def owned_pair():
     p = subprocess.Popen(["/bin/sh", "-c", "sleep 30 & wait"])
     unrelated = subprocess.Popen(["/bin/sleep", "30"])
     deadline = time.monotonic() + 10
-    child = None
-    while child is None and time.monotonic() < deadline:
-        for name in os.listdir("/proc"):
-            if name.isdigit():
-                try:
-                    with open("/proc/%s/stat" % name, "rb") as f:
-                        if int(f.read().rsplit(b")", 1)[1].split()[1]) == p.pid:
-                            child = int(name)
-                except (OSError, ValueError, IndexError):
-                    pass
-        time.sleep(0.02)
-    yield p.pid, child, unrelated
-    for proc in (p, unrelated):
-        proc.kill()
-        proc.wait()
-    if child is not None:
-        try:
-            os.kill(child, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+    child = held = None
+    try:
+        while child is None and time.monotonic() < deadline:
+            for name in os.listdir("/proc"):
+                if name.isdigit():
+                    try:
+                        found = read_generation(int(name))
+                    except (OSError, ValueError, IndexError):
+                        continue
+                    if found is not None and found[0] == p.pid:
+                        child = int(name)
+                        # Held while P is alive and unreaped, so C is still
+                        # P's child; C is never signalled by bare PID.
+                        held = hold_generation(child, p.pid, found[1])
+                        break
+            time.sleep(0.02)
+        yield p.pid, child, unrelated
+    finally:
+        if held is not None:
+            kill_held(held)
+        for proc in (p, unrelated):
+            proc.kill()
+            proc.wait(timeout=10)
 
 
 def test_confirm_isolated_success(tmp_path, owned_pair):
