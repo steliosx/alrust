@@ -889,10 +889,16 @@ def registry_frozen(job_root, evidence):
 
 
 def run_drop_stage(job_root, prefix, *, launched, expected, **kwargs):
-    """The `database-drop` stage. LAUNCHED selects the gate: writer_quiescence
-    over PREFIX followed by registry_frozen (DBFE-R2), or
-    no_launch_quiescence for an allocation that never reached launch. The stage closes COMPLETE only for verdict COMPLETE; any other
-    verdict is recorded, then the stage closes FAILED with that verdict."""
+    """The `database-drop` stage. The gate comes from the evidence in PREFIX
+    (LAUNCHED must agree with it, P3a):
+    - launched, with the registry: writer_quiescence with both holders,
+      then registry_frozen (DBFE-R2);
+    - launched, without a registry (PREFIX ends at stop): the
+      failed-entrypoint gate, A2 (P3b), admitting F1 or F2 only, recorded
+      as drop_gate {gate, case} before any SQL;
+    - not launched: no_launch_quiescence.
+    The stage closes COMPLETE only for verdict COMPLETE; any other verdict
+    is recorded, then the stage closes FAILED with that verdict."""
     from . import finalizer as fz
     _require(type(prefix) is list and CREATE_STAGE in prefix, "drop_prefix_invalid")
     # P3a: the path comes from the evidence; a caller flag that disagrees
@@ -900,7 +906,13 @@ def run_drop_stage(job_root, prefix, *, launched, expected, **kwargs):
     _require(launched is ("launch" in prefix), "drop_path_mismatch")
     create = sj.read_bounded(sj.journal_path(job_root, prefix.index(CREATE_STAGE),
                                              CREATE_STAGE), sj.MAX_JOURNAL)
-    if launched:
+    if launched and "registry" not in prefix:
+        def gate():
+            # P3b (A2): the failed-entrypoint path; the gate admits F1 or F2
+            # only, and refuses a passing entrypoint (that path needs the
+            # registry first, DBFE-R2).
+            return fz.failed_entrypoint_quiescence(job_root, prefix, expected)
+    elif launched:
         def gate():
             # The registry check runs only after the writer gate passed.
             registry_frozen(job_root, fz.writer_quiescence(
@@ -911,6 +923,11 @@ def run_drop_stage(job_root, prefix, *, launched, expected, **kwargs):
             no_launch_quiescence(job_root, prefix, expected)
 
     def action(journal, evidence):
+        if type(evidence) is dict and "case" in evidence:
+            # Which gate admitted this drop (d6bc7e80 section 4), as its own
+            # record; the approved database_drop record is unchanged.
+            journal.record("drop_gate", {"gate": "failed_entrypoint",
+                                         "case": evidence["case"]})
         verdict = drop_database(job_root, journal, create_journal_bytes=create, **kwargs)
         return verdict, None if verdict == "COMPLETE" else "drop_" + verdict.lower()
     return _run_stage(job_root, prefix, DROP_STAGE, gate, action)

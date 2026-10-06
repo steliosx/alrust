@@ -867,7 +867,9 @@ def test_launched_drop_refuses_without_a_registry(env, tmp_path, monkeypatch):
     # Codex's control from 5425c1b8: quiescent through stop, no registry.
     job, stub, prefix = composed_drop(env, tmp_path, monkeypatch, "stop")
     before = (stub / "received.log").read_bytes() if (stub / "received.log").exists() else b""
-    with pytest.raises(ds.DatabaseStageError, match="registry_not_frozen"):
+    # P3b: without a registry the failed-entrypoint gate applies, and it
+    # refuses a passing entrypoint (that path needs the registry first).
+    with pytest.raises(ds.DatabaseStageError, match="entrypoint_not_failed"):
         ds.run_drop_stage(str(job), prefix, launched=True, expected=EXPECTED, **kw(stub))
     after = (stub / "received.log").read_bytes() if (stub / "received.log").exists() else b""
     assert after == before                                   # no SQL at all

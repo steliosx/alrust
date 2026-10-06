@@ -219,7 +219,7 @@ def build(tmp_path, monkeypatch, *, report=b'{"result": "passed"}\n',
             with sj.StageJournal(str(job), index, name, previous) as journal:
                 for kind, payload in per_stage[name]:
                     journal.record(kind, payload(job) if callable(payload) else payload)
-                if name == fail_stage:
+                if name == fail_stage or (type(fail_stage) is tuple and name in fail_stage):
                     journal.fail("synthetic_failure")
                     raise RuntimeError("synthetic")
         except RuntimeError:

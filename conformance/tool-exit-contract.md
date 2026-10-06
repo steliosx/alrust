@@ -218,8 +218,37 @@ runners.
   P3A-INPUT-R1), opened without following a final link, bounded; anything
   else is NOT_RUN with no stage opened.
 
-Not in P3a: A2 (`failed_entrypoint_quiescence`, P3b), the job-role binding
-before the first read (P3c), and the paths-only failure record (P3d).
+**As implemented (P3b): A2, `failed_entrypoint_quiescence(job_root,
+stages, expected)`.** It is the gate for database-drop alone after a failed
+entrypoint (designs `d6bc7e80` section 4 and `409eabfa` section 5). Its
+prefix ends at `stop`; the registry is never built on this path. It has
+the same order, core snapshot, pins, stop proof and launch hand-off as the
+writer gate, plus the database-create holder. It admits exactly:
+- **F1:** the entrypoint journal closed FAILED; the aggregation FAILED
+  with the entrypoint its only non-COMPLETE stage; the entrypoint-exit
+  verdict COMPLETE with execution FAIL;
+- **F2:** the entrypoint journal closed COMPLETE; the aggregation VALID;
+  the verdict COMPLETE with execution FAIL, recomputed from the terminal
+  receipt (its trigger), never invented, with no journal or aggregation
+  changed.
+
+It refuses:
+- a passing entrypoint (`entrypoint_not_failed`, so it stays disjoint from
+  the normal gate);
+- any other FAILED stage (`failed_gate_other_stage_not_complete`);
+- an INCOMPLETE stage (`failed_gate_incomplete`);
+- an unproven or stale exit, or a stale holder;
+- a registry in the prefix (`failed_gate_prefix_invalid`).
+
+`run_drop_stage` selects it from the evidence (launched, no registry in
+the prefix) and records `drop_gate {gate: "failed_entrypoint", case}`
+before the drop. That is a separate record: the approved `database_drop`
+record is unchanged, so the `d6bc7e80` "gate field" is carried this way.
+The registry gate and `finalize()` refuse both cases. Profile FAIL and job
+cleanup UNPROVEN are unchanged.
+
+Not in P3a or P3b: the job-role binding before the first read (P3c) and
+the paths-only failure record (P3d).
 
 ## 8. Deadlines
 

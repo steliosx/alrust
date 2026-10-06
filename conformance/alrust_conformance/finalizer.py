@@ -584,6 +584,64 @@ def writer_quiescence(job_root, stages, expected, required, entrypoint_stage="en
     return {"aggregation": aggregation, "stop": stop, "proofs": proofs}
 
 
+def failed_entrypoint_quiescence(job_root, stages, expected, entrypoint_stage="entrypoint"):
+    """A2 (R-EP plan P3b; designs d6bc7e80 section 4 and 409eabfa section 5):
+    the gate for database-drop alone after a failed entrypoint. STAGES is
+    the prefix through stop (the registry is never built on this path).
+    It reads only immutable proof inputs, before any SQL, and admits
+    exactly one case:
+    - F1: the entrypoint journal closed FAILED; the aggregation FAILED with
+      the entrypoint as its only failed stage (every other stage, the exit
+      stages included, closed COMPLETE); the entrypoint-exit verdict
+      COMPLETE (closure) with execution FAIL;
+    - F2: the entrypoint journal closed COMPLETE; the aggregation VALID; the
+      entrypoint-exit verdict COMPLETE with execution FAIL, recomputed from
+      the terminal receipt (its trigger and wait status), never invented.
+    Both also need the order, one core snapshot with the caller's pins, the
+    linked COMPLETE stop proof with the supervisor generation ended, the
+    launch hand-off, and the database-create holder's exit proof. A passing
+    entrypoint, any other FAILED or INCOMPLETE stage, an unproven exit, or a
+    registry in the prefix refuses. Returns {"aggregation", "stop", "case",
+    "proofs"}; raises FinalizerError or JournalError."""
+    from . import tool_exit as _te
+    _require_order(stages, "stop", entrypoint_stage)
+    _require(stages[-1] == "stop", "failed_gate_prefix_invalid")
+    aggregation = _sj.aggregate(job_root, stages)
+    _require(aggregation["verdict"] in ("VALID", "FAILED"), "failed_gate_incomplete")
+    results = {stage["name"]: stage["result"] for stage in aggregation["stages"]}
+    entrypoint = results[entrypoint_stage]
+    others = [name for name, result in results.items()
+              if name != entrypoint_stage and result != "COMPLETE"]
+    _require(not others, "failed_gate_other_stage_not_complete")
+    if entrypoint == "FAILED":
+        _require(aggregation["verdict"] == "FAILED", "failed_gate_incomplete")
+        case = "F1"
+    else:
+        _require(entrypoint == "COMPLETE" and aggregation["verdict"] == "VALID",
+                 "failed_gate_incomplete")
+        case = "F2"
+    core_bytes, core = _gate_core(job_root, aggregation, expected)
+    records = _journal_records(job_root, aggregation)
+    stop, launched = _stop_evidence(job_root, records, core)
+    _launch_handoff(records, aggregation, stop, launched)
+    proof = entrypoint_exit_proof(job_root, aggregation, records, core_bytes,
+                                  expected["entrypoint"], entrypoint_stage, require_pass=False)
+    # Disjoint from the normal gate: a passing entrypoint takes writer_quiescence.
+    _require(proof["execution"] == "FAIL", "entrypoint_not_failed")
+    # proof["entrypoint_state"] equals the aggregation's result for the
+    # entrypoint: both come from the same journal bytes, whose digest
+    # entrypoint_exit_proof binds (M70, equivalent; no separate check).
+    if case == "F2":
+        _require(type(proof["trigger"]) is str, "entrypoint_failure_unverified")
+    try:
+        holders = _te.holder_proofs(job_root, aggregation, records, ("database-create",),
+                                    expected["tools"], core_bytes)
+    except _te.HolderError as error:
+        raise FinalizerError(str(error)) from None
+    return {"aggregation": aggregation, "stop": stop, "case": case,
+            "proofs": {"entrypoint_exit": proof, "holders": holders}}
+
+
 _DATABASE_IDENTITY = ("oid", "role", "role_oid", "system_identifier", "postmaster_start_time")
 
 
