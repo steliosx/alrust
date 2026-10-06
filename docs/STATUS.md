@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-03T16:27Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-05T19:07Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -112,6 +112,8 @@ are kept.
 | #97 | `chatgpt/readme-evidence-20261002` (owner's README checkpoint, Y17) | `207af942` (approved `bdd7f4bf`) | `b8dd6271` |
 | #98 | `claude/ci-launch-stage` (launch stage journal, readiness record, launch-confirm) | `effe4099` (approved `6cb8c11c`) | `0a117f6c` |
 | #99 | `codex/observer-launch-interoperability` (Codex's binding reader, venv audit and closed-launch consumer) | `583cd721` (approved `3930aaef`) | `def59f18` |
+| #100 | `claude/ci-database-stage-b3` (database stage parts A and B) | `d9ad6378` (approved `a276f9c1`) | `4510df34` |
+| #101 | `claude/status-2026-10-03` (STATUS; DECISIONS Y18) | `c6f921f2` (approved `64af78e3`) | `cdf44688` |
 
 After PR #10, `main` was at `bcd60ea3`; its hosted CI run [36859021523](https://github.com/steliosx/alrust/actions/runs/36859021523) completed successfully at scaffold scope (retrieved by Codex), and Codex independently verified every merge's parents and trees (`5bd706c0`). Checks then: README, STATUS, OpenAPI and the customer mapping are byte-identical to their reviewed versions; DECISIONS is charter-sync's plus only the ADR-0004 row; `spec/lifecycle.md` is the heartbeats version plus exactly the R1.2 clarification from PR #3's later approved head.
 
@@ -490,9 +492,10 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
         Approved at `effe4099` after `b80c831b` and `4ec44fc3` were
         refused. The evidence count is 35 x3 (the commit message's "38" is
         a miscount).
-      - Database stage (Claude): design approved at `87653d31` (DBC023-R1
-        and R2 closed at design scope; N3 and N4 for the code). The
-        implementation is in review, bundle-only:
+      - Database stage (Claude), merged as PR #100 (`d9ad6378`, merged at
+        `4510df34`, tree `9072782d`): design approved at `87653d31`
+        (DBC023-R1 and R2 closed at design scope; N3 and N4 for the code).
+        The implementation:
         - part A (create and drop state machines, SCRAM verifier, bounded
           psql);
         - part B (writer gate, no-launch gate, registry stage, frozen
@@ -505,20 +508,53 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
         (A3) and `d9ad6378` (B3) (`a276f9c1`; its own 47 and 205 focused
         tests, and the stdin control at about 0.20 s against a 200 ms
         deadline). Offline, with a stateful stub psql only: no real SQL,
-        SCRAM, server, schema or log qualification, no hosted run of this
-        code, and no approval of the future CLIs or workflow. Not yet
-        published; publication needs its own integration check and a
-        signed window.
+        SCRAM, server, schema or log qualification, and no approval of the
+        future CLIs or workflow.
+        - Hosted runs, each under a signed window: PR run 37141784749
+          (ALRUST-PR-DB-DOCS-W1) and main-push run 37357275052
+          (ALRUST-MAIN-PUSH-100-W1, success). Scaffold scope only: no
+          hosted job runs the database stage or its unit tests (the
+          workflow has no pytest step), and all 19 profiles are NOT_RUN.
+          PR #101's main-push run 37359048777 (ALRUST-MAIN-PUSH-101-W1)
+          also succeeded at scaffold scope.
+      - Provisioner secret hand-off (Q1), all offline (code with synthetic
+        controls only; the bridge is a design document), none published:
+        - Codex's interface and snapshot codec `6e2bfcc8`: approved by
+          Claude.
+        - Codex's discovery writer: `bc06aa01` refused (QW-R1, a
+          secondary failure masking the primary exception); `adcd2c3d`
+          approved standalone and offline.
+        - Claude's registry reader, on `claude/ci-db-q1-reader`. After the
+          writer gate, it reads the entrypoint snapshot through a held,
+          core-bound job root. Every value must be in the frozen registry,
+          and only then does the registry stage record
+          `obtained_secret_count`. The finalizer now requires that record
+          to come from the registry stage. `44b5b168` was refused for
+          Q1R44-R1: an ancestor directory swapped for a symlink after the
+          gate was not refused, as shown by Codex's control. The
+          correction, `a6b00f50`, was approved (component source, offline;
+          Codex's `f3e5446d`). Its publication is not yet planned; it
+          carries a cherry-pick of Codex's codec and needs coordination
+          with Codex's own lineage.
+        - Codex's API-key discovery bridge design: `8038ea45` refused
+          (D8038-R1: the entity `href` carries the key), and `937c511b`
+          approved as design only.
+        - Profile completeness belongs to the executor and writer before
+          the entrypoint is COMPLETE, not to the reader's count. No
+          composed writer-to-reader run exists yet.
     - **Next, in order:**
-      1. Codex: the provisioner secret interface (Q1, candidate
-         `6e2bfcc8` in review); then publishing the remaining approved
+      1. Codex: the standalone API-key capture adapter (under the
+         `937c511b` design); then publishing the remaining approved
          lineages, each with its own merge-tree check and signed window.
+         Claude: a publication plan for the approved Q1 reader
+         `a6b00f50`, agreed with Codex.
       2. Claude: the stage CLIs and the executing workflow (create,
          launch, launch-confirm, entrypoint, stop, registry, drop,
          finalizer), with the first real PostgreSQL evidence from one
          hosted scaffold run under its own admission.
-      3. Codex: the executing entrypoint, the provisioner secret interface
-         (Q1) and the served-connection adapter (Q2, N8).
+      3. Codex: the executing entrypoint with the Q1 writer and its
+         profile-completeness checks, and the served-connection adapter
+         (Q2, N8).
       4. Per-profile enabling heads.
 
       Phase 0 also needs the coverage closure and the lifecycle review.
@@ -547,6 +583,16 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
       first-hand decision reported by Claude (DECISIONS Y18). Codex has
       read and verified it and recorded a targeted classification; the
       adoption of its private controller supplement remains separate.
+  - Coordination on 2026-10-05: both lanes were paused by the owner
+    until 18:00Z. Claude resumed at 18:16Z and Codex at 18:18Z, each at
+    the owner's word. Codex admitted ALRUST-MAIN-PUSH-100-W1 and then
+    101-W1 separately, each conditional on Claude's signed pre-action
+    confirmation. Claude merged #100 and #101 inside those windows, and
+    Codex independently verified both resulting mains and runs
+    (CLOSED_VERIFIED_RELEASE). The owner's microVM CI preparation,
+    relayed by the Voalack session, changes nothing here: the shared VM
+    stays held, and no runner switch or VM retirement happens without
+    separate approval.
 - **Repository protection:** none. `branches/main` reports `protected: false`, and
   the protection and ruleset APIs return HTTP 403 (plan). The guard is
   **not enforced**. See `docs/repo-protection-recommendation.md`.
