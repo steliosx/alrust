@@ -106,12 +106,35 @@ def stop_owned(proc):
     PID."""
     if proc.poll() is not None:
         return
-    proc.send_signal(signal.SIGTERM)
+    # Each step is attempted even if an earlier one failed (P2B2-TEST-R1):
+    # a failed TERM still waits, a failed KILL still reaps. Failures are
+    # kept and raised after every step was tried.
+    errors = []
+    try:
+        proc.send_signal(signal.SIGTERM)
+    except BaseException as error:
+        errors.append(error)
     try:
         proc.wait(timeout=TEARDOWN_S + MARGIN_S)
+        exited = True
     except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait(timeout=MARGIN_S)
+        exited = False             # the expected route to the fallback
+    except BaseException as error:
+        errors.append(error)
+        exited = False
+    if not exited:
+        try:
+            proc.kill()
+        except BaseException as error:
+            errors.append(error)
+        try:
+            proc.wait(timeout=MARGIN_S)
+        except BaseException as error:
+            errors.append(error)
+    if len(errors) == 1:
+        raise errors[0]
+    if errors:
+        raise BaseExceptionGroup("stop_owned: %d steps failed" % len(errors), errors)
 
 
 def read_stderr(path):
@@ -132,20 +155,22 @@ def run_tool(root, digest, driver, mode, tmp_path, deadline_s=TOOL_DEADLINE_S):
                  sys.executable, "-I", str(driver), str(root), mode,
                  str(tmp_path / "escaped.pid")]
     err_path = tmp_path / ("supervisor-stderr-%d.txt" % next(_runs))
-    with open(err_path, "wb") as err:
-        proc = subprocess.Popen(args, process_group=0, stdin=subprocess.DEVNULL,
-                                stdout=subprocess.DEVNULL, stderr=err)
-    # From the first successful spawn: every exit path stops P_T if needed;
-    # a cleanup failure never hides the original one.
-    primary = None
+    # From the first successful spawn, including the parent's close of the
+    # stderr file: every exit path stops P_T if needed; a cleanup failure
+    # never hides the original one.
+    proc = primary = None
     try:
+        with open(err_path, "wb") as err:
+            proc = subprocess.Popen(args, process_group=0, stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.DEVNULL, stderr=err)
         rc = proc.wait(timeout=WAIT_S)
     except BaseException as error:
         primary = error
         raise
     finally:
         try:
-            stop_owned(proc)
+            if proc is not None:
+                stop_owned(proc)
         except BaseException as cleanup:
             if primary is None:
                 raise

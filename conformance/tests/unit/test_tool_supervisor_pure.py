@@ -335,8 +335,10 @@ class FakeProc:
     """An owned Popen stand-in. WAITS lists what successive wait() calls do:
     an int return code, or an exception to raise."""
 
-    def __init__(self, log, waits, signal_error=None, stderr=None, payload=b""):
+    def __init__(self, log, waits, signal_error=None, stderr=None, payload=b"",
+                 kill_error=None):
         self.log, self.waits, self.signal_error = log, list(waits), signal_error
+        self.kill_error = kill_error
         self.returncode = None
         if stderr is not None:
             stderr.write(payload)
@@ -359,13 +361,16 @@ class FakeProc:
 
     def kill(self):
         self.log.append(("kill",))
+        if self.kill_error:
+            raise self.kill_error
 
 
 @pytest.fixture
 def harness(tmp_path, monkeypatch):
-    log, plan = [], {"waits": [0], "signal_error": None, "payload": b""}
+    log, plan = [], {"waits": [0], "signal_error": None, "payload": b"", "kill_error": None}
     monkeypatch.setattr(tsp.subprocess, "Popen", lambda args, **kw: FakeProc(
-        log, plan["waits"], plan["signal_error"], kw.get("stderr"), plan["payload"]))
+        log, plan["waits"], plan["signal_error"], kw.get("stderr"), plan["payload"],
+        plan["kill_error"]))
     monkeypatch.setattr(os, "kill", lambda *a: log.append(("bare_kill",) + a))
 
     def run():
@@ -410,12 +415,65 @@ def test_run_tool_kills_only_the_owned_handle_if_teardown_stalls(harness):
 
 def test_run_tool_keeps_the_primary_failure_when_cleanup_fails(harness):
     log, plan, run = harness
-    plan["waits"] = [KeyboardInterrupt()]
+    plan["waits"] = [KeyboardInterrupt(), 0]
     plan["signal_error"] = OSError("synthetic signal failure")
     with pytest.raises(BaseExceptionGroup) as group:
         run()
     kinds = [type(e) for e in group.value.exceptions]
     assert kinds == [KeyboardInterrupt, OSError]
+    # A failed TERM still waits for the owned child (remaining-step control).
+    assert log == [("wait", tsp.WAIT_S), ("signal", _signal.SIGTERM),
+                   ("wait", tsp.TEARDOWN_S + tsp.MARGIN_S)]
+
+
+def test_failed_owned_kill_still_reaps(harness):
+    log, plan, run = harness
+    plan["waits"] = [_subprocess.TimeoutExpired("sup", 51),
+                     _subprocess.TimeoutExpired("sup", 21), -9]
+    plan["kill_error"] = OSError("synthetic kill failure")
+    with pytest.raises(BaseExceptionGroup) as group:
+        run()
+    assert [type(e) for e in group.value.exceptions] == [_subprocess.TimeoutExpired, OSError]
+    assert log == [("wait", tsp.WAIT_S), ("signal", _signal.SIGTERM),
+                   ("wait", tsp.TEARDOWN_S + tsp.MARGIN_S), ("kill",),
+                   ("wait", tsp.MARGIN_S)]
+    assert not any(e[0] == "bare_kill" for e in log)
+
+
+def test_stderr_close_failure_after_spawn_still_stops_the_owned_child(harness, monkeypatch,
+                                                                     tmp_path):
+    log, plan, run = harness
+    plan["waits"] = [-15]
+
+    class ClosingFails:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def write(self, data):
+            pass
+
+        def __exit__(self, *exc):
+            log.append(("close",))
+            raise OSError("synthetic close failure")
+    monkeypatch.setattr(tsp, "open", ClosingFails, raising=False)
+    with pytest.raises(OSError, match="synthetic close failure"):
+        run()
+    assert log == [("close",), ("signal", _signal.SIGTERM),
+                   ("wait", tsp.TEARDOWN_S + tsp.MARGIN_S)]
+
+
+def test_stop_owned_attempts_every_step_and_raises_them_all():
+    log = []
+    proc = FakeProc(log, [KeyboardInterrupt(), 0], signal_error=OSError("term"),
+                    kill_error=OSError("kill"))
+    with pytest.raises(BaseExceptionGroup) as group:
+        tsp.stop_owned(proc)
+    assert [type(e) for e in group.value.exceptions] == [OSError, KeyboardInterrupt, OSError]
+    assert log == [("signal", _signal.SIGTERM), ("wait", tsp.TEARDOWN_S + tsp.MARGIN_S),
+                   ("kill",), ("wait", tsp.MARGIN_S)]
 
 
 def test_run_tool_cleanup_failure_alone_is_raised(harness, monkeypatch):
