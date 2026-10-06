@@ -24,10 +24,13 @@ are those observed when the resource was created. Integers are exact ints
 |---|---|---|---|
 | `owned_resource` | `{"path", "dev", "ino", "type": "file" or "dir"}` | any | a resource the job created and the finalizer must remove |
 | `credential_registry` | `{"path": "<job root>/credential-registry.json", "dev", "ino", "sha256"}` | exactly 1 | the frozen registry; written before the database drop |
-| `obtained_secret_count` | `{"count", "registry_sha256"}` | exactly 1 | how many secrets the entrypoint obtained; must link the registry digest, and the registry must hold at least that many |
+| `obtained_secret_count` | `{"count", "registry_sha256"}` | exactly 1, in stage `registry` | how many distinct secrets the entrypoint obtained; must link the registry digest, and the registry must hold at least that many. Written by `run_registry_stage` only after every inventory value was found in the frozen registry (value-set inclusion; the count is only a lower bound) |
+| `private_secret_inventory` | `{"path": "<job root>/entrypoint-secrets.json", "dev", "ino", "sha256", "count"}` | exactly 1, in stage `entrypoint` | the entrypoint's frozen private snapshot (provisioner-secret-interface.md); read by the registry stage after the writer gate, decoded against the gate's core digest and this count |
 | `export_candidate` | `{"path", "dev", "ino", "name"}` | any, unique names | a file to publish; `name` must be in `EXPORT_ALLOWLIST`, whose fixed bound applies; the source stage is recorded in the receipt |
 | `stop_verdict` | `{"verdict": "COMPLETE", "reason": "tree_empty", "launch_receipt_sha256", "terminal_receipt_sha256"}` | exactly 1 | the stop helper's verdict and the receipts it was based on |
-| `database_drop` | `{"verdict": "COMPLETE", "database", "oid", "system_identifier"}` | exactly 1 | the guarded drop's result |
+| `database_created` | `{"name", "oid", "role", "role_oid", "system_identifier", "postmaster_start_time", "server_version_num", "version", "psql"}` | exactly 1, in stage `database-create` | the allocated database's identity (database_stage.py) |
+| `launch_handoff` | `{"launch_journal_sha256", "receipt_sha256", "supervisor", "child", "observed_monotonic_ns"}` | exactly 1, in stage `launch-confirm` | the hand-off observed alive (confirm-launch.py) |
+| `database_drop` | `{"verdict", "reason", "database", "oid", "role", "role_oid", "system_identifier", "postmaster_start_time"}` | exactly 1 | the guarded drop's result; only `COMPLETE` with an identity equal to `database_created` counts |
 
 ## Quiescence (section 9.1), all before any read of the registry or any write
 
@@ -41,10 +44,40 @@ are those observed when the resource was created. Integers are exact ints
   is absent, held by another `start_ticks`, or a zombie whose pidfd reports
   exit, on the same boot. A live generation or a failed inspection refuses.
   No signal is sent.
-- **Deferred:** the `database_drop` identity is type-checked only. Linking
-  it to the database stage's own receipt (the actual dropped database and
-  cluster) is a prerequisite of the database stage head, which does not
-  exist yet. Until then this is not database qualification.
+- **Launch hand-off:** exactly one `launch_handoff` in `launch-confirm`,
+  naming the validated launch journal's sha256, the stop verdict's launch
+  receipt and the same supervisor generation (a COMPLETE launch journal
+  alone is a syntactic record, LB4E-R2).
+- **Database linkage:** exactly one `database_created` in
+  `database-create` and one `database_drop` with verdict `COMPLETE` whose
+  `database`, `oid`, `role`, `role_oid`, `system_identifier` and
+  `postmaster_start_time` equal it. `ROLE_ONLY_COMPLETE`, `NONE_ALLOCATED`
+  and `UNPROVEN` refuse. This is offline evidence; no real PostgreSQL has
+  been exercised yet.
+
+## Writer gate (registry and database-drop)
+
+`writer_quiescence(job_root, prefix)` is the first half of the gate above,
+for the stages that run before the finalizer. PREFIX ends with the stage
+just before the caller's (at least through `stop`) and must contain
+`database-create`, then `launch` immediately followed by `launch-confirm`,
+then the entrypoint stage, then `stop` (DBFE-R1). It requires aggregation over the prefix VALID (aggregate's
+exact-set rule), the linked stop verdict with the supervisor generation
+positively ended, and the launch hand-off. It reads only immutable proof
+inputs (core, closed journals, launch and terminal receipts), never the
+registry, a credential, a log or the database, and does not require
+`database_drop`. The stage runners evaluate it BEFORE opening their own
+journal; a refusal then opens the journal only to close it FAILED with the
+gate's code. A failed pre-launch allocation uses `no_launch_quiescence`
+instead (database_stage.py).
+
+On the launched path, the `database-drop` runner also requires, after the
+writer gate passed, a frozen registry (`registry_frozen`, DBFE-R2): a
+COMPLETE `registry` stage after `stop` holding exactly one
+`credential_registry` record whose path, identity and sha256 match the
+registry file. Otherwise it sends no SQL and drops nothing, so the database
+cannot be dropped before its secrets are captured. A positively proven
+no-launch cleanup never needs a registry.
 - The registry's identity, digest and completeness, and every candidate
   record, are checked before `export/` is created.
 

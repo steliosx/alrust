@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-02T20:27Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-05T19:07Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -108,6 +108,12 @@ are kept.
 | #93 | `claude/charter-sync` (STATUS) | `cffbea38` (approved `6bf96960`) | `792db300` |
 | #94 | `claude/ci-observer-activation-wiring` (`.pth` calls the explicit activation helper) | `55a839d0` (approved `061c33e5`) | `94ac035d` |
 | #95 | `claude/ci-finalizer` (finalizer orchestration, upload gate, failure-only record) | `bb9c6832` (approved `5b37cb7a`) | `9730201a` |
+| #96 | `claude/status-2026-10-02c` (STATUS) | `0938df1f` (approved `64047270`) | `bdbd6511` |
+| #97 | `chatgpt/readme-evidence-20261002` (owner's README checkpoint, Y17) | `207af942` (approved `bdd7f4bf`) | `b8dd6271` |
+| #98 | `claude/ci-launch-stage` (launch stage journal, readiness record, launch-confirm) | `effe4099` (approved `6cb8c11c`) | `0a117f6c` |
+| #99 | `codex/observer-launch-interoperability` (Codex's binding reader, venv audit and closed-launch consumer) | `583cd721` (approved `3930aaef`) | `def59f18` |
+| #100 | `claude/ci-database-stage-b3` (database stage parts A and B) | `d9ad6378` (approved `a276f9c1`) | `4510df34` |
+| #101 | `claude/status-2026-10-03` (STATUS; DECISIONS Y18) | `c6f921f2` (approved `64af78e3`) | `cdf44688` |
 
 After PR #10, `main` was at `bcd60ea3`; its hosted CI run [36859021523](https://github.com/steliosx/alrust/actions/runs/36859021523) completed successfully at scaffold scope (retrieved by Codex), and Codex independently verified every merge's parents and trees (`5bd706c0`). Checks then: README, STATUS, OpenAPI and the customer mapping are byte-identical to their reviewed versions; DECISIONS is charter-sync's plus only the ADR-0004 row; `spec/lifecycle.md` is the heartbeats version plus exactly the R1.2 clarification from PR #3's later approved head.
 
@@ -400,6 +406,19 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
         from a `.pth` line, so a failed activation leaves the server ready
         without an observer. Server readiness never proves an active
         observer; a missing or refused observer must fail qualification.
+      - Codex's, merged as PR #99 (six commits on `bdbd6511`, merged at
+        `def59f18`, tree `2ecff083`): the read-only binding reader
+        (`10813fa4`, tests `5380e251`), the venv interpreter-alias audit
+        (`2a3a98ee`, tests `90b77847`) and the closed-launch consumer
+        (`62e381c9`), with `583cd721` fixing CL62-R1. That finding: the
+        reader expected the observer socket under `reference/`, while the
+        launcher puts it under `observer/`. It was found by Claude's
+        producer/consumer probe; Claude's earlier approval of the reader
+        had missed it. `583cd721` adds an opt-in real-launcher control,
+        and CL62-T1 (the confirmation journal's shape) is closed.
+        - Hosted runs, each under a signed window: PR run 37123056301
+          (W1, HOSTED_PASS_SCAFFOLD_SUPERVISED_ONLY) and main-push run
+          37132740751 (MAIN-PUSH-99-W2, success). Scaffold scope only.
       - Codex's, **approved by Claude as components but not yet
         published** (Codex publishes its own branches):
         - `02d4a084`: protocol codec;
@@ -414,7 +433,13 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
         - `91e31660`: runtime origin declarations in the package frame
           (actual prefix, executable alias, bound receiver and codec
           origins, and an inventory of loaded `alrust_*` modules). These
-          are private corroboration, never expected values or a trust root.
+          are private corroboration, never expected values or a trust root;
+          tests-only `e2e230f2` closed RO91-N1 and N2;
+        - `7f6050d8`: the held process pair and executable check (after
+          PA53-R1 and T1);
+        - `cb1de911`: the read-only original-deadline property on the
+          observation window;
+        - `71dc4763`: the binding plan (design document).
         Each was reviewed with synthetic controls only. No real reference
         run and no external process and interpreter qualifier exist yet.
         Ownership (agreed in the mailbox): Codex owns the producer and the
@@ -455,13 +480,81 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
         byte custody, the executing workflow, the reference observer, Rust
         parity and shared-VM qualification. No workflow calls the
         finalizer.
+      - PR #98, the launch stage: an opt-in stage mode in
+        `launch-reference.py` journals owned resources, the receipt
+        digest and a readiness record (both generations, C's executable,
+        the venv `python3`) before the ready line. The stage closes before
+        the hand-off, and a close failure stops the tree (LB80-R1).
+        Because COMPLETE bytes can survive a failed fsync or close
+        (LB4E-R2), a COMPLETE launch journal is only a syntactic record:
+        the new `launch-confirm` stage (`confirm-launch.py`) proves the
+        hand-off by observing the receipt's exact generations alive.
+        Approved at `effe4099` after `b80c831b` and `4ec44fc3` were
+        refused. The evidence count is 35 x3 (the commit message's "38" is
+        a miscount).
+      - Database stage (Claude), merged as PR #100 (`d9ad6378`, merged at
+        `4510df34`, tree `9072782d`): design approved at `87653d31`
+        (DBC023-R1 and R2 closed at design scope; N3 and N4 for the code).
+        The implementation:
+        - part A (create and drop state machines, SCRAM verifier, bounded
+          psql);
+        - part B (writer gate, no-launch gate, registry stage, frozen
+          registry before a launched drop, the finalizer's database
+          linkage).
+        Earlier heads were refused for DB61-R1 (unbounded output), DBFE-R1
+        (no entrypoint requirement), DBFE-R2 (drop before the registry was
+        frozen) and DBA2-R2 (stdin written outside the deadline). All four
+        are closed: Codex APPROVE_COMPONENT_SOURCE_OFFLINE at `3a0cb6db`
+        (A3) and `d9ad6378` (B3) (`a276f9c1`; its own 47 and 205 focused
+        tests, and the stdin control at about 0.20 s against a 200 ms
+        deadline). Offline, with a stateful stub psql only: no real SQL,
+        SCRAM, server, schema or log qualification, and no approval of the
+        future CLIs or workflow.
+        - Hosted runs, each under a signed window: PR run 37141784749
+          (ALRUST-PR-DB-DOCS-W1) and main-push run 37357275052
+          (ALRUST-MAIN-PUSH-100-W1, success). Scaffold scope only: no
+          hosted job runs the database stage or its unit tests (the
+          workflow has no pytest step), and all 19 profiles are NOT_RUN.
+          PR #101's main-push run 37359048777 (ALRUST-MAIN-PUSH-101-W1)
+          also succeeded at scaffold scope.
+      - Provisioner secret hand-off (Q1), all offline (code with synthetic
+        controls only; the bridge is a design document), none published:
+        - Codex's interface and snapshot codec `6e2bfcc8`: approved by
+          Claude.
+        - Codex's discovery writer: `bc06aa01` refused (QW-R1, a
+          secondary failure masking the primary exception); `adcd2c3d`
+          approved standalone and offline.
+        - Claude's registry reader, on `claude/ci-db-q1-reader`. After the
+          writer gate, it reads the entrypoint snapshot through a held,
+          core-bound job root. Every value must be in the frozen registry,
+          and only then does the registry stage record
+          `obtained_secret_count`. The finalizer now requires that record
+          to come from the registry stage. `44b5b168` was refused for
+          Q1R44-R1: an ancestor directory swapped for a symlink after the
+          gate was not refused, as shown by Codex's control. The
+          correction, `a6b00f50`, was approved (component source, offline;
+          Codex's `f3e5446d`). Its publication is not yet planned; it
+          carries a cherry-pick of Codex's codec and needs coordination
+          with Codex's own lineage.
+        - Codex's API-key discovery bridge design: `8038ea45` refused
+          (D8038-R1: the entity `href` carries the key), and `937c511b`
+          approved as design only.
+        - Profile completeness belongs to the executor and writer before
+          the entrypoint is COMPLETE, not to the reader's count. No
+          composed writer-to-reader run exists yet.
     - **Next, in order:**
-      1. Codex: the external process and interpreter qualifier, using the
-         installed-file audit and the prepared window; then the database
-         observation.
-      2. Claude: the database stage and its receipt linkage in the
-         finalizer.
-      3. Claude's executing workflow; Codex's executing entrypoint.
+      1. Codex: the standalone API-key capture adapter (under the
+         `937c511b` design); then publishing the remaining approved
+         lineages, each with its own merge-tree check and signed window.
+         Claude: a publication plan for the approved Q1 reader
+         `a6b00f50`, agreed with Codex.
+      2. Claude: the stage CLIs and the executing workflow (create,
+         launch, launch-confirm, entrypoint, stop, registry, drop,
+         finalizer), with the first real PostgreSQL evidence from one
+         hosted scaffold run under its own admission.
+      3. Codex: the executing entrypoint with the Q1 writer and its
+         profile-completeness checks, and the served-connection adapter
+         (Q2, N8).
       4. Per-profile enabling heads.
 
       Phase 0 also needs the coverage closure and the lifecycle review.
@@ -473,6 +566,33 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
     hourly mailbox check plus a 30-minute read-only tmux observation of
     Codex's session (owner, 2026-10-02). Both report only meaningful
     results.
+  - Coordination on 2026-10-03:
+    - Codex's lane stopped collecting its inbox from about 04:00Z to
+      12:07Z, and again from about 12:33Z to 14:34Z. The owner prompted
+      it both times; the mailbox, not the pane, showed the gap.
+    - Hosted runs, including the main-push run a merge triggers, now each
+      get a signed per-run window. Codex reads the owner's "no heavy job
+      before agreed admission" instruction as covering them, and did not
+      adopt a standing waiver. Claude's merges #92 to #98 had triggered
+      main-push runs without one; this is recorded as coordination finding
+      COORD-WINDOW-01, not retroactive admission.
+    - Reported by Opus (Zabalack session) as owner decisions: runner 22
+      stays held and will not be recovered; heavy laptop jobs are
+      heat-gated, with no two at once until a machine-wide queue exists.
+    - Shared CI security policy v1.1 adopted for Alrust, as the owner's
+      first-hand decision reported by Claude (DECISIONS Y18). Codex has
+      read and verified it and recorded a targeted classification; the
+      adoption of its private controller supplement remains separate.
+  - Coordination on 2026-10-05: both lanes were paused by the owner
+    until 18:00Z. Claude resumed at 18:16Z and Codex at 18:18Z, each at
+    the owner's word. Codex admitted ALRUST-MAIN-PUSH-100-W1 and then
+    101-W1 separately, each conditional on Claude's signed pre-action
+    confirmation. Claude merged #100 and #101 inside those windows, and
+    Codex independently verified both resulting mains and runs
+    (CLOSED_VERIFIED_RELEASE). The owner's microVM CI preparation,
+    relayed by the Voalack session, changes nothing here: the shared VM
+    stays held, and no runner switch or VM retirement happens without
+    separate approval.
 - **Repository protection:** none. `branches/main` reports `protected: false`, and
   the protection and ruleset APIs return HTTP 403 (plan). The guard is
   **not enforced**. See `docs/repo-protection-recommendation.md`.

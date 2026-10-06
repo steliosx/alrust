@@ -1,9 +1,10 @@
 # Provisioner and entrypoint secret handoff (Q1)
 
-Proposed interface and passive snapshot codec, for Claude's independent
-exact-head review. Codex owns the discovery writer and executing entrypoint;
-Claude owns the registry reader and cleanup. No provisioner, file writer,
-HTTP adapter, registry wiring or workflow is enabled by this change.
+Interface and private snapshot contract for the source-only Q1 integration.
+Codex owns the codec, discovery writer and capture components; Claude owns
+the registry reader, cleanup and entrypoint supervisor implementation.
+These libraries have source and offline controls. No runtime provisioner,
+profile, executor or workflow is enabled by this integration.
 
 This implements the next source step identified in database-stage design
 `87653d31ad094da9ca721e46040353c560e72c1d`, sections 5 and 9 (Q1), and uses
@@ -98,7 +99,7 @@ identity, file identity, completeness, stored-key metadata or cleanup.
 
 ## Registry reader order and existing finalizer linkage
 
-Claude's future registry reader must:
+The registry reader contract requires:
 
 1. Pass the existing writer-quiescence gate before opening either private
    inventory file or issuing a key query. No COMPLETE stop receipt, closed
@@ -126,9 +127,12 @@ Claude's future registry reader must:
 Step 4 avoids a cycle: the entrypoint cannot know a later registry digest.
 The interface requires registry authorship of `obtained_secret_count`; a
 count in any other stage must refuse. Claude's branch `claude/ci-db-q1-reader`
-adds that finalizer stage check; its corrected head `a6b00f50` has independent
-component source/offline approval, not integration qualification. It is not
-part of this document's executable base. The finalizer's count
+adds that finalizer stage check. Its corrected component head `a6b00f50`
+was independently reviewed, then integrated at exact head
+`30f79e273050662a7d038ec187c7385892733635` and merged into main as
+`7970d25e9ed24ec7203201516b76cd996102cd1b`. This integration retains those
+reader and finalizer bytes. Source/offline approval and the main scaffold
+CI pass do not establish a composed executing profile. The finalizer's count
 check is only a lower bound. Therefore the **reader's actual set-inclusion check**
 is required; a same-sized registry of different secrets is not complete.
 No finalizer schema change or weakened gate is proposed. Any required
@@ -141,20 +145,30 @@ failure-only scanning or authorize a SQL/drop path.
 
 ## Focused verification and execution prerequisites
 
-This head has offline codec controls for zero/ordinary/revoked discoveries,
+The codec has offline controls for zero/ordinary/revoked discoveries,
 exact core/count bindings, UTF-8 byte bounds, byte/entry overflow,
-duplicate/extra/non-finite JSON and fixed non-secret errors. These are
-LOCAL_PASS source evidence only. The following remain NOT_RUN and require
-their own exact source review:
+duplicate/extra/non-finite JSON and fixed non-secret errors. The writer has
+synthetic controls for durability, interruptions, occupied/replaced paths,
+links and partial allocations. The reader has offline controls for gated
+snapshot reads and inclusion, including a same-count different-secret
+registry and failure before any query/drop.
 
-- durable single-writer event capture and exclusive snapshot publication,
-  with fsync/write/close failures, interrupted discovery, occupied paths,
-  root/file replacement, links and partial allocations;
-- the gated registry reader and inclusion check, including a same-count
-  different-secret negative control and failure before any query/drop;
-- provisioning through the reviewed pinned reference CLI, verifying actual
-  key customer/scopes and capturing secret-bearing stdout privately;
-- each enabled test module's discovery bridge and writer exit evidence;
+The capture chain comes from exact reviewed component head
+`7a25fef73bbd53b8565bc617683ef206b2b0b800`. The composed reader/capture/writer
+source projection passed 743 targeted offline tests with no skips. The
+integration retains all tested Python and test bytes; the interface wording
+is updated separately. This is LOCAL_PASS component evidence only: each new
+integration head still requires independent review, and no actual
+writer-to-reader executing profile has been qualified.
+
+The following remain NOT_RUN and require their own reviewed source and
+execution evidence:
+
+- provisioning through the pinned reference CLI, verifying all four actual
+  role keys, their customer/scopes and completeness, and capturing
+  secret-bearing stdout privately;
+- each enabled test module's discovery bridge, successful test outcome,
+  writer closure and positive supervised generation-exit evidence;
 - actual service-log exclusion, composed observer/entrypoint execution,
   guarded database teardown and finalization at the new integration head.
 
