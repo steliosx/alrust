@@ -12,6 +12,10 @@ from the core, the job root and the caller's pins, never from the receipt
 being checked. It never signals: a still-live supervisor generation is
 UNPROVEN here. (The design's "TERM via pidfd" row for a timed-out step is a
 separate, later stop helper.)
+
+The receipt checks are shared with the stage-tool verifier (tool_exit.py,
+R-EP plan P2) through a receipt spec; ENTRYPOINT is this stage's spec, and
+the entrypoint receipts, checks, reasons and verdict record are unchanged.
 """
 import hashlib
 import json
@@ -30,6 +34,13 @@ ENTRYPOINT_STAGE = "entrypoint"
 MAX_RECEIPT = 1 << 16
 TEARDOWN_BUDGET_NS = 16_000_000_000
 _PID_LIMIT = 4194304
+
+# What differs between the entrypoint receipts and a stage tool's: the schema
+# labels, the key naming the observed journal, the tool binding (None for the
+# entrypoint) and the reason given for a script mismatch.
+ENTRYPOINT = {"launch": SCHEMA_LAUNCH, "terminal": SCHEMA_TERMINAL,
+              "journal_key": "entrypoint_journal", "tool": None,
+              "script_reason": "entrypoint_script_mismatch"}
 
 VERDICT_KEYS = frozenset({"verdict", "reason", "launch_receipt_sha256",
                           "terminal_receipt_sha256", "entrypoint_journal_sha256",
@@ -64,12 +75,27 @@ def _is_int(value, low=0, high=_MAX):
     return type(value) is int and low <= value <= high
 
 
-def _check_launch_schema(launch):
-    """Exact keys and types of alrust-entrypoint-launch/1 (REP3-R1)."""
+def _tool_keys(spec):
+    return {"tool"} if spec["tool"] is not None else set()
+
+
+def _check_tool_binding(value):
+    _need(type(value) is dict and set(value) == {"name", "stage_index"}
+          and type(value["name"]) is str
+          and _is_int(value["stage_index"], 0, _sj.MAX_STAGES - 2),
+          "tool_binding_malformed")
+
+
+def _check_launch_schema(launch, spec=ENTRYPOINT):
+    """Exact keys and types of alrust-entrypoint-launch/1 (REP3-R1), or of
+    the stage-tool launch receipt named by SPEC."""
     _need(type(launch) is dict and set(launch) == {
         "schema", "supervisor", "child", "boot_id", "core_identity_sha256", "command",
-        "entrypoint_journal", "terminal_receipt", "deadline", "launched_utc_ns",
-        "monotonic_ns"} and launch["schema"] == SCHEMA_LAUNCH, "launch_receipt_malformed")
+        spec["journal_key"], "terminal_receipt", "deadline", "launched_utc_ns",
+        "monotonic_ns"} | _tool_keys(spec) and launch["schema"] == spec["launch"],
+        "launch_receipt_malformed")
+    if spec["tool"] is not None:
+        _check_tool_binding(launch["tool"])
     sup, child = launch["supervisor"], launch["child"]
     _need(type(sup) is dict and set(sup) == {"pid", "pgid", "start_ticks", "uid", "subreaper"}
           and all(_is_int(sup[k]) for k in sup), "launch_receipt_malformed")
@@ -95,20 +121,24 @@ def _check_launch_schema(launch):
           and _is_int(deadline["monotonic_ns"], 1) and _is_int(deadline["teardown_budget_ns"])
           and type(deadline["boot_id"]) is str, "launch_receipt_malformed")
     _need(all(type(launch[k]) is str for k in ("boot_id", "core_identity_sha256",
-                                               "entrypoint_journal", "terminal_receipt"))
+                                               spec["journal_key"], "terminal_receipt"))
           and _is_int(launch["launched_utc_ns"]) and _is_int(launch["monotonic_ns"]),
           "launch_receipt_malformed")
 
 
-def _check_terminal_schema(terminal):
-    """Exact keys and types of alrust-entrypoint-terminal/1 (REP3-R1). Nullable
-    fields stay nullable only where the producer legitimately writes null."""
+def _check_terminal_schema(terminal, spec=ENTRYPOINT):
+    """Exact keys and types of alrust-entrypoint-terminal/1 (REP3-R1), or of
+    the stage-tool terminal receipt named by SPEC. Nullable fields stay
+    nullable only where the producer legitimately writes null."""
     _need(type(terminal) is dict and set(terminal) == {
         "schema", "result", "supervisor", "boot_id", "launch_receipt_sha256", "trigger",
         "child_wait_status", "child_signalled", "other_descendant_signals",
-        "other_descendants_reaped", "entrypoint_journal", "execution", "signals_sent",
+        "other_descendants_reaped", spec["journal_key"], "execution", "signals_sent",
         "children_reaped", "teardown_ns", "finished_utc_ns", "finished_monotonic_ns"}
-        and terminal["schema"] == SCHEMA_TERMINAL, "terminal_receipt_malformed")
+        | _tool_keys(spec) and terminal["schema"] == spec["terminal"],
+        "terminal_receipt_malformed")
+    if spec["tool"] is not None:
+        _check_tool_binding(terminal["tool"])
     _need(terminal["result"] in ("tree_empty", "tree_not_empty")
           and terminal["trigger"] in _TRIGGERS
           and terminal["execution"] in ("PASS", "FAIL")
@@ -120,7 +150,7 @@ def _check_terminal_schema(terminal):
               "children_reaped", "teardown_ns", "finished_utc_ns", "finished_monotonic_ns"))
           and type(terminal["boot_id"]) is str and _sha(terminal["launch_receipt_sha256"]),
           "terminal_receipt_malformed")
-    observed = terminal["entrypoint_journal"]
+    observed = terminal[spec["journal_key"]]
     if terminal["result"] == "tree_not_empty":
         # No ECHILD: the journal is never read, and C_E may be unreaped.
         _need(observed is None, "terminal_receipt_malformed")
@@ -169,13 +199,13 @@ def _journal_now(path):
     return incomplete
 
 
-def _derived_execution(terminal):
+def _derived_execution(terminal, spec=ENTRYPOINT):
     """Execution from the evidence, never from the terminal's own label."""
     status = terminal["child_wait_status"]
     if (terminal["trigger"] == "child_exited" and status is not None
             and os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
             and not terminal["child_signalled"]
-            and terminal["entrypoint_journal"]["state"] == "COMPLETE"):
+            and terminal[spec["journal_key"]]["state"] == "COMPLETE"):
         return "PASS"
     return "FAIL"
 
@@ -191,35 +221,33 @@ def receipt_paths(job_root):
     return os.path.join(base, LAUNCH_NAME), os.path.join(base, TERMINAL_NAME)
 
 
-def verify_entrypoint_exit(job_root, journal_index, expected):
-    """Return one entrypoint_exit_verdict record (design section 4).
-
-    EXPECTED holds the workflow head's pins: {"entrypoint_script_sha256",
-    "interpreter_path"}. verdict is COMPLETE (closure proven), FAILED
-    (terminal tree_not_empty with valid linkage) or UNPROVEN. execution is
-    the terminal's value only when verdict is COMPLETE, otherwise FAIL."""
+def verify_receipts(job_root, spec, journal, launch_path, terminal_path,
+                    script_sha256, interpreter_path):
+    """The receipt verification shared by the entrypoint-exit and tool-exit
+    stages. SCRIPT_SHA256 and INTERPRETER_PATH are the caller's validated
+    pins; JOURNAL and the receipt paths are derived by the caller from the
+    job root and stage index, never from a receipt. Returns {"verdict",
+    "reason", "launch_receipt_sha256", "terminal_receipt_sha256",
+    "journal_sha256", "journal_state", "execution", "trigger"}."""
     record = {"verdict": "UNPROVEN", "reason": "not_checked",
               "launch_receipt_sha256": None, "terminal_receipt_sha256": None,
-              "entrypoint_journal_sha256": None, "entrypoint_state": None,
+              "journal_sha256": None, "journal_state": None,
               "execution": "FAIL", "trigger": None}
     try:
-        _need(type(expected) is dict and set(expected) == {
-            "entrypoint_script_sha256", "interpreter_path"}
-            and _sha(expected["entrypoint_script_sha256"])
-            and type(expected["interpreter_path"]) is str
-            and os.path.isabs(expected["interpreter_path"]), "expected_pins_invalid")
         core_bytes = _sj.read_bounded(os.path.join(job_root, _sj.CORE_NAME), _sj.MAX_CORE)
         core = _sj.validate_core(core_bytes, job_root)
         core_sha256 = hashlib.sha256(core_bytes).hexdigest()
-        journal = _sj.journal_path(job_root, journal_index, ENTRYPOINT_STAGE)
-        launch_path, terminal_path = receipt_paths(job_root)
         try:
             launch_bytes = _sj.read_bounded(launch_path, MAX_RECEIPT)
         except (OSError, _sj.JournalError):
             raise _Refusal("UNPROVEN", "launch_receipt_unavailable") from None
         record["launch_receipt_sha256"] = hashlib.sha256(launch_bytes).hexdigest()
         launch = _sj.strict_json(launch_bytes, "launch_receipt_malformed")
-        _check_launch_schema(launch)
+        _check_launch_schema(launch, spec)
+        if spec["tool"] is not None:
+            # The receipt names the tool run it was written for (P2): a
+            # receipt copied from another tool or stage index refuses.
+            _need(launch["tool"] == spec["tool"], "tool_mismatch")
         launched = _generation(launch.get("supervisor"))
         sup = launch["supervisor"]
         # Independent expectations: the core file, the job root, the pins.
@@ -229,12 +257,12 @@ def verify_entrypoint_exit(job_root, journal_index, expected):
               and sup.get("subreaper") == 1, "supervisor_identity_invalid")
         command = launch.get("command")
         _need(type(command) is dict and type(command.get("script")) is dict
-              and command["script"].get("sha256") == expected["entrypoint_script_sha256"],
-              "entrypoint_script_mismatch")
+              and command["script"].get("sha256") == script_sha256,
+              spec["script_reason"])
         _need(type(command.get("executable")) is dict
-              and command["executable"].get("path") == expected["interpreter_path"],
+              and command["executable"].get("path") == interpreter_path,
               "interpreter_mismatch")
-        _need(launch.get("entrypoint_journal") == journal
+        _need(launch.get(spec["journal_key"]) == journal
               and launch.get("terminal_receipt") == terminal_path, "receipt_paths_mismatch")
         deadline = launch.get("deadline")
         _need(type(deadline) is dict and deadline.get("boot_id") == core["boot_id"]
@@ -249,12 +277,13 @@ def verify_entrypoint_exit(job_root, journal_index, expected):
             raise _Refusal("UNPROVEN", "terminal_receipt_unavailable") from None
         record["terminal_receipt_sha256"] = hashlib.sha256(terminal_bytes).hexdigest()
         terminal = _sj.strict_json(terminal_bytes, "terminal_receipt_malformed")
-        _check_terminal_schema(terminal)
+        _check_terminal_schema(terminal, spec)
         _need(type(terminal.get("supervisor")) is dict
               and set(terminal["supervisor"]) == {"pid", "start_ticks"}
               and _generation(terminal["supervisor"]) == launched
               and terminal.get("boot_id") == core["boot_id"]
-              and terminal.get("launch_receipt_sha256") == record["launch_receipt_sha256"],
+              and terminal.get("launch_receipt_sha256") == record["launch_receipt_sha256"]
+              and (spec["tool"] is None or terminal["tool"] == spec["tool"]),
               "terminal_link_mismatch")
         record["trigger"] = terminal.get("trigger")
         if terminal.get("result") == "tree_not_empty":
@@ -262,16 +291,16 @@ def verify_entrypoint_exit(job_root, journal_index, expected):
         # REP4-R1: the whole (sha256, state, code) tuple is derived from the
         # current journal bytes and must equal the receipt's observation;
         # only then is it used to derive execution.
-        observed = terminal["entrypoint_journal"]
+        observed = terminal[spec["journal_key"]]
         _need(_journal_now(journal) == observed, "journal_changed")
-        # C_E is signalled only before its status is collected, so a child
-        # that exited on its own was never signalled (REP1-R1 fix).
+        # The child is signalled only before its status is collected, so a
+        # child that exited on its own was never signalled (REP1-R1 fix).
         _need(not (terminal["trigger"] == "child_exited" and terminal["child_signalled"]),
               "receipt_contradiction")
-        _need(terminal["execution"] == _derived_execution(terminal),
+        _need(terminal["execution"] == _derived_execution(terminal, spec),
               "execution_contradiction")
-        record["entrypoint_state"] = observed["state"]
-        record["entrypoint_journal_sha256"] = observed["sha256"]
+        record["journal_state"] = observed["state"]
+        record["journal_sha256"] = observed["sha256"]
         # The receipts are expected bindings; this is the positive observation.
         _need(generation_ended(launched[0], launched[1], core["boot_id"]),
               "supervisor_generation_live_or_unproven")
@@ -281,6 +310,35 @@ def verify_entrypoint_exit(job_root, journal_index, expected):
         record.update(verdict=refusal.verdict, reason=refusal.reason, execution="FAIL")
     except (_sj.JournalError, OSError, ValueError, TypeError, KeyError):
         record.update(verdict="UNPROVEN", reason="evidence_unreadable", execution="FAIL")
+    return record
+
+
+def verify_entrypoint_exit(job_root, journal_index, expected):
+    """Return one entrypoint_exit_verdict record (design section 4).
+
+    EXPECTED holds the workflow head's pins: {"entrypoint_script_sha256",
+    "interpreter_path"}. verdict is COMPLETE (closure proven), FAILED
+    (terminal tree_not_empty with valid linkage) or UNPROVEN. execution is
+    the terminal's value only when verdict is COMPLETE, otherwise FAIL."""
+    if not (type(expected) is dict and set(expected) == {
+            "entrypoint_script_sha256", "interpreter_path"}
+            and _sha(expected["entrypoint_script_sha256"])
+            and type(expected["interpreter_path"]) is str
+            and os.path.isabs(expected["interpreter_path"])):
+        shared = {"verdict": "UNPROVEN", "reason": "expected_pins_invalid",
+                  "launch_receipt_sha256": None, "terminal_receipt_sha256": None,
+                  "journal_sha256": None, "journal_state": None,
+                  "execution": "FAIL", "trigger": None}
+    else:
+        launch_path, terminal_path = receipt_paths(job_root)
+        shared = verify_receipts(
+            job_root, ENTRYPOINT, _sj.journal_path(job_root, journal_index, ENTRYPOINT_STAGE),
+            launch_path, terminal_path, expected["entrypoint_script_sha256"],
+            expected["interpreter_path"])
+    record = {key: shared[key] for key in ("verdict", "reason", "launch_receipt_sha256",
+                                           "terminal_receipt_sha256", "execution", "trigger")}
+    record["entrypoint_journal_sha256"] = shared["journal_sha256"]
+    record["entrypoint_state"] = shared["journal_state"]
     return record
 
 
