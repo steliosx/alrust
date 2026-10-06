@@ -39,6 +39,7 @@ text:
 """
 import json
 import os
+import stat
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -57,6 +58,9 @@ def read_pins(path):
     a final link, bounded. Its shape is checked by the gate."""
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     try:
+        # P3A-INPUT-R1: the same opened descriptor must be a regular file.
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("pins not a regular file")
         data = os.read(fd, MAX_PINS + 1)
     finally:
         os.close(fd)

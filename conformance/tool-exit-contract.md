@@ -178,7 +178,10 @@ driver mismatch pre-fork.
 
 **As implemented (P3a).** `finalizer.gate_exit_proofs` is shared by the
 writer gate and `finalize()`:
-- **One core snapshot.** It is read once, its sha256 must equal the
+- **One core snapshot.** `aggregate()` reads and hashes the core for its
+  own checks. The gate then reads it exactly once more (`_gate_core`) and
+  passes those bytes to every later check; nothing rereads it (counted in
+  the controls, P3A-SNAPSHOT-N1). Its sha256 must equal the
   aggregation's `core_identity_sha256` (`gate_core_changed`), it must be
   /3 (`gate_legacy_core`), and the caller's pins (`{"entrypoint", "tools"}`)
   must equal the core's entrypoint pins (`gate_pins_mismatch`).
@@ -211,7 +214,9 @@ runners.
 - The finalizer removes the `entrypoint/` and `tools/` receipt directories
   as proof inputs, as it already does for `reference/`.
 - The stage-tool driver passes the expected pins from a JSON file
-  (`--expected-pins`).
+  (`--expected-pins`): a regular file (checked on the opened descriptor,
+  P3A-INPUT-R1), opened without following a final link, bounded; anything
+  else is NOT_RUN with no stage opened.
 
 Not in P3a: A2 (`failed_entrypoint_quiescence`, P3b), the job-role binding
 before the first read (P3c), and the paths-only failure record (P3d).

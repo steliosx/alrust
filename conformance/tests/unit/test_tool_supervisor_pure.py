@@ -528,3 +528,35 @@ def test_driver_unreadable_pins_are_not_run(runners, monkeypatch, capsys):
     assert drv.main(REGISTRY) == 70
     assert json.loads(capsys.readouterr().out) == {"result": "NOT_RUN",
                                                    "reason": "driver_setup_failed"}
+
+
+def _queued_fifo(tmp_path):
+    fifo = tmp_path / "pins.fifo"
+    os.mkfifo(fifo, 0o600)
+    holder = os.open(fifo, os.O_RDWR | os.O_NONBLOCK)           # keeps the data queued
+    os.write(holder, json.dumps(PINS).encode())
+    return fifo, holder
+
+
+def test_pins_fifo_with_queued_data_is_refused(tmp_path):
+    """P3A-INPUT-R1: a populated FIFO is not a regular file."""
+    fifo, holder = _queued_fifo(tmp_path)
+    try:
+        with pytest.raises(ValueError, match="regular"):
+            drv.read_pins(str(fifo))
+    finally:
+        os.close(holder)
+
+
+def test_pins_fifo_is_not_run_and_no_runner_starts(tmp_path, monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(ds, "run_registry_stage", lambda *a, **k: calls.append(a))
+    fifo, holder = _queued_fifo(tmp_path)
+    try:
+        argv = REGISTRY[:-1] + [str(fifo)]
+        assert drv.main(argv) == 70
+    finally:
+        os.close(holder)
+    assert calls == []
+    assert json.loads(capsys.readouterr().out) == {"result": "NOT_RUN",
+                                                   "reason": "driver_setup_failed"}

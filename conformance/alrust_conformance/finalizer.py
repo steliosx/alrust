@@ -531,13 +531,17 @@ def entrypoint_exit_proof(job_root, aggregation, records, core_bytes, expected_e
     return fresh
 
 
-def gate_exit_proofs(job_root, aggregation, records, expected, required,
+def gate_exit_proofs(job_root, aggregation, records, expected, required, core_bytes,
                      entrypoint_stage="entrypoint"):
-    """The P3a checks shared by the writer gate and finalize(): one core
-    snapshot, pins, A1 (normal path) and the required holders. Returns
+    """The P3a checks shared by the writer gate and finalize(): A1 (normal
+    path) and the required holders, on CORE_BYTES, the caller's single core
+    snapshot from _gate_core (bound to the aggregation, /3, pins checked).
+    It never reads the core again (P3A-SNAPSHOT-N1). Returns
     {"entrypoint_exit", "holders"}."""
     from . import tool_exit as _te
-    core_bytes, _ = _gate_core(job_root, aggregation, expected)
+    _require(type(core_bytes) is bytes
+             and hashlib.sha256(core_bytes).hexdigest() == aggregation.get("core_identity_sha256"),
+             "gate_core_changed")
     proof = entrypoint_exit_proof(job_root, aggregation, records, core_bytes,
                                   expected["entrypoint"], entrypoint_stage)
     try:
@@ -575,7 +579,7 @@ def writer_quiescence(job_root, stages, expected, required, entrypoint_stage="en
     records = _journal_records(job_root, aggregation)
     stop, launched = _stop_evidence(job_root, records, core)
     _launch_handoff(records, aggregation, stop, launched)
-    proofs = gate_exit_proofs(job_root, aggregation, records, expected, required,
+    proofs = gate_exit_proofs(job_root, aggregation, records, expected, required, core_bytes,
                               entrypoint_stage)
     return {"aggregation": aggregation, "stop": stop, "proofs": proofs}
 
@@ -642,7 +646,7 @@ def finalize(job_root, stages, expected, entrypoint_stage="entrypoint"):
         stop, launched = _stop_evidence(job_root, records, core)
         _launch_handoff(records, aggregation, stop, launched)
         gate_exit_proofs(job_root, aggregation, records, expected,
-                         ("database-create", "registry"), entrypoint_stage)
+                         ("database-create", "registry"), core_bytes, entrypoint_stage)
         evidence = {"stop": stop, "database": _database_linkage(records)}
         _, registry = _one(records, "credential_registry")
         _require(type(registry) is dict and set(registry) == {"path", "dev", "ino", "sha256"}

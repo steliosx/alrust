@@ -289,3 +289,39 @@ def test_writer_gate_binds_its_core_snapshot_to_the_aggregation(job, monkeypatch
     _swap_core_at_the_gate_read(monkeypatch)
     with pytest.raises(fz.FinalizerError, match="^gate_core_changed$"):
         fz.writer_quiescence(str(root), PREFIX, EXPECTED, ("database-create",))
+
+
+def _count_core_reads(monkeypatch):
+    reads = []
+    for owner in (fz, sj):
+        real = owner.read_bounded
+
+        def counted(path, limit, real=real):
+            if str(path).endswith(sj.CORE_NAME):
+                reads.append(path)
+            return real(path, limit)
+        monkeypatch.setattr(owner, "read_bounded", counted)
+    return reads
+
+
+def test_writer_gate_reads_the_core_once_beside_the_aggregation(job, monkeypatch):
+    """P3A-SNAPSHOT-N1: one aggregation read (it hashes the core) and one
+    gate snapshot; the recomputations reuse the snapshot."""
+    root = job(upto="registry-exit")
+    reads = _count_core_reads(monkeypatch)
+    fz.writer_quiescence(str(root), DROP_PREFIX, EXPECTED, ("database-create", "registry"))
+    assert len(reads) == 2
+
+
+def test_finalize_reads_the_core_once_beside_the_aggregation(job, monkeypatch):
+    root = job()
+    reads = _count_core_reads(monkeypatch)
+    real = fz._sealing_steps
+
+    def stop_at_sealing(*a, **k):
+        # Count only the gate part; sealing reads its own inputs later.
+        raise RuntimeError("stop before sealing")
+    monkeypatch.setattr(fz, "_sealing_steps", stop_at_sealing)
+    with pytest.raises(RuntimeError):
+        fz.finalize(str(root), STAGES, EXPECTED)
+    assert len(reads) == 2
