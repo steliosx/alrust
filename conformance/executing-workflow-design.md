@@ -17,11 +17,15 @@ finalization order, deadlines, entrypoint interface). R-EP design
 The executing workflow is one job that runs the stages below on one fresh
 machine for one profile (contract section 1). This design proposes:
 
-- **Inert on publication.** *Proposed:* a new job, separate from the four
-  existing scaffold jobs, triggered only by `workflow_dispatch` (no
-  `pull_request` or `push` trigger), so publishing it starts nothing. Any
-  first execution needs its own admission (section 8). The existing
-  `hosted profiles (inert preflight, all NOT_RUN)` job is unchanged.
+- **Inert on publication (EWD-R1).** Triggers belong to a workflow file,
+  not a job. *Proposed:* a **separate new workflow file**,
+  `.github/workflows/executing.yml`, whose only trigger is
+  `workflow_dispatch` (no `pull_request`, `push` or `schedule`), so
+  publishing it starts nothing. The existing `ci.yml`, with its
+  `push: main` / `pull_request` triggers and its four scaffold jobs,
+  including `hosted profiles (inert preflight, all NOT_RUN)`, is left
+  untouched. Publishing the file is not a dispatch; any first execution
+  needs its own admission (section 8).
 - **Hosted only at first.** GitHub-hosted `ubuntu-24.04`, the same
   `postgres:16` service shape as the existing `conformance-reference`
   job: `ports: ["5432:5432"]`, which publishes `0.0.0.0:5432`, matching
@@ -36,9 +40,14 @@ machine for one profile (contract section 1). This design proposes:
 
 Journal filenames are `NN-<stage>.jsonl` (`stage_journal.journal_path`),
 so indices are part of each stage's identity, and the exit verifiers
-bind `stage_index`. The canonical names and their order are
-`finalizer.FAILURE_STAGES`. *Proposed:* the workflow imports that
-constant rather than restating it.
+bind `stage_index`. The stage lists below (normal, A2, no-launch) are
+**explicit workflow proposals**. `finalizer.FAILURE_STAGES` is the
+imported allowed-name vocabulary (`failure_record` checks membership
+only); it does not enforce order (EWD-N1). The actual order is enforced by
+the named gate checks: `finalizer._require_order`, the exact A2 prefix in
+`failed_entrypoint_quiescence`, and `database_stage.no_launch_quiescence`.
+*Proposed:* the workflow imports `FAILURE_STAGES` and `STOP_VERDICTS`
+rather than restating them (Q-W-2, agreed in `0297abc0`).
 
 | Index | Stage | Actor | Writer of the journal | Existing source | Missing (this design's heads) |
 |---|---|---|---|---|---|
@@ -117,36 +126,60 @@ core's pins; a later core schema could add them.
 
 ## 5. Deadlines
 
-The job's 30-minute budget (contract section 10). *Proposed:* one early
-step computes the absolute `CLOCK_MONOTONIC` deadlines `D` for the
-entrypoint and each tool run from the step start and the budgets below,
-passes them as `--deadline-monotonic-ns`, and sets each step's
-`timeout-minutes` above `D + B` (B = 16 s, `entrypoint_exit.TEARDOWN_BUDGET_NS`)
-plus a margin, so an outside kill lands in UNPROVEN rather than racing
-teardown. Each tool `D` fits inside `database_stage.STAGE_BUDGET_NS`
-(60 s) with room for its exit stage (tool-exit-contract section 8).
+The job's 30-minute budget (contract section 10). *Proposed* (EWD-R2):
+- **Once:** an early step fixes a global job deadline `J` (absolute
+  `CLOCK_MONOTONIC`, same boot as the core) and the cleanup/finalization
+  reserve `R` (contract: 8 minutes) as plain files in the private job root.
+  They are never recomputed or extended.
+- **Per launch, immediately before it:** the step that starts a
+  supervised run (each `P_T` tool, then `P_E`) reads the clock and derives
+  that run's own `D = min(now + stage budget, J - R - exit reserve)`. The
+  stage budget is `database_stage.STAGE_BUDGET_NS` (60 s) for a tool, or the
+  manifest budget for the entrypoint; the exit reserve is `B` (16 s,
+  `entrypoint_exit.TEARDOWN_BUDGET_NS`) plus the exit stage's own time. It
+  passes that `D` as `--deadline-monotonic-ns`. If `D < now + B`, the
+  supervisor already refuses before the fork (no fork, no receipt), and
+  the workflow records that refusal; it never retries with a fresh `D`.
+- **Outer step timeout:** `timeout-minutes` is relative, so it is derived
+  from the same start: at least `ceil((D - now + B + margin) / 60 s)`
+  minutes, with the margin covering the terminal receipt. An outside kill
+  by that timeout, or by the job, leaves no valid terminal receipt:
+  UNPROVEN, and the gates refuse. It never proves cleanup.
 
 ## 6. Stop recorder (missing; W1)
 
-`stop-reference.py` prints one JSON line `{"verdict", "reason"}` and exits
-0/1/2. *Proposed* `scripts/record-stop.py`: opens the `stop` journal at its
-index after `entrypoint-exit`, runs `stop-reference.py RECEIPT SHA256
-JOB_ROOT` once (bounded), validates the line strictly (`(verdict, reason)
-in finalizer.STOP_VERDICTS`, Q-P3d-2: imported, not restated), computes
-the launch and terminal receipt digests from the fixed paths itself (not
-from the line), and records one `stop_verdict` of the exact shape
-`_stop_evidence` and `failure_record` require. Any other output closes the
-stage FAILED with a fixed code; it never retries.
+`stop-reference.py` prints one JSON line and exits 0, 1 or 2
+(`EXIT = {"COMPLETE": 0, "FAILED": 1, "UNPROVEN": 2}`). The line is
+`{"verdict", "reason"}`, plus an integer `errno` key only for
+`pidfd_open_failed` and `signal_failed` (`stop-reference.py:228, 254`).
+*Proposed* `scripts/record-stop.py` (EWD-R3):
+- opens the `stop` journal at its index after `entrypoint-exit` and runs
+  `stop-reference.py RECEIPT SHA256 JOB_ROOT` exactly once, bounded;
+- parses the bounded stdout with strict JSON (duplicate keys, non-finite
+  numbers and invalid UTF-8 refuse). The key set must be exactly
+  `{verdict, reason}`, or `{verdict, reason, errno}` with a non-bool int
+  `errno` and only for those two reasons. `(verdict, reason)` must be in
+  `finalizer.STOP_VERDICTS` (imported, Q-P3d-2), and the exit code must
+  equal `EXIT[verdict]`;
+- projects only the fixed `verdict` and `reason` into the record; `errno`
+  is never serialized as text into the journal;
+- computes the receipt digests itself from the fixed paths, not from the
+  line. `launch_receipt_sha256` comes from the launch receipt. For
+  `terminal_receipt_sha256`: COMPLETE requires the terminal receipt and
+  both actual digests (and the existing gates still apply); on an
+  UNPROVEN path with no terminal receipt it is `null`, which `failure_record`
+  accepts, so the failure evidence is kept, not erased;
+- records exactly one `stop_verdict` of the shape `_stop_evidence` and
+  `failure_record` require. It keeps the raw helper output privately in
+  the job root (never exported, removed by the finalizer as an owned
+  resource). Malformed or unavailable output closes the stage FAILED with
+  a fixed code; it never retries and never invents COMPLETE.
 
-## 7. Entrypoint for the first run (Q-W-1)
+## 7. Entrypoint for the first run (Q-W-1, decided)
 
-Codex's executing entrypoint (contract section 12 item 6) does not exist.
-Two options, for Codex's decision: (a) the first hosted run waits for it;
-(b) a minimal reviewed stand-in run as `C_E`, which opens the
-`entrypoint` journal, writes an empty Q1 inventory and closes COMPLETE,
-and touches no server or credential. (b) would exercise the database,
-launch, stop, registry, drop and finalizer stages end to end with zero
-vectors; it would prove nothing about conformance. No default is assumed.
+Codex chose (a) in `0297abc0`: the first run waits for her independently
+reviewed executing entrypoint (design `b03cebda`, heads E1–E4). No empty
+COMPLETE stand-in is proposed or enabled.
 
 ## 8. Admission classification (policy v1.1)
 
@@ -182,10 +215,14 @@ finalizer's scan and manifest are themselves reviewed for upload.
 3. **W3** `stage-tool.py database-create` names from the core; the launch
    expectation record.
 4. **W4** finalizer CLI (`finalize`, else `failure_record`), pure controls.
-5. **W5** the workflow job itself (`workflow_dispatch` only, inert on
-   publication), after W1–W4 are approved; its first execution is a
+5. **W5** the separate workflow file `executing.yml` (`workflow_dispatch`
+   only, inert on publication; `ci.yml` untouched), after W1–W4 and
+   Codex's E-heads it depends on are approved; its first execution is a
    separate admission.
 
-Questions: Q-W-1 (section 7); Q-W-2: agree that the workflow imports
-`FAILURE_STAGES` and `STOP_VERDICTS` rather than restating them; Q-W-3:
-agree that pins are workflow-file literals (section 3).
+Answers (`0297abc0`): Q-W-1 (a), wait for the real entrypoint; Q-W-2
+import the constants, with the membership/order distinction above; Q-W-3
+pins as approved workflow literals, and the stop helpers' literal digests
+checked before any eventual execution. W1–W5 order agreed in principle;
+every implementation head is reviewed separately, and the first execution
+is admitted separately.
