@@ -126,25 +126,61 @@ core's pins; a later core schema could add them.
 
 ## 5. Deadlines
 
-The job's 30-minute budget (contract section 10). *Proposed* (EWD-R2):
-- **Once:** an early step fixes a global job deadline `J` (absolute
-  `CLOCK_MONOTONIC`, same boot as the core) and the cleanup/finalization
-  reserve `R` (contract: 8 minutes) as plain files in the private job root.
-  They are never recomputed or extended.
-- **Per launch, immediately before it:** the step that starts a
-  supervised run (each `P_T` tool, then `P_E`) reads the clock and derives
-  that run's own `D = min(now + stage budget, J - R - exit reserve)`. The
-  stage budget is `database_stage.STAGE_BUDGET_NS` (60 s) for a tool, or the
-  manifest budget for the entrypoint; the exit reserve is `B` (16 s,
-  `entrypoint_exit.TEARDOWN_BUDGET_NS`) plus the exit stage's own time. It
-  passes that `D` as `--deadline-monotonic-ns`. If `D < now + B`, the
-  supervisor already refuses before the fork (no fork, no receipt), and
-  the workflow records that refusal; it never retries with a fresh `D`.
-- **Outer step timeout:** `timeout-minutes` is relative, so it is derived
-  from the same start: at least `ceil((D - now + B + margin) / 60 s)`
-  minutes, with the margin covering the terminal receipt. An outside kill
-  by that timeout, or by the job, leaves no valid terminal receipt:
-  UNPROVEN, and the gates refuse. It never proves cleanup.
+The job's 30-minute budget (contract section 10). *Proposed* (EWD-R2;
+the cleanup-phase cap per Codex `afa16a6a`):
+
+- **Once:** an early step fixes the global job deadline `J` (absolute
+  `CLOCK_MONOTONIC`, same boot as the core) and writes it to a private
+  file in the job root. It is never recomputed or extended.
+- **Two phases.** The *work phase* holds `database-create` (with its exit
+  stage), `launch`, `launch-confirm` and `entrypoint`. The *cleanup phase*
+  holds `entrypoint-exit`, `stop`, `registry`, `registry-exit`,
+  `database-drop` and the finalizer. The cleanup reserve `R` is fixed and
+  covers the whole cleanup phase at its maxima. Each line is an existing
+  bound or a proposed step limit:
+  the entrypoint's teardown `B` (16 s, `entrypoint_exit.TEARDOWN_BUDGET_NS`);
+  `stop-supervisor.py` plus `entrypoint-exit` (20 s wait plus 60 s step);
+  the reference stop (20 s exit wait, `stop-reference.py`, plus a margin);
+  `registry` (60 s, `STAGE_BUDGET_NS`, plus `B`); `stop-supervisor.py` plus
+  `registry-exit` (20 s plus 60 s); `database-drop` (60 s); the finalizer
+  (60 s, contract section 10). That sums to about 402 s (under 7 minutes)
+  before margins, inside the
+  contract's 8-minute reserve; *proposed* `R` = 8 minutes. The work cutoff
+  is `C = J − R`.
+- **Work-phase D**, frozen once, immediately before each launch (the
+  database-create tool, then the entrypoint):
+  `D = min(now + stage budget, C − exit reserve of that run)`, where the
+  stage budget is `STAGE_BUDGET_NS` for a tool or the manifest budget for
+  the entrypoint. The entrypoint's own teardown and exit are inside `R`,
+  so its exit reserve is 0 here; database-create's exit reserve is `B`
+  plus its exit stage. No work-phase run may start after `C`.
+- **Cleanup-phase D**, frozen once, immediately before the registry
+  launch: `D = min(now + STAGE_BUDGET_NS, J − remaining(registry))`, where
+  `remaining(registry)` is the reserve still needed after the registry
+  run: its teardown `B`, `stop-supervisor.py` and `registry-exit`, the
+  drop and the finalizer, plus margins. The registry is never capped by
+  `C`. With the work phase confined to `C` and `R` sized as above, the
+  registry has its full budget at the boundary (Codex's counterexample:
+  the entrypoint passes just before its D at `C`, its exit and stop use
+  their allowed reserve, and the registry still starts within `R` with
+  `remaining(registry)` left).
+- **Refusal, not extension.** If any launch's `D < now + B`, the
+  supervisor refuses before the fork (no fork, no receipt). The workflow
+  records that refusal with a fixed code; it never retries with a fresh
+  `D`. A cleanup-phase refusal leaves the profile FAIL with cleanup
+  UNPROVEN.
+- **Plan fit before allocation.** *Proposed:* before `database-create`
+  allocates anything, a pure check confirms that the whole plan (the work
+  budgets plus `R`) fits before `J`, and refuses before allocation if not.
+  W-heads add a pure near-boundary control: with the entrypoint ending
+  exactly at `C`, every cleanup step still fits; with `R` shortened by one
+  step's maximum, the plan refuses before allocation.
+- **Outer step timeout:** `timeout-minutes` is relative, so each step
+  derives it from the same start: at least
+  `ceil((D − now + B + margin) / 60 s)` minutes, the margin covering the
+  terminal receipt. An outside kill by that timeout or by the job leaves
+  no valid terminal receipt: UNPROVEN, and the gates refuse. It never
+  proves cleanup.
 
 ## 6. Stop recorder (missing; W1)
 
