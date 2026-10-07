@@ -203,8 +203,7 @@ def test_core_pins_tool_shapes():
 
 # --- the driver ------------------------------------------------------------
 
-CREATE = ["database-create", "--job-root", "/job", "--profile", "scaffold", "--run-id", "123",
-          "--attempt", "1", "--port", "5432", "--superuser", "postgres",
+CREATE = ["database-create", "--job-root", "/job", "--port", "5432", "--superuser", "postgres",
           "--public-superuser-password", "postgres", "--container-id", "a" * 12,
           "--psql", "/usr/bin/psql", "--docker", "/usr/bin/docker",
           "--deadline-monotonic-ns", "1000"]
@@ -231,8 +230,8 @@ def test_driver_create_passes_exact_arguments(runners, capsys):
     assert drv.main(CREATE) == 0
     (name, args, kwargs), = runners
     assert name == "create" and args == ("/job",)
-    assert kwargs == {"profile": "scaffold", "run_id": "123", "attempt": "1", "port": 5432,
-                      "superuser": "postgres", "superuser_password": "postgres",
+    # W3: no profile, run id or attempt from argv; they come from the core.
+    assert kwargs == {"port": 5432, "superuser": "postgres", "superuser_password": "postgres",
                       "container_id": "a" * 12, "psql_path": "/usr/bin/psql",
                       "docker_path": "/usr/bin/docker", "deadline_ns": 1000}
     assert json.loads(capsys.readouterr().out) == {"result": "COMPLETE",
@@ -320,7 +319,7 @@ def test_run_create_stage_closes_failed_with_the_code(tmp_path, monkeypatch):
         raise ds.DatabaseStageError("name_already_exists")
     monkeypatch.setattr(ds, "create_database", refuse)
     with pytest.raises(ds.DatabaseStageError):
-        ds.run_create_stage(str(root), profile="scaffold")
+        ds.run_create_stage(str(root))
     aggregation = sj.aggregate(str(root), ["database-create"])
     assert aggregation["verdict"] == "FAILED"
     last = sj.read_bounded(sj.journal_path(str(root), 0, "database-create"),

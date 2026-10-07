@@ -8,9 +8,11 @@ driver is C_T, so the job role's password is generated (database-create)
 or read (registry) only inside the supervised tree, after P_T exists
 (conformance/tool-exit-contract.md, sections 2 and 3).
 
-  database-create --job-root J --profile P --run-id R --attempt A --port N
-      --superuser U --public-superuser-password W --container-id C
-      --psql PATH --docker PATH --deadline-monotonic-ns D
+  database-create --job-root J --port N --superuser U
+      --public-superuser-password W --container-id C --psql PATH
+      --docker PATH --deadline-monotonic-ns D
+      (the database name's profile, run id and attempt come from the job's
+      /3 core, never argv; executing workflow W3)
   registry --job-root J --prefix a,b,c --secret-key-file F --port N
       --psql PATH --deadline-monotonic-ns D --expected-pins P
 
@@ -44,9 +46,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-CREATE_OPTIONS = ("--job-root", "--profile", "--run-id", "--attempt", "--port",
-                  "--superuser", "--public-superuser-password", "--container-id",
-                  "--psql", "--docker", "--deadline-monotonic-ns")
+CREATE_OPTIONS = ("--job-root", "--port", "--superuser", "--public-superuser-password",
+                  "--container-id", "--psql", "--docker", "--deadline-monotonic-ns")
 REGISTRY_OPTIONS = ("--job-root", "--prefix", "--secret-key-file", "--port", "--psql",
                     "--deadline-monotonic-ns", "--expected-pins")
 PATH_OPTIONS = ("--job-root", "--secret-key-file", "--psql", "--docker", "--expected-pins")
@@ -130,9 +131,7 @@ def main(argv):
     try:
         if tool == "database-create":
             ds.run_create_stage(
-                opts["--job-root"], profile=opts["--profile"], run_id=opts["--run-id"],
-                attempt=opts["--attempt"], port=opts["--port"],
-                superuser=opts["--superuser"],
+                opts["--job-root"], port=opts["--port"], superuser=opts["--superuser"],
                 superuser_password=opts["--public-superuser-password"],
                 container_id=opts["--container-id"], psql_path=opts["--psql"],
                 docker_path=opts["--docker"], deadline_ns=opts["--deadline-monotonic-ns"])

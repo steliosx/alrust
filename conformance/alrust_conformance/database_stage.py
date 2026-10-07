@@ -798,15 +798,42 @@ def build_registry(job_root, journal, *, secret_key_path, other_secrets, port,
 # ---------------------------------------------------------------------------
 # Stage runners: gate first, then the journal, then the action
 
+CORE_NAME_KWARGS = frozenset({"profile", "run_id", "attempt"})
+
+
+def _core_names(job_root, bound_sha256):
+    """The database name's parts from the job's /3 core (executing workflow
+    W3): exactly the bytes the open stage's stage_begin bound, re-read and
+    compared by sha256. {"profile", "run_id", "attempt"}, or a fixed-code
+    DatabaseStageError. database_name() still validates each part."""
+    try:
+        core_bytes = sj.read_bounded(os.path.join(job_root, sj.CORE_NAME), sj.MAX_CORE)
+    except OSError:
+        raise DatabaseStageError("create_core_unreadable") from None
+    _require(type(bound_sha256) is str
+             and hashlib.sha256(core_bytes).hexdigest() == bound_sha256, "create_core_changed")
+    try:
+        core = sj.validate_core(core_bytes, job_root)
+    except sj.JournalError:
+        raise DatabaseStageError("create_core_invalid") from None
+    _require(core["schema"] == sj.SCHEMA_CORE_V3, "create_legacy_core")
+    return {"profile": core["profile"], "run_id": core["run_id"],
+            "attempt": core["run_attempt"]}
+
+
 def run_create_stage(job_root, **kwargs):
     """The `database-create` stage, journal index 0 (R-EP plan P2b-2). Run
     only inside its tool supervisor P_T (contract tool-exit-contract.md):
     the job role's password is generated here, in this process, after P_T
-    exists. The stage closes FAILED with the fixed code on any refusal.
+    exists. The database name's profile, run id and attempt come only from
+    the /3 core that stage_begin bound (W3); a caller passing any of them
+    is refused. The stage closes FAILED with the fixed code on any refusal.
     Returns the URL file's path, never the URL."""
     with sj.StageJournal(job_root, 0, CREATE_STAGE) as journal:
         try:
-            return create_database(job_root, journal, **kwargs)
+            _require(not CORE_NAME_KWARGS & set(kwargs), "create_names_from_caller")
+            names = _core_names(job_root, journal.core_identity_sha256)
+            return create_database(job_root, journal, **names, **kwargs)
         except DatabaseStageError as error:
             journal.fail(error.code)
             raise
