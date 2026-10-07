@@ -262,3 +262,41 @@ pins as approved workflow literals, and the stop helpers' literal digests
 checked before any eventual execution. W1–W5 order agreed in principle;
 every implementation head is reviewed separately, and the first execution
 is admitted separately.
+
+## 11. Execution slices (proposed, 2026-10-07; for agreement)
+
+The smallest complete executions, in order. Each is a separate W5 head,
+reviewed at its exact commit, published inert (`workflow_dispatch` only),
+and executed only under its own signed admission on GitHub-hosted runners
+within the free allowance. Source/offline approval of a head is never
+runtime qualification of it.
+
+| Slice | Stages (indices) | Terminal outcome when everything works | What it qualifies | Not established |
+|---|---|---|---|---|
+| S0, no launch | core; `database-create` (0) under `P_T`; `database-create-exit` (1); `database-drop` (2, `no_launch_quiescence`); `finalize-job.py` | tool exit `COMPLETE` (`ECHILD`); drop `COMPLETE`; finalize-job line exactly `{"cleanup": "UNPROVEN", "failure_record": "NONE", "outcome": "NOT_FINALIZED", "reason": "entrypoint_stage_missing"}` (no launch receipt, so no failure record) | the core with pins as literals; `P_T` and `stage-tool.py` against the real PostgreSQL service; `stop-supervisor.py --tool`; the W2 exit and drop CLIs; W3's core-derived names; the deadlines module | any reference launch; the entrypoint; the finalizer's sealing path (S0 never reaches it); removal of the job root (runner discard only) |
+| S1, A2 | S0's 0–1; `launch` (2); `launch-confirm` (3); `entrypoint` (4) under `P_E` with a pinned refusal entrypoint; `entrypoint-exit` (5); `stop` (6); `database-drop` (7, `failed_entrypoint_quiescence`); `finalize-job.py` | entrypoint-exit `COMPLETE` with execution `FAIL` (F1 or F2); stop `COMPLETE/tree_empty`; drop `COMPLETE`; finalize-job `NOT_FINALIZED` with failure record `WRITTEN` | the whole reference launch, confirmation, stop and cleanup chain with real journals and receipts; the A2 gate; the failure record | any conformance result (the entrypoint runs no test) |
+| S2, one profile | S1 with the composed entrypoint (E3) and that profile enabled (E4); `registry` (7); `registry-exit` (8); `database-drop` (9); finalizer to `SEALED` | profile result from the entrypoint; finalize `SEALED` with cleanup `COMPLETE` | actual reference conformance for that profile | the other profiles; any Alrust server |
+
+The S0 success criterion is that exact set of verdicts and line, not a
+zero exit: `finalize-job.py` exits 2 for `NOT_FINALIZED` by design (W4).
+
+**Pin dependency (corrects Claude a9adb562, item 2).** Even S0 depends on
+an entrypoint script: tool mode needs a /3 core, `CORE_KEYS_V3` includes
+`entrypoint_pins`, and `stage_journal.core_main` refuses `--tool-pin`
+without `--supervisor-pin`, `--entrypoint-script-pin` and `--interpreter`
+(usage), measuring the pinned script file. The core must pin the reviewed
+script S1 will run, never an unrelated file as a stand-in. So the first
+item on the critical path for both S0 and S1 is Codex's refusal entrypoint
+(E1c): a C_E script that validates its E1a plan, opens journal index 4,
+records the plan's `NOT_RUN` refusal, closes, and exits non-zero.
+
+**Deadlines.** `alrust_conformance.deadlines` (Claude, on the W-head
+stack) implements section 5 as pure functions of `now` and `J`: R = 480 s
+over the cleanup steps' 402 s maxima; C = J − R; a tool's
+D = min(now + 60 s, C − 96 s), refused at or after C or below B; the
+child's deadline D − 5 s, so it closes its journal before its supervisor
+tears down at D; step timeouts ceil((D − now + B + 30 s) / 60 s); the plan
+fit before allocation; and J fixed once, after the core, as now + 25
+minutes (the 30-minute job less 5 minutes for the earlier steps), bound to
+the core's sha256 and boot. E1a's helper stays the entrypoint's
+work-phase deadline only.
