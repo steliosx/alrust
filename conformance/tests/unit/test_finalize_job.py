@@ -69,8 +69,28 @@ def argv(root, pins, stages=None):
 
 # --- the real finalizer, A2 path --------------------------------------------------------
 
+def _snapshot(root):
+    """Every path under ROOT except the export directory, with each regular
+    file's sha256 (None for directories and other types)."""
+    found = {}
+    for path in sorted(root.rglob("*")):
+        rel = path.relative_to(root)
+        if rel.parts[0] == fz.EXPORT_DIR:
+            continue
+        regular = path.is_file() and not path.is_symlink()
+        found[str(rel)] = hashlib.sha256(path.read_bytes()).hexdigest() if regular else None
+    return found
+
+
 def test_a2_is_not_finalized_and_writes_the_failure_record(a2_job, pins, capsys):
+    # finalize stops at its registry guard (gate_stages_invalid), after
+    # _require_order and before _gate_core: nothing outside the export
+    # directory is read for removal, changed or removed.
+    before = _snapshot(a2_job)
+    assert sum(k.startswith(sj.JOURNAL_DIR + "/") for k in before) == len(A2)
+    assert sj.CORE_NAME in before and "reference/launch.json" in before
     code, line = run(argv(a2_job, pins), capsys)
+    assert _snapshot(a2_job) == before
     assert code == 2
     written = [p for p in (a2_job / fz.EXPORT_DIR).iterdir()]
     assert len(written) == 1

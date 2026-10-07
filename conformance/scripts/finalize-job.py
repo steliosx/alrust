@@ -115,7 +115,10 @@ def report_line(report):
 
 
 def record_digest(path):
-    """sha256 of the written failure record (never its path or content)."""
+    """sha256 of the failure record failure_record() just wrote, re-read
+    from the file (O_NOFOLLOW, regular) rather than trusted from the
+    return, because that identity goes into the signed line. Never its path
+    or content. This and the pins file are the script's only reads."""
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
