@@ -48,6 +48,7 @@ _PROFILE = re.compile(r"[a-z0-9][a-z0-9_-]{0,30}\Z")
 _DIGITS = re.compile(r"[1-9][0-9]*\Z")
 _VERIFIER = re.compile(r"SCRAM-SHA-256\$4096:[A-Za-z0-9+/=]+\$[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+\Z")
 _CONTAINER = re.compile(r"[0-9a-f]{12,64}\Z")
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _PATH = "/usr/bin:/bin"
 
 
@@ -668,6 +669,35 @@ def launch_prerequisites(job_root, prefix, expected):
     except te.HolderError as error:
         raise DatabaseStageError(str(error)) from None
     return dict(_created_binding(job_root, records, core), aggregation=aggregation)
+
+
+def launch_expectation(binding):
+    """The launch journal's `launch_expectation` payload (executing workflow
+    W3) from launch_prerequisites' BINDING: the role and database directory
+    the launch expects, and the exact gate inputs that admitted it (the
+    bound core's sha256 and each gate journal's name and sha256, in order).
+    Pure; refuses a malformed binding with launch_expectation_invalid."""
+    try:
+        aggregation = binding["aggregation"]
+        payload = {
+            "role": binding["role"],
+            "database_dir": {"dev": binding["database_dir"]["dev"],
+                             "ino": binding["database_dir"]["ino"]},
+            "core_identity_sha256": aggregation["core_identity_sha256"],
+            "gate_journals": [{"name": stage["name"], "sha256": stage["sha256"]}
+                              for stage in aggregation["stages"]]}
+    except (KeyError, TypeError):
+        raise DatabaseStageError("launch_expectation_invalid") from None
+    _require(aggregation.get("verdict") == "VALID"
+             and [j["name"] for j in payload["gate_journals"]]
+             == [CREATE_STAGE, "database-create-exit"]
+             and type(payload["role"]) is str and _NAME.fullmatch(payload["role"]) is not None
+             and all(type(v) is int for v in payload["database_dir"].values())
+             and all(type(v) is str and _SHA256.fullmatch(v) for v in
+                     [payload["core_identity_sha256"]]
+                     + [j["sha256"] for j in payload["gate_journals"]]),
+             "launch_expectation_invalid")
+    return payload
 
 
 SQL_KEYS = """-- alrust:op=registry_keys

@@ -677,6 +677,15 @@ def main(argv):
         return 1
     rc = 1
     try:
+        # W3: the expectation the gate admitted, journalled before anything
+        # is created or started (the role, the database directory, and the
+        # bound core and gate journal digests).
+        try:
+            journal.record("launch_expectation", ds.launch_expectation(binding))
+        except (ds.DatabaseStageError, OSError, ValueError) as error:
+            log("refused: launch expectation not recorded: %s" % type(error).__name__)
+            journal.fail("launch_expectation_failed")
+            return 1
         # launch() closes the stage COMPLETE itself, while it still owns P.
         rc = launch(job_root, venv, port, ready_timeout, observer, journal,
                     lambda: journal.__exit__(None, None, None), secrets)
