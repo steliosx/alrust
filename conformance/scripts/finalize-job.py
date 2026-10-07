@@ -8,7 +8,10 @@ Runs finalizer.finalize(J, STAGES, PINS). Only when that returns
 NOT_FINALIZED (its quiescence gate did not pass, so nothing mutable was
 read, removed or exported) does it run finalizer.failure_record(J,
 STAGES), as finalize's contract directs; FAILED and SEALED never write a
-failure record. Both functions keep their own gates, codes and writes; this
+failure record. A FAILED report does not always have a finalizer journal
+behind it (export_exists, export_unavailable and a journal that cannot be
+opened all happen before it exists); then the fixed report line and the
+job's retained private state are the available evidence. Both functions keep their own gates, codes and writes; this
 script adds none. P is the expected-pins JSON file (workflow literals; not
 a secret). Standalone source: no workflow runs it yet (W5).
 
@@ -63,19 +66,34 @@ def modules():
     return finalizer
 
 
-def read_pins(path):
-    """The expected-pins JSON object: a regular file (checked on the opened
-    descriptor), not followed if a link, bounded. Raises ValueError."""
+def read_regular(path, limit):
+    """The complete bytes of a regular file (checked on the opened
+    descriptor), not followed if a link, read to EOF in a loop (a read may
+    legally return fewer bytes than asked, W4-READ-R1) and refused once more
+    than LIMIT bytes have accumulated. The descriptor is closed on every
+    path; an OSError propagates. Raises ValueError otherwise."""
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise ValueError("pins")
-        data = os.read(fd, MAX_PINS + 1)
+            raise ValueError("not regular")
+        pieces, size = [], 0
+        while True:
+            chunk = os.read(fd, limit + 1 - size)
+            if not chunk:
+                break
+            pieces.append(chunk)
+            size += len(chunk)
+            if size > limit:
+                raise ValueError("too large")
     finally:
         os.close(fd)
-    if len(data) > MAX_PINS:
-        raise ValueError("pins")
-    value = json.loads(data)
+    return b"".join(pieces)
+
+
+def read_pins(path):
+    """The expected-pins JSON object, from the complete file (read_regular,
+    at most MAX_PINS bytes). Raises ValueError or OSError."""
+    value = json.loads(read_regular(path, MAX_PINS))
     if type(value) is not dict:
         raise ValueError("pins")
     return value
@@ -118,17 +136,9 @@ def record_digest(path):
     """sha256 of the failure record failure_record() just wrote, re-read
     from the file (O_NOFOLLOW, regular) rather than trusted from the
     return, because that identity goes into the signed line. Never its path
-    or content. This and the pins file are the script's only reads."""
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
-    try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise ValueError("record")
-        data = os.read(fd, MAX_RECORD + 1)
-    finally:
-        os.close(fd)
-    if len(data) > MAX_RECORD:
-        raise ValueError("record")
-    return hashlib.sha256(data).hexdigest()
+    or content. This and the pins file are the script's only reads; both
+    hash or parse only the complete bytes, read to EOF (W4-READ-R1)."""
+    return hashlib.sha256(read_regular(path, MAX_RECORD)).hexdigest()
 
 
 def main(argv):

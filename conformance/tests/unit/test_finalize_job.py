@@ -213,6 +213,140 @@ def test_a_record_path_that_is_not_a_regular_file_is_unknown(spies, pins, capsys
     assert code == 3 and line == {"result": "UNKNOWN", "code": "finalizer_error"}
 
 
+# --- W4-READ-R1: both readers read to EOF ------------------------------------------------
+
+def _short_reads(monkeypatch, size, fail_on=None):
+    """os.read returning at most SIZE bytes per call (legal for a regular
+    file); FAIL_ON=n raises OSError on the n-th call. Returns the call log."""
+    real_read, calls = os.read, []
+
+    def read(fd, n):
+        calls.append(n)
+        if fail_on is not None and len(calls) == fail_on:
+            raise OSError("synthetic mid-read failure")
+        return real_read(fd, min(n, size))
+    monkeypatch.setattr(fj.os, "read", read)
+    return calls
+
+
+def _open_fds():
+    return set(os.listdir("/proc/self/fd"))
+
+
+RECORD = b'{"schema":"alrust-failure-record/1","outcome":"FAIL"}\n'
+
+
+def _not_finalized(state, tmp_path):
+    record = tmp_path / "record.json"
+    record.write_bytes(RECORD)
+    state["report"] = {"outcome": "NOT_FINALIZED", "cleanup": "UNPROVEN", "reason": "x"}
+    state["record"] = str(record)
+    return record
+
+
+def test_short_reads_still_digest_the_complete_record(spies, pins, capsys, tmp_path,
+                                                      monkeypatch):
+    calls, state = spies
+    _not_finalized(state, tmp_path)
+    reads = _short_reads(monkeypatch, 4)
+    code, line = run(argv(tmp_path / "job", pins), capsys)
+    assert code == 2 and line["failure_record"] == "WRITTEN"
+    assert line["failure_record_sha256"] == hashlib.sha256(RECORD).hexdigest()
+    assert len(reads) > len(RECORD) // 4          # many short reads, then EOF
+
+
+def test_short_reads_still_parse_the_complete_pins(spies, pins, capsys, tmp_path,
+                                                   monkeypatch):
+    calls, state = spies
+    state["report"] = dict(SEALED)
+    _short_reads(monkeypatch, 3)
+    assert run(argv(tmp_path / "job", pins), capsys)[0] == 0
+    assert calls[0][3] == EXPECTED
+
+
+def test_a_record_over_the_bound_across_chunks_is_unknown(spies, pins, capsys, tmp_path,
+                                                          monkeypatch):
+    calls, state = spies
+    _not_finalized(state, tmp_path)
+    monkeypatch.setattr(fj, "MAX_RECORD", len(RECORD) - 1)
+    _short_reads(monkeypatch, 4)                 # no single read sees the overflow
+    code, line = run(argv(tmp_path / "job", pins), capsys)
+    assert code == 3 and line == {"result": "UNKNOWN", "code": "finalizer_error"}
+
+
+def test_a_record_exactly_at_the_bound_is_read(spies, pins, capsys, tmp_path, monkeypatch):
+    calls, state = spies
+    _not_finalized(state, tmp_path)
+    monkeypatch.setattr(fj, "MAX_RECORD", len(RECORD))
+    _short_reads(monkeypatch, 4)
+    code, line = run(argv(tmp_path / "job", pins), capsys)
+    assert code == 2 and line["failure_record_sha256"] == hashlib.sha256(RECORD).hexdigest()
+
+
+def test_a_mid_read_error_on_the_record_is_unknown_and_closes(spies, pins, capsys,
+                                                              tmp_path, monkeypatch):
+    calls, state = spies
+    _not_finalized(state, tmp_path)
+    pins_reads = len(json.dumps(EXPECTED)) // 4 + 2   # pins read to EOF first
+    before = _open_fds()
+    _short_reads(monkeypatch, 4, fail_on=pins_reads + 2)
+    code, line = run(argv(tmp_path / "job", pins), capsys)
+    assert code == 3 and line == {"result": "UNKNOWN", "code": "finalizer_error"}
+    assert _open_fds() == before
+
+
+@pytest.mark.parametrize("kind", ["fifo", "directory"])
+def test_a_record_that_is_not_a_regular_file_is_unknown(spies, pins, capsys, tmp_path,
+                                                        kind):
+    # A FIFO opens non-blocking and reads as empty: without the regular-file
+    # check it would be reported WRITTEN with the digest of nothing.
+    calls, state = spies
+    state["report"] = {"outcome": "NOT_FINALIZED", "cleanup": "UNPROVEN", "reason": "x"}
+    path = tmp_path / "record"
+    if kind == "fifo":
+        os.mkfifo(path, 0o600)
+    else:
+        path.mkdir()
+    state["record"] = str(path)
+    code, line = run(argv(tmp_path / "job", pins), capsys)
+    assert code == 3 and line == {"result": "UNKNOWN", "code": "finalizer_error"}
+
+
+def test_pins_with_trailing_bytes_after_a_valid_prefix_are_refused(spies, pins, capsys,
+                                                                   tmp_path, monkeypatch):
+    # The first read returns exactly a valid JSON object; the rest is junk.
+    calls, _ = spies
+    prefix = json.dumps(EXPECTED).encode()
+    bad = tmp_path / "trailing-pins.json"
+    bad.write_bytes(prefix + b" trailing")
+    real_read = os.read
+
+    def read(fd, n):
+        return real_read(fd, min(n, len(prefix)))
+    monkeypatch.setattr(fj.os, "read", read)
+    code, line = run(argv(tmp_path / "job", bad), capsys)
+    assert code == 70 and line == {"result": "NOT_RUN", "reason": "setup_failed"}
+    assert calls == []
+
+
+def test_pins_over_the_bound_across_chunks_are_refused(spies, pins, capsys, tmp_path,
+                                                       monkeypatch):
+    calls, _ = spies
+    monkeypatch.setattr(fj, "MAX_PINS", len(json.dumps(EXPECTED)) - 1)
+    _short_reads(monkeypatch, 4)
+    code, line = run(argv(tmp_path / "job", pins), capsys)
+    assert code == 70 and calls == []
+
+
+def test_a_mid_read_error_on_the_pins_closes_and_is_setup_failed(spies, pins, capsys,
+                                                                 tmp_path, monkeypatch):
+    calls, _ = spies
+    before = _open_fds()
+    _short_reads(monkeypatch, 4, fail_on=2)
+    code, line = run(argv(tmp_path / "job", pins), capsys)
+    assert code == 70 and calls == [] and _open_fds() == before
+
+
 # --- setup and usage --------------------------------------------------------------------------
 
 def test_a_secret_in_the_environment_is_refused_before_anything(spies, pins, capsys,
