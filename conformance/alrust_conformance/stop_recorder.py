@@ -17,9 +17,14 @@ computed here from the fixed paths, never taken from the line: the launch
 digest must also equal the caller's digest (from the launcher's ready
 line) before the helper runs; the terminal digest is null when no terminal
 receipt exists, which only an UNPROVEN verdict allows. The raw helper
-output is kept privately in the job root as owned files (never exported;
-the finalizer removes owned resources). Any other outcome closes the stage
-FAILED with a fixed code, with no retry and no stop_verdict.
+output, including the bounded partial streams of a timed-out or
+over-long run (W1-R1), is kept privately in the job root as owned files,
+each recorded as owned as soon as it exists (never exported; the
+finalizer removes owned resources). Any other outcome closes the stage
+FAILED with a fixed code, with no retry and no stop_verdict. Expected I/O
+and journal failures map to fixed codes too (W1-R2): FAILED when the
+journal can still close, INCOMPLETE when it cannot; no exception text is
+ever returned or recorded.
 
 This module creates no process itself; RUN_HELPER does (scripts/record-stop.py
 passes database_stage._bounded_run). It proves nothing about cleanup: the
@@ -40,6 +45,7 @@ MAX_OUTPUT = 4096
 MAX_RECEIPT = 65536
 HELPER_TIMEOUT_S = 60
 RAW_NAMES = ("stop-helper.stdout", "stop-helper.stderr")
+RUNNER_FAILURES = {"timeout": "helper_timeout", "output_too_large": "helper_output_too_large"}
 
 
 class StopRecorderError(Exception):
@@ -68,10 +74,13 @@ def _read_receipt(path):
     except OSError:
         raise StopRecorderError("receipt_unreadable") from None
     try:
-        info = os.fstat(fd)
-        _require(stat.S_ISREG(info.st_mode) and info.st_size <= MAX_RECEIPT,
-                 "receipt_unreadable")
-        data = os.read(fd, MAX_RECEIPT + 1)
+        try:
+            info = os.fstat(fd)
+            _require(stat.S_ISREG(info.st_mode) and info.st_size <= MAX_RECEIPT,
+                     "receipt_unreadable")
+            data = os.read(fd, MAX_RECEIPT + 1)
+        except OSError:
+            raise StopRecorderError("receipt_unreadable") from None
         _require(len(data) <= MAX_RECEIPT, "receipt_unreadable")
         return data
     finally:
@@ -102,60 +111,104 @@ def parse_helper_output(stdout, returncode):
 
 
 def _keep_private(job_root, journal, name, data):
-    """Write DATA to <job_root>/NAME, 0600, exclusive, and record it as an
-    owned resource so that the finalizer accounts for and removes it."""
+    """Write DATA to <job_root>/NAME, 0600, exclusive. The file is recorded
+    as an owned resource as soon as it exists, before any byte is written,
+    so a partial write is still accounted for and removed by the
+    finalizer. An OSError is the fixed private_output_failed."""
     path = os.path.join(job_root, name)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
-                 0o600)
     try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                     0o600)
+    except OSError:
+        raise StopRecorderError("private_output_failed") from None
+    try:
+        info = os.fstat(fd)
+        journal.record("owned_resource", {"path": path, "dev": info.st_dev,
+                                          "ino": info.st_ino, "type": "file"})
         view = memoryview(data)
         while view:
             view = view[os.write(fd, view):]
         os.fsync(fd)
-        info = os.fstat(fd)
+    except OSError:
+        raise StopRecorderError("private_output_failed") from None
     finally:
-        os.close(fd)
-    journal.record("owned_resource", {"path": path, "dev": info.st_dev,
-                                      "ino": info.st_ino, "type": "file"})
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def _helper_result(result):
+    """(failure, returncode, stdout, stderr), checked BEFORE anything is
+    written (W1-N2): FAILURE None or a runner failure name, both streams
+    bytes of at most MAX_OUTPUT each (database_stage._bounded_run's
+    per-stream bound); anything else is helper_output_invalid."""
+    _require(type(result) is tuple and len(result) == 4, "helper_output_invalid")
+    failure, returncode, stdout, stderr = result
+    _require((failure is None or failure in RUNNER_FAILURES)
+             and type(stdout) is bytes and type(stderr) is bytes
+             and len(stdout) <= MAX_OUTPUT and len(stderr) <= MAX_OUTPUT,
+             "helper_output_invalid")
+    return failure, returncode, stdout, stderr
+
+
+def _record(job_root, journal, receipt_digest, run_helper, helper_argv):
+    """The stage body; raises StopRecorderError with a fixed code."""
+    launch_path, terminal_path = receipt_paths(job_root)
+    launch = _read_receipt(launch_path)
+    _require(launch is not None, "no_launch_receipt")
+    launch_sha256 = hashlib.sha256(launch).hexdigest()
+    # Before the helper runs: the caller's digest (the launcher's ready
+    # line) must name exactly this receipt.
+    _require(launch_sha256 == receipt_digest, "receipt_digest_mismatch")
+    try:
+        result = run_helper(list(helper_argv))
+    except (OSError, TimeoutError):
+        raise StopRecorderError("helper_unavailable") from None
+    failure, returncode, stdout, stderr = _helper_result(result)
+    # Kept before any judgement, so a failed run's partial streams survive
+    # as private evidence (W1-R1).
+    for name, data in zip(RAW_NAMES, (stdout, stderr)):
+        _keep_private(job_root, journal, name, data)
+    _require(failure is None, RUNNER_FAILURES.get(failure, "helper_output_invalid"))
+    verdict, reason = parse_helper_output(stdout, returncode)
+    terminal = _read_receipt(terminal_path)
+    _require(terminal is not None or verdict == "UNPROVEN", "terminal_missing")
+    # The launch receipt must be unchanged across the helper run.
+    _require(_read_receipt(launch_path) == launch, "receipt_changed")
+    journal.record("stop_verdict", {
+        "verdict": verdict, "reason": reason,
+        "launch_receipt_sha256": launch_sha256,
+        "terminal_receipt_sha256": (None if terminal is None
+                                    else hashlib.sha256(terminal).hexdigest())})
+    return verdict, reason
 
 
 def run_stop_stage(job_root, index, receipt_digest, *, run_helper, helper_argv):
     """Open `stop` at INDEX after `entrypoint-exit`, run the helper once and
-    record its verdict. RUN_HELPER(argv) returns (returncode, stdout, stderr)
-    or raises OSError/TimeoutError. Returns {"stage", "verdict", "reason"}
-    with stage COMPLETE, or {"stage": "FAILED", "code"}."""
+    record its verdict. RUN_HELPER(argv) returns database_stage._bounded_run's
+    (failure, returncode, stdout, stderr), or raises OSError/TimeoutError.
+    Returns {"stage": "COMPLETE", "verdict", "reason"}; {"stage": "FAILED",
+    "code"} when the stage closed FAILED; {"stage": "INCOMPLETE", "code":
+    "journal_failed"} when the journal could not be opened or closed."""
     _require(type(receipt_digest) is str and len(receipt_digest) == 64
              and not receipt_digest.strip("0123456789abcdef"), "usage")
-    launch_path, terminal_path = receipt_paths(job_root)
     try:
         with _sj.StageJournal(job_root, index, STAGE_NAME, PREVIOUS) as journal:
             try:
-                launch = _read_receipt(launch_path)
-                _require(launch is not None, "no_launch_receipt")
-                launch_sha256 = hashlib.sha256(launch).hexdigest()
-                # Before the helper runs: the caller's digest (the launcher's
-                # ready line) must name exactly this receipt.
-                _require(launch_sha256 == receipt_digest, "receipt_digest_mismatch")
-                try:
-                    returncode, stdout, stderr = run_helper(list(helper_argv))
-                except (OSError, TimeoutError):
-                    raise StopRecorderError("helper_unavailable") from None
-                for name, data in zip(RAW_NAMES, (stdout, stderr)):
-                    _require(type(data) is bytes, "helper_output_invalid")
-                    _keep_private(job_root, journal, name, data)
-                verdict, reason = parse_helper_output(stdout, returncode)
-                terminal = _read_receipt(terminal_path)
-                _require(terminal is not None or verdict == "UNPROVEN", "terminal_missing")
-                # The launch receipt must be unchanged across the helper run.
-                _require(_read_receipt(launch_path) == launch, "receipt_changed")
-                journal.record("stop_verdict", {
-                    "verdict": verdict, "reason": reason,
-                    "launch_receipt_sha256": launch_sha256,
-                    "terminal_receipt_sha256": (None if terminal is None
-                                                else hashlib.sha256(terminal).hexdigest())})
+                verdict, reason = _record(job_root, journal, receipt_digest, run_helper,
+                                          helper_argv)
             except StopRecorderError as error:
                 journal.fail(error.code)
                 raise
+            except (OSError, _sj.JournalError):
+                # A journal record or other I/O failure inside the stage.
+                journal.fail("recorder_io_failed")
+                raise StopRecorderError("recorder_io_failed") from None
     except StopRecorderError as error:
         return {"stage": "FAILED", "code": error.code}
+    except (OSError, _sj.JournalError):
+        # The journal could not be opened, or could not be closed: the stage
+        # is missing or INCOMPLETE, and the gates refuse it.
+        return {"stage": "INCOMPLETE", "code": "journal_failed"}
     return {"stage": "COMPLETE", "verdict": verdict, "reason": reason}

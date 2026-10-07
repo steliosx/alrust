@@ -12,10 +12,12 @@ child killed and reaped on expiry), and records one stop_verdict
 (alrust_conformance.stop_recorder). Standalone source: no workflow runs it
 yet (executing-workflow design W1/W5).
 
-One JSON line on stdout, never a value or exception text:
+One JSON line on stdout, never a value, path or exception text:
   0  stage COMPLETE and verdict COMPLETE;
   1  stage COMPLETE with verdict FAILED or UNPROVEN (the gates refuse);
-  2  stage FAILED with a fixed code;
+  2  stage FAILED, or INCOMPLETE (journal_failed), with a fixed code;
+  3  stage UNKNOWN: an unexpected error; the journal, not this line,
+     says whether and how the stage closed;
   64 usage.
 """
 import json
@@ -63,16 +65,18 @@ def main(argv):
     helper_argv = [sys.executable, "-I", "-S", "-B", STOP_HELPER, launch_path, digest, job_root]
 
     def run_helper(argv):
-        failure, returncode, stdout, stderr = ds._bounded_run(
-            argv, None, {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
-            sr.HELPER_TIMEOUT_S, sr.MAX_OUTPUT)
-        if failure is not None:
-            raise OSError(failure)
-        return returncode, stdout, stderr
+        # The bounded runner's own result, partial streams included on a
+        # timeout or overflow (W1-R1); the recorder keeps them privately.
+        return ds._bounded_run(argv, None, {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
+                               sr.HELPER_TIMEOUT_S, sr.MAX_OUTPUT)
 
-    result = sr.run_stop_stage(job_root, index, digest, run_helper=run_helper,
-                               helper_argv=helper_argv)
-    if result["stage"] == "FAILED":
+    try:
+        result = sr.run_stop_stage(job_root, index, digest, run_helper=run_helper,
+                                   helper_argv=helper_argv)
+    except Exception:
+        # W1-R2: never an unhandled traceback or exception text.
+        return emit({"stage": "UNKNOWN"}, 3)
+    if result["stage"] in ("FAILED", "INCOMPLETE"):
         return emit(result, 2)
     return emit(result, 0 if result["verdict"] == "COMPLETE" else 1)
 

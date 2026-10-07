@@ -35,8 +35,12 @@ def digest(root):
 
 
 class Helper:
-    def __init__(self, returncode=0, stdout=COMPLETE_LINE, stderr=b"", error=None, effect=None):
-        self.calls, self.result, self.error, self.effect = [], (returncode, stdout, stderr), error, effect
+    """A fake of the bounded runner: returns (failure, returncode, stdout,
+    stderr), as database_stage._bounded_run does."""
+    def __init__(self, returncode=0, stdout=COMPLETE_LINE, stderr=b"", error=None, effect=None,
+                 failure=None, result=None):
+        self.calls, self.error, self.effect = [], error, effect
+        self.result = result if result is not None else (failure, returncode, stdout, stderr)
 
     def __call__(self, argv):
         self.calls.append(argv)
@@ -244,3 +248,150 @@ def test_script_runs_the_helper_once_with_a_cleared_environment(job, script, cap
 def test_script_usage(script, capsys, argv):
     module, calls, _ = script
     assert module.main(argv) == 64 and calls == []
+
+
+
+# --- W1-R1: a failed runner's partial streams are kept, never parsed ---------------------
+
+@pytest.mark.parametrize("failure,code", [("timeout", "helper_timeout"),
+                                          ("output_too_large", "helper_output_too_large")])
+def test_runner_failure_keeps_the_partial_streams(job, failure, code):
+    partial = b'{"reason": "tree_empty", "verdict": "COMP'
+    helper = Helper(returncode=None, stdout=partial, stderr=b"partial err", failure=failure)
+    assert run(job, helper) == {"stage": "FAILED", "code": code}
+    assert (job / "stop-helper.stdout").read_bytes() == partial
+    assert (job / "stop-helper.stderr").read_bytes() == b"partial err"
+    owned = [r["payload"]["path"] for r in records(job) if r["kind"] == "owned_resource"]
+    assert owned == [str(job / name) for name in sr.RAW_NAMES]
+    assert stop_records(job) == [] and closing(job) == {"result": "FAILED", "code": code}
+
+
+def test_a_runner_failure_with_a_valid_looking_line_is_never_a_verdict(job):
+    helper = Helper(returncode=0, stdout=COMPLETE_LINE, failure="timeout")
+    assert run(job, helper) == {"stage": "FAILED", "code": "helper_timeout"}
+    assert stop_records(job) == []
+
+
+# --- W1-N2: the callback's result is bounded before anything is written ------------------
+
+@pytest.mark.parametrize("result", [
+    (None, 0, b"x" * (sr.MAX_OUTPUT + 1), b""),
+    (None, 0, COMPLETE_LINE, b"x" * (sr.MAX_OUTPUT + 1)),
+    (None, 0, "text", b""),
+    (None, 0, COMPLETE_LINE, None),
+    ("killed", 0, COMPLETE_LINE, b""),
+    (None, 0, COMPLETE_LINE),
+    [None, 0, COMPLETE_LINE, b""],
+])
+def test_an_invalid_runner_result_writes_nothing(job, result):
+    assert run(job, Helper(result=result)) == {"stage": "FAILED",
+                                               "code": "helper_output_invalid"}
+    assert not (job / "stop-helper.stdout").exists()
+    assert not (job / "stop-helper.stderr").exists()
+
+
+# --- W1-R2: I/O and journal failures are fixed codes, never exception text ---------------
+
+SECRET_TEXT = "synthetic-diagnostic-path-and-value"
+
+
+def _fd_path(fd):
+    try:
+        return os.readlink("/proc/self/fd/%d" % fd)
+    except OSError:
+        return ""
+
+
+def test_a_private_write_failure_is_fixed_and_still_owned(job, monkeypatch):
+    # Only writes to the private stdout file fail; the journal's own writes
+    # are untouched (sr.os is the global os module).
+    real_write = os.write
+
+    def failing_write(fd, data):
+        if _fd_path(fd).endswith("/stop-helper.stdout"):
+            raise OSError(SECRET_TEXT)
+        return real_write(fd, data)
+    monkeypatch.setattr(sr.os, "write", failing_write)
+    result = run(job, Helper())
+    monkeypatch.setattr(sr.os, "write", real_write)
+    assert result == {"stage": "FAILED", "code": "private_output_failed"}
+    # The created (empty) file was recorded as owned before the write.
+    owned = [r["payload"]["path"] for r in records(job) if r["kind"] == "owned_resource"]
+    assert owned == [str(job / "stop-helper.stdout")]
+    assert SECRET_TEXT not in Path(sj.journal_path(str(job), INDEX, "stop")).read_text()
+
+
+def test_a_receipt_read_failure_is_fixed(job, monkeypatch):
+    real_fstat = os.fstat
+
+    def failing_fstat(fd):
+        if _fd_path(fd).endswith("/reference/launch.json"):
+            raise OSError(SECRET_TEXT)
+        return real_fstat(fd)
+    monkeypatch.setattr(sr.os, "fstat", failing_fstat)
+    result = run(job, Helper())
+    monkeypatch.setattr(sr.os, "fstat", real_fstat)
+    assert result == {"stage": "FAILED", "code": "receipt_unreadable"}
+
+
+class BrokenJournal:
+    def __init__(self, *a, fail_on="enter"):
+        self.fail_on, self.codes = fail_on, []
+
+    def __enter__(self):
+        if self.fail_on == "enter":
+            raise OSError(SECRET_TEXT)
+        return self
+
+    def record(self, kind, payload):
+        if self.fail_on == "record":
+            raise sj.JournalError(SECRET_TEXT)
+
+    def fail(self, code):
+        self.codes.append(code)
+
+    def __exit__(self, *exc):
+        if self.fail_on == "exit":
+            raise OSError(SECRET_TEXT)
+        return False
+
+
+@pytest.mark.parametrize("fail_on,expected", [
+    ("enter", {"stage": "INCOMPLETE", "code": "journal_failed"}),
+    ("exit", {"stage": "INCOMPLETE", "code": "journal_failed"}),
+    ("record", {"stage": "FAILED", "code": "recorder_io_failed"}),
+])
+def test_journal_failures_are_fixed_results(job, monkeypatch, fail_on, expected):
+    journals = []
+
+    def factory(*a):
+        journal = BrokenJournal(fail_on=fail_on)
+        journals.append(journal)
+        return journal
+    monkeypatch.setattr(sr._sj, "StageJournal", factory)
+    result = run(job, Helper())
+    assert result == expected and SECRET_TEXT not in json.dumps(result)
+    if fail_on == "record":
+        assert journals[0].codes == ["recorder_io_failed"]
+
+
+def test_script_turns_an_unexpected_error_into_a_fixed_unknown(job, script, capsys, monkeypatch):
+    module, calls, _ = script
+    _, recorder = module.package()
+
+    def boom(*a, **k):
+        raise RuntimeError(SECRET_TEXT)
+    monkeypatch.setattr(recorder, "run_stop_stage", boom)
+    argv = ["--job-root", str(job), "--stage-index", str(INDEX), "--receipt-digest", digest(job)]
+    assert module.main(argv) == 3
+    out = capsys.readouterr().out
+    assert json.loads(out) == {"stage": "UNKNOWN"} and SECRET_TEXT not in out
+
+
+def test_script_keeps_the_bounded_runners_partial_output(job, script, capsys):
+    module, calls, calls_result = script
+    calls_result[0] = ("timeout", None, b"partial", b"")
+    argv = ["--job-root", str(job), "--stage-index", str(INDEX), "--receipt-digest", digest(job)]
+    assert module.main(argv) == 2
+    assert json.loads(capsys.readouterr().out) == {"stage": "FAILED", "code": "helper_timeout"}
+    assert (job / "stop-helper.stdout").read_bytes() == b"partial"
