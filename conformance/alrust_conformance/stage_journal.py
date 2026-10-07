@@ -430,8 +430,10 @@ class StageJournal:
         self._root, self._index, self._name = job_root, index, name
         self._previous = previous_name
         self._journal = None
-        # The sha256 of the core bytes stage_begin bound; set on entry (W3).
+        # What stage_begin bound, set on entry (W3): the core bytes' sha256
+        # and the previous stage {"index", "name", "sha256"} (None at 0).
         self.core_identity_sha256 = None
+        self.previous_stage = None
         self._code = None
 
     def _envelope(self, kind, payload):
@@ -461,6 +463,7 @@ class StageJournal:
             self._journal.close()
             raise
         self.core_identity_sha256 = core_sha256
+        self.previous_stage = previous
         return self
 
     def record(self, kind, payload):

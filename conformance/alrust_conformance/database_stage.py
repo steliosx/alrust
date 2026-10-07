@@ -700,6 +700,24 @@ def launch_expectation(binding):
     return payload
 
 
+def check_launch_entry(expectation, core_identity_sha256, previous_stage):
+    """W3-BIND-R1: the launch stage's own stage_begin must have bound exactly
+    the inputs the gate admitted. CORE_IDENTITY_SHA256 and PREVIOUS_STAGE
+    are what StageJournal entry recorded; EXPECTATION is launch_expectation's
+    payload. The core must be the gate's core (launch_core_changed) and the
+    previous stage must be database-create-exit at index 1 with the gate's
+    journal sha256 (launch_previous_changed). Pure; refuses before any
+    launch."""
+    _require(type(core_identity_sha256) is str
+             and core_identity_sha256 == expectation["core_identity_sha256"],
+             "launch_core_changed")
+    exit_journal = expectation["gate_journals"][-1]
+    _require(type(previous_stage) is dict
+             and previous_stage == {"index": 1, "name": exit_journal["name"],
+                                    "sha256": exit_journal["sha256"]},
+             "launch_previous_changed")
+
+
 SQL_KEYS = """-- alrust:op=registry_keys
 SELECT json_build_object('keys', coalesce(json_agg(key), '[]'::json))
 FROM (SELECT key FROM keys ORDER BY key LIMIT :limit) AS k;

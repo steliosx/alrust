@@ -100,6 +100,138 @@ def test_a_malformed_binding_is_refused(binding, change):
     assert error.value.code == "launch_expectation_invalid"
 
 
+# --- W3-BIND-R1: the launch journal must bind the gate's inputs -----------------------------
+
+def _load_launcher():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("launch_reference_w3", LAUNCHER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+lr = _load_launcher()
+
+
+def _rewrite_core(root):
+    # Another VALID /3 core (one field changed, canonical bytes), as if the
+    # core were replaced between the gate's read and the journal's entry.
+    path = root / sj.CORE_NAME
+    core = json.loads(path.read_bytes())
+    core["captured_utc_ns"] += 1
+    os.chmod(path, 0o600)
+    path.write_bytes(sj._dumps(core))
+    sj.validate_core(path.read_bytes(), str(root))
+
+
+def _change_exit_journal(root):
+    path = Path(sj.journal_path(str(root), 1, "database-create-exit"))
+    os.chmod(path, 0o600)
+    with open(path, "ab") as f:
+        f.write(b"\n")
+
+
+def _launch_stage(root, bound, monkeypatch=None, record_error=None):
+    """Enter the real launch journal and run the launcher's own expectation
+    step; on a failure, close it exactly as main() does (fail, then FAILED)."""
+    journal = sj.StageJournal(str(root), 2, "launch", "database-create-exit").__enter__()
+    if record_error is not None:
+        def broken(kind, payload):
+            raise record_error
+        monkeypatch.setattr(journal, "record", broken)
+    failure = lr.record_launch_expectation(ds, journal, bound)
+    if failure is None:
+        journal.__exit__(None, None, None)
+    else:
+        journal.fail(failure)
+        journal.__exit__(lr.LaunchFailed, lr.LaunchFailed(1), None)
+    lines = Path(sj.journal_path(str(root), 2, "launch")).read_bytes().splitlines()
+    return failure, [json.loads(line)["evidence"] for line in lines]
+
+
+def test_matching_entry_records_the_expectation(binding):
+    root, bound = binding
+    failure, records = _launch_stage(root, bound)
+    assert failure is None
+    assert [r["kind"] for r in records] == ["stage_begin", "launch_expectation",
+                                            "stage_complete"]
+    assert records[-1]["payload"] == {"result": "COMPLETE"}
+
+
+@pytest.mark.parametrize("mutate,code", [
+    (_rewrite_core, "launch_core_changed"),
+    (_change_exit_journal, "launch_previous_changed"),
+], ids=["core-replaced", "exit-journal-changed"])
+def test_inputs_changed_between_gate_and_entry_fail_before_launch(binding, mutate, code):
+    root, bound = binding                    # the gate has already run here
+    mutate(root)
+    failure, records = _launch_stage(root, bound)
+    assert failure == code
+    assert [r["kind"] for r in records] == ["stage_begin", "stage_complete"]
+    assert records[-1]["payload"] == {"result": "FAILED", "code": code}
+
+
+@pytest.mark.parametrize("error", [OSError("disk"), sj.JournalError("record_invalid")])
+def test_a_failed_record_is_a_fixed_failure(binding, monkeypatch, error):
+    root, bound = binding
+    failure, records = _launch_stage(root, bound, monkeypatch, record_error=error)
+    assert failure == "launch_expectation_failed"
+    assert records[-1]["payload"] == {"result": "FAILED", "code": failure}
+
+
+def test_a_malformed_binding_fails_the_launch_stage(binding):
+    root, bound = binding
+    bad = _broken(lambda b: b.update(role="postgres"))(bound)
+    failure, records = _launch_stage(root, bad)
+    assert failure == "launch_expectation_invalid"
+    assert records[-1]["payload"] == {"result": "FAILED", "code": failure}
+
+
+@pytest.mark.parametrize("core,previous,code", [
+    (None, "ok", "launch_core_changed"),
+    ("0" * 64, "ok", "launch_core_changed"),
+    ("core", None, "launch_previous_changed"),
+    ("core", {"index": 0}, "launch_previous_changed"),
+    ("core", "index", "launch_previous_changed"),
+    ("core", "name", "launch_previous_changed"),
+    ("core", "sha", "launch_previous_changed"),
+], ids=["core-none", "core-other", "previous-none", "previous-shape", "previous-index",
+        "previous-name", "previous-sha"])
+def test_check_launch_entry(binding, core, previous, code):
+    _, bound = binding
+    expectation = ds.launch_expectation(bound)
+    exit_journal = expectation["gate_journals"][-1]
+    good = {"index": 1, "name": exit_journal["name"], "sha256": exit_journal["sha256"]}
+    core = expectation["core_identity_sha256"] if core == "core" else core
+    previous = {"ok": good, "index": dict(good, index=2),
+                "name": dict(good, name="database-create"),
+                "sha": dict(good, sha256="0" * 64)}.get(previous, previous) \
+        if isinstance(previous, str) else previous
+    with pytest.raises(ds.DatabaseStageError) as error:
+        ds.check_launch_entry(expectation, core, previous)
+    assert error.value.code == code
+
+
+def test_check_launch_entry_accepts_the_exact_entry(binding):
+    _, bound = binding
+    expectation = ds.launch_expectation(bound)
+    exit_journal = expectation["gate_journals"][-1]
+    assert ds.check_launch_entry(
+        expectation, expectation["core_identity_sha256"],
+        {"index": 1, "name": "database-create-exit", "sha256": exit_journal["sha256"]}) is None
+
+
+def test_the_journal_exposes_its_previous_stage_binding(binding):
+    root, _ = binding
+    exit_sha = hashlib.sha256(Path(sj.journal_path(str(root), 1,
+                                                   "database-create-exit")).read_bytes()).hexdigest()
+    journal = sj.StageJournal(str(root), 2, "launch", "database-create-exit")
+    assert journal.previous_stage is None
+    with journal:
+        assert journal.previous_stage == {"index": 1, "name": "database-create-exit",
+                                          "sha256": exit_sha}
+
+
 # --- placement in launch-reference.py main(), source only ---------------------------------
 
 def _main():
@@ -118,35 +250,33 @@ def _attr(call, name):
     return isinstance(call.func, ast.Attribute) and call.func.attr == name
 
 
-def test_the_launcher_records_it_after_stage_begin_and_before_launch():
+def _is_step(c):
+    return isinstance(c.func, ast.Name) and c.func.id == "record_launch_expectation"
+
+
+def test_the_launcher_runs_the_step_after_stage_begin_and_before_launch():
     main = _main()
     [(enter_line, _)] = _calls(main, lambda c: _attr(c, "__enter__"))
-    records = _calls(main, lambda c: _attr(c, "record") and c.args
-                     and isinstance(c.args[0], ast.Constant)
-                     and c.args[0].value == "launch_expectation")
-    assert len(records) == 1
-    [(record_line, record)] = records
-    payload = record.args[1]
-    assert _attr(payload, "launch_expectation") and payload.func.value.id == "ds"
-    assert [a.id for a in payload.args] == ["binding"]
+    [(step_line, step)] = _calls(main, _is_step)
+    assert [a.id for a in step.args] == ["ds", "journal", "binding"]
     # The stage path's launch(), the one handed the open journal.
     [(launch_line, _)] = _calls(main, lambda c: isinstance(c.func, ast.Name)
                                 and c.func.id == "launch" and len(c.args) == 8
                                 and isinstance(c.args[5], ast.Name)
                                 and c.args[5].id == "journal")
-    assert enter_line < record_line < launch_line
+    assert enter_line < step_line < launch_line
 
 
-def test_a_failed_record_fails_the_stage_without_launching():
+def test_a_step_failure_fails_the_stage_without_launching():
     main = _main()
-    [handler] = [h for t in ast.walk(main) if isinstance(t, ast.Try)
-                 for h in t.handlers
-                 if any(_attr(c, "record") and c.args and isinstance(c.args[0], ast.Constant)
-                        and c.args[0].value == "launch_expectation"
-                        for b in t.body for c in ast.walk(b) if isinstance(c, ast.Call))]
-    fails = [c for c in ast.walk(handler) if isinstance(c, ast.Call) and _attr(c, "fail")]
-    assert [c.args[0].value for c in fails] == ["launch_expectation_failed"]
-    returns = [n for n in handler.body if isinstance(n, ast.Return)]
+    [branch] = [n for n in ast.walk(main) if isinstance(n, ast.If)
+                and isinstance(n.test, ast.Compare)
+                and isinstance(n.test.left, ast.Name) and n.test.left.id == "failure"]
+    fails = [c for c in ast.walk(branch) if isinstance(c, ast.Call) and _attr(c, "fail")]
+    assert len(fails) == 1 and fails[0].args[0].id == "failure"
+    returns = [n for n in branch.body if isinstance(n, ast.Return)]
     assert len(returns) == 1 and returns[0].value.value == 1
-    caught = {e.attr if isinstance(e, ast.Attribute) else e.id for e in handler.type.elts}
-    assert caught == {"DatabaseStageError", "OSError", "ValueError"}
+    # The only record of the expectation is inside the step, never in main.
+    assert not _calls(main, lambda c: _attr(c, "record") and c.args
+                      and isinstance(c.args[0], ast.Constant)
+                      and c.args[0].value == "launch_expectation")
