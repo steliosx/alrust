@@ -24,9 +24,12 @@ stop-supervisor.py before an exit stage (P4); this script never signals.
 
 One JSON line on stdout, never a value or exception text:
   0  COMPLETE: the stage closed COMPLETE;
-  2  FAILED: the stage refused or closed FAILED, with a fixed code;
-  3  UNKNOWN: an unexpected error; the stage journal, not this line, says
-     whether and how the stage closed;
+  2  FAILED: the stage closed FAILED with a fixed code, or an exit stage
+     refused its prefix before opening any journal;
+  3  UNKNOWN: an unexpected error (runner_error), or a journal error
+     (journal_failed, for example a journal that could not be opened or
+     closed); the stage journal, not this line, says whether and how the
+     stage closed;
   64 NOT_RUN: usage;
   70 NOT_RUN: setup failed before any stage was opened.
 """
@@ -41,7 +44,8 @@ MAX_PINS = 1 << 16
 SECRET_VARIABLES = ("DATABASE_URL", "SECRET_KEY", "PGPASSWORD")
 _STAGE = re.compile(r"[a-z][a-z0-9-]{0,31}\Z")
 _DIGITS = re.compile(r"(0|[1-9][0-9]{0,18})\Z")
-_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}\Z")
+# The exit runners' own refusals, raised before their journal opens.
+PREFIX_REFUSALS = frozenset({"entrypoint_exit_prefix_invalid", "tool_exit_prefix_invalid"})
 OPTIONS = {
     "entrypoint-exit": ("--job-root", "--prefix", "--expected-pins"),
     "tool-exit": ("--job-root", "--prefix", "--tool", "--expected-pins"),
@@ -61,8 +65,8 @@ def modules():
     conformance = os.path.dirname(HERE)
     if conformance not in sys.path:
         sys.path.insert(0, conformance)
-    from alrust_conformance import database_stage, entrypoint_exit, tool_exit
-    return database_stage, entrypoint_exit, tool_exit
+    from alrust_conformance import database_stage, entrypoint_exit, stage_journal, tool_exit
+    return database_stage, entrypoint_exit, stage_journal, tool_exit
 
 
 def read_pins(path):
@@ -120,7 +124,7 @@ def main(argv):
     if any(name in os.environ for name in SECRET_VARIABLES):
         return emit({"result": "NOT_RUN", "reason": "secret_in_environment"}, 70)
     try:
-        ds, ee, te = modules()
+        ds, ee, sj, te = modules()
         pins = read_pins(opts["--expected-pins"])
     except BaseException:  # no stage was opened; never print the error text
         return emit({"result": "NOT_RUN", "reason": "setup_failed"}, 70)
@@ -144,12 +148,12 @@ def main(argv):
             verdict = "COMPLETE"
     except ds.DatabaseStageError as error:
         return emit({"result": "FAILED", "stage": command, "code": error.code}, 2)
-    except ds.sj.JournalError as error:
-        # A refusal with the journal module's fixed code (for example an
-        # exit stage's prefix check, before its journal opens).
-        code = str(error)
-        return emit({"result": "FAILED", "stage": command,
-                     "code": code if _CODE.fullmatch(code) else "journal_error"}, 2)
+    except sj.JournalError as error:
+        if str(error) in PREFIX_REFUSALS:
+            return emit({"result": "FAILED", "stage": command, "code": str(error)}, 2)
+        # Any other journal error: this line cannot say whether the stage
+        # closed (never claimed FAILED; compare W1's journal_failed).
+        return emit({"result": "UNKNOWN", "stage": command, "code": "journal_failed"}, 3)
     except Exception:  # never a traceback: it could carry a value
         return emit({"result": "UNKNOWN", "stage": command, "code": "runner_error"}, 3)
     if verdict == "COMPLETE":

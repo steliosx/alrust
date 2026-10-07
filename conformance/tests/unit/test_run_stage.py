@@ -99,6 +99,46 @@ def test_a_wrong_prefix_is_a_fixed_refusal_before_any_journal(job, capsys):
                                     "entrypoint-exit")).exists()
 
 
+def test_a_tool_exit_prefix_mismatch_is_a_fixed_refusal_before_any_journal(job, capsys):
+    root, pins = job("database-create")
+    argv = ["tool-exit", "--job-root", str(root), "--prefix", "database-create",
+            "--tool", "registry", "--expected-pins", str(pins)]
+    assert run(argv, capsys) == (2, {"result": "FAILED", "stage": "tool-exit",
+                                     "code": "tool_exit_prefix_invalid"})
+    assert not Path(sj.journal_path(str(root), 1, "registry-exit")).exists()
+
+
+@pytest.mark.parametrize("command", ["entrypoint-exit", "tool-exit"])
+def test_a_journal_error_is_never_claimed_failed(job, capsys, monkeypatch, command):
+    # The journal cannot close: the line says UNKNOWN journal_failed, and
+    # leaves the closure to the journal (compare W1's journal_failed).
+    root, pins = job("entrypoint" if command == "entrypoint-exit" else "database-create")
+
+    def broken_exit(self, *exc):
+        raise sj.JournalError("journal_close_failed")
+    monkeypatch.setattr(sj.StageJournal, "__exit__", broken_exit)
+    if command == "entrypoint-exit":
+        argv = ["entrypoint-exit", "--job-root", str(root), "--prefix",
+                ",".join(STAGES[:STAGES.index("entrypoint") + 1]), "--expected-pins", str(pins)]
+    else:
+        argv = ["tool-exit", "--job-root", str(root), "--prefix", "database-create",
+                "--tool", "database-create", "--expected-pins", str(pins)]
+    assert run(argv, capsys) == (3, {"result": "UNKNOWN", "stage": command,
+                                     "code": "journal_failed"})
+
+
+def test_an_unlisted_journal_code_is_not_passed_through(job, capsys, monkeypatch):
+    root, pins = job("database-create")
+
+    def refuse(*a, **k):
+        raise sj.JournalError("journal_set_mismatch")
+    monkeypatch.setattr(ds, "run_drop_stage", refuse)
+    argv = (["database-drop", "--job-root", str(root), "--prefix",
+             "database-create,database-create-exit", "--expected-pins", str(pins)] + DROP_ARGS)
+    assert run(argv, capsys) == (3, {"result": "UNKNOWN", "stage": "database-drop",
+                                     "code": "journal_failed"})
+
+
 # --- the drop stage ----------------------------------------------------------------------
 
 DROP_ARGS = ["--port", "5432", "--superuser", "postgres", "--public-superuser-password",
@@ -112,9 +152,10 @@ def test_drop_refuses_at_the_real_gate_before_any_sql(job, capsys, monkeypatch):
     monkeypatch.setattr(ds, "Psql", lambda *a, **k: pytest.fail("SQL attempted"))
     argv = (["database-drop", "--job-root", str(root), "--prefix",
              "database-create,database-create-exit", "--expected-pins", str(pins)] + DROP_ARGS)
-    code, line = run(argv, capsys)
-    assert code == 2 and line["result"] == "FAILED" and line["stage"] == "database-drop"
-    assert line["code"] not in ("", "runner_error")
+    assert run(argv, capsys) == (2, {"result": "FAILED", "stage": "database-drop",
+                                     "code": "no_launch_prefix_not_closed"})
+    assert closing(root, 2, "database-drop") == {"result": "FAILED",
+                                                  "code": "no_launch_prefix_not_closed"}
 
 
 @pytest.mark.parametrize("prefix,launched", [
