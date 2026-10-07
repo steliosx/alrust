@@ -270,6 +270,59 @@ An outside kill of `P_T` leaves no terminal receipt: UNPROVEN, and the gates
 refuse. Stopping a live `P_T` uses only a held, generation-checked pidfd
 (P4's reviewed helper), never a bare PID. Unknown state is FAIL or HOLD.
 
+**As implemented (P4): `scripts/stop-supervisor.py`.** The helper proves
+nothing. It only makes the exit-stage verifier's positive row reachable
+when a supervisor (`P_E` or a `P_T`) outlived its step, for example after a
+step timeout (design `409eabfa` section 4, the "still live" row). The
+verifiers (`entrypoint_exit`, `tool_exit`) then decide from the receipts,
+unchanged, and stay signal-free. The helper's only hazard is signalling the
+wrong process, so every check exists to refuse to signal, not to produce
+evidence.
+
+- Invocation: `stop-supervisor.py --job-root J --entrypoint`, or `--job-root
+  J --tool NAME --stage-index N` (NAME in `HOLDER_TOOLS`, N in 0..99). The
+  workflow runs it unconditionally before each exit stage; on a supervisor
+  that has already ended it is a no-op.
+- Binding. No caller-supplied receipt digest exists for `P_E` or `P_T`;
+  unlike the reference launcher, they print no ready line. The helper
+  therefore uses:
+  - the private job root (uid-owned, no group or other bits, no symlink);
+  - the fixed launch-receipt path of the selected tree;
+  - the exact launch schema, plus, for a tool, the receipt's tool binding
+    equal to NAME and N;
+  - the receipt's terminal path equal to the fixed one;
+  - its `core_identity_sha256` equal to the digest of the core read now,
+    validated for J;
+  - its `boot_id` equal to the core's and to `/proc` now;
+  - then, through a pidfd, the generation (`start_ticks`, `uid`).
+  A stale receipt from an earlier attempt is harmless, because a reused PID
+  has other `start_ticks` and is never signalled.
+- Action: at most one signal, `SIGTERM`, by `pidfd_send_signal(fd, SIGTERM,
+  None, 0)`, sent only after the pidfd's generation is confirmed and only
+  if no terminal receipt exists yet. It never sends a kill signal and
+  never signals a group, a numeric PID or its own process. The
+  supervisor's teardown owns its tree (TERM 10 s, KILL 5 s, receipt 1 s:
+  `B` = 16 s); the helper's single bounded wait on the pidfd, 20 s inside
+  one invocation, exceeds `B`. It is not a poller.
+- Output: one JSON line `{"outcome", "signalled", "reason"}`. Neither
+  outcome is a verdict:
+
+  | outcome | exit | reasons |
+  |---|---|---|
+  | `ENDED` | 0 | `not_running` (pidfd_open finds no process, or the PID now has another generation; nothing signalled); `exited` (it exited within the wait, signalled or not) |
+  | `UNPROVEN` | 2 | `usage`, `job_root_invalid`, `pidfd_unsupported`, `core_unreadable`, `boot_mismatch`, `boot_unreadable`, `no_launch_receipt`, `receipt_unreadable`, `receipt_not_bound`, `self_unreadable`, `refused_own_process`, `pidfd_open_failed`, `generation_unreadable`, `uid_mismatch` (never signalled), `signal_failed`, `did_not_exit` (TERM ignored for 20 s; never escalated) |
+
+- Residuals:
+  - the helper is not pinned in the core, like `stop-reference.py`;
+  - its output line is not journalled. Nothing depends on it, because the
+    verifier re-derives everything from the receipts and `/proc`;
+  - a supervisor that ignores TERM stays live, the exit stage is UNPROVEN,
+    and the gates refuse.
+- Execution: the controls are pure (`test_stop_supervisor.py`). The ended
+  path uses the real `pidfd_open` on an absent PID; the live paths use
+  in-process fakes. Signalling a real supervisor is NOT_RUN and needs a
+  window.
+
 ## 10. Server secrets: paths only (Q-P2-1 and Q-P2-2, agreed in `c860b652`)
 
 The workflow shell, the launcher, the launcher's stop helper and the

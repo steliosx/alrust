@@ -10,8 +10,8 @@ the two receipts written by entrypoint-supervisor.py at fixed paths under
 the job root, the closed entrypoint journal, and /proc. Expected values come
 from the core, the job root and the caller's pins, never from the receipt
 being checked. It never signals: a still-live supervisor generation is
-UNPROVEN here. (The design's "TERM via pidfd" row for a timed-out step is a
-separate, later stop helper.)
+UNPROVEN here. (The design's "TERM via pidfd" row for a timed-out step is
+scripts/stop-supervisor.py, R-EP plan P4, run before this stage.)
 
 The receipt checks are shared with the stage-tool verifier (tool_exit.py,
 R-EP plan P2) through a receipt spec; ENTRYPOINT is this stage's spec, and
