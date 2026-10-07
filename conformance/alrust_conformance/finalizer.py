@@ -458,16 +458,57 @@ def writer_quiescence(job_root, stages, entrypoint_stage="entrypoint"):
 _DATABASE_IDENTITY = ("oid", "role", "role_oid", "system_identifier", "postmaster_start_time")
 
 
+_CONTAINER_ID = re.compile(r"[0-9a-f]{12,64}\Z")
+_ENDPOINT_HOSTS = ("0.0.0.0", "127.0.0.1")
+
+
+def _database_container(records):
+    """Exactly one database_container record, in database-create, of the
+    exact shape container_identity writes, with a 5432/tcp mapping whose
+    host port is its database_port on an address reachable from 127.0.0.1
+    (PR #100 review, comments 4174199627 and 4174199632)."""
+    found = [(stage, payload) for stage, kind, payload in records
+             if kind == "database_container"]
+    _require(len(found) == 1 and found[0][0] == "database-create",
+             "database_container_missing_or_repeated")
+    c = found[0][1]
+    _require(type(c) is dict and set(c) == {
+        "container_id", "image_id", "repo_digests", "port", "database_port"}
+        and type(c["container_id"]) is str and _CONTAINER_ID.fullmatch(c["container_id"])
+        and type(c["image_id"]) is str
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", c["image_id"]) is not None
+        and type(c["repo_digests"]) is list and len(c["repo_digests"]) <= 16
+        and all(type(d) is str and len(d) <= 256 for d in c["repo_digests"])
+        and c["repo_digests"] == sorted(c["repo_digests"])
+        and type(c["port"]) is list and 1 <= len(c["port"]) <= 16
+        and all(type(m) is dict and set(m) == {"container", "host_ip", "host_port"}
+                and m["container"] == "5432/tcp" and type(m["host_ip"]) is str
+                and len(m["host_ip"]) <= 45 and type(m["host_port"]) is str
+                and re.fullmatch(r"[0-9]{1,5}", m["host_port"]) is not None
+                for m in c["port"])
+        and type(c["database_port"]) is int and 0 < c["database_port"] < 65536,
+        "database_container_invalid")
+    _require(any(m["host_port"] == str(c["database_port"]) and m["host_ip"] in _ENDPOINT_HOSTS
+                 for m in c["port"]), "database_endpoint_unbound")
+    return c
+
+
 def _database_linkage(records):
     """Closes the deferred database linkage (database design section 7):
-    exactly one database_created record, in database-create, and exactly one
-    database_drop record whose verdict is COMPLETE and whose identity equals
-    it. ROLE_ONLY_COMPLETE, NONE_ALLOCATED or UNPROVEN refuse."""
+    exactly one database_created record, in database-create; exactly one
+    database_container record there that binds the database port
+    (_database_container); and exactly one database_drop record, in
+    database-drop, whose verdict is COMPLETE and whose identity equals the
+    created one. ROLE_ONLY_COMPLETE, NONE_ALLOCATED or UNPROVEN refuse."""
     created = [(stage, payload) for stage, kind, payload in records
                if kind == "database_created"]
     _require(len(created) == 1 and created[0][0] == "database-create",
              "database_created_missing_or_repeated")
-    _, drop = _one(records, "database_drop")
+    _database_container(records)
+    drop_stage, drop = _one(records, "database_drop")
+    # PR #100 review, comment 4174199634: the drop verdict counts only from
+    # the database-drop stage itself.
+    _require(drop_stage == "database-drop", "database_drop_misplaced")
     created = created[0][1]
     _require(type(created) is dict and type(drop) is dict and set(drop) == {
         "verdict", "reason", "database", "oid", "role", "role_oid",

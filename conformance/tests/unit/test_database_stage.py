@@ -251,9 +251,10 @@ def test_create_records_every_object_and_keeps_the_password_private(env):
     assert os.stat(url).st_mode & 0o777 == 0o600
     data = create_bytes(job)
     kinds = [r["kind"] for r in records(data)]
-    assert kinds == ["stage_begin", "owned_resource", "database_role_attempted",
-                     "database_role_created", "database_create_attempted",
-                     "database_created", "database_container", "stage_complete"]
+    # PR #100 review: the container's published port is checked before any SQL.
+    assert kinds == ["stage_begin", "owned_resource", "database_container",
+                     "database_role_attempted", "database_role_created",
+                     "database_create_attempted", "database_created", "stage_complete"]
     created = [r["payload"] for r in records(data) if r["kind"] == "database_created"][0]
     current = state(stub)
     assert created == {"name": name, "oid": current["databases"][name]["oid"], "role": name,
@@ -266,6 +267,8 @@ def test_create_records_every_object_and_keeps_the_password_private(env):
                                 "version": "psql (PostgreSQL) 16.4 (synthetic)"}}
     container = [r["payload"] for r in records(data) if r["kind"] == "database_container"][0]
     assert container["image_id"] == IMAGE and container["container_id"] == CONTAINER
+    assert container["database_port"] == 5432 and container["port"] == [
+        {"container": "5432/tcp", "host_ip": "0.0.0.0", "host_port": "5432"}]
     # The server received only the SCRAM verifier, and the password appears
     # nowhere outside the URL file: not in argv, stdin, the child
     # environment, or the journal.
@@ -538,7 +541,7 @@ def test_docker_output_over_limit_refuses(tmp_path):
     stub.chmod(0o755)
     import time as _time
     with pytest.raises(ds.DatabaseStageError, match="docker_output_too_large"):
-        ds.container_identity(str(stub), CONTAINER, _time.monotonic_ns() + 3_000_000_000)
+        ds.container_identity(str(stub), CONTAINER, _time.monotonic_ns() + 3_000_000_000, 5432)
 
 
 # --- DBA2-R2: stdin is fed under the same deadline ------------------------------
