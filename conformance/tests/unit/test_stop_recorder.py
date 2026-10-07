@@ -395,3 +395,60 @@ def test_script_keeps_the_bounded_runners_partial_output(job, script, capsys):
     assert module.main(argv) == 2
     assert json.loads(capsys.readouterr().out) == {"stage": "FAILED", "code": "helper_timeout"}
     assert (job / "stop-helper.stdout").read_bytes() == b"partial"
+
+
+# --- W1-R2 (second review): the final close is not swallowed -----------------------------
+
+def _close_fault(monkeypatch, also_write=False):
+    """os.close reports an error for the private stdout file after really
+    closing it (Linux releases the descriptor even when close reports an
+    error); counts the closes of that file. Optionally its write fails too."""
+    real_close, real_write = os.close, os.write
+    closes, targets = [], set()
+
+    def close(fd):
+        # A descriptor number seen once as the target is remembered, so a
+        # second close of the same (already released) number is counted too.
+        if fd in targets or _fd_path(fd).endswith("/stop-helper.stdout"):
+            first = fd not in targets
+            targets.add(fd)
+            closes.append(fd)
+            if first:
+                real_close(fd)
+            raise OSError(SECRET_TEXT)
+        return real_close(fd)
+
+    def write(fd, data):
+        if also_write and _fd_path(fd).endswith("/stop-helper.stdout"):
+            raise OSError(SECRET_TEXT)
+        return real_write(fd, data)
+    monkeypatch.setattr(sr.os, "close", close)
+    monkeypatch.setattr(sr.os, "write", write)
+    return closes
+
+
+def test_a_close_failure_after_a_good_write_is_not_complete(job, monkeypatch):
+    closes = _close_fault(monkeypatch)
+    result = run(job, Helper())
+    monkeypatch.undo()
+    assert result == {"stage": "FAILED", "code": "private_output_failed"}
+    assert stop_records(job) == [] and len(closes) == 1          # closed once, not retried
+    assert (job / "stop-helper.stdout").read_bytes() == COMPLETE_LINE   # evidence kept
+    owned = [r["payload"]["path"] for r in records(job) if r["kind"] == "owned_resource"]
+    assert owned == [str(job / "stop-helper.stdout")]
+    assert closing(job) == {"result": "FAILED", "code": "private_output_failed"}
+
+
+def test_a_write_failure_stays_primary_over_a_close_failure(job, monkeypatch):
+    closes = _close_fault(monkeypatch, also_write=True)
+    result = run(job, Helper())
+    monkeypatch.undo()
+    assert result == {"stage": "FAILED", "code": "private_output_failed"}
+    assert len(closes) == 1 and stop_records(job) == []
+
+
+@pytest.mark.parametrize("failure", [[], {}, ["timeout"], 1, b"timeout"])
+def test_an_unhashable_or_mistyped_failure_tag_is_a_fixed_refusal(job, failure):
+    assert run(job, Helper(failure=failure)) == {"stage": "FAILED",
+                                                 "code": "helper_output_invalid"}
+    assert not (job / "stop-helper.stdout").exists()

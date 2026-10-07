@@ -114,7 +114,10 @@ def _keep_private(job_root, journal, name, data):
     """Write DATA to <job_root>/NAME, 0600, exclusive. The file is recorded
     as an owned resource as soon as it exists, before any byte is written,
     so a partial write is still accounted for and removed by the
-    finalizer. An OSError is the fixed private_output_failed."""
+    finalizer. An OSError, including one from the final close, is the fixed
+    private_output_failed (W1-R2). The descriptor is closed exactly once on
+    every path; a close error after an earlier error leaves that earlier
+    error primary, and a possibly closed descriptor is never closed again."""
     path = os.path.join(job_root, name)
     try:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -129,13 +132,18 @@ def _keep_private(job_root, journal, name, data):
         while view:
             view = view[os.write(fd, view):]
         os.fsync(fd)
-    except OSError:
-        raise StopRecorderError("private_output_failed") from None
-    finally:
+    except BaseException as primary:
         try:
             os.close(fd)
         except OSError:
-            pass
+            pass                        # the primary error stays primary
+        if isinstance(primary, OSError):
+            raise StopRecorderError("private_output_failed") from None
+        raise
+    try:
+        os.close(fd)
+    except OSError:
+        raise StopRecorderError("private_output_failed") from None
 
 
 def _helper_result(result):
@@ -145,7 +153,7 @@ def _helper_result(result):
     per-stream bound); anything else is helper_output_invalid."""
     _require(type(result) is tuple and len(result) == 4, "helper_output_invalid")
     failure, returncode, stdout, stderr = result
-    _require((failure is None or failure in RUNNER_FAILURES)
+    _require((failure is None or (type(failure) is str and failure in RUNNER_FAILURES))
              and type(stdout) is bytes and type(stderr) is bytes
              and len(stdout) <= MAX_OUTPUT and len(stderr) <= MAX_OUTPUT,
              "helper_output_invalid")
