@@ -9,6 +9,19 @@ and launch hashes, and integer-zero actual launcher/confirmation exit codes.
 Missing, extra, reordered, duplicate or legacy two-stage prefixes refuse.
 The entrypoint index is fixed at4; input cannot choose it. Diagnostics are fixed.
 
+The four stage digests mean **SHA-256 of each complete closed journal file's
+bytes**, in prefix order: the same per-stage file hashes used by `aggregate`
+and the independently supplied `stages` tuple in `read_closed_launch`. They
+are not digests of individual records, payloads, parsed objects or reserialized
+JSON. The adapter must retain each original closed-file hash from its producer.
+The separate core/launch digests name the original core and launch-receipt bytes.
+The launcher exit comes from the actual `launch-reference.py` launch invocation
+(ready line and hand-off), never its preflight-only invocation; confirmation
+exit comes from actual `confirm-launch.py`
+(recorded live hand-off). Exit0 is necessary but does not replace the later
+receipt, closed-journal and current-generation checks. Neither exit is inferred
+from a journal, receipt, synthetic declaration or this guard's return value.
+
 This is a pure preparatory guard: no file, clock, reader, journal, import of
 named plugins, service, credential or process action. Valid results stay
 NOT_RUN, execution disabled. Hash syntax cannot authenticate originals or
