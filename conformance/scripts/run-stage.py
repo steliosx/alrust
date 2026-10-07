@@ -12,7 +12,9 @@ gate, records and closure are the runner's own:
   database-drop --job-root J --prefix a,b,... --port N --superuser U
       --public-superuser-password W --psql PATH --deadline-monotonic-ns D
       --expected-pins P
-      database_stage.run_drop_stage. Whether a server was launched is
+      database_stage.run_drop_stage. PREFIX must contain database-create
+      (otherwise usage; the runner would refuse it before any journal,
+      W2-R1). Whether a server was launched is
       taken from the evidence (PREFIX; aggregate's exact journal set
       refuses a prefix that omits an existing journal), never from a
       caller flag. The only password in argv is the service superuser's,
@@ -20,12 +22,16 @@ gate, records and closure are the runner's own:
 
 P is the expected-pins JSON file (workflow literals; not a secret).
 Standalone source: no workflow runs it yet (W5). The caller runs
-stop-supervisor.py before an exit stage (P4); this script never signals.
+stop-supervisor.py before an exit stage (P4). This script makes no direct
+signal or process call, but it is NOT process-free (W2-N1): after its gate
+admits, the drop runner runs psql as a child through database_stage's
+bounded runner. Classify database-drop as process-creating (W5).
 
 One JSON line on stdout, never a value or exception text:
   0  COMPLETE: the stage closed COMPLETE;
-  2  FAILED: the stage closed FAILED with a fixed code, or an exit stage
-     refused its prefix before opening any journal;
+  2  FAILED: the stage closed FAILED with a fixed code;
+     REFUSED: a runner refused before opening any journal, with its
+     fixed code (no stage evidence exists; W2-R1);
   3  UNKNOWN: an unexpected error (runner_error), or a journal error
      (journal_failed, for example a journal that could not be opened or
      closed); the stage journal, not this line, says whether and how the
@@ -44,8 +50,11 @@ MAX_PINS = 1 << 16
 SECRET_VARIABLES = ("DATABASE_URL", "SECRET_KEY", "PGPASSWORD")
 _STAGE = re.compile(r"[a-z][a-z0-9-]{0,31}\Z")
 _DIGITS = re.compile(r"(0|[1-9][0-9]{0,18})\Z")
-# The exit runners' own refusals, raised before their journal opens.
+# The runners' own refusals raised before their journal opens: the exit
+# runners' prefix checks (JournalError) and the drop runner's prefix and
+# path checks (DatabaseStageError), W2-R1.
 PREFIX_REFUSALS = frozenset({"entrypoint_exit_prefix_invalid", "tool_exit_prefix_invalid"})
+DROP_PRE_OPEN = frozenset({"drop_prefix_invalid", "drop_path_mismatch"})
 OPTIONS = {
     "entrypoint-exit": ("--job-root", "--prefix", "--expected-pins"),
     "tool-exit": ("--job-root", "--prefix", "--tool", "--expected-pins"),
@@ -104,6 +113,8 @@ def parse(argv):
     if not (1 <= len(prefix) <= 31 and all(_STAGE.fullmatch(n) for n in prefix)):
         return None
     opts["--prefix"] = prefix
+    if command == "database-drop" and "database-create" not in prefix:
+        return None
     if "--tool" in opts and not _STAGE.fullmatch(opts["--tool"]):
         return None
     for name in ("--port", "--deadline-monotonic-ns"):
@@ -147,10 +158,12 @@ def main(argv):
                 psql_path=opts["--psql"], deadline_ns=opts["--deadline-monotonic-ns"])
             verdict = "COMPLETE"
     except ds.DatabaseStageError as error:
+        if error.code in DROP_PRE_OPEN:
+            return emit({"result": "REFUSED", "stage": command, "code": error.code}, 2)
         return emit({"result": "FAILED", "stage": command, "code": error.code}, 2)
     except sj.JournalError as error:
         if str(error) in PREFIX_REFUSALS:
-            return emit({"result": "FAILED", "stage": command, "code": str(error)}, 2)
+            return emit({"result": "REFUSED", "stage": command, "code": str(error)}, 2)
         # Any other journal error: this line cannot say whether the stage
         # closed (never claimed FAILED; compare W1's journal_failed).
         return emit({"result": "UNKNOWN", "stage": command, "code": "journal_failed"}, 3)

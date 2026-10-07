@@ -93,7 +93,7 @@ def test_a_wrong_prefix_is_a_fixed_refusal_before_any_journal(job, capsys):
     root, pins = job("launch")
     argv = ["entrypoint-exit", "--job-root", str(root), "--prefix",
             ",".join(STAGES[:STAGES.index("launch") + 1]), "--expected-pins", str(pins)]
-    assert run(argv, capsys) == (2, {"result": "FAILED", "stage": "entrypoint-exit",
+    assert run(argv, capsys) == (2, {"result": "REFUSED", "stage": "entrypoint-exit",
                                      "code": "entrypoint_exit_prefix_invalid"})
     assert not Path(sj.journal_path(str(root), STAGES.index("launch") + 1,
                                     "entrypoint-exit")).exists()
@@ -103,7 +103,7 @@ def test_a_tool_exit_prefix_mismatch_is_a_fixed_refusal_before_any_journal(job, 
     root, pins = job("database-create")
     argv = ["tool-exit", "--job-root", str(root), "--prefix", "database-create",
             "--tool", "registry", "--expected-pins", str(pins)]
-    assert run(argv, capsys) == (2, {"result": "FAILED", "stage": "tool-exit",
+    assert run(argv, capsys) == (2, {"result": "REFUSED", "stage": "tool-exit",
                                      "code": "tool_exit_prefix_invalid"})
     assert not Path(sj.journal_path(str(root), 1, "registry-exit")).exists()
 
@@ -178,16 +178,46 @@ def test_drop_takes_launched_from_the_prefix_never_a_flag(job, capsys, monkeypat
                       "psql_path": "/usr/bin/psql", "deadline_ns": 1000}
 
 
-def test_a_drop_refusal_keeps_its_fixed_code(job, capsys, monkeypatch):
+def test_a_drop_prefix_without_create_is_usage_with_no_journal_or_sql(job, capsys,
+                                                                       monkeypatch):
+    # W2-R1: the runner would refuse this before opening any journal, so
+    # the CLI rejects it as usage and never reaches the runner.
+    root, pins = job("launch")
+    monkeypatch.setattr(ds, "run_drop_stage", lambda *a, **k: pytest.fail("runner reached"))
+    monkeypatch.setattr(ds, "Psql", lambda *a, **k: pytest.fail("SQL attempted"))
+    before = sorted(os.listdir(root / sj.JOURNAL_DIR))
+    argv = (["database-drop", "--job-root", str(root), "--prefix", "launch",
+             "--expected-pins", str(pins)] + DROP_ARGS)
+    assert run(argv, capsys) == (64, {"result": "NOT_RUN", "reason": "usage"})
+    assert sorted(os.listdir(root / sj.JOURNAL_DIR)) == before
+
+
+@pytest.mark.parametrize("code", ["drop_prefix_invalid", "drop_path_mismatch"])
+def test_a_drop_pre_open_refusal_is_never_claimed_failed(job, capsys, monkeypatch, code):
+    # Through the real runner, drop_path_mismatch is unreachable from this
+    # CLI and drop_prefix_invalid is usage; if either still arrives, it is
+    # REFUSED (no journal), never FAILED (a closed stage).
     root, pins = job("database-create")
 
     def refuse(*a, **k):
-        raise ds.DatabaseStageError("drop_path_mismatch")
+        raise ds.DatabaseStageError(code)
+    monkeypatch.setattr(ds, "run_drop_stage", refuse)
+    argv = (["database-drop", "--job-root", str(root), "--prefix",
+             "database-create,database-create-exit", "--expected-pins", str(pins)] + DROP_ARGS)
+    assert run(argv, capsys) == (2, {"result": "REFUSED", "stage": "database-drop",
+                                     "code": code})
+
+
+def test_a_post_open_drop_failure_keeps_its_fixed_code(job, capsys, monkeypatch):
+    root, pins = job("database-create")
+
+    def refuse(*a, **k):
+        raise ds.DatabaseStageError("drop_allocation_changed")
     monkeypatch.setattr(ds, "run_drop_stage", refuse)
     argv = (["database-drop", "--job-root", str(root), "--prefix",
              "database-create,database-create-exit", "--expected-pins", str(pins)] + DROP_ARGS)
     assert run(argv, capsys) == (2, {"result": "FAILED", "stage": "database-drop",
-                                     "code": "drop_path_mismatch"})
+                                     "code": "drop_allocation_changed"})
 
 
 # --- setup, usage and unexpected errors ---------------------------------------------------
@@ -247,7 +277,10 @@ def test_an_unexpected_error_is_a_fixed_unknown(job, capsys, monkeypatch):
     assert SECRET_TEXT not in json.dumps(line)
 
 
-def test_the_script_never_signals_or_starts_processes():
+def test_the_script_makes_no_direct_signal_or_process_call():
+    # W2-N1: direct calls only. The drop runner this script delegates to
+    # runs psql through a bounded subprocess after its gate admits, so the
+    # CLI is not process-free; that classification belongs to W5.
     source = SCRIPT.read_text()
     for forbidden in ("os.kill", "killpg", "pidfd_send_signal", "subprocess", "os.system",
                       "os.fork", "os.exec"):
