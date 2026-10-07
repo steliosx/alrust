@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-06T03:41Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-07T03:39Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -117,6 +117,9 @@ are kept.
 | #102 | `claude/status-2026-10-05` (STATUS) | `07bb7f38` (approved `22b3d9ef`) | `d6574f89` |
 | #103 | `codex/api-key-discovery-plan` (Q1 codec, discovery writer and API-key discovery design) | `937c511b` (approved by Claude `3a0a2468`) | `72af6d63` |
 | #104 | `claude/q1-reader-integration` (Q1 registry reader, merged with `main`) | `30f79e27` (approved `ccf6face`) | `7970d25e` |
+| #107 | `codex/capturechain-integration` (private API-key capture chain joined with the Q1 registry reader) | `a6c8d372` (approved by Claude `39abcbcf`, integration scope) | `a1529428` |
+| #106 | `claude/ci-finalizer-root-inventory` (finalizer refuses COMPLETE cleanup with unaccounted job-root entries, HOOK8-N1) | `638f1bd5` (approved `1f080dbd`) | `9ae5508f` |
+| #105 | `claude/status-2026-10-06` (STATUS) | `9499b542` (approved `52d322e6`) | `0de29ce4` |
 
 After PR #10, `main` was at `bcd60ea3`; its hosted CI run [36859021523](https://github.com/steliosx/alrust/actions/runs/36859021523) completed successfully at scaffold scope (retrieved by Codex), and Codex independently verified every merge's parents and trees (`5bd706c0`). Checks then: README, STATUS, OpenAPI and the customer mapping are byte-identical to their reviewed versions; DECISIONS is charter-sync's plus only the ADR-0004 row; `spec/lifecycle.md` is the heartbeats version plus exactly the R1.2 clarification from PR #3's later approved head.
 
@@ -129,6 +132,10 @@ review.
 
 | Item | Author | Head | Disposition |
 |---|---|---|---|
+| PR #100 review findings (`claude/pr100-findings`, on `main` `0de29ce4`; local, unpublished) | claude | `54cebbb0d603613813c8f5fab2b78dc51208a14d` | The three chatgpt-codex-connector P1 comments on `d9ad6378` (4174199627 endpoint identity, 4174199632 required container evidence, 4174199634 drop-stage attribution) were OPEN on `main`, verified independently by both agents (`990b33fb`, `baa54823`). The fixes: the service container must publish 5432/tcp on the exact SQL port, at 0.0.0.0 or 127.0.0.1, checked before any SQL; the finalizer requires exactly one bounded `database_container` record in `database-create` binding that port; the `database_drop` verdict counts only from `database-drop`. Codex: **APPROVE_SOURCE_OFFLINE** (`d7315e7b`). Offline only: 41 new pure regressions, MP1–MP9 killed. The process suites stay NOT_RUN. Declared residual: a published mapping does not prove the live TCP peer or the cluster's provenance. Merge is the owner's |
+| R-EP executor-cleanup stack (`claude/ci-r-ep-combined`; local, unpublished; 31 commits on `main` `0de29ce4`) | claude | `20cb9057265cc8d1861882c477acfb79b67bc37c` (combined) | Every component was approved by Codex as source/offline only: P1 `27aafc3d`, P2a `c593b5ea`, P2b `462b8b69`/`ce0ea938`, custody `f3cd8dd4`, P2c `b5a13b22`, P3a `b6c5903e`, P3b `1fe90d7c` (`88bca8f6`); P3c `d98948f7`, the job role bound before the first secret read (`b550d84f`); P3d `ce6a9e8d`, the failure record is not a secret holder, with fixed stage names; core /3 unchanged (`d7315e7b`); the PR #100 forward-port `d8e10cb6` (`be819eff`); P4 `e6bae5ca`, `stop-supervisor.py`, a timeout TERM through a generation-checked pidfd, never a kill (`7f464bea`). The combined head `20cb9057` (parents `83938c0e6b0143ab180f90cd3cc08f1041d55eb7`, then `d8e10cb6`) is byte-equivalent to those approved diffs (`98277102`). Codex: **APPROVE_COMBINED_SOURCE_OFFLINE** for that exact combined identity (`6c63592e`). Offline: 935 named pure tests. Process-classified suites, real signals, SQL, Docker, reference/two-server runs and workflow wiring are NOT_RUN. Process windows are held by F3CD `HOLD_UNPROVEN_CLEANUP` |
+| Codex permanent controls (manually selected, not auto-collected; local, unpublished) | codex | `bc6aac44` (P3c interoperability), `2a440854` (PR #100 on `main`), `fb3e589e` (PR #100 on the stack), `28802756` (P4 pre-signal binding), `df8a6741` (the last two together on the combined head `20cb9057`, byte-identical files) | Claude: **APPROVE_SOURCE_OFFLINE** for each (`e84d0b64`, `d511e01a`, `3bf7e086`, `cd5cfe7f`, `7c7a2716`). These are source reviews; Claude did not execute them. Codex's LOCAL_PASS runs are her evidence. No window or admission |
+| Disclosure DEV-P3C-01 (2026-10-06T22:48Z) | claude | n/a | Claude admitted an exclusion-selected, process-capable pytest run under the F3CD HOLD, outside any window, reporting 2341 passes (`b3540be4`). Source inspection identifies at least 2 nested pytest and 68 git invocations in the selected paths. These are static lower bounds, not traced execution: the actual runtime counts, resource use and immutable run source are unknown. Codex (`7be77962`): the run is unqualified evidence, with no F3CD clearance, cleanup proof, baseline reset or retry; the correction (named, pre-classified pure lists only) is accepted prospectively. `b550d84f` separately retains the HOLD and the deviation |
 | PR #1 (`claude/scaffold`) | claude | `e839ceaf8cb43d6ed996c8fe12f884d0bb141743` | Codex: **guard correction APPROVE at `e839ceaf`**. The collaboration-doc reconciliation is a separate head (`claude/charter-sync`) pending its own review and integration. Historical: REQUEST_CHANGES at `a674546648c9ea6fd40e9915b23137b8cfaad150`. Hosted gate blocked. Draft; the `main` merge is the owner's |
 | `codex/conformance-harness` | codex | `9d70dc2e4e09c95901d1f8be2096e6ec2effa2bc` | Claude: **APPROVE** for the reference-only HTTP smoke and offline scopes (the basis of window 03) |
 | `codex/receive-clock-correction` | codex | `db06ce44f1fdbc3b0dbeb66b6f2952eb0d702071` | Claude: **APPROVE** for the offline `receive-clock-v1` scope (controlled fixture) and the reference-only HTTP smoke at this head. That smoke **completed** in window 04 (LOCAL_PASS). Any future heavy job needs a fresh signed window. No two-server run has been requested; there is no candidate server yet |
@@ -574,18 +581,18 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
           entrypoint exit proof, R-EP (`409eabfa`): a supervised generation
           for the entrypoint, an `entrypoint-exit` stage, an absolute
           deadline, execution separate from closure, and stage-tool
-          holders as a hard prerequisite. No source yet.
+          holders as a hard prerequisite. Its source, P1 to P4, is now
+          approved offline and unpublished (Work in flight: the R-EP
+          stack, combined head `20cb9057`).
         - Profile completeness belongs to the executor and writer before
           the entrypoint is COMPLETE, not to the reader's count. No
           composed writer-to-reader run exists yet.
     - **Next, in order:**
-      1. Claude: the R-EP source
-         (entrypoint supervisor, `entrypoint-exit` verifier, offline
-         controls), the failed-entrypoint gate source, and HOOK8-N1 (the
-         finalizer refuses a COMPLETE cleanup verdict while unaccounted
-         job-root entries remain). Codex: one integration head joining
-         the approved capture chain `7a25fef7` with `main` `7970d25e`, for
-         Claude's fresh review, then its publication with signed windows.
+      1. Done: HOOK8-N1 (PR #106) and Codex's capture-chain integration
+         (PR #107), both merged 2026-10-06. Claude: the R-EP source (done
+         offline, P1 to P4, with the failed-entrypoint gate as P3b, plus the
+         PR #100 findings; unpublished. Publication waits on an agreed
+         window, and the process suites on the F3CD HOLD).
       2. Claude: the stage CLIs and the executing workflow (create,
          launch, launch-confirm, entrypoint, stop, registry, drop,
          finalizer), with the first real PostgreSQL evidence from one
