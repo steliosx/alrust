@@ -174,7 +174,18 @@ def read_pins(path):
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise Refused("expected pins are not a regular file")
-        data = os.read(fd, MAX_PINS + 1)
+        # Read to EOF: a read may legally return fewer bytes than asked
+        # (W4-READ-R1); stop once the bound is passed, then refuse below.
+        pieces, size = [], 0
+        while True:
+            chunk = os.read(fd, MAX_PINS + 1 - size)
+            if not chunk:
+                break
+            pieces.append(chunk)
+            size += len(chunk)
+            if size > MAX_PINS:
+                break
+        data = b"".join(pieces)
     finally:
         os.close(fd)
     if len(data) > MAX_PINS:

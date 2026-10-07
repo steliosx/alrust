@@ -78,7 +78,18 @@ def _read_receipt(path):
             info = os.fstat(fd)
             _require(stat.S_ISREG(info.st_mode) and info.st_size <= MAX_RECEIPT,
                      "receipt_unreadable")
-            data = os.read(fd, MAX_RECEIPT + 1)
+            # Read to EOF: a read may legally return fewer bytes than asked
+            # (W4-READ-R1); stop once the bound is passed, then refuse below.
+            pieces, size = [], 0
+            while True:
+                chunk = os.read(fd, MAX_RECEIPT + 1 - size)
+                if not chunk:
+                    break
+                pieces.append(chunk)
+                size += len(chunk)
+                if size > MAX_RECEIPT:
+                    break
+            data = b"".join(pieces)
         except OSError:
             raise StopRecorderError("receipt_unreadable") from None
         _require(len(data) <= MAX_RECEIPT, "receipt_unreadable")

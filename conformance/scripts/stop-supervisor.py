@@ -89,7 +89,18 @@ def read_bounded(path, limit=MAX_RECEIPT):
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
             raise ValueError("not a small regular file")
-        data = os.read(fd, limit + 1)
+        # Read to EOF: a read may legally return fewer bytes than asked
+        # (W4-READ-R1); stop once the bound is passed, then refuse below.
+        pieces, size = [], 0
+        while True:
+            chunk = os.read(fd, limit + 1 - size)
+            if not chunk:
+                break
+            pieces.append(chunk)
+            size += len(chunk)
+            if size > limit:
+                break
+        data = b"".join(pieces)
         if len(data) > limit:
             raise ValueError("too large")
         return data
