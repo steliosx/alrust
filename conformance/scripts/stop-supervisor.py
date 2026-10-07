@@ -16,15 +16,19 @@ Usage:
   python3 -I -S -B stop-supervisor.py --job-root J --entrypoint
   python3 -I -S -B stop-supervisor.py --job-root J --tool NAME --stage-index N
 
-The workflow runs it unconditionally before each exit stage; on a
-supervisor that has already ended it is a no-op.
+Proposed integration, not wired by this head (a later workflow head): run it
+unconditionally before each exit stage; on a supervisor that has already
+ended it is a no-op.
 
 Binding (there is no caller-supplied receipt digest: no launcher ready line
 exists for P_E or P_T): the private job root J; the fixed launch-receipt
 path for the selected tree (entrypoint/launch.json, or
-tools/NN-NAME/launch.json); the exact launch schema and, for a tool, the
-receipt's tool binding equal to NAME and N; the receipt's terminal path
-equal to the fixed one; its core_identity_sha256 equal to the digest of the
+tools/NN-NAME/launch.json); the verifier's own exact, type-sensitive launch
+schema (entrypoint_exit._check_launch_schema with ENTRYPOINT or
+tool_exit.spec(NAME, N)) and, for a tool, the receipt's tool binding equal
+to NAME and N; the supervisor's pgid equal to its pid, subreaper 1, and uid
+equal to this helper's own uid, the job root's owner (P4-OWNER-R2); the
+receipt's terminal path equal to the fixed one; its core_identity_sha256 equal to the digest of the
 core read now, validated for J; its boot_id equal to the core's and to
 /proc now; then, through a pidfd, the supervisor's generation (start_ticks
 and uid). A stale receipt from an earlier attempt is harmless: a reused PID
@@ -143,35 +147,39 @@ def parse_args(argv):
 
 
 def selected(ee, te, job_root, tool, index):
-    """(launch_path, terminal_path, launch_schema, terminal_schema, binding)."""
+    """(launch_path, terminal_path, receipt spec) of the selected tree."""
     if tool is None:
         launch, terminal = ee.receipt_paths(job_root)
-        return launch, terminal, ee.SCHEMA_LAUNCH, ee.SCHEMA_TERMINAL, None
+        return launch, terminal, ee.ENTRYPOINT
     if tool not in te.HOLDER_TOOLS:
         raise ValueError("usage")
     launch, terminal = te.receipt_paths(job_root, tool, index)
-    return launch, terminal, te.SCHEMA_LAUNCH, te.SCHEMA_TERMINAL, \
-        {"name": tool, "stage_index": index}
+    return launch, terminal, te.spec(tool, index)
 
 
-def supervisor_of(receipt, schema, terminal_path, binding, core_sha256, boot):
-    """(pid, start_ticks, uid) of the receipt's supervisor; ValueError if the
-    receipt is not this job's, this tree's and this boot's."""
-    if type(receipt) is not dict or receipt.get("schema") != schema:
-        raise ValueError("schema")
+def supervisor_of(ee, receipt, spec, terminal_path, core_sha256, boot):
+    """(pid, start_ticks) of the receipt's supervisor; ValueError if the
+    receipt is not, exactly, this job's, this tree's, this boot's and this
+    owner's (P4-BIND-R1, P4-OWNER-R2)."""
+    try:
+        # The verifier's own exact, type-sensitive schema: keys, int (not
+        # bool or float) fields, the child, command and deadline shapes,
+        # and for a tool the binding's shape.
+        ee._check_launch_schema(receipt, spec)
+    except ee._Refusal:
+        raise ValueError("schema") from None
+    if spec["tool"] is not None and receipt["tool"] != spec["tool"]:
+        raise ValueError("tool")
     sup = receipt["supervisor"]
-    pid, ticks, uid = sup["pid"], sup["start_ticks"], sup["uid"]
-    if not (type(pid) is int and 1 < pid <= PID_LIMIT and sup["pgid"] == pid
-            and type(ticks) is int and 1 < ticks < 2 ** 63
-            and type(uid) is int and 0 <= uid < 2 ** 32):
+    pid, ticks = sup["pid"], sup["start_ticks"]
+    if not (1 < pid <= PID_LIMIT and sup["pgid"] == pid and 1 < ticks < 2 ** 63
+            and sup["subreaper"] == 1 and sup["uid"] == os.getuid()):
         raise ValueError("supervisor")
     if receipt["terminal_receipt"] != terminal_path \
             or receipt["core_identity_sha256"] != core_sha256 \
             or receipt["boot_id"] != boot:
         raise ValueError("binding")
-    if binding is not None and receipt.get("tool") != binding:
-        raise ValueError("tool")
-    return pid, ticks, uid
+    return pid, ticks
 
 
 def main(argv):
@@ -186,7 +194,7 @@ def main(argv):
         return outcome("UNPROVEN", "pidfd_unsupported")
     try:
         ee, sj, te = package()
-        launch_path, terminal_path, schema, _, binding = selected(ee, te, job_root, tool, index)
+        launch_path, terminal_path, spec = selected(ee, te, job_root, tool, index)
     except (ImportError, ValueError):
         return outcome("UNPROVEN", "usage")
     try:
@@ -200,17 +208,17 @@ def main(argv):
     except OSError:
         return outcome("UNPROVEN", "boot_unreadable")
     try:
-        receipt = json.loads(read_bounded(launch_path))
+        receipt = sj.strict_json(read_bounded(launch_path), "receipt_unreadable")
     except FileNotFoundError:
         return outcome("UNPROVEN", "no_launch_receipt")
     except (OSError, ValueError, RecursionError):
         return outcome("UNPROVEN", "receipt_unreadable")
     try:
-        pid, ticks, uid = supervisor_of(receipt, schema, terminal_path, binding,
-                                        hashlib.sha256(core_bytes).hexdigest(),
-                                        core["boot_id"])
+        pid, ticks = supervisor_of(ee, receipt, spec, terminal_path,
+                                   hashlib.sha256(core_bytes).hexdigest(), core["boot_id"])
     except (KeyError, TypeError, ValueError):
         return outcome("UNPROVEN", "receipt_not_bound")
+    uid = os.getuid()
     try:
         own = {os.getpid(), os.getppid(), os.getpgid(0), os.getsid(0)}
     except OSError:

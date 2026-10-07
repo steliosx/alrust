@@ -52,21 +52,32 @@ def job(tmp_path, monkeypatch):
 
 
 def receipt(root, tool=None, index=None, change=None, pid=ABSENT):
-    """A launch receipt at the fixed path for the selected tree."""
+    """A full-schema launch receipt at the fixed path for the selected tree,
+    of the shape the supervisor writes and the verifier's schema check
+    admits (P4-BIND-R1: no minimal receipts)."""
     core_bytes = (root / sj.CORE_NAME).read_bytes()
     core = json.loads(core_bytes)
     if tool is None:
         launch, terminal = ee.receipt_paths(str(root))
-        schema = ee.SCHEMA_LAUNCH
+        spec, journal = ee.ENTRYPOINT, sj.journal_path(str(root), 4, ee.ENTRYPOINT_STAGE)
     else:
         launch, terminal = te.receipt_paths(str(root), tool, index)
-        schema = te.SCHEMA_LAUNCH
-    body = {"schema": schema,
+        spec, journal = te.spec(tool, index), sj.journal_path(str(root), index, tool)
+    body = {"schema": spec["launch"],
             "supervisor": {"pid": pid, "pgid": pid, "start_ticks": TICKS, "uid": os.getuid(),
                            "subreaper": 1},
+            "child": {"pid": pid + 1, "start_ticks": TICKS + 1},
             "boot_id": core["boot_id"],
             "core_identity_sha256": hashlib.sha256(core_bytes).hexdigest(),
-            "terminal_receipt": terminal}
+            "command": {"argv_sha256": "e" * 64,
+                        "executable": {"path": xf.PYTHON, "dev": 1, "ino": 2},
+                        "script": {"path": "/job/script.py", "dev": 1, "ino": 3,
+                                   "sha256": xf.SCRIPT_SHA}},
+            spec["journal_key"]: journal,
+            "terminal_receipt": terminal,
+            "deadline": {"monotonic_ns": 10 ** 12, "teardown_budget_ns": ee.TEARDOWN_BUDGET_NS,
+                         "boot_id": core["boot_id"]},
+            "launched_utc_ns": 1, "monotonic_ns": 1}
     if tool is not None:
         body["tool"] = {"name": tool, "stage_index": index}
     if change:
@@ -331,3 +342,49 @@ def test_the_wait_covers_the_supervisors_own_teardown():
     # honours TERM writes its terminal receipt inside the wait.
     assert sup.EXIT_WAIT_SECONDS == 20.0
     assert sup.EXIT_WAIT_SECONDS * 1e9 > ee.TEARDOWN_BUDGET_NS == 16 * 10 ** 9
+
+
+
+# --- P4-BIND-R1 / P4-OWNER-R2 (Codex be819eff): exact identity before any pidfd ----------
+
+def test_the_fixture_is_the_verifiers_exact_schema(job):
+    for tool, index, spec in ((None, None, ee.ENTRYPOINT),
+                              ("database-create", 0, te.spec("database-create", 0))):
+        launch, _ = receipt(job, tool, index)
+        ee._check_launch_schema(json.loads(launch.read_text()), spec)     # no refusal
+
+
+@pytest.mark.parametrize("tool,index,change", [
+    ("database-create", 0, lambda r: r["tool"].update(stage_index=False)),
+    ("database-create", 0, lambda r: r["tool"].update(stage_index=0.0)),
+    (None, None, lambda r: r.pop("child")),
+    (None, None, lambda r: r["supervisor"].update(pgid=float(r["supervisor"]["pid"]))),
+    (None, None, lambda r: r["supervisor"].update(subreaper=0)),
+    (None, None, lambda r: r["supervisor"].update(start_ticks=float(TICKS))),
+    (None, None, lambda r: r.update(extra=1)),
+    (None, None, lambda r: r.pop("deadline")),
+])
+def test_an_inexact_receipt_never_reaches_a_signal(job, capsys, live, tool, index, change):
+    # Codex's reproductions: each reached the (fake) SIGTERM at 74c618e0.
+    receipt(job, tool, index, change=change)
+    argv = ENTRY(job) if tool is None else TOOL(job)
+    assert run(argv, capsys) == (2, {"outcome": "UNPROVEN", "signalled": False,
+                                     "reason": "receipt_not_bound"})
+    assert live["signals"] == [] and live["fds"] == []
+
+
+def test_a_receipt_of_another_owner_never_reaches_a_signal(job, capsys, live):
+    # The live generation agrees with the receipt's foreign uid: only the
+    # independent owner check (this helper's uid) refuses.
+    receipt(job, change=lambda r: r["supervisor"].update(uid=os.getuid() + 1))
+    live["generation"] = (TICKS, os.getuid() + 1)
+    assert run(ENTRY(job), capsys)[1] == {"outcome": "UNPROVEN", "signalled": False,
+                                          "reason": "receipt_not_bound"}
+    assert live["signals"] == [] and live["fds"] == []
+
+
+def test_a_duplicate_member_receipt_is_unreadable(job, capsys, no_pidfd):
+    launch, _ = receipt(job)
+    text = launch.read_text()
+    launch.write_text(text[:-1] + ', "monotonic_ns": 2}')
+    assert run(ENTRY(job), capsys)[1]["reason"] == "receipt_unreadable"

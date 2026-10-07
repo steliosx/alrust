@@ -280,16 +280,26 @@ wrong process, so every check exists to refuse to signal, not to produce
 evidence.
 
 - Invocation: `stop-supervisor.py --job-root J --entrypoint`, or `--job-root
-  J --tool NAME --stage-index N` (NAME in `HOLDER_TOOLS`, N in 0..99). The
-  workflow runs it unconditionally before each exit stage; on a supervisor
-  that has already ended it is a no-op.
+  J --tool NAME --stage-index N` (NAME in `HOLDER_TOOLS`, N in 0..99).
+  Standalone source: no workflow runs it yet (P4-DOC-N1). The proposed
+  integration, for a later workflow head, is to run it unconditionally
+  before each exit stage; on a supervisor that has already ended it is a
+  no-op.
 - Binding. No caller-supplied receipt digest exists for `P_E` or `P_T`;
   unlike the reference launcher, they print no ready line. The helper
   therefore uses:
   - the private job root (uid-owned, no group or other bits, no symlink);
   - the fixed launch-receipt path of the selected tree;
-  - the exact launch schema, plus, for a tool, the receipt's tool binding
-    equal to NAME and N;
+  - the verifier's own exact, type-sensitive launch schema
+    (`entrypoint_exit._check_launch_schema` with `ENTRYPOINT` or
+    `tool_exit.spec(NAME, N)`), so a bool or float stage index, a missing
+    child, a float pgid or an extra key refuses (P4-BIND-R1). The receipt
+    is parsed with `strict_json`. For a tool, the binding must equal NAME
+    and N;
+  - the supervisor's `pgid` equal to its `pid`, `subreaper` 1, and `uid`
+    equal to the helper's own uid, which is the private job root's owner.
+    This is checked before any pidfd; the live generation must then agree
+    (P4-OWNER-R2);
   - the receipt's terminal path equal to the fixed one;
   - its `core_identity_sha256` equal to the digest of the core read now,
     validated for J;
