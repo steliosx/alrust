@@ -1,0 +1,253 @@
+# Executing workflow, slice S0 (no launch): conformance/executing-workflow-design.md
+# sections 2-5 and 11. Dispatch only: publishing this file runs nothing. Every
+# dispatch needs its own signed admission (the hosted free allowance only; no
+# self-hosted runner, VM or paid change).
+#
+# S0 creates and drops a real database under the tool supervisor and ends with
+# the finalizer's expected NOT_FINALIZED report. It is an infrastructure
+# expected-failure qualification, never reference conformance: no reference
+# server, entrypoint or profile runs. The core pins the reviewed refusal
+# entrypoint (conformance/scripts/refuse-entrypoint.py), which S0 never executes.
+#
+# Every pin below is a literal fixed by this file's reviewed commit
+# (tests/unit/test_executing_workflow.py binds each to the committed bytes).
+name: executing
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: executing-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # The pinned interpreter: the runner's system CPython 3.12, by path.
+  PY: /usr/bin/python3
+  PROFILE: s0-no-launch
+
+jobs:
+  s0:
+    name: S0 no-launch (database create, exit, drop; expected NOT_FINALIZED)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: alerta
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      # --- before J: these steps' timeouts sum to at most 5 minutes ----------------
+      - uses: actions/checkout@v4
+        timeout-minutes: 2
+        with:
+          submodules: true
+      - name: Preconditions (refuse before any allocation)
+        id: preconditions
+        timeout-minutes: 1
+        env:
+          CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          [[ $("$PY" -c 'import sys; print("%d.%d" % sys.version_info[:2])') == 3.12 ]] \
+            || { echo "S0 refused: $PY is not CPython 3.12" >&2; exit 1; }
+          command -v psql >/dev/null || { echo "S0 refused: psql missing" >&2; exit 1; }
+          [[ $(command -v psql) == /usr/bin/psql ]] || { echo "S0 refused: psql is not /usr/bin/psql" >&2; exit 1; }
+          [[ -x /usr/bin/docker ]] || { echo "S0 refused: /usr/bin/docker missing" >&2; exit 1; }
+          [[ $CONTAINER_ID =~ ^[0-9a-f]{12,64}$ ]] || { echo "S0 refused: no service container id" >&2; exit 1; }
+          /usr/bin/docker inspect --format '{{.State.Running}}' "$CONTAINER_ID" | grep -qx true \
+            || { echo "S0 refused: the PostgreSQL service is not running" >&2; exit 1; }
+          echo "container_id=$CONTAINER_ID" >> "$GITHUB_OUTPUT"
+      - name: Private job root and output directory
+        id: root
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          job="$RUNNER_TEMP/alrust-exec"
+          out="$RUNNER_TEMP/alrust-exec-out"
+          mkdir -m 700 -- "$job"
+          mkdir -m 700 -- "$out"
+          echo "job=$job" >> "$GITHUB_OUTPUT"
+          echo "out=$out" >> "$GITHUB_OUTPUT"
+      - name: Core identity (/3, pins as literals)
+        id: core
+        timeout-minutes: 1
+        env:
+          JOB: ${{ steps.root.outputs.job }}
+          OUT: ${{ steps.root.outputs.out }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/conformance"
+          env -i PATH=/usr/bin:/bin LANG=C.UTF-8 \
+            GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GITHUB_RUN_ID="$GITHUB_RUN_ID" \
+            GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" GITHUB_JOB="$GITHUB_JOB" \
+            ImageOS="$ImageOS" ImageVersion="$ImageVersion" \
+            "$PY" -S -B -m alrust_conformance.stage_journal core \
+              --repo-root "$GITHUB_WORKSPACE" --job-root "$JOB" --profile "$PROFILE" \
+              --event-head-sha "$GITHUB_SHA" \
+              --reference-pin f4312727783dad64198b62ed778bbca98a5144a3 \
+              --manifest-pin b50ab8fc325416b4e91e8bed5da28c42845d8910f86264c6517cac27dfb1c113 \
+              --lock-pin .github/reference-build.lock=9a53097d8a784fc0488dca98e1d2548eae2e9c5f6def3054e560b8d29d5e8b77 \
+              --lock-pin .github/reference-requirements.lock=85529018051d4bb1beba6b15577c79045cd0f524c0d1ae2d5e9ce5845f1385fb \
+              --lock-pin conformance/requirements.lock=3c79186493fd22e01e3256c9a35b3e49f56f224112f7bccbdaff1dbc696b73d1 \
+              --supervisor-pin conformance/scripts/entrypoint-supervisor.py=1b6cf71be6a59035ea1d2e5e54538306295fe0b50e11731fbcbdc30bc3df49e6 \
+              --entrypoint-script-pin conformance/scripts/refuse-entrypoint.py=671df977f5c77ff1559d4a8c19868a11deed6da440a63384cbab60d319a31863 \
+              --interpreter /usr/bin/python3 \
+              --tool-pin database-create=conformance/scripts/stage-tool.py=3befb99611f1300ba1a07604614173e687a05dfa4f2b1952d42b5698a41c6f9f \
+              --tool-pin registry=conformance/scripts/stage-tool.py=3befb99611f1300ba1a07604614173e687a05dfa4f2b1952d42b5698a41c6f9f \
+            | tee "$OUT/core.out"
+          core=$(jq -r 'select(.status == "WRITTEN") | .sha256' "$OUT/core.out")
+          [[ $core =~ ^[0-9a-f]{64}$ ]] || { echo "core not written" >&2; exit 1; }
+          mkdir -m 700 -- "$JOB/journal"
+          echo "sha256=$core" >> "$GITHUB_OUTPUT"
+      # --- J, fixed once; its original digest is carried to every reader (DL-J-R1) --
+      - name: Fix the job deadline J and check the S0 plan fits
+        id: deadline
+        timeout-minutes: 1
+        env:
+          JOB: ${{ steps.root.outputs.job }}
+          OUT: ${{ steps.root.outputs.out }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/conformance"
+          env -i PATH=/usr/bin:/bin LANG=C.UTF-8 "$PY" -S -B -m alrust_conformance.deadlines \
+            fix --job-root "$JOB" | tee "$OUT/deadline-fix.out"
+          sha=$(jq -r '.job_deadline_sha256 // empty' "$OUT/deadline-fix.out")
+          [[ $sha =~ ^[0-9a-f]{64}$ ]] || { echo "J not fixed" >&2; exit 1; }
+          env -i PATH=/usr/bin:/bin LANG=C.UTF-8 "$PY" -S -B -m alrust_conformance.deadlines \
+            plan-s0 --job-root "$JOB" --job-deadline-sha256 "$sha" | tee "$OUT/plan.out"
+          jq -e '.fits == true' "$OUT/plan.out" >/dev/null
+          echo "job_deadline_sha256=$sha" >> "$GITHUB_OUTPUT"
+      - name: Expected pins (the same literals)
+        timeout-minutes: 1
+        env:
+          OUT: ${{ steps.root.outputs.out }}
+        run: |
+          set -euo pipefail
+          umask 077
+          cat > "$OUT/expected-pins.json" <<'PINS'
+          {"entrypoint": {"entrypoint_script_sha256": "671df977f5c77ff1559d4a8c19868a11deed6da440a63384cbab60d319a31863", "interpreter_path": "/usr/bin/python3"}, "tools": {"database-create": {"driver_sha256": "3befb99611f1300ba1a07604614173e687a05dfa4f2b1952d42b5698a41c6f9f", "interpreter_path": "/usr/bin/python3"}, "registry": {"driver_sha256": "3befb99611f1300ba1a07604614173e687a05dfa4f2b1952d42b5698a41c6f9f", "interpreter_path": "/usr/bin/python3"}}}
+          PINS
+      # --- index 0: database-create under its tool supervisor P_T ------------------
+      - name: database-create (stage 0) under P_T
+        id: create
+        timeout-minutes: 3
+        env:
+          JOB: ${{ steps.root.outputs.job }}
+          OUT: ${{ steps.root.outputs.out }}
+          CORE: ${{ steps.core.outputs.sha256 }}
+          JSHA: ${{ steps.deadline.outputs.job_deadline_sha256 }}
+          CONTAINER_ID: ${{ steps.preconditions.outputs.container_id }}
+        run: |
+          set -euo pipefail
+          w="$GITHUB_WORKSPACE/conformance"
+          cd "$w"
+          env -i PATH=/usr/bin:/bin LANG=C.UTF-8 "$PY" -S -B -m alrust_conformance.deadlines \
+            tool-launch --job-root "$JOB" --job-deadline-sha256 "$JSHA" | tee "$OUT/create-deadline.out"
+          d=$(jq -r '.deadline_monotonic_ns // empty' "$OUT/create-deadline.out")
+          dc=$(jq -r '.child_deadline_monotonic_ns // empty' "$OUT/create-deadline.out")
+          [[ $d =~ ^[0-9]+$ && $dc =~ ^[0-9]+$ ]] || { echo "no create deadline" >&2; exit 1; }
+          echo "attempted=1" >> "$GITHUB_OUTPUT"
+          env -i PATH=/usr/bin:/bin LANG=C.UTF-8 /usr/bin/setsid --wait "$PY" -I -S -B \
+            "$w/scripts/entrypoint-supervisor.py" \
+            --receipt "$JOB/tools/00-database-create/launch.json" \
+            --terminal "$JOB/tools/00-database-create/terminal.json" \
+            --core "$JOB/core-identity.json" --core-sha256 "$CORE" \
+            --script "$w/scripts/stage-tool.py" \
+            --entrypoint-journal "$JOB/journal/00-database-create.jsonl" \
+            --deadline-monotonic-ns "$d" --tool database-create --stage-index 0 -- \
+            "$PY" -I -S -B "$w/scripts/stage-tool.py" database-create \
+              --job-root "$JOB" --port 5432 --superuser postgres \
+              --public-superuser-password postgres --container-id "$CONTAINER_ID" \
+              --psql /usr/bin/psql --docker /usr/bin/docker --deadline-monotonic-ns "$dc" \
+            | tee "$OUT/create.out"
+      # --- index 1: database-create-exit (always, once create was attempted) -------
+      - name: Stop the tool supervisor if still live (P4), then database-create-exit (stage 1)
+        id: create_exit
+        if: always() && steps.create.outputs.attempted == '1'
+        timeout-minutes: 3
+        env:
+          JOB: ${{ steps.root.outputs.job }}
+          OUT: ${{ steps.root.outputs.out }}
+        run: |
+          set -uo pipefail
+          w="$GITHUB_WORKSPACE/conformance"
+          # P4: a no-op when P_T has already ended; it proves nothing, so its exit
+          # is recorded, and the exit verifier below decides from the receipts.
+          env -i PATH=/usr/bin:/bin LANG=C.UTF-8 "$PY" -I -S -B "$w/scripts/stop-supervisor.py" \
+            --job-root "$JOB" --tool database-create --stage-index 0 | tee "$OUT/stop-supervisor.out"
+          echo "stop-supervisor exit ${PIPESTATUS[0]}" | tee "$OUT/stop-supervisor.rc"
+          set -e
+          env -i PATH=/usr/bin:/bin LANG=C.UTF-8 "$PY" -I -S -B "$w/scripts/run-stage.py" tool-exit \
+            --job-root "$JOB" --prefix database-create --tool database-create \
+            --expected-pins "$OUT/expected-pins.json" | tee "$OUT/create-exit.out"
+      # --- index 2: database-drop (no_launch_quiescence) -----------------------------
+      - name: database-drop (stage 2)
+        id: drop
+        if: always() && steps.create.outputs.attempted == '1'
+        timeout-minutes: 3
+        env:
+          JOB: ${{ steps.root.outputs.job }}
+          OUT: ${{ steps.root.outputs.out }}
+          JSHA: ${{ steps.deadline.outputs.job_deadline_sha256 }}
+        run: |
+          set -euo pipefail
+          w="$GITHUB_WORKSPACE/conformance"
+          cd "$w"
+          env -i PATH=/usr/bin:/bin LANG=C.UTF-8 "$PY" -S -B -m alrust_conformance.deadlines \
+            cleanup --job-root "$JOB" --job-deadline-sha256 "$JSHA" --step database-drop \
+            | tee "$OUT/drop-deadline.out"
+          d=$(jq -r '.deadline_monotonic_ns // empty' "$OUT/drop-deadline.out")
+          [[ $d =~ ^[0-9]+$ ]] || { echo "no drop deadline" >&2; exit 1; }
+          env -i PATH=/usr/bin:/bin LANG=C.UTF-8 "$PY" -I -S -B "$w/scripts/run-stage.py" database-drop \
+            --job-root "$JOB" --prefix database-create,database-create-exit --port 5432 \
+            --superuser postgres --public-superuser-password postgres --psql /usr/bin/psql \
+            --deadline-monotonic-ns "$d" --expected-pins "$OUT/expected-pins.json" \
+            | tee "$OUT/drop.out"
+      # --- finalizer: NOT_FINALIZED by construction (no launch receipt) ---------------
+      - name: Finalizer (expected NOT_FINALIZED, failure record NONE)
+        if: always() && steps.create.outputs.attempted == '1'
+        timeout-minutes: 2
+        env:
+          JOB: ${{ steps.root.outputs.job }}
+          OUT: ${{ steps.root.outputs.out }}
+        run: |
+          set -uo pipefail
+          w="$GITHUB_WORKSPACE/conformance"
+          env -i PATH=/usr/bin:/bin LANG=C.UTF-8 "$PY" -I -S -B "$w/scripts/finalize-job.py" \
+            --job-root "$JOB" --stages database-create,database-create-exit,database-drop \
+            --expected-pins "$OUT/expected-pins.json" > "$OUT/finalize.out"
+          rc=$?
+          cat "$OUT/finalize.out"
+          echo "finalize-job exit $rc"
+          echo "$rc" > "$OUT/finalize.rc"
+      # --- S0 verdict: the exact expected lines, never a zero exit alone -------------
+      - name: S0 verdict (infrastructure expected-failure qualification)
+        if: always()
+        timeout-minutes: 1
+        env:
+          OUT: ${{ steps.root.outputs.out }}
+        run: |
+          set -uo pipefail
+          ok=1
+          grep -qx '{"result": "COMPLETE", "tool": "database-create"}' "$OUT/create.out" 2>/dev/null || ok=0
+          grep -qx '{"result": "COMPLETE", "stage": "tool-exit"}' "$OUT/create-exit.out" 2>/dev/null || ok=0
+          grep -qx '{"result": "COMPLETE", "stage": "database-drop"}' "$OUT/drop.out" 2>/dev/null || ok=0
+          grep -qx '{"cleanup": "UNPROVEN", "failure_record": "NONE", "outcome": "NOT_FINALIZED", "reason": "entrypoint_stage_missing"}' "$OUT/finalize.out" 2>/dev/null || ok=0
+          [[ $(cat "$OUT/finalize.rc" 2>/dev/null) == 2 ]] || ok=0
+          if [[ $ok == 1 ]]; then
+            echo "S0 COMPLETE: tool exit COMPLETE, drop COMPLETE, finalizer NOT_FINALIZED/NONE (expected). No conformance credit."
+          else
+            echo "S0 NOT COMPLETE: see the step lines above" >&2
+            exit 1
+          fi
