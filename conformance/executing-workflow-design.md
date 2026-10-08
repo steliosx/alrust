@@ -274,7 +274,7 @@ runtime qualification of it.
 | Slice | Stages (indices) | Terminal outcome when everything works | What it qualifies | Not established |
 |---|---|---|---|---|
 | S0, no launch | core; `database-create` (0) under `P_T`; `database-create-exit` (1); `database-drop` (2, `no_launch_quiescence`); `finalize-job.py` | tool exit `COMPLETE` (`ECHILD`); drop `COMPLETE`; finalize-job line exactly `{"cleanup": "UNPROVEN", "failure_record": "NONE", "outcome": "NOT_FINALIZED", "reason": "entrypoint_stage_missing"}` (no launch receipt, so no failure record) | the core with pins as literals; `P_T` and `stage-tool.py` against the real PostgreSQL service; `stop-supervisor.py --tool`; the W2 exit and drop CLIs; W3's core-derived names; the deadlines module | any reference launch; the entrypoint; the finalizer's sealing path (S0 never reaches it); removal of the job root (runner discard only) |
-| S1, A2 | S0's 0–1; `launch` (2); `launch-confirm` (3); `entrypoint` (4) under `P_E` with a pinned refusal entrypoint; `entrypoint-exit` (5); `stop` (6); `database-drop` (7, `failed_entrypoint_quiescence`); `finalize-job.py` | entrypoint-exit `COMPLETE` with execution `FAIL` (F1 or F2); stop `COMPLETE/tree_empty`; drop `COMPLETE`; finalize-job `NOT_FINALIZED` with failure record `WRITTEN` | the whole reference launch, confirmation, stop and cleanup chain with real journals and receipts; the A2 gate; the failure record | any conformance result (the entrypoint runs no test) |
+| S1, A2 | S0's 0–1; `launch` (2); `launch-confirm` (3); `entrypoint` (4) under `P_E` with a pinned refusal entrypoint; `entrypoint-exit` (5); `stop` (6); `database-drop` (7, `failed_entrypoint_quiescence`); `finalize-job.py` | entrypoint-exit `COMPLETE` with execution `FAIL`, intended as F1 (index 4 closed FAILED; F2 is a distinguished fault path, not the plan); stop `COMPLETE/tree_empty`; drop `COMPLETE`; finalize-job `NOT_FINALIZED` with failure record `WRITTEN` | the whole reference launch, confirmation, stop and cleanup chain with real journals and receipts; the A2 gate; the failure record | any conformance result (the entrypoint runs no test) |
 | S2, one profile | S1 with the composed entrypoint (E3) and that profile enabled (E4); `registry` (7); `registry-exit` (8); `database-drop` (9); finalizer to `SEALED` | profile result from the entrypoint; finalize `SEALED` with cleanup `COMPLETE` | actual reference conformance for that profile | the other profiles; any Alrust server |
 
 The S0 success criterion is that exact set of verdicts and line, not a
@@ -302,5 +302,8 @@ child's deadline D − 5 s, so it closes its journal before its supervisor
 tears down at D; step timeouts ceil((D − now + B + 30 s) / 60 s); the plan
 fit before allocation; and J fixed once, after the core, as now + 25
 minutes (the 30-minute job less 5 minutes for the earlier steps), bound to
-the core's sha256 and boot. E1a's helper stays the entrypoint's
+the core's sha256 and boot. The producing step returns the J file's full
+sha256; the workflow carries it as a step output to every reader, which
+refuses `job_deadline_changed` before parsing if the file's bytes differ
+(DL-J-R1), as the prefix digests are carried for E1c (E1C-N2). E1a's helper stays the entrypoint's
 work-phase deadline only.
