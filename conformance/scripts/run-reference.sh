@@ -15,6 +15,10 @@
 #                    inside it, nothing is written to the checkout, and the
 #                    built server is launched by launch-reference.py under
 #                    reference-supervisor.py instead of the group launch below.
+#                    Both are the scaffold-only copies frozen from main e3dee31b
+#                    in conformance/scaffold-scripts/ (owner decision, option 3
+#                    of STACK-SCAFFOLD-R1); conformance/scripts/ holds the
+#                    strict staged launcher, which this scaffold never calls.
 #
 # Readiness is bound to the server this script launched (as in the reviewed
 # AX64-V3-E2 smoke): the port must be observably free before launch; the
@@ -121,7 +125,7 @@ if [[ -n ${JOB_ROOT:-} ]]; then
   # Every refusal that does not need the built venv happens here, before
   # the build, with the launcher's own checks (job root, HOME, venv path,
   # environment allowlist, /etc/alertad.conf, port, an earlier launch).
-  "$py" -I -S -B "$root/conformance/scripts/launch-reference.py" --preflight \
+  "$py" -I -S -B "$root/conformance/scaffold-scripts/launch-reference.py" --preflight \
     --job-root "$JOB_ROOT" --venv "$VENV" --port "$PORT" --ready-timeout "$READY_TIMEOUT" \
     || { echo "run-reference: supervised-mode preflight refused; nothing was built" >&2; exit 1; }
 fi
@@ -157,7 +161,7 @@ export SECRET_KEY="${SECRET_KEY:-conformance-not-secret}"
 if [[ -n ${JOB_ROOT:-} ]]; then
   # Supervised mode: the launcher owns launch, readiness, receipt custody and
   # cleanup; nothing below runs.
-  exec "$py" -I -S -B "$root/conformance/scripts/launch-reference.py" \
+  exec "$py" -I -S -B "$root/conformance/scaffold-scripts/launch-reference.py" \
     --job-root "$JOB_ROOT" --venv "$venv" --port "$PORT" --ready-timeout "$READY_TIMEOUT"
 fi
 

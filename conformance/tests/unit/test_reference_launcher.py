@@ -660,10 +660,14 @@ def fake_checkout(tmp_path):
     run offline: a stub reference tree and a stub pg_config."""
     repo = tmp_path / "shrepo"
     (repo / "conformance" / "scripts").mkdir(parents=True)
+    (repo / "conformance" / "scaffold-scripts").mkdir(parents=True)
     (repo / "reference" / "alerta").mkdir(parents=True)
     (repo / "reference" / "alerta" / "setup.py").write_text("")
-    for name in ("run-reference.sh", "launch-reference.py"):
-        shutil.copy(SCRIPTS / name, repo / "conformance" / "scripts" / name)
+    shutil.copy(SCRIPTS / "run-reference.sh", repo / "conformance" / "scripts" / "run-reference.sh")
+    # run-reference.sh calls the scaffold-only launcher (STACK-SCAFFOLD-R1,
+    # option 3), not the strict staged one in conformance/scripts/.
+    shutil.copy(SCRIPTS.parent / "scaffold-scripts" / "launch-reference.py",
+                repo / "conformance" / "scaffold-scripts" / "launch-reference.py")
     tools = tmp_path / "tools"
     tools.mkdir()
     (tools / "pg_config").write_text("#!/bin/sh\nexit 0\n")
