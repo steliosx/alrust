@@ -11,6 +11,11 @@
 #
 # Every pin below is a literal fixed by this file's reviewed commit
 # (tests/unit/test_executing_workflow.py binds each to the committed bytes).
+#
+# Custody (W5b; DECISIONS Y24): after the finalizer, the credential-bearing
+# files are removed and their absence verified, then an exact allowlist of
+# non-credential originals is staged and uploaded as a 1-day artifact. The
+# job timeout leaves room for runner and service setup before J (S0PLAN-R2).
 name: executing
 
 on:
@@ -32,7 +37,11 @@ jobs:
   s0:
     name: S0 no-launch (database create, exit, drop; expected NOT_FINALIZED)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # J = clock capture + 25 min (deadlines.JOB_BUDGET_NS). The job timeout
+    # counts from job start, before runner and service setup, so it must exceed
+    # J's budget by the pre-J steps and a setup margin (SETUP_MARGIN_MINUTES in
+    # the control): 45 >= 25 + 6 + 10.
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:16
@@ -152,6 +161,11 @@ jobs:
           set -euo pipefail
           w="$GITHUB_WORKSPACE/conformance"
           cd "$w"
+          # S0PLAN-N1: the stop helper's literal digest is also checked before
+          # anything is allocated; a mismatch stops here, before attempted=1.
+          env -i PATH=/usr/bin:/bin LANG=C.UTF-8 "$PY" -I -S -B "$w/scripts/check-pin.py" \
+            "$w/scripts/stop-supervisor.py" 015381b0d0aad5cea9e4496b034557d8d244dcfb7cfda05fc96dc857980fa202 \
+            | tee "$OUT/create-pin.out"
           env -i PATH=/usr/bin:/bin LANG=C.UTF-8 "$PY" -S -B -m alrust_conformance.deadlines \
             tool-launch --job-root "$JOB" --job-deadline-sha256 "$JSHA" | tee "$OUT/create-deadline.out"
           d=$(jq -r '.deadline_monotonic_ns // empty' "$OUT/create-deadline.out")
@@ -240,6 +254,43 @@ jobs:
           cat "$OUT/finalize.out"
           echo "finalize-job exit $rc"
           echo "$rc" > "$OUT/finalize.rc"
+      # --- custody (Y24): dispose credentials, stage originals, upload ---------------
+      - name: Dispose of the credential-bearing files (verified absent)
+        if: always() && steps.create.outputs.attempted == '1'
+        timeout-minutes: 1
+        env:
+          JOB: ${{ steps.root.outputs.job }}
+          OUT: ${{ steps.root.outputs.out }}
+        run: |
+          set -uo pipefail
+          w="$GITHUB_WORKSPACE/conformance"
+          env -i PATH=/usr/bin:/bin LANG=C.UTF-8 "$PY" -I -S -B "$w/scripts/dispose-credentials.py" \
+            "$JOB" | tee "$OUT/dispose.out"
+      - name: Stage the original non-credential evidence
+        id: export
+        if: always() && steps.create.outputs.attempted == '1'
+        timeout-minutes: 1
+        env:
+          JOB: ${{ steps.root.outputs.job }}
+          OUT: ${{ steps.root.outputs.out }}
+        run: |
+          set -euo pipefail
+          w="$GITHUB_WORKSPACE/conformance"
+          staging="$RUNNER_TEMP/alrust-evidence"
+          env -i PATH=/usr/bin:/bin LANG=C.UTF-8 "$PY" -I -S -B "$w/scripts/export-evidence.py" \
+            "$JOB" "$OUT" "$staging" | tee "$OUT/export.out"
+          echo "staging=$staging" >> "$GITHUB_OUTPUT"
+      - name: Upload the evidence (1-day artifact, owner-chosen custody)
+        if: always() && steps.export.outcome == 'success'
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: s0-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.export.outputs.staging }}
+          retention-days: 1
+          if-no-files-found: error
+          overwrite: false
+          include-hidden-files: false
       # --- S0 verdict: the exact expected lines, never a zero exit alone -------------
       - name: S0 verdict (infrastructure expected-failure qualification)
         if: always()
@@ -254,8 +305,10 @@ jobs:
           grep -qx '{"result": "COMPLETE", "stage": "database-drop"}' "$OUT/drop.out" 2>/dev/null || ok=0
           grep -qx '{"cleanup": "UNPROVEN", "failure_record": "NONE", "outcome": "NOT_FINALIZED", "reason": "entrypoint_stage_missing"}' "$OUT/finalize.out" 2>/dev/null || ok=0
           [[ $(cat "$OUT/finalize.rc" 2>/dev/null) == 2 ]] || ok=0
+          grep -q '^{"other_entries": [0-9]*, "removed": {.*}, "result": "DISPOSED"}$' "$OUT/dispose.out" 2>/dev/null || ok=0
+          grep -q '^{"absent": \[.*\], "files": [0-9]*, "manifest_sha256": "[0-9a-f]\{64\}", "result": "STAGED"}$' "$OUT/export.out" 2>/dev/null || ok=0
           if [[ $ok == 1 ]]; then
-            echo "S0 COMPLETE: tool exit COMPLETE, drop COMPLETE, finalizer NOT_FINALIZED/NONE (expected). No conformance credit."
+            echo "S0 COMPLETE: tool exit COMPLETE, drop COMPLETE, finalizer NOT_FINALIZED/NONE (expected), credentials DISPOSED, evidence STAGED. No conformance credit."
           else
             echo "S0 NOT COMPLETE: see the step lines above" >&2
             exit 1

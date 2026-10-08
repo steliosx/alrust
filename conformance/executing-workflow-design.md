@@ -229,6 +229,27 @@ first execution under its own signed admission and window, existing
 hosted minutes (no new or paid CI), no artifact upload until the
 finalizer's scan and manifest are themselves reviewed for upload.
 
+*W5b (2026-10-08), for S0 only, DECISIONS Y24:* the finalizer's own export
+stays as above, and its NOT_FINALIZED path still removes and exports
+nothing. Custody of S0's original evidence is a separate reviewed path,
+which runs after the finalizer whenever create was attempted:
+`dispose-credentials.py` removes the credential-bearing files under
+`$JOB_ROOT/database` (`url`, the `pgpass-*` passfiles, `psql-stderr-*`)
+and verifies their absence by a fresh listing; then `export-evidence.py`
+refuses if any credential name remains, copies an exact allowlist of
+non-credential originals (core, J, the three closed journals, the tool's
+launch and terminal receipts, the expected pins and every step's stdout
+record) into a private staging directory, and refuses the whole export on
+any credential marker. It prints an in-log manifest (name, bytes, sha256).
+The staging directory is uploaded as a 1-day artifact by
+`actions/upload-artifact`, pinned by commit, readable by the repository's
+collaborators (the same readers as the job log). Claude downloads it once
+into a private directory outside Git and the mailbox and checks it against
+the in-log manifest. S0 reports five proof states separately: the
+holder's tree end, the SQL name+OID absence, GitHub's service and network
+removal, the credential-file disposal, and runner discard of everything
+else.
+
 ## 9. Carried residuals and where they close
 
 | Residual (source) | Proposed close |
@@ -273,7 +294,7 @@ runtime qualification of it.
 
 | Slice | Stages (indices) | Terminal outcome when everything works | What it qualifies | Not established |
 |---|---|---|---|---|
-| S0, no launch | core; `database-create` (0) under `P_T`; `database-create-exit` (1); `database-drop` (2, `no_launch_quiescence`); `finalize-job.py` | tool exit `COMPLETE` (`ECHILD`); drop `COMPLETE`; finalize-job line exactly `{"cleanup": "UNPROVEN", "failure_record": "NONE", "outcome": "NOT_FINALIZED", "reason": "entrypoint_stage_missing"}` (no launch receipt, so no failure record) | the core with pins as literals; `P_T` and `stage-tool.py` against the real PostgreSQL service; `stop-supervisor.py --tool`; the W2 exit and drop CLIs; W3's core-derived names; the deadlines module | any reference launch; the entrypoint; the finalizer's sealing path (S0 never reaches it); removal of the job root (runner discard only) |
+| S0, no launch | core; `database-create` (0) under `P_T`; `database-create-exit` (1); `database-drop` (2, `no_launch_quiescence`); `finalize-job.py` | tool exit `COMPLETE` (`ECHILD`); drop `COMPLETE`; finalize-job line exactly `{"cleanup": "UNPROVEN", "failure_record": "NONE", "outcome": "NOT_FINALIZED", "reason": "entrypoint_stage_missing"}` (no launch receipt, so no failure record) | the core with pins as literals; `P_T` and `stage-tool.py` against the real PostgreSQL service; `stop-supervisor.py --tool`; the W2 exit and drop CLIs; W3's core-derived names; the deadlines module | any reference launch; the entrypoint; the finalizer's sealing path (S0 never reaches it); removal of the rest of the job root (runner discard only; the credential files are disposed of and verified by W5b) |
 | S1, A2 | S0's 0–1; `launch` (2); `launch-confirm` (3); `entrypoint` (4) under `P_E` with a pinned refusal entrypoint; `entrypoint-exit` (5); `stop` (6); `database-drop` (7, `failed_entrypoint_quiescence`); `finalize-job.py` | entrypoint-exit `COMPLETE` with execution `FAIL`, intended as F1 (index 4 closed FAILED; F2 is a distinguished fault path, not the plan); stop `COMPLETE/tree_empty`; drop `COMPLETE`; finalize-job `NOT_FINALIZED` with failure record `WRITTEN` | the whole reference launch, confirmation, stop and cleanup chain with real journals and receipts; the A2 gate; the failure record | any conformance result (the entrypoint runs no test) |
 | S2, one profile | S1 with the composed entrypoint (E3) and that profile enabled (E4); `registry` (7); `registry-exit` (8); `database-drop` (9); finalizer to `SEALED` | profile result from the entrypoint; finalize `SEALED` with cleanup `COMPLETE` | actual reference conformance for that profile | the other profiles; any Alrust server |
 
