@@ -26,7 +26,11 @@ read_job_deadline touch the job root.
 - A plan is admitted only if NOW + its work budget + R <= J, checked
   before anything is allocated.
 
-Refusals are DeadlineError with a fixed code; nothing is ever extended."""
+Refusals are DeadlineError with a fixed code; nothing is ever extended.
+
+The command line (python -m alrust_conformance.deadlines, W5a) is the only
+part that reads the clock: once per call, CLOCK_MONOTONIC via
+time.monotonic_ns(), the same clock the core and the journals record."""
 import hashlib
 import json
 import os
@@ -125,6 +129,21 @@ def child_deadline(now, deadline):
     return child
 
 
+def cleanup_deadline(now, job_deadline, step):
+    """D for a cleanup-phase step named STEP (one of CLEANUP_STEPS):
+    min(NOW + that step's maximum, J - the maxima of every step after it),
+    so the rest of the cleanup still fits before J. Refused if D would not
+    leave the teardown budget B. Never capped by C."""
+    _require(_ns(now) and _ns(job_deadline), "deadline_input_invalid")
+    names = [name for name, _ in CLEANUP_STEPS]
+    _require(step in names, "cleanup_step_invalid")
+    index = names.index(step)
+    remaining = sum(ns for _, ns in CLEANUP_STEPS[index + 1:])
+    deadline = min(now + CLEANUP_STEPS[index][1], job_deadline - remaining)
+    _require(deadline >= now + B_NS, "deadline_insufficient")
+    return deadline
+
+
 def step_timeout_minutes(now, deadline):
     """A step's timeout-minutes covering D, the teardown and a margin, from
     the same NOW: ceil((D - NOW + B + margin) / 60 s)."""
@@ -187,3 +206,69 @@ def _core(job_root):
     except (OSError, _sj.JournalError):
         raise DeadlineError("core_unavailable") from None
     return core_bytes, core
+
+
+# --- command line (W5a): one clock read per call, one JSON line out -----------------
+
+_USAGE = {"fix": ("--job-root",),
+          "plan-s0": ("--job-root", "--job-deadline-sha256"),
+          "tool-launch": ("--job-root", "--job-deadline-sha256"),
+          "cleanup": ("--job-root", "--job-deadline-sha256", "--step")}
+
+
+def _parse(argv):
+    if not argv or argv[0] not in _USAGE:
+        return None
+    names, rest = _USAGE[argv[0]], argv[1:]
+    if len(rest) != 2 * len(names) or sorted(rest[0::2]) != sorted(names):
+        return None
+    opts = dict(zip(rest[0::2], rest[1::2]))
+    root = opts["--job-root"]
+    if not (os.path.isabs(root) and os.path.normpath(root) == root):
+        return None
+    return argv[0], opts
+
+
+def main(argv, clock=None):
+    """Exit 0 with the values; 2 REFUSED with a fixed code; 64 usage."""
+    import sys
+    import time
+    clock = clock or time.monotonic_ns
+    parsed = _parse(argv)
+    if parsed is None:
+        line, code = {"result": "NOT_RUN", "reason": "usage"}, 64
+    else:
+        command, opts = parsed
+        try:
+            now = clock()
+            if command == "fix":
+                job_deadline, digest = write_job_deadline(opts["--job-root"], now)
+                line = {"job_deadline_monotonic_ns": job_deadline, "job_deadline_sha256": digest}
+            else:
+                job_deadline = read_job_deadline(opts["--job-root"],
+                                                 opts["--job-deadline-sha256"])
+                if command == "plan-s0":
+                    require_plan_fits(now, job_deadline, S0_WORK_NS)
+                    line = {"plan": "S0", "fits": True}
+                elif command == "tool-launch":
+                    deadline = tool_launch_deadline(now, job_deadline)
+                    line = {"deadline_monotonic_ns": deadline,
+                            "child_deadline_monotonic_ns": child_deadline(now, deadline),
+                            "step_timeout_minutes": step_timeout_minutes(now, deadline)}
+                else:
+                    deadline = cleanup_deadline(now, job_deadline, opts["--step"])
+                    line = {"deadline_monotonic_ns": deadline,
+                            "step_timeout_minutes": step_timeout_minutes(now, deadline)}
+            code = 0
+        except DeadlineError as error:
+            line, code = {"result": "REFUSED", "code": str(error)}, 2
+        except Exception:  # never a traceback or exception text
+            line, code = {"result": "UNKNOWN", "code": "deadline_error"}, 3
+    sys.stdout.write(json.dumps(line, sort_keys=True) + "\n")
+    sys.stdout.flush()
+    return code
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main(sys.argv[1:]))
