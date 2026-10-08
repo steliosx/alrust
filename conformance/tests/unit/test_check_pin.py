@@ -64,10 +64,21 @@ def test_a_helper_that_is_not_a_regular_file_is_refused(helper, capsys, tmp_path
         2, {"result": "REFUSED", "code": "pin_unreadable"})
 
 
-def test_a_helper_over_the_bound_is_refused(helper, capsys, monkeypatch):
-    path, digest = helper
-    monkeypatch.setattr(cp, "MAX_BYTES", len(HELPER) - 1)
-    assert run(capsys, [str(path), digest])[1]["code"] == "pin_unreadable"
+def test_a_file_over_the_one_mib_bound_is_refused(capsys, tmp_path):
+    # A real file one byte over MAX_BYTES (the bound is a default argument,
+    # fixed at definition, so it is exercised with real size, not patched).
+    path = tmp_path / "big.py"
+    data = b"#" * (cp.MAX_BYTES + 1)
+    path.write_bytes(data)
+    assert run(capsys, [str(path), hashlib.sha256(data).hexdigest()]) == (
+        2, {"result": "REFUSED", "code": "pin_unreadable"})
+
+
+def test_a_file_exactly_at_the_bound_is_read(capsys, tmp_path):
+    path = tmp_path / "edge.py"
+    data = b"#" * cp.MAX_BYTES
+    path.write_bytes(data)
+    assert run(capsys, [str(path), hashlib.sha256(data).hexdigest()]) == (0, {"result": "MATCH"})
 
 
 def test_short_reads_still_hash_the_complete_file(helper, capsys, monkeypatch):
