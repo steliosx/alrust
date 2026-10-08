@@ -40,7 +40,8 @@ def test_dispatch_only_read_only_never_cancelled():
     assert [line.strip() for line in on_block if line.strip()] == ["workflow_dispatch:"]
     assert "permissions:\n  contents: read\n" in TEXT
     assert "cancel-in-progress: false" in TEXT and "cancel-in-progress: true" not in TEXT
-    assert "runs-on: ubuntu-24.04" in TEXT and "self-hosted" not in TEXT
+    runs_on = [l.strip() for l in LINES if l.strip().startswith("runs-on:")]
+    assert runs_on == ["runs-on: ubuntu-24.04"]
 
 
 def test_every_file_pin_equals_the_committed_bytes():

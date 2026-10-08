@@ -249,7 +249,8 @@ def test_cleanup_deadline_leaves_the_later_steps_their_maxima():
     # database-drop: the finalizer (60 s) must still fit after it.
     early = J - 1000 * S
     assert dl.cleanup_deadline(early, J, "database-drop") == early + dl.DROP_NS
-    late = J - dl.DROP_NS - 10 * S
+    # late: now + 60 s would pass J - 60 s, and J - 60 s still leaves B.
+    late = J - 100 * S
     assert dl.cleanup_deadline(late, J, "database-drop") == J - dl.FINALIZER_NS
     # the finalizer is last: nothing after it.
     assert dl.cleanup_deadline(J - 30 * S, J, "finalizer") == J
