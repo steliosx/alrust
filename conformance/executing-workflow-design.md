@@ -232,7 +232,17 @@ finalizer's scan and manifest are themselves reviewed for upload.
 *W5b (2026-10-08), for S0 only, DECISIONS Y24:* the finalizer's own export
 stays as above, and its NOT_FINALIZED path still removes and exports
 nothing. Custody of S0's original evidence is a separate reviewed path,
-which runs after the finalizer whenever create was attempted:
+which runs after the finalizer whenever the job root exists. Both of its
+scripts gate themselves first (`alrust_conformance.custody`, W5B-R1/R2):
+when create was attempted, the closed create prefix, the core bound to it
+with the workflow's pins, and the database-create holder's exit proof
+recomputed COMPLETE (`tool_exit.holder_proofs`, as the drop's gate uses),
+with the opened database directory equal to the create stage's
+owned_resource record; when create was not attempted, proof that nothing
+was launched (no journal, tool receipt, database directory or launch
+evidence), in which case the core, J and the early step records are staged.
+An unproven holder refuses both scripts: nothing is removed or staged, and
+the files stay private and held. Then:
 `dispose-credentials.py` removes the credential-bearing files under
 `$JOB_ROOT/database` (`url`, the `pgpass-*` passfiles, `psql-stderr-*`)
 and verifies their absence by a fresh listing; then `export-evidence.py`

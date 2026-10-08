@@ -196,10 +196,17 @@ def test_the_stop_helper_pin_is_also_checked_before_any_allocation():
     assert "set -euo pipefail" in "\n".join(block)
 
 
-def test_custody_steps_follow_the_finalizer_and_precede_the_verdict():
+def test_custody_steps_run_whenever_the_job_root_exists_and_gate_themselves():
+    # W5B-R1/R2: both steps run after any failure once the job root exists;
+    # each script gates itself (attempted=1: holder proven with the pins;
+    # attempted=0: nothing launched).
     for prefix in ("Dispose of the credential-bearing files", "Stage the original non-credential evidence"):
         block = "\n".join(_step_block(prefix))
-        assert "if: always() && steps.create.outputs.attempted == '1'" in block
+        assert "if: always() && steps.root.outcome == 'success'" in block
+        assert "ATTEMPTED: ${{ steps.create.outputs.attempted }}" in block
+        assert 'gate=(--attempted 1 --expected-pins "$OUT/expected-pins.json")' in block
+        assert "else gate=(--attempted 0); fi" in block
+        assert '"${gate[@]}"' in block
     upload = "\n".join(_step_block("Upload the evidence"))
     assert "if: always() && steps.export.outcome == 'success'" in upload
 
@@ -216,7 +223,8 @@ def test_the_upload_action_is_pinned_and_short_lived():
 
 def test_the_verdict_requires_disposal_and_staging():
     verdict = "\n".join(_step_block("S0 verdict"))
-    assert '"result": "DISPOSED"' in verdict and '"result": "STAGED"' in verdict
+    assert '"holder": "PROVEN"' in verdict and '"result": "DISPOSED"' in verdict
+    assert '"result": "STAGED", "state": "HOLDER_PROVEN"' in verdict
 
 
 def test_the_export_allowlist_never_names_a_credential():

@@ -255,30 +255,40 @@ jobs:
           echo "finalize-job exit $rc"
           echo "$rc" > "$OUT/finalize.rc"
       # --- custody (Y24): dispose credentials, stage originals, upload ---------------
+      # Both custody steps run whenever the job root exists. Each script gates
+      # itself first (alrust_conformance.custody, W5B-R1/R2): attempted=1
+      # needs the create holder's exit proven now; attempted=0 needs proof that
+      # nothing was launched. A refused gate touches and stages nothing.
       - name: Dispose of the credential-bearing files (verified absent)
-        if: always() && steps.create.outputs.attempted == '1'
+        if: always() && steps.root.outcome == 'success'
         timeout-minutes: 1
         env:
           JOB: ${{ steps.root.outputs.job }}
           OUT: ${{ steps.root.outputs.out }}
+          ATTEMPTED: ${{ steps.create.outputs.attempted }}
         run: |
           set -uo pipefail
           w="$GITHUB_WORKSPACE/conformance"
+          if [[ ${ATTEMPTED:-} == 1 ]]; then gate=(--attempted 1 --expected-pins "$OUT/expected-pins.json")
+          else gate=(--attempted 0); fi
           env -i PATH=/usr/bin:/bin LANG=C.UTF-8 "$PY" -I -S -B "$w/scripts/dispose-credentials.py" \
-            "$JOB" | tee "$OUT/dispose.out"
+            "$JOB" "${gate[@]}" | tee "$OUT/dispose.out"
       - name: Stage the original non-credential evidence
         id: export
-        if: always() && steps.create.outputs.attempted == '1'
+        if: always() && steps.root.outcome == 'success'
         timeout-minutes: 1
         env:
           JOB: ${{ steps.root.outputs.job }}
           OUT: ${{ steps.root.outputs.out }}
+          ATTEMPTED: ${{ steps.create.outputs.attempted }}
         run: |
           set -euo pipefail
           w="$GITHUB_WORKSPACE/conformance"
           staging="$RUNNER_TEMP/alrust-evidence"
+          if [[ ${ATTEMPTED:-} == 1 ]]; then gate=(--attempted 1 --expected-pins "$OUT/expected-pins.json")
+          else gate=(--attempted 0); fi
           env -i PATH=/usr/bin:/bin LANG=C.UTF-8 "$PY" -I -S -B "$w/scripts/export-evidence.py" \
-            "$JOB" "$OUT" "$staging" | tee "$OUT/export.out"
+            "$JOB" "$OUT" "$staging" "${gate[@]}" | tee "$OUT/export.out"
           echo "staging=$staging" >> "$GITHUB_OUTPUT"
       - name: Upload the evidence (1-day artifact, owner-chosen custody)
         if: always() && steps.export.outcome == 'success'
@@ -305,10 +315,10 @@ jobs:
           grep -qx '{"result": "COMPLETE", "stage": "database-drop"}' "$OUT/drop.out" 2>/dev/null || ok=0
           grep -qx '{"cleanup": "UNPROVEN", "failure_record": "NONE", "outcome": "NOT_FINALIZED", "reason": "entrypoint_stage_missing"}' "$OUT/finalize.out" 2>/dev/null || ok=0
           [[ $(cat "$OUT/finalize.rc" 2>/dev/null) == 2 ]] || ok=0
-          grep -q '^{"other_entries": [0-9]*, "removed": {.*}, "result": "DISPOSED"}$' "$OUT/dispose.out" 2>/dev/null || ok=0
-          grep -q '^{"absent": \[.*\], "files": [0-9]*, "manifest_sha256": "[0-9a-f]\{64\}", "result": "STAGED"}$' "$OUT/export.out" 2>/dev/null || ok=0
+          grep -q '^{"holder": "PROVEN", "other_entries": [0-9]*, "removed": {.*}, "result": "DISPOSED"}$' "$OUT/dispose.out" 2>/dev/null || ok=0
+          grep -q '^{"absent": \[.*\], "files": [0-9]*, "manifest_sha256": "[0-9a-f]\{64\}", "result": "STAGED", "state": "HOLDER_PROVEN"}$' "$OUT/export.out" 2>/dev/null || ok=0
           if [[ $ok == 1 ]]; then
-            echo "S0 COMPLETE: tool exit COMPLETE, drop COMPLETE, finalizer NOT_FINALIZED/NONE (expected), credentials DISPOSED, evidence STAGED. No conformance credit."
+            echo "S0 COMPLETE: tool exit COMPLETE, drop COMPLETE, finalizer NOT_FINALIZED/NONE (expected), credentials DISPOSED (holder PROVEN), evidence STAGED. No conformance credit."
           else
             echo "S0 NOT COMPLETE: see the step lines above" >&2
             exit 1
