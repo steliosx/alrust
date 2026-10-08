@@ -241,3 +241,103 @@ def test_no_core_means_no_j(tmp_path):
     root.mkdir(mode=0o700)
     with pytest.raises(dl.DeadlineError, match="core_unavailable"):
         dl.write_job_deadline(str(root), 1)
+
+
+# --- the cleanup-phase deadline and the command line (W5a) ------------------------------
+
+def test_cleanup_deadline_leaves_the_later_steps_their_maxima():
+    # database-drop: the finalizer (60 s) must still fit after it.
+    early = J - 1000 * S
+    assert dl.cleanup_deadline(early, J, "database-drop") == early + dl.DROP_NS
+    late = J - dl.DROP_NS - 10 * S
+    assert dl.cleanup_deadline(late, J, "database-drop") == J - dl.FINALIZER_NS
+    # the finalizer is last: nothing after it.
+    assert dl.cleanup_deadline(J - 30 * S, J, "finalizer") == J
+
+
+def test_cleanup_deadline_is_never_capped_by_c():
+    now = C + 10 * S
+    assert dl.cleanup_deadline(now, J, "database-drop") == now + dl.DROP_NS
+
+
+@pytest.mark.parametrize("now,step,code", [
+    (J - dl.FINALIZER_NS - dl.B_NS + 1, "database-drop", "deadline_insufficient"),
+    (0, "launch", "cleanup_step_invalid"),
+    (True, "database-drop", "deadline_input_invalid"),
+])
+def test_cleanup_deadline_refusals(now, step, code):
+    with pytest.raises(dl.DeadlineError, match=code):
+        dl.cleanup_deadline(now, J, step)
+
+
+def _cli(capsys, argv, now):
+    code = dl.main(argv, clock=lambda: now)
+    return code, json.loads(capsys.readouterr().out)
+
+
+def test_cli_fix_then_every_reader_binds_the_original_digest(tmp_path, monkeypatch, capsys):
+    root, _ = _job(tmp_path, monkeypatch)
+    now = _captured(root) + 1
+    code, fixed = _cli(capsys, ["fix", "--job-root", str(root)], now)
+    assert code == 0 and fixed["job_deadline_monotonic_ns"] == now + dl.JOB_BUDGET_NS
+    digest = fixed["job_deadline_sha256"]
+    path = os.path.join(str(root), dl.JOB_DEADLINE_NAME)
+    assert digest == hashlib.sha256(open(path, "rb").read()).hexdigest()
+    args = ["--job-root", str(root), "--job-deadline-sha256", digest]
+    assert _cli(capsys, ["plan-s0"] + args, now + S) == (0, {"plan": "S0", "fits": True})
+    code, launch = _cli(capsys, ["tool-launch"] + args, now + S)
+    assert code == 0 and launch == {
+        "deadline_monotonic_ns": now + S + dl.STAGE_BUDGET_NS,
+        "child_deadline_monotonic_ns": now + S + dl.STAGE_BUDGET_NS - dl.CHILD_CLOSE_MARGIN_NS,
+        "step_timeout_minutes": 2}
+    code, drop = _cli(capsys, ["cleanup"] + args + ["--step", "database-drop"], now + 100 * S)
+    assert code == 0 and drop["deadline_monotonic_ns"] == now + 100 * S + dl.DROP_NS
+
+
+def test_cli_a_second_fix_is_refused(tmp_path, monkeypatch, capsys):
+    root, _ = _job(tmp_path, monkeypatch)
+    now = _captured(root) + 1
+    assert _cli(capsys, ["fix", "--job-root", str(root)], now)[0] == 0
+    assert _cli(capsys, ["fix", "--job-root", str(root)], now + 1) == (
+        2, {"result": "REFUSED", "code": "job_deadline_exists"})
+
+
+def test_cli_a_changed_j_is_refused_against_the_original_digest(tmp_path, monkeypatch, capsys):
+    root, _ = _job(tmp_path, monkeypatch)
+    now = _captured(root) + 1
+    _, fixed = _cli(capsys, ["fix", "--job-root", str(root)], now)
+    _rewrite(root, lambda r: r.update(job_deadline_monotonic_ns=r["job_deadline_monotonic_ns"]
+                                      + 3600 * S))
+    args = ["--job-root", str(root), "--job-deadline-sha256", fixed["job_deadline_sha256"]]
+    assert _cli(capsys, ["tool-launch"] + args, now + S) == (
+        2, {"result": "REFUSED", "code": "job_deadline_changed"})
+
+
+def test_cli_plan_and_launch_refuse_past_the_cutoff(tmp_path, monkeypatch, capsys):
+    root, _ = _job(tmp_path, monkeypatch)
+    now = _captured(root) + 1
+    _, fixed = _cli(capsys, ["fix", "--job-root", str(root)], now)
+    j = fixed["job_deadline_monotonic_ns"]
+    args = ["--job-root", str(root), "--job-deadline-sha256", fixed["job_deadline_sha256"]]
+    assert _cli(capsys, ["plan-s0"] + args, j - dl.CLEANUP_RESERVE_NS)[1] == {
+        "result": "REFUSED", "code": "plan_does_not_fit"}
+    assert _cli(capsys, ["tool-launch"] + args, j - dl.CLEANUP_RESERVE_NS)[1] == {
+        "result": "REFUSED", "code": "work_phase_over"}
+
+
+@pytest.mark.parametrize("argv", [
+    [], ["fix"], ["fix", "--job-root", "rel"], ["fix", "--job-root", "/j", "--job-root", "/j"],
+    ["tool-launch", "--job-root", "/j"], ["cleanup", "--job-root", "/j",
+                                          "--job-deadline-sha256", "0" * 64],
+    ["launch", "--job-root", "/j"],
+])
+def test_cli_usage(capsys, argv):
+    assert _cli(capsys, argv, 1) == (64, {"result": "NOT_RUN", "reason": "usage"})
+
+
+def test_cli_an_unexpected_error_is_a_fixed_unknown(capsys, monkeypatch, tmp_path):
+    def boom(*a):
+        raise RuntimeError("synthetic-diagnostic-value")
+    monkeypatch.setattr(dl, "write_job_deadline", boom)
+    code, line = _cli(capsys, ["fix", "--job-root", str(tmp_path)], 1)
+    assert (code, line) == (3, {"result": "UNKNOWN", "code": "deadline_error"})
