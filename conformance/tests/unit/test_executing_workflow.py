@@ -130,3 +130,25 @@ def test_the_verdict_checks_the_exact_expected_lines():
                  '"reason": "entrypoint_stage_missing"}'):
         assert "grep -qx '%s'" % line in TEXT, line
     assert '[[ $(cat "$OUT/finalize.rc" 2>/dev/null) == 2 ]]' in TEXT
+
+
+def test_the_stop_helper_is_pin_checked_before_it_runs():
+    # W5A-R1: the literal equals the committed bytes, the check precedes the
+    # P4 helper and the exit stage, and a mismatch exits before either.
+    [literal] = re.findall(r'scripts/stop-supervisor.py" ([0-9a-f]{64})', TEXT)
+    assert literal == _sha("conformance/scripts/stop-supervisor.py")
+    check = next(i for i, l in enumerate(LINES) if "scripts/check-pin.py" in l)
+    p4 = next(i for i, l in enumerate(LINES) if 'scripts/stop-supervisor.py" \\' in l
+              and "check-pin" not in l and i > check + 1)
+    exit_stage = next(i for i, l in enumerate(LINES) if "run-stage.py\" tool-exit" in l)
+    assert check < p4 < exit_stage
+    failure = LINES[check:p4]
+    assert any(l.strip() == "exit 1" for l in failure)
+    assert LINES[check].strip().startswith("if ! env -i PATH=/usr/bin:/bin LANG=C.UTF-8")
+
+
+def test_check_pin_is_a_standard_library_script():
+    text = (ROOT / "conformance" / "scripts" / "check-pin.py").read_text()
+    imports = set(re.findall(r"^import (\w+)", text, re.M))
+    assert imports <= {"hashlib", "json", "os", "re", "stat", "sys"}
+    assert "from " not in "\n".join(l for l in text.splitlines() if l.startswith("from "))

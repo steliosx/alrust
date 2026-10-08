@@ -182,6 +182,15 @@ jobs:
         run: |
           set -uo pipefail
           w="$GITHUB_WORKSPACE/conformance"
+          # W5A-R1: stop-supervisor.py is not in the core's pins; its literal
+          # digest is checked before it runs. A mismatch fails closed: no P4,
+          # no signal, no exit stage.
+          if ! env -i PATH=/usr/bin:/bin LANG=C.UTF-8 "$PY" -I -S -B "$w/scripts/check-pin.py" \
+              "$w/scripts/stop-supervisor.py" 015381b0d0aad5cea9e4496b034557d8d244dcfb7cfda05fc96dc857980fa202 \
+              | tee "$OUT/stop-supervisor-pin.out"; then
+            echo "stop-supervisor.py does not match its pinned digest; P4 and the exit stage not run" >&2
+            exit 1
+          fi
           # P4: a no-op when P_T has already ended; it proves nothing, so its exit
           # is recorded, and the exit verifier below decides from the receipts.
           env -i PATH=/usr/bin:/bin LANG=C.UTF-8 "$PY" -I -S -B "$w/scripts/stop-supervisor.py" \
