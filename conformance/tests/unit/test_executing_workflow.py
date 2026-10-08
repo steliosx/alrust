@@ -137,8 +137,9 @@ def test_the_verdict_checks_the_exact_expected_lines():
 def test_the_stop_helper_is_pin_checked_before_it_runs():
     # W5A-R1: the literal equals the committed bytes, the check precedes the
     # P4 helper and the exit stage, and a mismatch exits before either.
-    [literal] = re.findall(r'scripts/stop-supervisor.py" ([0-9a-f]{64})', TEXT)
-    assert literal == _sha("conformance/scripts/stop-supervisor.py")
+    # Two checks since W5b (S0PLAN-N1): before allocation, and again here.
+    literals = re.findall(r'scripts/stop-supervisor.py" ([0-9a-f]{64})', TEXT)
+    assert literals == [_sha("conformance/scripts/stop-supervisor.py")] * 2
     check = next(i for i, l in enumerate(LINES)
                  if "scripts/check-pin.py" in l and l.strip().startswith("if !"))
     p4 = next(i for i, l in enumerate(LINES) if 'scripts/stop-supervisor.py" \\' in l
@@ -187,7 +188,8 @@ def test_the_stop_helper_pin_is_also_checked_before_any_allocation():
     block = _step_block("database-create (stage 0)")
     pin = next(i for i, l in enumerate(block) if "scripts/check-pin.py" in l)
     launch = next(i for i, l in enumerate(block) if "tool-launch" in l)
-    attempted = next(i for i, l in enumerate(block) if "attempted=1" in l)
+    attempted = next(i for i, l in enumerate(block)
+                     if l.strip() == 'echo "attempted=1" >> "$GITHUB_OUTPUT"')
     supervisor = next(i for i, l in enumerate(block) if "entrypoint-supervisor.py" in l)
     assert pin < launch < attempted < supervisor
     assert _sha("conformance/scripts/stop-supervisor.py") in block[pin + 1]
