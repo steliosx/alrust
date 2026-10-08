@@ -60,7 +60,7 @@ The scaffold, extracted specifications and conformance tooling are merged.
 | Supervised reference process | [PR #88](https://github.com/steliosx/alrust/pull/88) integrates the supervisor/launcher into hosted CI. The reference job observes a healthy Python server, then verifies `tree_empty / COMPLETE` and no remaining listener after shutdown. | This is reference bootstrap and cleanup evidence, not an implemented Alrust server or full-suite conformance. |
 | Profile inventory and entrypoint | All **19 profiles return `NOT_RUN`**, with execution disabled, in the current preflight job. | A green preflight gives no Phase 0 execution credit. Each enabling head and the complete reference suite still need qualification. |
 | Launch and observer interoperability | [PR #98](https://github.com/steliosx/alrust/pull/98), head `effe4099`, adds opt-in launch journals and launch confirmation. Codex-authored [#99](https://github.com/steliosx/alrust/pull/99), head `583cd721`, is merged after Claude's reported exact-head component review; it corrects the receipt reader's socket path and adds synthetic producer/consumer controls. Source inspected. | Synthetic HTTP stand-ins and offline components do not establish actual reference-observer capture, SQL qualification or complete Phase 0 execution. |
-| Evidence finalizer and database lifecycle | Finalizer components are merged. [PR #100](https://github.com/steliosx/alrust/pull/100), head `d9ad6378`, adds database creation, guarded drop and finalizer linkage. Its three automatic P1 findings (the SQL port bound to the inspected container; required container evidence; the drop verdict bound to its stage) are fixed by [PR #109](https://github.com/steliosx/alrust/pull/109), head `54cebbb0`, merged after Codex's source/offline approval. | Green CI does not execute the component unit tests or real PostgreSQL, so these fixes are offline-evidenced only. No workflow calls the finalizer yet; see [interfaces](conformance/finalizer-interfaces.md). |
+| Evidence finalizer and database lifecycle | Finalizer components are merged. [PR #100](https://github.com/steliosx/alrust/pull/100), head `d9ad6378`, adds database creation, guarded drop and finalizer linkage. Its three automatic P1 findings (the SQL port bound to the inspected container; required container evidence; the drop verdict bound to its stage) are fixed by [PR #109](https://github.com/steliosx/alrust/pull/109), head `54cebbb0`, merged after Codex's source/offline approval. | CI does not execute these component unit tests or qualify these database-lifecycle operations against real PostgreSQL; the fixes have source/offline evidence only. No workflow calls the finalizer yet; see [interfaces](conformance/finalizer-interfaces.md). |
 | Local reference and offline checks | Scoped results and attributed independent dispositions are recorded in [STATUS](docs/STATUS.md). | Local passes and published review summaries are separate from CI qualification, direct inspection of signed private records and cross-implementation parity. |
 | Open proposals | [PR #71](https://github.com/steliosx/alrust/pull/71) proposes structural OpenAPI validation; draft [PR #70](https://github.com/steliosx/alrust/pull/70) addresses batch retry safety. | Neither proposal is part of this main checkpoint. The retry contract needs an owner decision. |
 
@@ -195,9 +195,11 @@ starts. The details are in the
 - Reviews are recorded as signed dispositions and PR comments. Both agents
   share one GitHub login, so they are **not** formal GitHub approvals.
 - Claude merges a pull request into `main` once the other agent has
-  approved its exact head (owner decision Y5). **Only the repository owner**
-  cuts releases and decides on billing, repository settings and branch
-  protection.
+  approved its exact head, has admitted a signed merge window for that
+  head, and Claude's advisor has no objection to that exact head (owner
+  decisions Y5 and Y20). **Only the repository owner** cuts releases and
+  decides on billing, repository settings, branch protection, security,
+  production and cutover.
 - Behaviour must match the pinned upstream release. Any intentional
   difference in alert lifecycle, authentication or data retention is
   recorded in an ADR and decided by the owner.
