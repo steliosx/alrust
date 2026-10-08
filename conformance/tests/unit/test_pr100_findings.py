@@ -10,7 +10,8 @@ comments 4174199627, 4174199632, 4174199634 on d9ad6378):
 
 docker is replaced by an in-process fake of _bounded_run, Psql by a recorder;
 finalize() runs on synthetic journals with a synthetic ended generation
-(absent PIDs). No process, socket, container or database is used."""
+(absent PIDs). Forward-ported onto the R-EP stack, where finalize() also
+takes the expected pins (P3a). No process, socket, container or database is used."""
 import json
 import os
 
@@ -18,6 +19,7 @@ import pytest
 
 from alrust_conformance import database_stage as ds
 from alrust_conformance import finalizer as fz
+from exit_fixtures import EXPECTED
 from test_finalizer_orchestration import STAGES, build
 
 CONTAINER = "0123456789abcdef0123"
@@ -135,13 +137,13 @@ def job(tmp_path, monkeypatch):
 
 
 def _refused(root, reason):
-    report = fz.finalize(str(root), STAGES)
+    report = fz.finalize(str(root), STAGES, EXPECTED)
     assert (report["outcome"], report["reason"]) == ("NOT_FINALIZED", reason)
     assert not (root / "export").exists()
 
 
 def test_complete_database_evidence_seals(job):
-    report = fz.finalize(str(job()), STAGES)
+    report = fz.finalize(str(job()), STAGES, EXPECTED)
     assert report["outcome"] == "SEALED", report
 
 

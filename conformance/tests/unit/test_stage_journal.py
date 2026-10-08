@@ -584,3 +584,106 @@ def test_previous_link_false_index_on_stage_one(job):
     rewrite(p, [json.dumps(x, separators=(",", ":")).encode() for x in rows])
     report = sj.aggregate(str(job), ["database", "launch"])
     assert (report["verdict"], report["reason"]) == ("INCOMPLETE", "chain_broken")
+
+
+# Core /2 entrypoint pins through the CLI (R-EP gate plan P1). Uses the
+# same local git fixture as the CLI tests above.
+def _entry_files(repo):
+    (repo / "conformance" / "scripts").mkdir(parents=True, exist_ok=True)
+    (repo / "conformance" / "scripts" / "entrypoint-supervisor.py").write_bytes(b"# s\n")
+    (repo / "conformance" / "entrypoint.py").write_bytes(b"# e\n")
+    return (hashlib.sha256(b"# s\n").hexdigest(), hashlib.sha256(b"# e\n").hexdigest())
+
+
+def test_core_cli_writes_v2_with_entrypoint_pins(job, tmp_path, monkeypatch, capsys):
+    for k, v in ENV.items():
+        monkeypatch.setenv(k, v)
+    repo, head, ref_head = cli_repo(tmp_path)
+    s_sha, e_sha = _entry_files(repo)
+    import sys as _sys
+    args = cli_args(repo, job, ref_head) + [
+        "--supervisor-pin", "conformance/scripts/entrypoint-supervisor.py=" + s_sha,
+        "--entrypoint-script-pin", "conformance/entrypoint.py=" + e_sha,
+        "--interpreter", _sys.executable]
+    assert sj.main(args) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "WRITTEN"
+    record = json.loads((job / "core-identity.json").read_text())
+    assert record["schema"] == sj.SCHEMA_CORE_V2
+    pins = record["entrypoint_pins"]
+    assert pins["supervisor"] == {
+        "path": str(repo / "conformance/scripts/entrypoint-supervisor.py"), "sha256": s_sha}
+    assert pins["entrypoint_script"]["sha256"] == e_sha
+    assert pins["interpreter"]["path"] == _sys.executable
+    assert pins["interpreter"]["resolved_path"] == os.path.realpath(_sys.executable)
+
+
+@pytest.mark.parametrize("which,reason", [
+    ("supervisor_changed", "entrypoint_not_pinned"),
+    ("partial", "usage"),
+    ("traversal", "entrypoint_pins_invalid"),
+    ("relative_interpreter", "entrypoint_pins_invalid"),
+])
+def test_core_cli_entrypoint_pin_refusals(job, tmp_path, monkeypatch, capsys, which, reason):
+    for k, v in ENV.items():
+        monkeypatch.setenv(k, v)
+    repo, head, ref_head = cli_repo(tmp_path)
+    s_sha, e_sha = _entry_files(repo)
+    import sys as _sys
+    extra = ["--supervisor-pin", "conformance/scripts/entrypoint-supervisor.py=" + s_sha,
+             "--entrypoint-script-pin", "conformance/entrypoint.py=" + e_sha,
+             "--interpreter", _sys.executable]
+    if which == "supervisor_changed":
+        (repo / "conformance/scripts/entrypoint-supervisor.py").write_bytes(b"# changed\n")
+    elif which == "partial":
+        extra = extra[:2]
+    elif which == "traversal":
+        extra[1] = "../escape.py=" + s_sha
+    else:
+        extra[5] = "relative/python3"
+    code = sj.main(cli_args(repo, job, ref_head) + extra)
+    assert code == (64 if which == "partial" else 2)
+    assert json.loads(capsys.readouterr().out)["reason"] == reason
+    assert not (job / "core-identity.json").exists()
+
+
+def test_core_cli_writes_v3_with_tool_pins(job, tmp_path, monkeypatch, capsys):
+    """P2b-1: the git-backed CLI writes /3 with both tool driver pins."""
+    for k, v in ENV.items():
+        monkeypatch.setenv(k, v)
+    repo, head, ref_head = cli_repo(tmp_path)
+    s_sha, e_sha = _entry_files(repo)
+    driver = repo / "conformance/scripts/stage-tool.py"
+    driver.write_bytes(b"# synthetic stage-tool driver\n")
+    d_sha = hashlib.sha256(driver.read_bytes()).hexdigest()
+    import sys as _sys
+    args = cli_args(repo, job, ref_head) + [
+        "--supervisor-pin", "conformance/scripts/entrypoint-supervisor.py=" + s_sha,
+        "--entrypoint-script-pin", "conformance/entrypoint.py=" + e_sha,
+        "--interpreter", _sys.executable,
+        "--tool-pin", "database-create=conformance/scripts/stage-tool.py=" + d_sha,
+        "--tool-pin", "registry=conformance/scripts/stage-tool.py=" + d_sha]
+    assert sj.main(args) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "WRITTEN"
+    record = json.loads((job / "core-identity.json").read_text())
+    assert record["schema"] == sj.SCHEMA_CORE_V3
+    assert record["tool_pins"] == {t: {"driver": {"path": str(driver), "sha256": d_sha}}
+                                   for t in sj.TOOL_PIN_NAMES}
+
+
+def test_core_cli_refuses_a_changed_tool_driver(job, tmp_path, monkeypatch, capsys):
+    for k, v in ENV.items():
+        monkeypatch.setenv(k, v)
+    repo, head, ref_head = cli_repo(tmp_path)
+    s_sha, e_sha = _entry_files(repo)
+    driver = repo / "conformance/scripts/stage-tool.py"
+    driver.write_bytes(b"# synthetic stage-tool driver\n")
+    import sys as _sys
+    args = cli_args(repo, job, ref_head) + [
+        "--supervisor-pin", "conformance/scripts/entrypoint-supervisor.py=" + s_sha,
+        "--entrypoint-script-pin", "conformance/entrypoint.py=" + e_sha,
+        "--interpreter", _sys.executable,
+        "--tool-pin", "database-create=conformance/scripts/stage-tool.py=" + "0" * 64,
+        "--tool-pin", "registry=conformance/scripts/stage-tool.py=" + "0" * 64]
+    assert sj.main(args) == 2
+    assert json.loads(capsys.readouterr().out)["reason"] == "tool_not_pinned"
+    assert not (job / "core-identity.json").exists()

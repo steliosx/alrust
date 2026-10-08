@@ -12,6 +12,9 @@ from pathlib import Path
 
 import pytest
 
+import exit_fixtures as xf
+from exit_fixtures import EXPECTED
+
 from alrust_conformance import finalizer as fz
 from alrust_conformance import stage_journal as sj
 
@@ -20,7 +23,8 @@ SHA = "b" * 64
 ENV = {"GITHUB_REPOSITORY": "steliosx/alrust", "GITHUB_RUN_ID": "123",
        "GITHUB_RUN_ATTEMPT": "1", "GITHUB_JOB": "profile",
        "ImageOS": "ubuntu24", "ImageVersion": "20261001.1"}
-STAGES = ["database-create", "launch", "launch-confirm", "entrypoint", "stop", "registry",
+STAGES = ["database-create", "database-create-exit", "launch", "launch-confirm",
+          "entrypoint", "entrypoint-exit", "stop", "registry", "registry-exit",
           "database-drop"]
 DB_IDENTITY = {"oid": 16384, "role": "alrust_scaffold_123_1", "role_oid": 16383,
                "system_identifier": "7123456789012345678",
@@ -43,15 +47,28 @@ def unseal_after(tmp_path):
                     entry.chmod(0o600)
 
 
+REAP_WAIT_S = 10.0
+
+
 def ended_generation():
     """(pid, start_ticks) of a real child that has exited and been reaped,
-    so the finalizer's positive exit observation has a genuine subject."""
+    so the finalizer's positive exit observation has a genuine subject.
+    From the spawn, the kill and a bounded reap go through the owned handle
+    on every path, even if reading /proc fails (P2B2-WINDOW-R1)."""
     import subprocess
+    import owned_process
     child = subprocess.Popen(["/bin/sleep", "30"])
-    with open("/proc/%d/stat" % child.pid, "rb") as f:
-        ticks = int(f.read().rsplit(b")", 1)[1].split()[19])
-    child.kill()
-    child.wait()
+    primary = None
+    try:
+        with open("/proc/%d/stat" % child.pid, "rb") as f:
+            ticks = int(f.read().rsplit(b")", 1)[1].split()[19])
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        owned_process.run_steps(
+            [lambda: owned_process.kill_and_reap(child, REAP_WAIT_S)], primary,
+            "ended_generation cleanup failed")
     return child.pid, ticks
 
 
@@ -67,6 +84,7 @@ def build(tmp_path, monkeypatch, *, report=b'{"result": "passed"}\n',
           generation=None, omit_stop=False, created_change=None, handoff_change=None,
           omit_handoff=False, upto=None, inventory=None, obtained_stage="registry",
           inventory_core=None, inventory_record_change=None, inventory_stage="entrypoint",
+          entrypoint_exit=None,
           container_change=None, container_stage="database-create", drop_stage="database-drop"):
     monkeypatch.setattr(sj, "EXTERNAL_CONFIG", str(tmp_path / "no-alertad.conf"))
     job = tmp_path / "job"
@@ -74,11 +92,14 @@ def build(tmp_path, monkeypatch, *, report=b'{"result": "passed"}\n',
     sj.write_core_identity(str(job), profile="scaffold", event_head_sha=GIT,
                            checkout_sha=GIT, reference_sha=GIT, reference_pin=GIT,
                            lock_sha256={"l": SHA}, lock_pins={"l": SHA},
-                           manifest_sha256=SHA, manifest_pin=SHA, env=dict(ENV))
+                           manifest_sha256=SHA, manifest_pin=SHA, env=dict(ENV),
+                           **xf.core_pins())
     core = json.loads((job / "core-identity.json").read_text())
     (job / "venv" / "lib").mkdir(parents=True)
     (job / "venv" / "lib" / "m.py").write_text("x")
     (job / "settings.py").write_text("DEBUG = False\n")
+    # The private database directory database-create records (P3c binding).
+    (job / "database").mkdir(mode=0o700)
     reference = job / "reference"
     reference.mkdir(mode=0o700)
     pid, ticks = generation if generation is not None else ended_generation()
@@ -123,7 +144,8 @@ def build(tmp_path, monkeypatch, *, report=b'{"result": "passed"}\n',
     def handoff(job_root):
         # Built when the launch journal exists, so its digest is real.
         value = {"launch_journal_sha256": hashlib.sha256(
-                     Path(sj.journal_path(str(job_root), 1, "launch")).read_bytes()).hexdigest(),
+                     Path(sj.journal_path(str(job_root), STAGES.index("launch"),
+                                          "launch")).read_bytes()).hexdigest(),
                  "receipt_sha256": stop["launch_receipt_sha256"],
                  "supervisor": {"pid": pid, "start_ticks": ticks},
                  "child": {"pid": pid + 1, "start_ticks": ticks + 1},
@@ -153,6 +175,7 @@ def build(tmp_path, monkeypatch, *, report=b'{"result": "passed"}\n',
         container_change(container)
     per_stage = {
         "database-create": [
+            ("owned_resource", stat_record(job / "database", "dir")),
             ("database_role_attempted", {"role": DB_IDENTITY["role"]}),
             ("database_role_created", {k: DB_IDENTITY[k] for k in (
                 "role", "role_oid", "system_identifier", "postmaster_start_time")}),
@@ -167,6 +190,14 @@ def build(tmp_path, monkeypatch, *, report=b'{"result": "passed"}\n',
             sha256=registry_sha)),
                      ("obtained_secret_count", obtained)],
         "database-drop": [("database_drop", database)],
+        # P3a: each exit stage holds the verdict recomputed from receipts
+        # written for the closed stage before it (synthetic ended generations).
+        "database-create-exit": [("tool_exit_verdict", lambda j: xf.tool_verdict(
+            j, "database-create", STAGES.index("database-create")))],
+        "entrypoint-exit": [("entrypoint_exit_verdict", lambda j: xf.entrypoint_verdict(
+            j, STAGES.index("entrypoint"), **(entrypoint_exit or {})))],
+        "registry-exit": [("tool_exit_verdict", lambda j: xf.tool_verdict(
+            j, "registry", STAGES.index("registry")))],
     }
     if container_stage is not None:
         per_stage[container_stage].append(("database_container", container))
@@ -204,7 +235,7 @@ def build(tmp_path, monkeypatch, *, report=b'{"result": "passed"}\n',
             with sj.StageJournal(str(job), index, name, previous) as journal:
                 for kind, payload in per_stage[name]:
                     journal.record(kind, payload(job) if callable(payload) else payload)
-                if name == fail_stage:
+                if name == fail_stage or (type(fail_stage) is tuple and name in fail_stage):
                     journal.fail("synthetic_failure")
                     raise RuntimeError("synthetic")
         except RuntimeError:
@@ -215,7 +246,7 @@ def build(tmp_path, monkeypatch, *, report=b'{"result": "passed"}\n',
 
 def test_sealed_export_with_complete_cleanup(tmp_path, monkeypatch):
     job = build(tmp_path, monkeypatch)
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     digest = report.pop("manifest_sha256")
     assert report == {"outcome": "SEALED", "cleanup": "COMPLETE", "reason": "sealed"}
     assert fz.verify_manifest(str(job / "export"), digest) is True
@@ -249,7 +280,7 @@ def test_sealed_export_with_complete_cleanup(tmp_path, monkeypatch):
 def test_secret_in_candidate_blocks_the_manifest(tmp_path, monkeypatch, planted):
     job = build(tmp_path, monkeypatch, report=b'{"leak": "' + planted.replace(b'"', b"'")
                 + b'"}\n')
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     assert (report["outcome"], report["reason"]) == ("FAILED", "scan_finding")
     assert not (job / "export" / "manifest.json").exists()
     assert oct((job / "export").stat().st_mode & 0o777) == "0o700"
@@ -259,7 +290,7 @@ def test_secret_in_the_receipt_itself_blocks_the_manifest(tmp_path, monkeypatch)
     # An owned resource whose path contains a secret puts that secret into
     # the terminal receipt; the final-byte scan must catch it there.
     job = build(tmp_path, monkeypatch, leaky_dir=True)
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     assert (report["outcome"], report["reason"]) == ("FAILED", "scan_finding")
     assert SIGNING.encode() in (job / "export" / "terminal-cleanup.json").read_bytes()
     assert not (job / "export" / "manifest.json").exists()
@@ -270,7 +301,7 @@ def test_not_finalized_without_positive_quiescence(tmp_path, monkeypatch):
         verdict="UNPROVEN", reason="no_terminal_receipt"))
     candidate = job / "conformance-report.json"
     candidate.chmod(0o000)  # never opened on this path
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     assert (report["outcome"], report["reason"]) == ("NOT_FINALIZED", "stop_not_proven")
     assert not (job / "export").exists()
     assert (job / "venv").exists() and (job / fz.REGISTRY_NAME).exists()
@@ -284,7 +315,7 @@ def test_not_finalized_without_positive_quiescence(tmp_path, monkeypatch):
 ])
 def test_stop_evidence_must_link_receipts(tmp_path, monkeypatch, change, reason):
     job = build(tmp_path, monkeypatch, stop_change=change)
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     assert (report["outcome"], report["reason"]) == ("NOT_FINALIZED", reason)
     assert not (job / "export").exists()
 
@@ -302,7 +333,7 @@ def test_terminal_must_be_tree_empty_for_the_launch_generation(tmp_path, monkeyp
     # The stop record's hashes match these receipts, so the generation and
     # result checks themselves must refuse.
     job = build(tmp_path, monkeypatch, terminal_change=change)
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     assert (report["outcome"], report["reason"]) == ("NOT_FINALIZED",
                                                      "stop_receipt_mismatch")
     assert not (job / "export").exists()
@@ -324,7 +355,7 @@ def test_terminal_must_be_tree_empty_for_the_launch_generation(tmp_path, monkeyp
 ])
 def test_database_drop_must_be_proven_and_linked(tmp_path, monkeypatch, change, reason):
     job = build(tmp_path, monkeypatch, database_change=change)
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     assert (report["outcome"], report["reason"]) == ("NOT_FINALIZED", reason)
     assert not (job / "export").exists()
 
@@ -332,7 +363,7 @@ def test_database_drop_must_be_proven_and_linked(tmp_path, monkeypatch, change, 
 def test_database_created_must_be_recorded_once(tmp_path, monkeypatch):
     job = build(tmp_path, monkeypatch, extra_records=[
         ("database-create", "database_created", dict(DB_IDENTITY, name="x"))])
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     assert (report["outcome"], report["reason"]) == (
         "NOT_FINALIZED", "database_created_missing_or_repeated")
 
@@ -347,13 +378,13 @@ def test_database_created_must_be_recorded_once(tmp_path, monkeypatch):
 ])
 def test_finalizer_requires_the_launch_handoff(tmp_path, monkeypatch, change, omit, reason):
     job = build(tmp_path, monkeypatch, handoff_change=change, omit_handoff=omit)
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     assert (report["outcome"], report["reason"]) == ("NOT_FINALIZED", reason)
 
 
 def test_failed_entrypoint_is_named(tmp_path, monkeypatch):
     job = build(tmp_path, monkeypatch, fail_stage="entrypoint")
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     assert (report["outcome"], report["reason"]) == ("NOT_FINALIZED",
                                                      "entrypoint_not_complete")
     assert not (job / "export").exists()
@@ -361,13 +392,13 @@ def test_failed_entrypoint_is_named(tmp_path, monkeypatch):
 
 def test_other_failed_stage_is_not_finalized(tmp_path, monkeypatch):
     job = build(tmp_path, monkeypatch, fail_stage="launch")
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     assert (report["outcome"], report["reason"]) == ("NOT_FINALIZED", "aggregation_failed")
 
 
 def test_entrypoint_stage_must_be_named(tmp_path, monkeypatch):
     job = build(tmp_path, monkeypatch)
-    report = fz.finalize(str(job), STAGES, entrypoint_stage="executor")
+    report = fz.finalize(str(job), STAGES, EXPECTED, entrypoint_stage="executor")
     assert (report["outcome"], report["reason"]) == ("NOT_FINALIZED",
                                                      "entrypoint_stage_missing")
 
@@ -380,7 +411,7 @@ def test_entrypoint_stage_must_be_named(tmp_path, monkeypatch):
 def test_obtained_secret_count_must_link_registry(tmp_path, monkeypatch, change, reason):
     # All of these are refused before the export directory exists.
     job = build(tmp_path, monkeypatch, obtained_change=change)
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     assert (report["outcome"], report["reason"]) == ("NOT_FINALIZED", reason)
     assert not (job / "export").exists()
 
@@ -389,7 +420,7 @@ def test_required_record_repeated_is_refused(tmp_path, monkeypatch):
     job = build(tmp_path, monkeypatch, extra_records=[
         ("stop", "database_drop", {"verdict": "COMPLETE", "database": "x",
                                    "oid": 1, "system_identifier": "1"})])
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     assert (report["outcome"], report["reason"]) == (
         "NOT_FINALIZED", "database_drop_missing_or_repeated")
 
@@ -403,7 +434,7 @@ def test_required_record_repeated_is_refused(tmp_path, monkeypatch):
 def test_candidate_must_be_allowlisted_and_identified(tmp_path, monkeypatch, change,
                                                       outcome, reason):
     job = build(tmp_path, monkeypatch, candidate_change=change)
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     assert (report["outcome"], report["reason"]) == (outcome, reason)
     assert not (job / "export" / "manifest.json").exists()
 
@@ -413,7 +444,7 @@ def test_second_invalid_candidate_means_nothing_is_copied(tmp_path, monkeypatch)
     job = build(tmp_path, monkeypatch, extra_records=[
         ("entrypoint", "export_candidate", {"path": "/etc/hostname", "dev": 1,
                                             "ino": 1, "name": "other.json"})])
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     assert (report["outcome"], report["reason"]) == ("NOT_FINALIZED",
                                                      "candidate_record_invalid")
     assert not (job / "export").exists()
@@ -422,7 +453,7 @@ def test_second_invalid_candidate_means_nothing_is_copied(tmp_path, monkeypatch)
 def test_oversized_candidate_is_refused(tmp_path, monkeypatch):
     job = build(tmp_path, monkeypatch,
                 report=b"x" * (fz.EXPORT_ALLOWLIST["conformance-report.json"] + 1))
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     assert (report["outcome"], report["reason"]) == ("FAILED", "candidate_identity_mismatch")
 
 
@@ -434,7 +465,7 @@ def test_removal_mismatch_is_unproven_but_sealed(tmp_path, monkeypatch):
     settings = job / "settings.py"
     settings.unlink()
     settings.write_text("replacement\n")
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     assert (report["outcome"], report["cleanup"]) == ("SEALED", "UNPROVEN")
     receipt = json.loads((job / "export" / "terminal-cleanup.json").read_text())
     reasons = {r["reason"] for r in receipt["removals"]}
@@ -455,7 +486,7 @@ def test_unaccounted_root_entry_is_unproven_and_left_in_place(tmp_path, monkeypa
         stray.mkdir()
     else:
         stray.symlink_to(job / "missing-target")
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     assert (report["outcome"], report["cleanup"]) == ("SEALED", "UNPROVEN")
     receipt_bytes = (job / "export" / "terminal-cleanup.json").read_bytes()
     receipt = json.loads(receipt_bytes)
@@ -478,7 +509,7 @@ def test_unlistable_root_is_unproven(tmp_path, monkeypatch):
         return real_listdir(path)
 
     monkeypatch.setattr(fz.os, "listdir", listdir)
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     assert (report["outcome"], report["cleanup"]) == ("SEALED", "UNPROVEN")
     receipt = json.loads((job / "export" / "terminal-cleanup.json").read_text())
     assert receipt["unaccounted_root_entries"] is None
@@ -488,7 +519,7 @@ def test_unlistable_root_is_unproven(tmp_path, monkeypatch):
 def test_export_directory_must_not_exist(tmp_path, monkeypatch):
     job = build(tmp_path, monkeypatch)
     (job / "export").mkdir(mode=0o700)
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     assert (report["outcome"], report["reason"]) == ("FAILED", "export_exists")
     assert (job / "venv").exists()
 
@@ -496,7 +527,7 @@ def test_export_directory_must_not_exist(tmp_path, monkeypatch):
 @pytest.mark.parametrize("tamper", ["content", "extra_file", "missing_file"])
 def test_verify_manifest_detects_later_tampering(tmp_path, monkeypatch, tamper):
     job = build(tmp_path, monkeypatch)
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     assert report["outcome"] == "SEALED"
     export = job / "export"
     digest = report["manifest_sha256"]
@@ -517,9 +548,8 @@ def test_verify_manifest_detects_later_tampering(tmp_path, monkeypatch, tamper):
 def test_failure_record_reads_only_hashes(tmp_path, monkeypatch):
     job = build(tmp_path, monkeypatch, stop_change=lambda s: s.update(
         verdict="UNPROVEN", reason="no_terminal_receipt"))
-    assert fz.finalize(str(job), STAGES)["outcome"] == "NOT_FINALIZED"
-    env = {"SECRET_KEY": SIGNING, "DATABASE_URL": DB_URL}
-    path = fz.failure_record(str(job), STAGES, env)
+    assert fz.finalize(str(job), STAGES, EXPECTED)["outcome"] == "NOT_FINALIZED"
+    path = fz.failure_record(str(job), STAGES)          # P3d: no secret input
     assert path == str(job / "export" / "failure-record.json")
     record = json.loads(Path(path).read_text())
     assert record["outcome"] == "FAIL" and record["cleanup"] == "UNPROVEN"
@@ -534,11 +564,11 @@ def test_failure_record_reads_only_hashes(tmp_path, monkeypatch):
     assert (job / fz.REGISTRY_NAME).exists() and (job / "venv").exists()
 
 
-def test_failure_record_needs_the_scan_secrets(tmp_path, monkeypatch):
+def test_failure_record_takes_no_secret_input(tmp_path, monkeypatch):
+    # P3d (Q-P2c-1): the caller passes no values; the old third argument is gone.
     job = build(tmp_path, monkeypatch)
-    assert fz.failure_record(str(job), STAGES, {"SECRET_KEY": SIGNING}) is None
-    assert fz.failure_record(str(job), STAGES, {"SECRET_KEY": "short",
-                                                 "DATABASE_URL": DB_URL}) is None
+    with pytest.raises(TypeError):
+        fz.failure_record(str(job), STAGES, {"SECRET_KEY": SIGNING, "DATABASE_URL": DB_URL})
     assert not (job / "export").exists()
 
 
@@ -548,14 +578,14 @@ def test_repeated_candidate_name_is_refused(tmp_path, monkeypatch):
         ("entrypoint", "export_candidate", {"path": str(tmp_path / "job" / "x.json"),
                                             "dev": 1, "ino": 1,
                                             "name": "conformance-report.json"})])
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     assert (report["outcome"], report["reason"]) == ("NOT_FINALIZED", "candidate_repeated")
     assert not (job / "export").exists()
 
 
 def test_verify_manifest_requires_a_clean_scan_record(tmp_path, monkeypatch):
     job = build(tmp_path, monkeypatch)
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     export = job / "export"
     export.chmod(0o700)
     manifest_path = export / "manifest.json"
@@ -576,7 +606,7 @@ def test_live_supervisor_is_not_quiescence(tmp_path, monkeypatch):
     with open("/proc/self/stat", "rb") as f:
         ticks = int(f.read().rsplit(b")", 1)[1].split()[19])
     job = build(tmp_path, monkeypatch, generation=(os.getpid(), ticks))
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     assert (report["outcome"], report["reason"]) == ("NOT_FINALIZED",
                                                      "supervisor_generation_live_or_unproven")
     assert not (job / "export").exists()
@@ -611,7 +641,7 @@ def test_change_after_scan_fails_the_upload_gate(tmp_path, monkeypatch):
                 target.write_bytes(SIGNING.encode())
         return original(path, limit)
     monkeypatch.setattr(fz, "read_bounded", change_on_second_read)
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     assert len(calls) == 1          # finalize read the export file once
     assert report["outcome"] == "SEALED"
     assert fz.verify_manifest(str(job / "export"), report["manifest_sha256"]) is False
@@ -626,7 +656,7 @@ def test_verify_manifest_refuses_invented_or_incomplete_manifests(tmp_path, monk
     (export / "manifest.json").write_text(data)
     assert fz.verify_manifest(str(export), hashlib.sha256(data.encode()).hexdigest()) is False
     job = build(tmp_path, monkeypatch)
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     real = job / "export"
     assert fz.verify_manifest(str(real), "0" * 64) is False
     assert fz.verify_manifest(str(real), "not-a-digest") is False
@@ -651,30 +681,23 @@ def test_failure_record_requires_its_inputs(tmp_path, monkeypatch, missing):
     job = build(tmp_path, monkeypatch, stop_change=lambda s: s.update(
         verdict="UNPROVEN", reason="no_terminal_receipt"))
     (job / missing).unlink()
-    env = {"SECRET_KEY": SIGNING, "DATABASE_URL": DB_URL}
-    assert fz.failure_record(str(job), STAGES, env) is None
+    assert fz.failure_record(str(job), STAGES) is None
     assert not (job / "export").exists()
 
 
 # F2FE89-R5: wrong types and invalid UTF-8 are fixed refusals.
 def test_candidate_name_of_wrong_type(tmp_path, monkeypatch):
     job = build(tmp_path, monkeypatch, candidate_change=lambda c: c.update(name=[]))
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     assert (report["outcome"], report["reason"]) == ("NOT_FINALIZED",
                                                      "candidate_record_invalid")
-
-
-def test_failure_record_env_with_surrogate(tmp_path, monkeypatch):
-    job = build(tmp_path, monkeypatch)
-    env = {"SECRET_KEY": "x" * 20 + "\ud800", "DATABASE_URL": DB_URL}
-    assert fz.failure_record(str(job), STAGES, env) is None
 
 
 def test_verify_manifest_requires_the_mandatory_evidence(tmp_path, monkeypatch):
     # The finalizer journal removed from both the manifest AND the directory:
     # the file set is consistent, so only the mandatory-evidence rule refuses.
     job = build(tmp_path, monkeypatch)
-    fz.finalize(str(job), STAGES)
+    fz.finalize(str(job), STAGES, EXPECTED)
     export = job / "export"
     export.chmod(0o700)
     manifest = json.loads((export / "manifest.json").read_text())
@@ -690,12 +713,11 @@ def test_verify_manifest_requires_the_mandatory_evidence(tmp_path, monkeypatch):
 
 # F2FE89-R4a: the failure record needs complete closed journals and exactly
 # one linked stop verdict; "stop": null never satisfies section 9.1a.
-FAILURE_ENV = {"SECRET_KEY": SIGNING, "DATABASE_URL": DB_URL}
 UNPROVEN_STOP = dict(verdict="UNPROVEN", reason="no_terminal_receipt")
 
 
 def _no_failure_output(job):
-    assert fz.failure_record(str(job), STAGES, FAILURE_ENV) is None
+    assert fz.failure_record(str(job), STAGES) is None
     assert not (job / "export").exists()
 
 
@@ -708,7 +730,7 @@ def test_failure_record_refuses_missing_journals(tmp_path, monkeypatch):
 
 def test_failure_record_refuses_an_unclosed_journal(tmp_path, monkeypatch):
     job = build(tmp_path, monkeypatch, stop_change=lambda s: s.update(UNPROVEN_STOP))
-    path = Path(sj.journal_path(str(job), 6, "database-drop"))
+    path = Path(sj.journal_path(str(job), STAGES.index("database-drop"), "database-drop"))
     lines = path.read_bytes().splitlines(keepends=True)
     path.chmod(0o600)
     path.write_bytes(b"".join(lines[:-1]))          # drop stage_complete
@@ -754,7 +776,7 @@ def test_failure_record_without_a_terminal_receipt(tmp_path, monkeypatch):
     job = build(tmp_path, monkeypatch, stop_change=lambda s: s.update(
         UNPROVEN_STOP, terminal_receipt_sha256=None))
     (job / "reference" / "terminal.json").unlink()
-    path = fz.failure_record(str(job), STAGES, FAILURE_ENV)
+    path = fz.failure_record(str(job), STAGES)
     record = json.loads(Path(path).read_text())
     assert record["stop"] == UNPROVEN_STOP
     assert set(record["hashes"]) == {"core_identity", "launch_receipt"}
@@ -765,7 +787,7 @@ def test_failure_record_from_a_closed_failed_stage(tmp_path, monkeypatch):
     job = build(tmp_path, monkeypatch, fail_stage="database-drop",
                 stop_change=lambda s: s.update(UNPROVEN_STOP))
     assert sj.aggregate(str(job), STAGES)["verdict"] == "FAILED"
-    path = fz.failure_record(str(job), STAGES, FAILURE_ENV)
+    path = fz.failure_record(str(job), STAGES)
     record = json.loads(Path(path).read_text())
     assert record["aggregation"]["verdict"] == "FAILED"
     assert set(record["hashes"]) == {"core_identity", "launch_receipt", "terminal_receipt"}
@@ -787,7 +809,7 @@ def test_export_creation_io_failure_is_a_fixed_report(tmp_path, monkeypatch):
             raise OSError(errno.ENOSPC, "synthetic")
         return real_mkdir(path, *args, **kwargs)
     monkeypatch.setattr(fz.os, "mkdir", no_space)
-    assert fz.finalize(str(job), STAGES) == {"outcome": "FAILED", "cleanup": "UNPROVEN",
+    assert fz.finalize(str(job), STAGES, EXPECTED) == {"outcome": "FAILED", "cleanup": "UNPROVEN",
                                              "reason": "export_unavailable"}
     _inputs_preserved(job)
 
@@ -799,7 +821,7 @@ def test_journal_construction_io_failure_is_a_fixed_report(tmp_path, monkeypatch
         raise OSError(errno.EIO, "synthetic")
     job = build(tmp_path, monkeypatch)
     monkeypatch.setattr(fz, "PrivateJournal", broken)
-    assert fz.finalize(str(job), STAGES) == {"outcome": "FAILED", "cleanup": "UNPROVEN",
+    assert fz.finalize(str(job), STAGES, EXPECTED) == {"outcome": "FAILED", "cleanup": "UNPROVEN",
                                              "reason": "finalizer_journal_unavailable"}
     _inputs_preserved(job)
     assert not (job / "export" / "manifest.json").exists()
@@ -815,7 +837,7 @@ def test_closing_failure_never_masks_or_seals(tmp_path, monkeypatch):
             raise OSError(errno.EIO, "synthetic")
     job = build(tmp_path, monkeypatch)
     monkeypatch.setattr(fz, "PrivateJournal", CloseFails)
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     # The explicit close inside the steps fails first; that report stands.
     assert report == {"outcome": "FAILED", "cleanup": "COMPLETE",
                       "reason": "finalizer_io_failed"}
@@ -832,7 +854,7 @@ def test_a_write_failure_after_removals_reports_the_actual_cleanup(tmp_path, mon
             raise OSError(errno.ENOSPC, "synthetic")
         return real_open(path, *args, **kwargs)
     monkeypatch.setattr(fz.os, "open", fail_receipt)
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     assert report == {"outcome": "FAILED", "cleanup": "COMPLETE",
                       "reason": "finalizer_io_failed"}
     assert not (job / "export" / "manifest.json").exists()
@@ -842,17 +864,21 @@ def test_a_write_failure_after_removals_reports_the_actual_cleanup(tmp_path, mon
 # writer_quiescence: the gate the registry and database-drop stages run
 # BEFORE opening their own journals (database design section 4, DBC023-R1).
 PREFIX = STAGES[:STAGES.index("stop") + 1]
+BEFORE_REGISTRY = ("database-create",)          # P3a required holders
+BEFORE_DROP = ("database-create", "registry")
 
 
 def test_writer_gate_passes_on_a_quiescent_prefix(tmp_path, monkeypatch):
     job = build(tmp_path, monkeypatch, upto="stop")
-    evidence = fz.writer_quiescence(str(job), PREFIX)
+    evidence = fz.writer_quiescence(str(job), PREFIX, EXPECTED, BEFORE_REGISTRY)
     assert evidence["aggregation"]["verdict"] == "VALID"
     assert evidence["stop"]["verdict"] == "COMPLETE"
-    # The registry's own prefix (through registry) also passes.
+    assert evidence["proofs"]["entrypoint_exit"]["verdict"] == "COMPLETE"
+    # The drop path's prefix (through registry-exit) also passes, with both holders.
     (tmp_path / "second").mkdir()
-    job2 = build(tmp_path / "second", monkeypatch, upto="registry")
-    fz.writer_quiescence(str(job2), STAGES[:STAGES.index("registry") + 1])
+    job2 = build(tmp_path / "second", monkeypatch, upto="registry-exit")
+    fz.writer_quiescence(str(job2), STAGES[:STAGES.index("registry-exit") + 1], EXPECTED,
+                         BEFORE_DROP)
 
 
 @pytest.mark.parametrize("prefix", [
@@ -864,8 +890,8 @@ def test_writer_gate_passes_on_a_quiescent_prefix(tmp_path, monkeypatch):
 ])
 def test_writer_gate_refuses_an_invalid_prefix(tmp_path, monkeypatch, prefix):
     job = build(tmp_path, monkeypatch, upto="stop")
-    with pytest.raises(fz.FinalizerError, match="writer_gate_stages_invalid"):
-        fz.writer_quiescence(str(job), prefix)
+    with pytest.raises(fz.FinalizerError, match="gate_stages_invalid"):
+        fz.writer_quiescence(str(job), prefix, EXPECTED, BEFORE_REGISTRY)
 
 
 @pytest.mark.parametrize("kwargs,code", [
@@ -882,7 +908,7 @@ def test_writer_gate_refuses_an_invalid_prefix(tmp_path, monkeypatch, prefix):
 def test_writer_gate_refusals(tmp_path, monkeypatch, kwargs, code):
     job = build(tmp_path, monkeypatch, upto="stop", **kwargs)
     with pytest.raises(fz.FinalizerError, match=code):
-        fz.writer_quiescence(str(job), PREFIX)
+        fz.writer_quiescence(str(job), PREFIX, EXPECTED, BEFORE_REGISTRY)
 
 
 def test_writer_gate_refuses_a_live_supervisor(tmp_path, monkeypatch):
@@ -890,7 +916,7 @@ def test_writer_gate_refuses_a_live_supervisor(tmp_path, monkeypatch):
         ticks = int(f.read().rsplit(b")", 1)[1].split()[19])
     job = build(tmp_path, monkeypatch, upto="stop", generation=(os.getpid(), ticks))
     with pytest.raises(fz.FinalizerError, match="supervisor_generation_live_or_unproven"):
-        fz.writer_quiescence(str(job), PREFIX)
+        fz.writer_quiescence(str(job), PREFIX, EXPECTED, BEFORE_REGISTRY)
 
 
 def test_writer_gate_refuses_an_unclosed_or_extra_journal(tmp_path, monkeypatch):
@@ -898,7 +924,7 @@ def test_writer_gate_refuses_an_unclosed_or_extra_journal(tmp_path, monkeypatch)
     # An already-open next journal (the order N4 forbids) is an extra file.
     Path(sj.journal_path(str(job), len(PREFIX), "registry")).write_text("")
     with pytest.raises(fz.FinalizerError, match="writer_gate_incomplete"):
-        fz.writer_quiescence(str(job), PREFIX)
+        fz.writer_quiescence(str(job), PREFIX, EXPECTED, BEFORE_REGISTRY)
 
 
 def test_writer_gate_reads_no_registry_or_credential(tmp_path, monkeypatch):
@@ -911,7 +937,7 @@ def test_writer_gate_reads_no_registry_or_credential(tmp_path, monkeypatch):
         read.append(os.path.basename(path))
         return real(path, limit)
     monkeypatch.setattr(fz, "read_bounded", spy)
-    fz.writer_quiescence(str(job), PREFIX)
+    fz.writer_quiescence(str(job), PREFIX, EXPECTED, BEFORE_REGISTRY)
     assert fz.REGISTRY_NAME not in read and "server.log" not in read
     assert set(read) <= {"core-identity.json", "launch.json", "terminal.json"} | {
         os.path.basename(sj.journal_path(str(job), i, n)) for i, n in enumerate(PREFIX)}
@@ -924,14 +950,14 @@ def test_writer_gate_requires_a_closed_entrypoint(tmp_path, monkeypatch):
     monkeypatch.setattr(sys.modules[__name__], "STAGES", prefix)
     job = build(tmp_path, monkeypatch, upto="stop")
     assert sj.aggregate(str(job), prefix)["verdict"] == "VALID"
-    with pytest.raises(fz.FinalizerError, match="writer_gate_stages_invalid"):
-        fz.writer_quiescence(str(job), prefix)
+    with pytest.raises(fz.FinalizerError, match="gate_stages_invalid"):
+        fz.writer_quiescence(str(job), prefix, EXPECTED, BEFORE_REGISTRY)
 
 
 def test_writer_gate_requires_entrypoint_before_stop(tmp_path, monkeypatch):
     prefix = ["database-create", "launch", "launch-confirm", "stop", "entrypoint"]
-    with pytest.raises(fz.FinalizerError, match="writer_gate_stages_invalid"):
-        fz.writer_quiescence(str(tmp_path), prefix)
+    with pytest.raises(fz.FinalizerError, match="gate_stages_invalid"):
+        fz.writer_quiescence(str(tmp_path), prefix, EXPECTED, BEFORE_REGISTRY)
 
 
 
@@ -939,7 +965,7 @@ def test_obtained_count_must_come_from_the_registry_stage(tmp_path, monkeypatch)
     # Q1 (b): an entrypoint-authored count is refused, even if well formed.
     job = build(tmp_path, monkeypatch, extra_records=[
         ("entrypoint", "obtained_secret_count", {"count": 0, "registry_sha256": "0" * 64})])
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     assert (report["outcome"], report["reason"]) == (
         "NOT_FINALIZED", "obtained_secret_count_missing_or_repeated")
 
@@ -947,7 +973,7 @@ def test_obtained_count_must_come_from_the_registry_stage(tmp_path, monkeypatch)
 def test_obtained_count_only_in_the_entrypoint_is_refused(tmp_path, monkeypatch):
     # Q1 (b): the count authored by the entrypoint (the old layout) refuses.
     job = build(tmp_path, monkeypatch, obtained_stage="entrypoint")
-    report = fz.finalize(str(job), STAGES)
+    report = fz.finalize(str(job), STAGES, EXPECTED)
     assert (report["outcome"], report["reason"]) == (
         "NOT_FINALIZED", "obtained_secret_count_not_from_registry")
     assert not (job / "export").exists()

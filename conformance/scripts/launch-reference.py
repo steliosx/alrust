@@ -3,7 +3,7 @@
 
 Contract: docs/ci-launch-attestation-contract.md, sections 4 and 5 (SS-I1).
 Run as `python3 -I -S -B launch-reference.py --job-root J --venv V --port N
---ready-timeout S`. run-reference.sh calls it in JOB_ROOT mode twice: first
+--ready-timeout S --secret-key-file K --database-port D`. run-reference.sh calls it in JOB_ROOT mode twice: first
 with a leading --preflight, BEFORE building V, which applies every refusal
 below that does not need the built venv (V must not exist yet) and starts
 nothing; then, after the build, without it.
@@ -22,6 +22,22 @@ The launcher:
   the venv's interpreter;
 - prints one line: the receipt path and its sha256. That printed digest is
   the only trusted binding for the stop helper.
+
+Server secrets, paths only (R-EP plan P2c; contract tool-exit-contract.md
+section 10): the launcher never holds DATABASE_URL or SECRET_KEY. Neither
+is in its environment allowlist, so either one present is refused. It
+passes P only the fixed URL file <J>/database/url, the 0600 key file K
+(which must lie under J) and the database port D. P's served child reads
+them after P's launch receipt exists (reference-supervisor.py).
+
+Launch gate (R-EP plan P3c): only stage mode launches, at index 2 after
+database-create-exit, with --expected-pins P (a JSON file, not a secret).
+Before its journal opens and before P exists, the launcher runs
+database_stage.launch_prerequisites: the closed VALID create and
+create-exit stages, the database-create holder's exit proof on one core
+snapshot with those pins, and the job role and database directory derived
+from the core and database_created. It passes P --expected-role and
+--database-dir-identity; P's child checks both against the URL it reads.
 
 On any failure, or on TERM or INT, it signals only P, its own unreaped child,
 waits a bounded time for P's exit, and reports the stop helper's verdict. It
@@ -76,7 +92,7 @@ STOP = os.path.join(HERE, "stop-reference.py")
 EXTERNAL_CONFIG = "/etc/alertad.conf"
 SCHEMA_LAUNCH = "alrust-reference-launch/1"
 ALLOWED_ENV = {
-    "PATH", "LANG", "HOME", "DATABASE_URL", "SECRET_KEY", "AUTH_REQUIRED",
+    "PATH", "LANG", "HOME", "AUTH_REQUIRED",
     "ALERTA_SVR_CONF_FILE", "PORT", "VENV", "REFERENCE_PYTHON",
     "READY_TIMEOUT", "JOB_ROOT",
     # Set by the shell that execs this launcher.
@@ -139,6 +155,50 @@ class LaunchFailed(Exception):
         self.rc = rc
 
 
+MAX_PINS = 1 << 16
+LAUNCH_PREFIX = ["database-create", "database-create-exit"]
+
+
+def database_stage_module():
+    """The reviewed database-stage package of this checkout (stdlib only),
+    for the launch gate (P3c)."""
+    stage_journal_module()
+    from alrust_conformance import database_stage
+    return database_stage
+
+
+def read_pins(path):
+    """The expected-pins JSON object: a regular file (checked on the opened
+    descriptor), not followed if a link, bounded. Not a secret."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise Refused("expected pins are not a regular file")
+        # Read to EOF: a read may legally return fewer bytes than asked
+        # (W4-READ-R1); stop once the bound is passed, then refuse below.
+        pieces, size = [], 0
+        while True:
+            chunk = os.read(fd, MAX_PINS + 1 - size)
+            if not chunk:
+                break
+            pieces.append(chunk)
+            size += len(chunk)
+            if size > MAX_PINS:
+                break
+        data = b"".join(pieces)
+    finally:
+        os.close(fd)
+    if len(data) > MAX_PINS:
+        raise Refused("expected pins too large")
+    try:
+        value = json.loads(data)
+    except ValueError:
+        raise Refused("expected pins are not JSON") from None
+    if type(value) is not dict:
+        raise Refused("expected pins are not an object")
+    return value
+
+
 def stage_journal_module():
     """The reviewed stage-journal module of this checkout (stdlib only). With
     -I only this script's directory is on sys.path, so the conformance
@@ -170,7 +230,8 @@ def parse_args(argv):
     --observer-file NAME SHA256 PATH (NAME from OBSERVER_FILE_NAMES), plus
     optionally --stage-index N and, for N > 0, --previous-stage NAME."""
     opts = {"--job-root": None, "--venv": None, "--port": None,
-            "--ready-timeout": None, "--stage-index": None, "--previous-stage": None}
+            "--ready-timeout": None, "--stage-index": None, "--previous-stage": None,
+            "--secret-key-file": None, "--database-port": None, "--expected-pins": None}
     files, i = [], 0
     while i < len(argv):
         name = argv[i]
@@ -182,13 +243,21 @@ def parse_args(argv):
             i += 2
         else:
             raise Refused("usage: --job-root J --venv V --port N --ready-timeout S "
+                          "--secret-key-file K --database-port D "
                           "[--observer-file NAME SHA256 PATH]... "
                           "[--stage-index N [--previous-stage NAME]]")
-    for name in ("--job-root", "--venv"):
+    if opts["--expected-pins"] is not None and not (
+            os.path.isabs(opts["--expected-pins"])
+            and os.path.normpath(opts["--expected-pins"]) == opts["--expected-pins"]):
+        raise Refused("--expected-pins must be an absolute normalized path")
+    for name in ("--job-root", "--venv", "--secret-key-file"):
         if opts[name] is None or not os.path.isabs(opts[name]) \
                 or os.path.normpath(opts[name]) != opts[name]:
             raise Refused("%s must be an absolute normalized path" % name)
-    for name, high in (("--port", 65535), ("--ready-timeout", 9999)):
+    if not opts["--secret-key-file"].startswith(opts["--job-root"] + "/"):
+        raise Refused("--secret-key-file must lie under the job root")
+    for name, high in (("--port", 65535), ("--ready-timeout", 9999),
+                       ("--database-port", 65535)):
         value = opts[name]
         if value is None or not value.isdigit() or not 1 <= int(value) <= high \
                 or value[0] == "0":
@@ -211,8 +280,12 @@ def parse_args(argv):
         if (int(index) == 0) != (previous is None):
             raise Refused("--previous-stage is required exactly when --stage-index > 0")
         stage = (int(index), previous)
+    secrets = {"url": os.path.join(opts["--job-root"], "database", "url"),
+               "key": opts["--secret-key-file"],
+               "database_port": int(opts["--database-port"]),
+               "pins": opts["--expected-pins"]}
     return (opts["--job-root"], opts["--venv"], int(opts["--port"]),
-            int(opts["--ready-timeout"]), sorted(files) or None, stage)
+            int(opts["--ready-timeout"]), sorted(files) or None, stage, secrets)
 
 
 def read_observer_module(module, pin):
@@ -561,8 +634,13 @@ def main(argv):
     signal.signal(signal.SIGINT, on_signal)
     preflight = argv[:1] == ["--preflight"]
     try:
-        job_root, venv, port, ready_timeout, observer, stage = \
+        job_root, venv, port, ready_timeout, observer, stage, secrets = \
             parse_args(argv[preflight:])
+        if stage is None and not preflight:
+            # P3c: a launch reads the job role's URL, so it must pass the
+            # launch gate, which needs the stage context. No fallback.
+            raise Refused("a launch needs the stage context (--stage-index 2 "
+                          "--previous-stage database-create-exit)")
         check_environment()
         check_external_config()
         check_job_root(job_root)
@@ -571,6 +649,19 @@ def main(argv):
         if stage is not None:
             sj = stage_journal_module()
             check_stage(sj, job_root, stage)
+        if stage is not None and not preflight:
+            if stage != (2, LAUNCH_PREFIX[-1]) or secrets["pins"] is None:
+                raise Refused("a launch follows database-create-exit at index 2, "
+                              "with --expected-pins")
+            ds = database_stage_module()
+            try:
+                # Before the launch journal opens and before P exists.
+                binding = ds.launch_prerequisites(job_root, LAUNCH_PREFIX,
+                                                  read_pins(secrets["pins"]))
+            except ds.DatabaseStageError as error:
+                raise Refused("launch gate: %s" % error.code)
+            secrets = dict(secrets, role=binding["role"],
+                           database_dir=binding["database_dir"])
         if preflight:
             check_venv_path(job_root, venv)
             if os.path.lexists(venv):
@@ -587,7 +678,8 @@ def main(argv):
         log("refused: %s" % error)
         return 1
     if stage is None:
-        return launch(job_root, venv, port, ready_timeout, observer, _NoStage(), None)
+        return launch(job_root, venv, port, ready_timeout, observer, _NoStage(), None,
+                      secrets)
     journal = sj.StageJournal(job_root, stage[0], STAGE_NAME, stage[1])
     try:
         journal.__enter__()
@@ -596,9 +688,16 @@ def main(argv):
         return 1
     rc = 1
     try:
+        # W3: before anything is created or started, the launch journal must
+        # have bound the gate's inputs, and records the expectation.
+        failure = record_launch_expectation(ds, journal, binding)
+        if failure is not None:
+            log("refused: launch expectation: %s" % failure)
+            journal.fail(failure)
+            return 1
         # launch() closes the stage COMPLETE itself, while it still owns P.
         rc = launch(job_root, venv, port, ready_timeout, observer, journal,
-                    lambda: journal.__exit__(None, None, None))
+                    lambda: journal.__exit__(None, None, None), secrets)
     finally:
         if rc != 0:
             # FAILED with the code launch() set. A journal whose COMPLETE close
@@ -607,7 +706,43 @@ def main(argv):
     return rc
 
 
-def launch(job_root, venv, port, ready_timeout, observer, stage, close_stage):
+def record_launch_expectation(ds, journal, binding):
+    """W3 and W3-BIND-R1, in the open launch JOURNAL: build the expectation
+    from the gate's BINDING, require that the journal's stage_begin bound the
+    same core and the gate's database-create-exit journal, then record it.
+    Returns None, or the fixed failure code (launch_core_changed,
+    launch_previous_changed, launch_expectation_invalid or
+    launch_expectation_failed); the caller fails the stage and never
+    launches."""
+    try:
+        expectation = ds.launch_expectation(binding)
+        ds.check_launch_entry(expectation, journal.core_identity_sha256,
+                              journal.previous_stage)
+        journal.record("launch_expectation", expectation)
+    except ds.DatabaseStageError as error:
+        return error.code
+    except (OSError, ValueError):
+        return "launch_expectation_failed"
+    return None
+
+
+def supervisor_argv(receipt, terminal, venv, secrets, observer_record, command):
+    """P's argv: paths and the database port only, never a secret value."""
+    return ([sys.executable, "-I", "-S", "-B", SUPERVISOR, "--receipt", receipt,
+             "--terminal", terminal, "--venv", venv,
+             "--database-url-file", secrets["url"], "--secret-key-file", secrets["key"],
+             "--database-port", str(secrets["database_port"]),
+             "--expected-role", secrets["role"],
+             "--database-dir-identity", "%d:%d" % (secrets["database_dir"]["dev"],
+                                                   secrets["database_dir"]["ino"])]
+            + ([] if observer_record is None else
+               ["--observer-socket", observer_record["socket"],
+                "--observer-manifest", observer_record["manifest"],
+                "--observer-manifest-sha256", observer_record["manifest_sha256"]])
+            + ["--"] + command)
+
+
+def launch(job_root, venv, port, ready_timeout, observer, stage, close_stage, secrets):
     """The launch after the shared checks; stage is a StageJournal or
     _NoStage, and close_stage (stage mode only) records stage_complete
     COMPLETE. Returns the exit status; 0 only after a hand-off."""
@@ -654,13 +789,7 @@ def launch(job_root, venv, port, ready_timeout, observer, stage, close_stage):
                "--port", str(port), "--no-reload", "--no-debugger"]
     deadline = time.monotonic() + ready_timeout
     proc = subprocess.Popen(
-        [sys.executable, "-I", "-S", "-B", SUPERVISOR, "--receipt", receipt,
-         "--terminal", terminal, "--venv", venv]
-        + ([] if observer_record is None else
-           ["--observer-socket", observer_record["socket"],
-            "--observer-manifest", observer_record["manifest"],
-            "--observer-manifest-sha256", observer_record["manifest_sha256"]])
-        + ["--"] + command,
+        supervisor_argv(receipt, terminal, venv, secrets, observer_record, command),
         process_group=0, stdin=subprocess.DEVNULL, stdout=server_log,
         stderr=server_log)
     os.close(server_log)

@@ -3,8 +3,31 @@
 
 Contract: docs/ci-launch-attestation-contract.md, section 5. Run as
 `python3 -I -S -B reference-supervisor.py --receipt R --terminal T
---venv V [--observer-socket S] -- COMMAND...` from a launcher that made
-this process the leader of its own process group.
+--venv V --database-url-file U --secret-key-file K --database-port N
+[--observer-socket S ...] -- COMMAND...` from a launcher that made this
+process the leader of its own process group.
+
+Server secrets, paths only (R-EP plan P2c; contract
+tool-exit-contract.md section 10). This process never holds DATABASE_URL
+or SECRET_KEY: it refuses to start if DATABASE_URL, SECRET_KEY or
+PGPASSWORD is in its environment, and it is given only the two file
+paths. The served child C reads them itself, and only after a barrier:
+- before the fork, P creates a pipe; C closes the write end and blocks on
+  a one-byte read;
+- P writes the byte only after the launch receipt R is written and synced.
+  If R cannot be written, P closes the pipe unwritten, and C exits (126)
+  without opening either file;
+- after the byte, C opens each path one component at a time from "/"
+  without following links; the URL file's directory must be the object
+  --database-dir-identity names, and its role --expected-role (P3c). Each file must be a private (no group or other
+  bits) regular single-link file of this uid, bounded. The URL must be the
+  job role's postgresql://NAME:PASSWORD@127.0.0.1:N/NAME with N the given
+  port. The key must be 16..4096 bytes of printable text. Any refusal exits
+  (125) with a fixed code, never a value;
+- C then places DATABASE_URL and SECRET_KEY in its own environment and
+  execs COMMAND exactly as before.
+So the first read of either value happens after R exists, inside P's
+supervised tree; C and its descendants are the only holders.
 
 - It marks itself a child subreaper, so every orphaned descendant is
   reparented to it while it lives.
@@ -26,7 +49,9 @@ import ctypes
 import hashlib
 import json
 import os
+import re
 import signal
+import stat
 import sys
 import time
 
@@ -37,6 +62,20 @@ PR_GET_CHILD_SUBREAPER = 37
 TERM_SECONDS = 10.0
 KILL_SECONDS = 5.0
 POLL_SECONDS = 0.05
+SECRET_OPTIONS = ("--database-url-file", "--secret-key-file", "--database-port",
+                  "--expected-role", "--database-dir-identity")
+_ROLE = re.compile(r"alrust_[a-z0-9_]{1,56}\Z")
+_IDENTITY = re.compile(r"(0|[1-9][0-9]{0,19}):(0|[1-9][0-9]{0,19})\Z")
+SECRET_VARIABLES = ("DATABASE_URL", "SECRET_KEY", "PGPASSWORD")
+MAX_URL = 1024
+MIN_KEY, MAX_KEY = 16, 4096
+# The job role's URL as database_stage writes it (its _URL, with the
+# database name required equal to the role name).
+_URL = re.compile(r"postgresql://(alrust_[a-z0-9_]{1,56}):([0-9a-f]{64})"
+                  r"@127\.0\.0\.1:([1-9][0-9]{0,4})/\1\Z")
+RELEASE = b"1"
+EXIT_CHILD_BARRIER = 126
+EXIT_CHILD_SECRET = 125
 OBSERVER_SOCKET = "ALRUST_OBSERVER_SOCKET"
 OBSERVER_PARENT = "ALRUST_OBSERVER_PARENT"
 
@@ -70,6 +109,7 @@ def is_sha256(value):
 def parse_args(argv):
     opts = {"--receipt": None, "--terminal": None, "--venv": None}
     opts.update(dict.fromkeys(OBSERVER_OPTIONS))
+    opts.update(dict.fromkeys(SECRET_OPTIONS))
     i = 0
     while i < len(argv) and argv[i] != "--":
         name = argv[i]
@@ -78,15 +118,33 @@ def parse_args(argv):
         opts[name] = argv[i + 1]
         i += 2
     command = argv[i + 1:]
-    if not command or opts["--receipt"] is None or opts["--terminal"] is None \
-            or opts["--venv"] is None:
+    if not command or any(opts[name] is None for name in
+                          ("--receipt", "--terminal", "--venv") + SECRET_OPTIONS):
         fail(EXIT_USAGE, "usage: --receipt R --terminal T --venv V "
+                         "--database-url-file U --secret-key-file K --database-port N "
+                         "--expected-role ROLE --database-dir-identity DEV:INO "
                          "[--observer-socket S --observer-manifest M "
                          "--observer-manifest-sha256 H] -- COMMAND...")
     for name in ("--receipt", "--terminal", "--venv", "--observer-socket",
                  "--observer-manifest"):
         if opts[name] is not None and not os.path.isabs(opts[name]):
             fail(EXIT_USAGE, "%s must be absolute" % name)
+    for name in ("--database-url-file", "--secret-key-file"):
+        if not os.path.isabs(opts[name]) or os.path.normpath(opts[name]) != opts[name] \
+                or opts[name] == "/":
+            fail(EXIT_USAGE, "%s must be an absolute normalized file path" % name)
+    port = opts["--database-port"]
+    if not port.isdigit() or port != str(int(port)) or not 1 <= int(port) <= 65535:
+        fail(EXIT_USAGE, "--database-port must be 1..65535")
+    opts["--database-port"] = int(port)
+    # P3c: the job role and the URL file's directory object, both derived by
+    # the launcher's gate from the core and the closed database-create stage.
+    if not _ROLE.fullmatch(opts["--expected-role"]):
+        fail(EXIT_USAGE, "--expected-role must be a job role name")
+    identity = _IDENTITY.fullmatch(opts["--database-dir-identity"])
+    if not identity:
+        fail(EXIT_USAGE, "--database-dir-identity must be DEV:INO")
+    opts["--database-dir-identity"] = (int(identity[1]), int(identity[2]))
     given = [opts[name] is not None for name in OBSERVER_OPTIONS]
     if any(given) and not all(given):
         fail(EXIT_USAGE, "the three observer options go together")
@@ -94,6 +152,115 @@ def parse_args(argv):
     if opts[name] is not None and not is_sha256(opts[name]):
         fail(EXIT_USAGE, "%s must be 64 lowercase hex characters" % name)
     return opts, command
+
+
+class SecretRefused(Exception):
+    """A fixed code; never a value or a path."""
+
+
+def read_private(path, limit, parent_identity=None):
+    """The bytes of PATH, opened one component at a time from "/" without
+    following links, only if it is a private regular single-link file of
+    this uid of at most LIMIT bytes. With PARENT_IDENTITY (dev, ino), the
+    held parent directory must be exactly that object (P3c)."""
+    names = path.split("/")[1:]
+    flags = os.O_RDONLY | os.O_CLOEXEC
+    try:
+        fd = os.open("/", flags | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        raise SecretRefused("secret_path_unreadable") from None
+    try:
+        for name in names[:-1]:
+            try:
+                child = os.open(name, flags | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            except OSError:
+                raise SecretRefused("secret_path_unreadable") from None
+            os.close(fd)
+            fd = child
+        if parent_identity is not None:
+            info = os.fstat(fd)
+            if (info.st_dev, info.st_ino) != parent_identity:
+                raise SecretRefused("secret_dir_not_bound")
+        try:
+            leaf = os.open(names[-1], flags | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY,
+                           dir_fd=fd)
+        except OSError:
+            raise SecretRefused("secret_path_unreadable") from None
+    finally:
+        os.close(fd)
+    try:
+        info = os.fstat(leaf)
+        if not (stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid()
+                and stat.S_IMODE(info.st_mode) & 0o077 == 0 and info.st_nlink == 1
+                and info.st_size <= limit):
+            raise SecretRefused("secret_file_not_private")
+        chunks, size = [], 0
+        while size <= limit:
+            chunk = os.read(leaf, limit + 1 - size)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+        if size > limit:
+            raise SecretRefused("secret_file_not_private")
+        return b"".join(chunks)
+    except OSError:
+        raise SecretRefused("secret_path_unreadable") from None
+    finally:
+        os.close(leaf)
+
+
+def _one_line(data):
+    return data[:-1] if data.endswith(b"\n") else data
+
+
+def child_secrets(url_path, key_path, port, role, dir_identity):
+    """The two values, read and validated by the served child after the
+    barrier. The expectation (ROLE, DIR_IDENTITY, PORT) is fixed before the
+    read; the URL must be in that directory object and name that role and
+    port, which is checked after the read and before exec (P3c). Returns
+    {"DATABASE_URL", "SECRET_KEY"}; raises SecretRefused."""
+    url = _one_line(read_private(url_path, MAX_URL, dir_identity))
+    try:
+        url = url.decode("ascii")
+    except UnicodeError:
+        raise SecretRefused("database_url_invalid") from None
+    match = _URL.fullmatch(url)
+    if not match or int(match[3]) != port:
+        raise SecretRefused("database_url_invalid")
+    if match[1] != role:
+        raise SecretRefused("database_role_unexpected")
+    key = _one_line(read_private(key_path, MAX_KEY + 1))
+    try:
+        text = key.decode("utf-8")
+    except UnicodeError:
+        raise SecretRefused("secret_key_invalid") from None
+    if not MIN_KEY <= len(key) <= MAX_KEY or not text.isprintable():
+        raise SecretRefused("secret_key_invalid")
+    return {"DATABASE_URL": url, "SECRET_KEY": text}
+
+
+def await_release(fd):
+    """The child's side of the barrier: True only for the release byte. EOF
+    (the parent closed the pipe unwritten) or anything else is False."""
+    try:
+        return os.read(fd, 1) == RELEASE
+    except OSError:
+        return False
+
+
+def release(fd, receipt_ok):
+    """The parent's side: the byte only after the launch receipt was written
+    and synced; otherwise close unwritten. Returns whether it was sent."""
+    sent = False
+    try:
+        if receipt_ok:
+            sent = os.write(fd, RELEASE) == 1
+    except OSError:
+        sent = False
+    finally:
+        os.close(fd)
+    return sent
 
 
 def read_stat(pid):
@@ -227,6 +394,11 @@ def main(argv):
         fail(EXIT_SETUP, "setup read failed: %s" % error)
     if my_stat is None:
         fail(EXIT_SETUP, "own /proc entry unreadable")
+    present = [name for name in SECRET_VARIABLES if name in os.environ]
+    if present:
+        # Paths only: this process never holds a value (P2c).
+        fail(EXIT_SETUP, "secret value variables in the environment: %s"
+             % ", ".join(present))
 
     env = dict(os.environ)
     env.pop(OBSERVER_SOCKET, None)
@@ -235,14 +407,38 @@ def main(argv):
         env[OBSERVER_SOCKET] = opts["--observer-socket"]
         env[OBSERVER_PARENT] = str(me)
 
+    try:
+        gate_read, gate_write = os.pipe()
+    except OSError as error:
+        fail(EXIT_SETUP, "barrier pipe: %s" % error)
     child = os.fork()
     if child == 0:
         try:
             signal.signal(signal.SIGTERM, signal.SIG_DFL)
             signal.signal(signal.SIGINT, signal.SIG_DFL)
+            os.close(gate_write)
+            released = await_release(gate_read)
+            os.close(gate_read)
+            if not released:
+                os.write(2, b"reference-supervisor: child: no release, nothing read\n")
+                os._exit(EXIT_CHILD_BARRIER)
+            try:
+                env.update(child_secrets(opts["--database-url-file"],
+                                         opts["--secret-key-file"], opts["--database-port"],
+                                         opts["--expected-role"],
+                                         opts["--database-dir-identity"]))
+            except SecretRefused as refused:
+                os.write(2, b"reference-supervisor: child: secrets refused: %s\n"
+                         % str(refused).encode("ascii", "replace"))
+                os._exit(EXIT_CHILD_SECRET)
+            except BaseException:
+                os.write(2, b"reference-supervisor: child: secrets refused: "
+                            b"secret_read_failed\n")
+                os._exit(EXIT_CHILD_SECRET)
             os.execve(command[0], command, env)
         finally:
             os._exit(127)
+    os.close(gate_read)
 
     try:
         child_stat = read_stat(child)
@@ -277,6 +473,8 @@ def main(argv):
     except OSError as error:
         sys.stderr.write("reference-supervisor: launch receipt: %s\n" % error)
         receipt_ok = False
+    # The barrier: C may read its secrets only now that R exists (P2c).
+    release(gate_write, receipt_ok)
 
     child_status = None
     while receipt_ok and not stop_requested:

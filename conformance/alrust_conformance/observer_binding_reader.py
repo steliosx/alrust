@@ -17,6 +17,10 @@ from . import stage_journal as sj
 MAX_BYTES = 65536
 MAX_PATH = 4096
 CORE_EXPECTATIONS = sj.CORE_KEYS - {"captured_utc_ns", "captured_monotonic_ns"}
+# Core /2 (R-EP plan P1) adds entrypoint_pins; the expectation set follows the
+# expected schema exactly, so a /1 expectation never matches a /2 core.
+CORE_EXPECTATIONS_V2 = sj.CORE_KEYS_V2 - {"captured_utc_ns", "captured_monotonic_ns"}
+CORE_EXPECTATIONS_V3 = sj.CORE_KEYS_V3 - {"captured_utc_ns", "captured_monotonic_ns"}
 LAUNCH_KEYS = frozenset({"schema", "supervisor", "child", "boot_id", "venv",
                          "terminal_receipt", "observer_socket", "observer",
                          "launched_utc_ns", "monotonic_ns"})
@@ -160,8 +164,13 @@ def read_binding_inputs(job_root, root_identity, *, expected_core, core_sha256,
     _require(all(_digest(x) for x in (core_sha256, launch_sha256,
                                      readiness_sha256, observer_manifest_sha256)),
              "expected_digest_invalid")
-    _require(type(expected_core) is dict and set(expected_core) == CORE_EXPECTATIONS,
-             "expected_core_invalid")
+    _require(type(expected_core) is dict and (
+        (expected_core.get("schema") == sj.SCHEMA_CORE
+         and set(expected_core) == CORE_EXPECTATIONS)
+        or (expected_core.get("schema") == sj.SCHEMA_CORE_V2
+            and set(expected_core) == CORE_EXPECTATIONS_V2)
+        or (expected_core.get("schema") == sj.SCHEMA_CORE_V3
+            and set(expected_core) == CORE_EXPECTATIONS_V3)), "expected_core_invalid")
     _require(type(expected_version) is str and _VERSION.fullmatch(expected_version)
              and type(expected_port) is int and 1 <= expected_port <= 65535,
              "expected_readiness_invalid")
@@ -187,7 +196,9 @@ def read_binding_inputs(job_root, root_identity, *, expected_core, core_sha256,
             sj.validate_core(sj._dumps(dict(expected_core, captured_utc_ns=0,
                                            captured_monotonic_ns=0)), job_root)
             core = sj.validate_core(core_data, job_root)
-            _require({k: core[k] for k in CORE_EXPECTATIONS} == expected_core,
+            _require(set(core) - {"captured_utc_ns", "captured_monotonic_ns"}
+                     == set(expected_core)
+                     and {k: core[k] for k in expected_core} == expected_core,
                      "core_expectation_mismatch")
             _require(core["boot_id"] == sj.boot_id(), "boot_mismatch")
             launch = sj.strict_json(launch_data, "launch_invalid")
