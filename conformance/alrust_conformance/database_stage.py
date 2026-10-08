@@ -48,6 +48,7 @@ _PROFILE = re.compile(r"[a-z0-9][a-z0-9_-]{0,30}\Z")
 _DIGITS = re.compile(r"[1-9][0-9]*\Z")
 _VERIFIER = re.compile(r"SCRAM-SHA-256\$4096:[A-Za-z0-9+/=]+\$[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+\Z")
 _CONTAINER = re.compile(r"[0-9a-f]{12,64}\Z")
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _PATH = "/usr/bin:/bin"
 
 
@@ -670,6 +671,53 @@ def launch_prerequisites(job_root, prefix, expected):
     return dict(_created_binding(job_root, records, core), aggregation=aggregation)
 
 
+def launch_expectation(binding):
+    """The launch journal's `launch_expectation` payload (executing workflow
+    W3) from launch_prerequisites' BINDING: the role and database directory
+    the launch expects, and the exact gate inputs that admitted it (the
+    bound core's sha256 and each gate journal's name and sha256, in order).
+    Pure; refuses a malformed binding with launch_expectation_invalid."""
+    try:
+        aggregation = binding["aggregation"]
+        payload = {
+            "role": binding["role"],
+            "database_dir": {"dev": binding["database_dir"]["dev"],
+                             "ino": binding["database_dir"]["ino"]},
+            "core_identity_sha256": aggregation["core_identity_sha256"],
+            "gate_journals": [{"name": stage["name"], "sha256": stage["sha256"]}
+                              for stage in aggregation["stages"]]}
+    except (KeyError, TypeError):
+        raise DatabaseStageError("launch_expectation_invalid") from None
+    _require(aggregation.get("verdict") == "VALID"
+             and [j["name"] for j in payload["gate_journals"]]
+             == [CREATE_STAGE, "database-create-exit"]
+             and type(payload["role"]) is str and _NAME.fullmatch(payload["role"]) is not None
+             and all(type(v) is int for v in payload["database_dir"].values())
+             and all(type(v) is str and _SHA256.fullmatch(v) for v in
+                     [payload["core_identity_sha256"]]
+                     + [j["sha256"] for j in payload["gate_journals"]]),
+             "launch_expectation_invalid")
+    return payload
+
+
+def check_launch_entry(expectation, core_identity_sha256, previous_stage):
+    """W3-BIND-R1: the launch stage's own stage_begin must have bound exactly
+    the inputs the gate admitted. CORE_IDENTITY_SHA256 and PREVIOUS_STAGE
+    are what StageJournal entry recorded; EXPECTATION is launch_expectation's
+    payload. The core must be the gate's core (launch_core_changed) and the
+    previous stage must be database-create-exit at index 1 with the gate's
+    journal sha256 (launch_previous_changed). Pure; refuses before any
+    launch."""
+    _require(type(core_identity_sha256) is str
+             and core_identity_sha256 == expectation["core_identity_sha256"],
+             "launch_core_changed")
+    exit_journal = expectation["gate_journals"][-1]
+    _require(type(previous_stage) is dict
+             and previous_stage == {"index": 1, "name": exit_journal["name"],
+                                    "sha256": exit_journal["sha256"]},
+             "launch_previous_changed")
+
+
 SQL_KEYS = """-- alrust:op=registry_keys
 SELECT json_build_object('keys', coalesce(json_agg(key), '[]'::json))
 FROM (SELECT key FROM keys ORDER BY key LIMIT :limit) AS k;
@@ -798,15 +846,42 @@ def build_registry(job_root, journal, *, secret_key_path, other_secrets, port,
 # ---------------------------------------------------------------------------
 # Stage runners: gate first, then the journal, then the action
 
+CORE_NAME_KWARGS = frozenset({"profile", "run_id", "attempt"})
+
+
+def _core_names(job_root, bound_sha256):
+    """The database name's parts from the job's /3 core (executing workflow
+    W3): exactly the bytes the open stage's stage_begin bound, re-read and
+    compared by sha256. {"profile", "run_id", "attempt"}, or a fixed-code
+    DatabaseStageError. database_name() still validates each part."""
+    try:
+        core_bytes = sj.read_bounded(os.path.join(job_root, sj.CORE_NAME), sj.MAX_CORE)
+    except OSError:
+        raise DatabaseStageError("create_core_unreadable") from None
+    _require(type(bound_sha256) is str
+             and hashlib.sha256(core_bytes).hexdigest() == bound_sha256, "create_core_changed")
+    try:
+        core = sj.validate_core(core_bytes, job_root)
+    except sj.JournalError:
+        raise DatabaseStageError("create_core_invalid") from None
+    _require(core["schema"] == sj.SCHEMA_CORE_V3, "create_legacy_core")
+    return {"profile": core["profile"], "run_id": core["run_id"],
+            "attempt": core["run_attempt"]}
+
+
 def run_create_stage(job_root, **kwargs):
     """The `database-create` stage, journal index 0 (R-EP plan P2b-2). Run
     only inside its tool supervisor P_T (contract tool-exit-contract.md):
     the job role's password is generated here, in this process, after P_T
-    exists. The stage closes FAILED with the fixed code on any refusal.
+    exists. The database name's profile, run id and attempt come only from
+    the /3 core that stage_begin bound (W3); a caller passing any of them
+    is refused. The stage closes FAILED with the fixed code on any refusal.
     Returns the URL file's path, never the URL."""
     with sj.StageJournal(job_root, 0, CREATE_STAGE) as journal:
         try:
-            return create_database(job_root, journal, **kwargs)
+            _require(not CORE_NAME_KWARGS & set(kwargs), "create_names_from_caller")
+            names = _core_names(job_root, journal.core_identity_sha256)
+            return create_database(job_root, journal, **names, **kwargs)
         except DatabaseStageError as error:
             journal.fail(error.code)
             raise

@@ -174,7 +174,18 @@ def read_pins(path):
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise Refused("expected pins are not a regular file")
-        data = os.read(fd, MAX_PINS + 1)
+        # Read to EOF: a read may legally return fewer bytes than asked
+        # (W4-READ-R1); stop once the bound is passed, then refuse below.
+        pieces, size = [], 0
+        while True:
+            chunk = os.read(fd, MAX_PINS + 1 - size)
+            if not chunk:
+                break
+            pieces.append(chunk)
+            size += len(chunk)
+            if size > MAX_PINS:
+                break
+        data = b"".join(pieces)
     finally:
         os.close(fd)
     if len(data) > MAX_PINS:
@@ -677,6 +688,13 @@ def main(argv):
         return 1
     rc = 1
     try:
+        # W3: before anything is created or started, the launch journal must
+        # have bound the gate's inputs, and records the expectation.
+        failure = record_launch_expectation(ds, journal, binding)
+        if failure is not None:
+            log("refused: launch expectation: %s" % failure)
+            journal.fail(failure)
+            return 1
         # launch() closes the stage COMPLETE itself, while it still owns P.
         rc = launch(job_root, venv, port, ready_timeout, observer, journal,
                     lambda: journal.__exit__(None, None, None), secrets)
@@ -686,6 +704,26 @@ def main(argv):
             # already failed is closed and stays without stage_complete.
             journal.__exit__(LaunchFailed, LaunchFailed(rc), None)
     return rc
+
+
+def record_launch_expectation(ds, journal, binding):
+    """W3 and W3-BIND-R1, in the open launch JOURNAL: build the expectation
+    from the gate's BINDING, require that the journal's stage_begin bound the
+    same core and the gate's database-create-exit journal, then record it.
+    Returns None, or the fixed failure code (launch_core_changed,
+    launch_previous_changed, launch_expectation_invalid or
+    launch_expectation_failed); the caller fails the stage and never
+    launches."""
+    try:
+        expectation = ds.launch_expectation(binding)
+        ds.check_launch_entry(expectation, journal.core_identity_sha256,
+                              journal.previous_stage)
+        journal.record("launch_expectation", expectation)
+    except ds.DatabaseStageError as error:
+        return error.code
+    except (OSError, ValueError):
+        return "launch_expectation_failed"
+    return None
 
 
 def supervisor_argv(receipt, terminal, venv, secrets, observer_record, command):

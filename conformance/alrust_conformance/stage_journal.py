@@ -430,6 +430,10 @@ class StageJournal:
         self._root, self._index, self._name = job_root, index, name
         self._previous = previous_name
         self._journal = None
+        # What stage_begin bound, set on entry (W3): the core bytes' sha256
+        # and the previous stage {"index", "name", "sha256"} (None at 0).
+        self.core_identity_sha256 = None
+        self.previous_stage = None
         self._code = None
 
     def _envelope(self, kind, payload):
@@ -450,13 +454,16 @@ class StageJournal:
             previous = {"index": self._index - 1, "name": self._previous,
                         "sha256": hashlib.sha256(data).hexdigest()}
         self._journal = PrivateJournal(journal_path(self._root, self._index, self._name))
+        core_sha256 = hashlib.sha256(core).hexdigest()
         try:
             self._journal.append(self._envelope("stage_begin", {
-                "core_identity_sha256": hashlib.sha256(core).hexdigest(),
+                "core_identity_sha256": core_sha256,
                 "previous_stage": previous}))
         except BaseException:
             self._journal.close()
             raise
+        self.core_identity_sha256 = core_sha256
+        self.previous_stage = previous
         return self
 
     def record(self, kind, payload):
