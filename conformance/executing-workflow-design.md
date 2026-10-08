@@ -287,8 +287,12 @@ without `--supervisor-pin`, `--entrypoint-script-pin` and `--interpreter`
 (usage), measuring the pinned script file. The core must pin the reviewed
 script S1 will run, never an unrelated file as a stand-in. So the first
 item on the critical path for both S0 and S1 is Codex's refusal entrypoint
-(E1c): a C_E script that validates its E1a plan, opens journal index 4,
-records the plan's `NOT_RUN` refusal, closes, and exits non-zero.
+(E1c, design `93b0dee5`): the separately identified `refusal-cleanup`
+infrastructure probe. Before opening anything it checks the core and the
+closed four-stage prefix against the original digests the workflow captured;
+it then opens journal index 4, closes it **FAILED** with the fixed code
+`infrastructure_refusal`, and exits non-zero (A2's F1). After allocation its
+outcome is FAIL, never a fresh `NOT_RUN`, and it earns no conformance credit.
 
 **Deadlines.** `alrust_conformance.deadlines` (Claude, on the W-head
 stack) implements section 5 as pure functions of `now` and `J`: R = 480 s
