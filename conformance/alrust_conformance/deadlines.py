@@ -9,7 +9,11 @@ read_job_deadline touch the job root.
 
 - J, the job deadline, is fixed once by an early step (after the core is
   written) as NOW + JOB_BUDGET_NS, bound to the core's sha256 and boot,
-  and never recomputed or extended.
+  and never recomputed or extended. The producing step returns the job
+  deadline file's full sha256; the workflow carries that original digest
+  (a step output) to every reader, which refuses unless the file still
+  has exactly those bytes (DL-J-R1). The expected digest is never taken
+  from bytes read later.
 - The cleanup reserve R covers the whole cleanup phase at its maxima
   (CLEANUP_STEPS, about 402 s); the work cutoff is C = J - R.
 - A work-phase tool launch gets D = min(NOW + STAGE_BUDGET_NS,
@@ -132,31 +136,41 @@ def step_timeout_minutes(now, deadline):
 def write_job_deadline(job_root, now):
     """Fix J = NOW + JOB_BUDGET_NS once, bound to the current core's sha256
     and boot: <job_root>/job-deadline.json, 0600, exclusive (a second call
-    refuses). NOW must not precede the core's capture. Returns J."""
+    refuses). NOW must not precede the core's capture. Returns (J, the
+    file's full sha256); the caller keeps that digest as the original, for
+    every read_job_deadline."""
     core_bytes, core = _core(job_root)
     _require(_ns(now) and now >= core["captured_monotonic_ns"], "deadline_before_core")
     job_deadline = now + JOB_BUDGET_NS
     record = {"schema": SCHEMA_JOB_DEADLINE, "job_deadline_monotonic_ns": job_deadline,
               "boot_id": core["boot_id"], "core_identity_sha256": hashlib.sha256(core_bytes).hexdigest()}
+    data = json.dumps(record, sort_keys=True).encode() + b"\n"
     try:
-        _sj._write_exclusive(os.path.join(job_root, JOB_DEADLINE_NAME),
-                             json.dumps(record, sort_keys=True).encode() + b"\n")
+        _sj._write_exclusive(os.path.join(job_root, JOB_DEADLINE_NAME), data)
     except FileExistsError:
         raise DeadlineError("job_deadline_exists") from None
     except OSError:
         raise DeadlineError("job_deadline_unwritable") from None
-    return job_deadline
+    return job_deadline, hashlib.sha256(data).hexdigest()
 
 
-def read_job_deadline(job_root):
-    """J from <job_root>/job-deadline.json: exact keys, the current core's
-    sha256 and boot, and the running boot. Never recomputed."""
+def read_job_deadline(job_root, expected_sha256):
+    """J from <job_root>/job-deadline.json, only if the file's full sha256
+    equals EXPECTED_SHA256, the original digest write_job_deadline returned
+    (DL-J-R1), compared before anything is parsed; then exact keys, the
+    current core's sha256 and boot, and the running boot. Never recomputed."""
+    _require(type(expected_sha256) is str and len(expected_sha256) == 64
+             and not expected_sha256.strip("0123456789abcdef"), "job_deadline_expected_invalid")
     core_bytes, core = _core(job_root)
     try:
         data = _sj.read_bounded(os.path.join(job_root, JOB_DEADLINE_NAME), MAX_JOB_DEADLINE)
-        record = _sj.strict_json(data.rstrip(b"\n"), "job_deadline_invalid")
     except (OSError, _sj.JournalError):
         raise DeadlineError("job_deadline_unreadable") from None
+    _require(hashlib.sha256(data).hexdigest() == expected_sha256, "job_deadline_changed")
+    try:
+        record = _sj.strict_json(data.rstrip(b"\n"), "job_deadline_invalid")
+    except _sj.JournalError:
+        raise DeadlineError("job_deadline_invalid") from None
     _require(type(record) is dict and set(record) == {
         "schema", "job_deadline_monotonic_ns", "boot_id", "core_identity_sha256"}
         and record["schema"] == SCHEMA_JOB_DEADLINE

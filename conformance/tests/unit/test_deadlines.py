@@ -3,6 +3,7 @@
 and J as arguments; the job-deadline file is written in a private job root
 from test_tool_supervisor_pure._job. No clock-dependent assertion, process,
 socket or signal."""
+import hashlib
 import json
 import os
 
@@ -131,14 +132,52 @@ def _captured(root):
 def test_j_is_fixed_once_and_read_back(tmp_path, monkeypatch):
     root, _ = _job(tmp_path, monkeypatch)
     now = _captured(root) + 1
-    j = dl.write_job_deadline(str(root), now)
+    j, digest = dl.write_job_deadline(str(root), now)
     assert j == now + dl.JOB_BUDGET_NS
-    assert dl.read_job_deadline(str(root)) == j
     path = os.path.join(str(root), dl.JOB_DEADLINE_NAME)
+    assert digest == hashlib.sha256(open(path, "rb").read()).hexdigest()
+    assert dl.read_job_deadline(str(root), digest) == j
     assert oct(os.stat(path).st_mode & 0o777) == "0o600"
     with pytest.raises(dl.DeadlineError, match="job_deadline_exists"):
         dl.write_job_deadline(str(root), now + 5)
-    assert dl.read_job_deadline(str(root)) == j
+    assert dl.read_job_deadline(str(root), digest) == j
+
+
+def _rewrite(root, change):
+    """Rewrite the J file in place (same UID), as an accident or a later
+    step could; returns the new bytes' digest."""
+    path = os.path.join(str(root), dl.JOB_DEADLINE_NAME)
+    record = json.loads(open(path, "rb").read())
+    change(record)
+    data = json.dumps(record, sort_keys=True).encode() + b"\n"
+    os.chmod(path, 0o600)
+    with open(path, "wb") as f:
+        f.write(data)
+    return hashlib.sha256(data).hexdigest()
+
+
+def test_a_j_extended_in_place_is_refused_against_the_original_digest(tmp_path, monkeypatch):
+    # DL-J-R1: same core bytes, same boot, J moved by 3600 s.
+    root, _ = _job(tmp_path, monkeypatch)
+    j, digest = dl.write_job_deadline(str(root), _captured(root) + 1)
+    _rewrite(root, lambda r: r.update(job_deadline_monotonic_ns=j + 3600 * S))
+    with pytest.raises(dl.DeadlineError, match="job_deadline_changed"):
+        dl.read_job_deadline(str(root), digest)
+
+
+def test_an_unchanged_j_still_reads_with_its_original_digest(tmp_path, monkeypatch):
+    root, _ = _job(tmp_path, monkeypatch)
+    j, digest = dl.write_job_deadline(str(root), _captured(root) + 1)
+    _rewrite(root, lambda r: None)                  # same bytes rewritten
+    assert dl.read_job_deadline(str(root), digest) == j
+
+
+@pytest.mark.parametrize("expected", [None, "", "a" * 63, "A" * 64, "g" * 64, b"a" * 64])
+def test_the_expected_digest_must_be_a_full_lowercase_sha256(tmp_path, monkeypatch, expected):
+    root, _ = _job(tmp_path, monkeypatch)
+    dl.write_job_deadline(str(root), _captured(root) + 1)
+    with pytest.raises(dl.DeadlineError, match="job_deadline_expected_invalid"):
+        dl.read_job_deadline(str(root), expected)
 
 
 def test_j_cannot_precede_the_core(tmp_path, monkeypatch):
@@ -150,7 +189,7 @@ def test_j_cannot_precede_the_core(tmp_path, monkeypatch):
 
 def test_a_changed_core_invalidates_j(tmp_path, monkeypatch):
     root, _ = _job(tmp_path, monkeypatch)
-    dl.write_job_deadline(str(root), _captured(root) + 1)
+    _, digest = dl.write_job_deadline(str(root), _captured(root) + 1)
     path = os.path.join(str(root), sj.CORE_NAME)
     core = json.loads(open(path, "rb").read())
     core["captured_utc_ns"] += 1
@@ -158,15 +197,15 @@ def test_a_changed_core_invalidates_j(tmp_path, monkeypatch):
     with open(path, "wb") as f:
         f.write(sj._dumps(core))
     with pytest.raises(dl.DeadlineError, match="job_deadline_core_changed"):
-        dl.read_job_deadline(str(root))
+        dl.read_job_deadline(str(root), digest)
 
 
 def test_another_boot_invalidates_j(tmp_path, monkeypatch):
     root, _ = _job(tmp_path, monkeypatch)
-    dl.write_job_deadline(str(root), _captured(root) + 1)
+    _, digest = dl.write_job_deadline(str(root), _captured(root) + 1)
     monkeypatch.setattr(sj, "boot_id", lambda: "0" * 8 + "-0000-0000-0000-" + "0" * 12)
     with pytest.raises(dl.DeadlineError, match="job_deadline_other_boot"):
-        dl.read_job_deadline(str(root))
+        dl.read_job_deadline(str(root), digest)
 
 
 @pytest.mark.parametrize("change", [
@@ -177,27 +216,24 @@ def test_another_boot_invalidates_j(tmp_path, monkeypatch):
     lambda r: r.pop("boot_id"),
 ])
 def test_a_malformed_record_is_refused(tmp_path, monkeypatch, change):
+    # The expected digest is that of the malformed bytes, as if a faulty
+    # producer had written them: the record checks still refuse.
     root, _ = _job(tmp_path, monkeypatch)
     dl.write_job_deadline(str(root), _captured(root) + 1)
-    path = os.path.join(str(root), dl.JOB_DEADLINE_NAME)
-    record = json.loads(open(path, "rb").read())
-    change(record)
-    os.chmod(path, 0o600)
-    with open(path, "wb") as f:
-        f.write(json.dumps(record, sort_keys=True).encode() + b"\n")
+    digest = _rewrite(root, change)
     with pytest.raises(dl.DeadlineError, match="job_deadline_invalid"):
-        dl.read_job_deadline(str(root))
+        dl.read_job_deadline(str(root), digest)
 
 
 def test_a_linked_or_missing_record_is_unreadable(tmp_path, monkeypatch):
     root, _ = _job(tmp_path, monkeypatch)
     with pytest.raises(dl.DeadlineError, match="job_deadline_unreadable"):
-        dl.read_job_deadline(str(root))
+        dl.read_job_deadline(str(root), "0" * 64)
     target = tmp_path / "elsewhere.json"
     target.write_text("{}")
     os.symlink(target, os.path.join(str(root), dl.JOB_DEADLINE_NAME))
     with pytest.raises(dl.DeadlineError, match="job_deadline_unreadable"):
-        dl.read_job_deadline(str(root))
+        dl.read_job_deadline(str(root), hashlib.sha256(b"{}").hexdigest())
 
 
 def test_no_core_means_no_j(tmp_path):
