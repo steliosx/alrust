@@ -1,9 +1,10 @@
-"""Named memory-only controls: no FileRuntime/HeldReader/PrivateJournal calls.
+"""Named memory-only controls: no actual FileRuntime/OS/PrivateJournal calls.
 
 Imports: refusal policy (stdlib definitions); stage_journal and its
 security_evidence dependency (stdlib definitions). Only stage_journal's pure
 _parse_journal/strict_json path is called. Core validation and file identity
 operations are explicit memory adapters, not filesystem qualification.
+HeldReader uses a complete MemoryOS replacement, never real descriptors.
 """
 import copy
 import contextlib
@@ -382,6 +383,26 @@ class RefusalPureTests(unittest.TestCase):
         try:
             with self.assertRaises(probe.RefusalError):
                 probe.HeldReader("/synthetic/job")
+            self.assertFalse(fake.fds)
+        finally:
+            probe.os = original
+
+    def test_descriptor_close_error_is_propagated_after_all_closes_attempted(self):
+        fake, original = MemoryOS(), probe.os
+        probe.os = fake
+        try:
+            reader = probe.HeldReader("/synthetic/job")
+            count, close = len(fake.fds), fake.close
+            attempts = []
+            def fail_first(fd):
+                close(fd)
+                attempts.append(fd)
+                if len(attempts) == 1:
+                    raise OSError("unknown descriptor close")
+            fake.close = fail_first
+            with self.assertRaises(OSError):
+                reader.close()
+            self.assertEqual(len(attempts), count)
             self.assertFalse(fake.fds)
         finally:
             probe.os = original

@@ -224,8 +224,15 @@ class HeldReader:
         _need(sorted(os.listdir(self.directory)) == sorted(names), "journal_set_invalid")
 
     def close(self):
+        error = None
         while self.fds:
-            os.close(self.fds.pop())
+            try:
+                os.close(self.fds.pop())
+            except BaseException as exc:
+                if error is None:
+                    error = exc
+        if error is not None:
+            raise error
 
 
 class FileRuntime:
