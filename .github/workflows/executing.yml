@@ -38,10 +38,11 @@ jobs:
     name: S0 no-launch (database create, exit, drop; expected NOT_FINALIZED)
     runs-on: ubuntu-24.04
     # J = clock capture + 25 min (deadlines.JOB_BUDGET_NS). The job timeout
-    # counts from job start, before runner and service setup, so it must exceed
-    # J's budget by the pre-J steps and a setup margin (SETUP_MARGIN_MINUTES in
-    # the control): 45 >= 25 + 6 + 10.
-    timeout-minutes: 45
+    # counts from job start, before runner and service setup, and the custody,
+    # upload and verdict steps run after J, outside its reserve. So it must
+    # cover the pre-J steps, a setup margin (SETUP_MARGIN_MINUTES in the
+    # control), J's budget and those post-J steps: 50 >= 6 + 10 + 25 + 5.
+    timeout-minutes: 50
     services:
       postgres:
         image: postgres:16

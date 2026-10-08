@@ -170,7 +170,7 @@ def _step_block(prefix):
     return LINES[steps[k][0]:end]
 
 
-def test_the_job_timeout_leaves_j_and_a_setup_margin():
+def test_the_job_timeout_covers_setup_pre_j_j_and_the_post_j_steps():
     # J = capture + JOB_BUDGET_NS; the job timeout counts from job start.
     from alrust_conformance import deadlines as dl
     [job_timeout] = [int(m) for m in re.findall(r"^    timeout-minutes: (\d+)$", TEXT, re.M)]
@@ -181,7 +181,14 @@ def test_the_job_timeout_leaves_j_and_a_setup_margin():
         block = "\n".join(LINES[steps[k][0]:steps[k + 1][0]])
         pre_j += int(re.search(r"timeout-minutes: (\d+)", block).group(1))
     budget = dl.JOB_BUDGET_NS // (60 * dl.SECOND_NS)
-    assert job_timeout - budget >= pre_j + SETUP_MARGIN_MINUTES
+    # The custody, upload and verdict steps run after J, outside its reserve
+    # (W5BR2-N2), so their static timeouts count too.
+    post_j = 0
+    for prefix in ("Dispose of the credential-bearing files", "Stage the original non-credential evidence",
+                   "Upload the evidence", "S0 verdict"):
+        post_j += int(re.search(r"timeout-minutes: (\d+)", "\n".join(_step_block(prefix))).group(1))
+    assert post_j == 5
+    assert job_timeout >= pre_j + SETUP_MARGIN_MINUTES + budget + post_j
 
 
 def test_the_stop_helper_pin_is_also_checked_before_any_allocation():
