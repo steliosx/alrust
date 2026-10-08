@@ -106,3 +106,20 @@ probe result and independently prove P_E/exit/stop/A2/drop/finalizer outcomes.
 An unexpected stage_failed fault must not be accepted as the intended probe.
 S2/E2/E3/E4 and all19 profile execution remain separate. F3CD hold, owner gates,
 cooperative heavy exclusion and ARM64 deferral remain unchanged.
+
+## E1C-S-N1 diagnostic correction
+
+Refusal exit65 stays FAIL/UNPROVEN. Its reason now preserves only exact strings
+from the fixed PUBLIC_REFUSAL_CODES vocabulary; unknown arguments, multiple
+arguments, non-string objects and subclasses collapse to probe_refused without
+stringification. This distinguishes a measured core_changed before index4
+opens from refusal_journal_unproven after a closed journal fails validation.
+The identifier is diagnostic only: journal bytes and P_E/A2 still decide the
+evidence state and process closure. Close failures still override diagnostics
+to runtime_error/interrupted; nothing acquires COMPLETE or conformance credit.
+
+Named memory controls cover both phases and every public identifier, plus
+private text, multiple/empty arguments and an object that forbids __str__.
+No actual FileRuntime/OS/journalwriter/CLI/process call is newly exercised.
+Any module/dependency literal in W5b must use this changed exact head, after
+fresh independent review. The wrapper remains unchanged.

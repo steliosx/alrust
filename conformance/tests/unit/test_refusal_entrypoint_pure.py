@@ -324,6 +324,65 @@ class RefusalPureTests(unittest.TestCase):
             finally:
                 probe.FileRuntime = original
 
+    def test_main_distinguishes_before_open_from_unproven_terminal(self):
+        for phase, reason, opens in [("before", "core_changed", 0),
+                                      ("after", "refusal_journal_unproven", 1)]:
+            r = MemoryRuntime()
+            if phase == "before":
+                r.files["core-identity.json"] += b" "  # Original producer digest stays.
+            else:
+                r.terminal_payload = lambda data: {"result": "COMPLETE"}
+            original = probe.FileRuntime
+            probe.FileRuntime = lambda: r
+            try:
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    code = probe.main(r.argv)
+                with self.subTest(phase=phase):
+                    self.assertEqual(code, 65)
+                    self.assertEqual(r.opens, opens)
+                    self.assertEqual(json.loads(output.getvalue()), {
+                        "execution": "FAIL", "journal": "UNPROVEN", "reason": reason})
+            finally:
+                probe.FileRuntime = original
+
+    def test_main_only_emits_fixed_public_refusal_identifiers(self):
+        class MustNotStringify:
+            def __str__(self):
+                raise AssertionError("arbitrary diagnostic must never be formatted")
+
+        class UnknownRefusal(probe.RefusalError):
+            pass
+
+        errors = [probe.RefusalError(code) for code in sorted(probe.PUBLIC_REFUSAL_CODES)]
+        errors += [probe.RefusalError("private secret /path"),
+                   probe.RefusalError("usage", "private"),
+                   probe.RefusalError(MustNotStringify()), probe.RefusalError(),
+                   UnknownRefusal("usage")]
+        for error in errors:
+            r = MemoryRuntime()
+            def reject():
+                raise error
+            r.environment_names = reject
+            original = probe.FileRuntime
+            probe.FileRuntime = lambda: r
+            try:
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    code = probe.main(r.argv)
+                reason = (error.args[0] if type(error) is probe.RefusalError and len(error.args) == 1
+                          and type(error.args[0]) is str
+                          and error.args[0] in probe.PUBLIC_REFUSAL_CODES else "probe_refused")
+                with self.subTest(argument_type=type(error.args[0]).__name__ if error.args else "none"):
+                    self.assertEqual(code, 65)
+                    self.assertEqual(r.opens, 0)
+                    self.assertEqual(json.loads(output.getvalue()), {
+                        "execution": "FAIL", "journal": "UNPROVEN", "reason": reason})
+                    self.assertNotIn("private secret /path", output.getvalue())
+                    self.assertNotIn("/path", output.getvalue())
+            finally:
+                probe.FileRuntime = original
+
     def test_held_reader_short_reads_reach_eof_with_all_descriptors_closed(self):
         fake, original = MemoryOS(), probe.os
         probe.os = fake

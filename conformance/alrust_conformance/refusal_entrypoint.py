@@ -21,6 +21,29 @@ MAX_INT = (1 << 63) - 1
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
 _NUMBER = re.compile(r"[1-9][0-9]{0,18}\Z")
 PUBLIC_ENV = frozenset({"PATH", "LANG", "LC_ALL"})
+PUBLIC_REFUSAL_CODES = frozenset({
+    'ancestor_changed',
+    'core_boot_changed',
+    'core_changed',
+    'core_digest_invalid',
+    'core_schema_invalid',
+    'deadline_elapsed_or_clock_invalid',
+    'deadline_invalid',
+    'declared_invocation_failed',
+    'directory_not_private',
+    'environment_not_public',
+    'file_changed',
+    'file_not_private_bounded',
+    'job_root_invalid',
+    'journal_set_invalid',
+    'prefix_changed',
+    'prefix_digests_invalid',
+    'prefix_not_complete',
+    'probe_invalid',
+    'reader_path_invalid',
+    'refusal_journal_unproven',
+    'usage',
+})
 
 
 class RefusalError(ValueError):
@@ -287,8 +310,14 @@ def main(argv):
         parse_cli(argv)  # Invalid invocation imports no journal or file adapter.
         runtime = FileRuntime()
         report, code = run_refusal(argv, runtime)
-    except RefusalError:
-        report, code = {"execution": "FAIL", "journal": "UNPROVEN", "reason": "probe_refused"}, 65
+    except RefusalError as error:
+        # Only an exact built-in string in the fixed public vocabulary may
+        # reach output. Never stringify arbitrary error arguments or inputs.
+        reason = "probe_refused"
+        if (type(error) is RefusalError and len(error.args) == 1
+                and type(error.args[0]) is str and error.args[0] in PUBLIC_REFUSAL_CODES):
+            reason = error.args[0]
+        report, code = {"execution": "FAIL", "journal": "UNPROVEN", "reason": reason}, 65
     except KeyboardInterrupt:
         report, code = {"execution": "FAIL", "journal": "UNPROVEN", "reason": "interrupted"}, 130
     except Exception:
