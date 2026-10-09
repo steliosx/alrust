@@ -244,3 +244,36 @@ def test_the_export_allowlist_never_names_a_credential():
     assert not any(n.startswith(ds.DATABASE_DIR + "/") for n in ex.JOB_FILES)
     assert not any(ex._CREDENTIAL.match(n.rsplit("/", 1)[-1]) for n in names)
     assert len(set(names)) == len(names)
+
+
+# --- W5c: GitHub runs `run:` scripts as `bash -e {0}` (no `shell:` key) ---------
+
+def test_no_step_overrides_the_shell():
+    # The default is `bash -e {0}`; the controls below assume it.
+    assert "shell:" not in TEXT and "defaults:" not in TEXT
+
+
+def test_the_finalizer_exit_is_recorded_under_bash_e():
+    block = _step_block("Finalizer")
+    text = "\n".join(block)
+    call = next(i for i, l in enumerate(block) if "scripts/finalize-job.py" in l)
+    end = next(i for i in range(call, len(block)) if not block[i].rstrip().endswith("\\"))
+    assert block[end].rstrip().endswith('> "$OUT/finalize.out" || rc=$?')
+    assert any(l.strip() == "rc=0" for l in block[:call])
+    assert not any(l.strip() == "rc=$?" for l in block)
+    assert 'echo "$rc" > "$OUT/finalize.rc"' in text
+
+
+def test_the_p4_exit_is_recorded_under_bash_e():
+    block = _step_block("Stop the tool supervisor")
+    p4 = next(i for i, l in enumerate(block)
+              if 'scripts/stop-supervisor.py" \\' in l and "check-pin" not in l
+              and not block[i - 1].rstrip().endswith("\\"))
+    off = max(i for i in range(p4) if block[i].strip() == "set +e")
+    rc = next(i for i, l in enumerate(block) if "PIPESTATUS[0]" in l)
+    on = next(i for i in range(rc, len(block)) if block[i].strip() == "set -e")
+    exit_stage = next(i for i, l in enumerate(block) if 'run-stage.py" tool-exit' in l)
+    assert off < p4 < rc < on < exit_stage
+    # The pin check before P4 still fails closed (an `if !` block with exit 1).
+    pin = next(i for i, l in enumerate(block) if "scripts/check-pin.py" in l)
+    assert pin < off and block[pin].strip().startswith("if ! env -i")
