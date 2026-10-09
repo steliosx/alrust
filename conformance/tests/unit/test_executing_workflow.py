@@ -117,7 +117,9 @@ def test_no_masked_failures():
 def test_the_steps_follow_the_design_order():
     names = [name for _, name in _steps()]
     order = ["Core identity", "Fix the job deadline", "Expected pins", "database-create (stage 0)",
-             "Stop the tool supervisor", "database-drop (stage 2)", "Finalizer", "S0 verdict"]
+             "Stop the tool supervisor", "database-drop (stage 2)", "Finalizer",
+             "Dispose of the credential-bearing files", "Stage the original non-credential evidence",
+             "Upload the evidence", "S0 verdict"]
     positions = [next(i for i, n in enumerate(names) if n.startswith(o)) for o in order]
     assert positions == sorted(positions)
 
@@ -135,9 +137,11 @@ def test_the_verdict_checks_the_exact_expected_lines():
 def test_the_stop_helper_is_pin_checked_before_it_runs():
     # W5A-R1: the literal equals the committed bytes, the check precedes the
     # P4 helper and the exit stage, and a mismatch exits before either.
-    [literal] = re.findall(r'scripts/stop-supervisor.py" ([0-9a-f]{64})', TEXT)
-    assert literal == _sha("conformance/scripts/stop-supervisor.py")
-    check = next(i for i, l in enumerate(LINES) if "scripts/check-pin.py" in l)
+    # Two checks since W5b (S0PLAN-N1): before allocation, and again here.
+    literals = re.findall(r'scripts/stop-supervisor.py" ([0-9a-f]{64})', TEXT)
+    assert literals == [_sha("conformance/scripts/stop-supervisor.py")] * 2
+    check = next(i for i, l in enumerate(LINES)
+                 if "scripts/check-pin.py" in l and l.strip().startswith("if !"))
     p4 = next(i for i, l in enumerate(LINES) if 'scripts/stop-supervisor.py" \\' in l
               and "check-pin" not in l and i > check + 1)
     exit_stage = next(i for i, l in enumerate(LINES) if "run-stage.py\" tool-exit" in l)
@@ -152,3 +156,91 @@ def test_check_pin_is_a_standard_library_script():
     imports = set(re.findall(r"^import (\w+)", text, re.M))
     assert imports <= {"hashlib", "json", "os", "re", "stat", "sys"}
     assert "from " not in "\n".join(l for l in text.splitlines() if l.startswith("from "))
+
+
+# --- W5b: custody, credential disposal, the deadline margin, the pre-create pin ---
+
+SETUP_MARGIN_MINUTES = 10   # runner and service setup allowed before J (S0PLAN-R2)
+
+
+def _step_block(prefix):
+    steps = _steps()
+    k = next(k for k, (_, name) in enumerate(steps) if name.startswith(prefix))
+    end = steps[k + 1][0] if k + 1 < len(steps) else len(LINES)
+    return LINES[steps[k][0]:end]
+
+
+def test_the_job_timeout_covers_setup_pre_j_j_and_the_post_j_steps():
+    # J = capture + JOB_BUDGET_NS; the job timeout counts from job start.
+    from alrust_conformance import deadlines as dl
+    [job_timeout] = [int(m) for m in re.findall(r"^    timeout-minutes: (\d+)$", TEXT, re.M)]
+    steps = _steps()
+    fix = next(i for i, (_, name) in enumerate(steps) if name.startswith("Fix the job deadline"))
+    pre_j = 0
+    for k in range(fix + 1):        # the steps before J plus the J step itself
+        block = "\n".join(LINES[steps[k][0]:steps[k + 1][0]])
+        pre_j += int(re.search(r"timeout-minutes: (\d+)", block).group(1))
+    budget = dl.JOB_BUDGET_NS // (60 * dl.SECOND_NS)
+    # The custody, upload and verdict steps run after J, outside its reserve
+    # (W5BR2-N2), so their static timeouts count too.
+    post_j = 0
+    for prefix in ("Dispose of the credential-bearing files", "Stage the original non-credential evidence",
+                   "Upload the evidence", "S0 verdict"):
+        post_j += int(re.search(r"timeout-minutes: (\d+)", "\n".join(_step_block(prefix))).group(1))
+    assert post_j == 5
+    assert job_timeout >= pre_j + SETUP_MARGIN_MINUTES + budget + post_j
+
+
+def test_the_stop_helper_pin_is_also_checked_before_any_allocation():
+    block = _step_block("database-create (stage 0)")
+    pin = next(i for i, l in enumerate(block) if "scripts/check-pin.py" in l)
+    launch = next(i for i, l in enumerate(block) if "tool-launch" in l)
+    attempted = next(i for i, l in enumerate(block)
+                     if l.strip() == 'echo "attempted=1" >> "$GITHUB_OUTPUT"')
+    supervisor = next(i for i, l in enumerate(block) if "entrypoint-supervisor.py" in l)
+    assert pin < launch < attempted < supervisor
+    assert _sha("conformance/scripts/stop-supervisor.py") in block[pin + 1]
+    assert "set -euo pipefail" in "\n".join(block)
+
+
+def test_custody_steps_run_whenever_the_job_root_exists_and_gate_themselves():
+    # W5B-R1/R2: both steps run after any failure once the job root exists;
+    # each script gates itself (attempted=1: holder proven with the pins;
+    # attempted=0: nothing launched).
+    for prefix in ("Dispose of the credential-bearing files", "Stage the original non-credential evidence"):
+        block = "\n".join(_step_block(prefix))
+        assert "if: always() && steps.root.outcome == 'success'" in block
+        assert "ATTEMPTED: ${{ steps.create.outputs.attempted }}" in block
+        assert 'gate=(--attempted 1 --expected-pins "$OUT/expected-pins.json")' in block
+        assert "else gate=(--attempted 0); fi" in block
+        assert '"${gate[@]}"' in block
+    upload = "\n".join(_step_block("Upload the evidence"))
+    assert "if: always() && steps.export.outcome == 'success'" in upload
+
+
+def test_the_upload_action_is_pinned_and_short_lived():
+    upload = "\n".join(_step_block("Upload the evidence"))
+    [sha] = re.findall(r"uses: actions/upload-artifact@([0-9a-f]+)", upload)
+    assert len(sha) == 40
+    for line in ("retention-days: 1", "if-no-files-found: error", "overwrite: false",
+                 "include-hidden-files: false", "path: ${{ steps.export.outputs.staging }}"):
+        assert line in upload, line
+    assert "permissions:\n  contents: read\n" in TEXT and "actions: write" not in TEXT
+
+
+def test_the_verdict_requires_disposal_and_staging():
+    verdict = "\n".join(_step_block("S0 verdict"))
+    assert '"holder": "PROVEN"' in verdict and '"result": "DISPOSED"' in verdict
+    assert '"result": "STAGED", "state": "HOLDER_PROVEN"' in verdict
+
+
+def test_the_export_allowlist_never_names_a_credential():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "export_evidence", ROOT / "conformance" / "scripts" / "export-evidence.py")
+    ex = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ex)
+    names = list(ex.JOB_FILES) + list(ex.OUT_FILES)
+    assert not any(n.startswith(ds.DATABASE_DIR + "/") for n in ex.JOB_FILES)
+    assert not any(ex._CREDENTIAL.match(n.rsplit("/", 1)[-1]) for n in names)
+    assert len(set(names)) == len(names)
