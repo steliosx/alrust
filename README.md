@@ -49,14 +49,17 @@ The full plan and its fixed decisions are in the
 
 ## Status
 
-**Current checkpoint: 7 October 2026**, inspected at main
-[`7c07e52`](https://github.com/steliosx/alrust/tree/7c07e52f27b88b8c5a3b38d9f4cd73fff5f89554).
+**Current checkpoint: 9 October 2026**, inspected at main
+[`1a37e36`](https://github.com/steliosx/alrust/tree/1a37e364ce66105ceb7bbd9bc2fade678d5f188d).
 The scaffold, extracted specifications and conformance tooling are merged.
 **Phase 0 remains open; no Rust server or two-server conformance result is claimed.**
+The first admitted S0 infrastructure run completed its designed no-launch path;
+it is infrastructure evidence, not conformance credit.
 
 | Area | Current evidence | What it does not establish |
 |---|---|---|
-| CI bootstrap and scaffold | [Run 37696114824](https://github.com/steliosx/alrust/actions/runs/37696114824) passed all four jobs at `7c07e52`: reference guard, Rust formatting/lint/build checks, inert profile preflight and supervised reference-server bootstrap. | Rust targets still contain zero tests; no HTTP conformance vectors run in this workflow. |
+| CI bootstrap and scaffold | [Run 37977051871](https://github.com/steliosx/alrust/actions/runs/37977051871) passed all four jobs at `1a37e36`: reference guard, Rust formatting/lint/build checks, inert profile preflight and supervised reference-server bootstrap. | Rust targets still contain zero tests; no HTTP conformance vectors run in this workflow. |
+| First admitted S0 infrastructure run | [Run 37986106038](https://github.com/steliosx/alrust/actions/runs/37986106038) completed database create, supervised exit and drop on `1a37e36`; the finalizer returned its expected `NOT_FINALIZED / NONE` result, credential files were disposed and a one-day evidence artifact was staged. | This was the designed infrastructure expected-failure path. Cleanup remains `UNPROVEN`; all 19 profiles and all 15 controls remain `NOT_RUN`. It is not conformance, an Alrust server test or a reusable execution window. |
 | Supervised reference process | [PR #88](https://github.com/steliosx/alrust/pull/88) integrates the supervisor/launcher into hosted CI. The reference job observes a healthy Python server, then verifies `tree_empty / COMPLETE` and no remaining listener after shutdown. | This is reference bootstrap and cleanup evidence, not an implemented Alrust server or full-suite conformance. |
 | Profile inventory and entrypoint | All **19 profiles return `NOT_RUN`**, with execution disabled, in the current preflight job. | A green preflight gives no Phase 0 execution credit. Each enabling head and the complete reference suite still need qualification. |
 | Launch and observer interoperability | [PR #98](https://github.com/steliosx/alrust/pull/98), head `effe4099`, adds opt-in launch journals and launch confirmation. Codex-authored [#99](https://github.com/steliosx/alrust/pull/99), head `583cd721`, is merged after Claude's reported exact-head component review; it corrects the receipt reader's socket path and adds synthetic producer/consumer controls. Source inspected. | Synthetic HTTP stand-ins and offline components do not establish actual reference-observer capture, SQL qualification or complete Phase 0 execution. |
