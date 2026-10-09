@@ -208,6 +208,10 @@ jobs:
           fi
           # P4: a no-op when P_T has already ended; it proves nothing, so its exit
           # is recorded, and the exit verifier below decides from the receipts.
+          # W5C-R1: GitHub runs this script as `bash -e {0}`; without set +e a
+          # nonzero P4 exit (2, UNPROVEN) would end the step before its exit is
+          # recorded and before the exit verifier runs.
+          set +e
           env -i PATH=/usr/bin:/bin LANG=C.UTF-8 "$PY" -I -S -B "$w/scripts/stop-supervisor.py" \
             --job-root "$JOB" --tool database-create --stage-index 0 | tee "$OUT/stop-supervisor.out"
           echo "stop-supervisor exit ${PIPESTATUS[0]}" | tee "$OUT/stop-supervisor.rc"
@@ -248,10 +252,13 @@ jobs:
         run: |
           set -uo pipefail
           w="$GITHUB_WORKSPACE/conformance"
+          # W5C-R1: GitHub runs this script as `bash -e {0}`, so the expected
+          # nonzero exit (2) is captured by `|| rc=$?` instead of ending the step
+          # before finalize.rc is written.
+          rc=0
           env -i PATH=/usr/bin:/bin LANG=C.UTF-8 "$PY" -I -S -B "$w/scripts/finalize-job.py" \
             --job-root "$JOB" --stages database-create,database-create-exit,database-drop \
-            --expected-pins "$OUT/expected-pins.json" > "$OUT/finalize.out"
-          rc=$?
+            --expected-pins "$OUT/expected-pins.json" > "$OUT/finalize.out" || rc=$?
           cat "$OUT/finalize.out"
           echo "finalize-job exit $rc"
           echo "$rc" > "$OUT/finalize.rc"
