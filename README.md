@@ -49,8 +49,8 @@ The full plan and its fixed decisions are in the
 
 ## Status
 
-**Current checkpoint: 9 October 2026**, inspected at main
-[`1a37e36`](https://github.com/steliosx/alrust/tree/1a37e364ce66105ceb7bbd9bc2fade678d5f188d).
+**Current checkpoint: 10 October 2026**, inspected at main
+[`4aebd70`](https://github.com/steliosx/alrust/tree/4aebd704e80c2f831bad7f96762adc0fad84cc3d).
 The scaffold, extracted specifications and conformance tooling are merged.
 **Phase 0 remains open; no Rust server or two-server conformance result is claimed.**
 The first admitted S0 infrastructure run completed its designed no-launch path;
@@ -58,7 +58,9 @@ it is infrastructure evidence, not conformance credit.
 
 | Area | Current evidence | What it does not establish |
 |---|---|---|
-| CI bootstrap and scaffold | [Run 37977051871](https://github.com/steliosx/alrust/actions/runs/37977051871) passed all four jobs at `1a37e36`: reference guard, Rust formatting/lint/build checks, inert profile preflight and supervised reference-server bootstrap. | Rust targets still contain zero tests; no HTTP conformance vectors run in this workflow. |
+| CI bootstrap and scaffold | [Run 38085941574](https://github.com/steliosx/alrust/actions/runs/38085941574) passed all four jobs on main `4aebd70`: reference guard, Rust formatting/lint/test, inert profile preflight and supervised reference-server bootstrap. | A green scaffold workflow does not establish an implemented Alrust server or two-server conformance. |
+| PostgreSQL service-image source | [PR #125](https://github.com/steliosx/alrust/pull/125), head `704c831`, replaced Docker Hub pulls with the digest-pinned ECR Public mirror; its [four-job run](https://github.com/steliosx/alrust/actions/runs/38064948410) passed and the change is merged. | This fixes the observed Docker Hub pull-rate failure. It does not verify ECR publisher identity, guarantee future quota, or add conformance credit. |
+| Permanent execution controls | [PR #127](https://github.com/steliosx/alrust/pull/127), head `66b8636`, merged 15 PR100/P4 controls. The ordinary [PR run](https://github.com/steliosx/alrust/actions/runs/38082693147) passed. | The controls are excluded from normal discovery and remain **`NOT_RUN`**. Codex's P2 ordering-oracle thread is unresolved, so this merge is control source, not executed or cleanly reviewed control evidence. |
 | First admitted S0 infrastructure run | [Run 37986106038](https://github.com/steliosx/alrust/actions/runs/37986106038) completed database create, supervised exit and drop on `1a37e36`; the finalizer returned its expected `NOT_FINALIZED / NONE` result, credential files were disposed and a one-day evidence artifact was staged. | This was the designed infrastructure expected-failure path. Cleanup remains `UNPROVEN`; all 19 profiles and all 15 controls remain `NOT_RUN`. It is not conformance, an Alrust server test or a reusable execution window. |
 | Supervised reference process | [PR #88](https://github.com/steliosx/alrust/pull/88) integrates the supervisor/launcher into hosted CI. The reference job observes a healthy Python server, then verifies `tree_empty / COMPLETE` and no remaining listener after shutdown. | This is reference bootstrap and cleanup evidence, not an implemented Alrust server or full-suite conformance. |
 | Profile inventory and entrypoint | All **19 profiles return `NOT_RUN`**, with execution disabled, in the current preflight job. | A green preflight gives no Phase 0 execution credit. Each enabling head and the complete reference suite still need qualification. |
