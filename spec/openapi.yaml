@@ -18,8 +18,10 @@ info:
       **blackouts**; **API keys**; **users**; **groups**; **permissions**
       (with `/scopes`); **customers**; **`/config`**; **management**;
       the root index `/` and `/_`; the **webhook dispatcher**
-      (`/webhooks/{webhook}`) and the **prometheus** provider mapping.
-      Not yet written: the other eleven provider webhook payload mappings, the auth routes and other routes
+      (`/webhooks/{webhook}`) and all twelve **provider mappings** (cloudwatch,
+      grafana, graylog, newrelic, pagerduty, pingdom, prometheus, riemann,
+      serverdensity, slack, stackdriver, telegram).
+      Not yet written: the auth routes and other routes
       the static inventory lists.
     - **Reference security defects** are recorded where found (marked
       SECURITY). They describe the class of problem at source level only;
