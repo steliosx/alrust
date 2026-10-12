@@ -1,0 +1,130 @@
+name: GHCR mirror (one-time, ECR-RATE-1 option D, stage M)
+
+# expected-graph.json is Stage I's verified graph (run 38300290643), byte for
+# byte; the skopeo pins are Stage I's recorded tool identity. bounded.sh,
+# cleanup.sh, oci_graph.py and stored_bytes.py are the reviewed Stage I files.
+# Runs only on push to claude/ghcr-mirror-once; never merged; never a PR.
+# No sudo or other privileged step.
+#
+# Budget (minutes): checkout 2 + identity 1 + gate 1 + acquire 9 + publish 9
+# + verify 10 + cleanup 2 = 34, under the job limit of 36.
+on:
+  push:
+    branches: [claude/ghcr-mirror-once]
+
+permissions: {}
+
+concurrency:
+  group: ghcr-mirror-once
+  cancel-in-progress: false
+
+env:
+  SRC_REPO: public.ecr.aws/docker/library/postgres
+  DIGEST: sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
+  # Published by digest only: no tag is written, so nothing existing can be
+  # overwritten, and content already present at this digest is identical.
+  DEST_REPO: ghcr.io/steliosx/alrust-postgres
+  MAX_BYTES: "4294967296"
+  STAGE_MAX_BYTES: "5368709120"
+  PER_FILE_BYTES: "2147483648"
+  HEADROOM_BYTES: "1073741824"
+  COPY_TIMEOUT_S: "480"
+  EXPECTED_SKOPEO: "skopeo version 1.13.3"
+  EXPECTED_SKOPEO_SHA256: "1802f4706bb0f3f5a7a43e61c6ecef2adcfff567d454eb0052aeb5769885302c"
+
+jobs:
+  mirror:
+    name: acquire, verify, publish from local copy, verify back
+    runs-on: ubuntu-24.04
+    timeout-minutes: 36
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        timeout-minutes: 2
+        with:
+          persist-credentials: false
+
+      - name: Tool identity (fail closed on a different skopeo executable)
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          tool=$(command -v skopeo)
+          test -n "$tool"
+          v=$("$tool" --version); echo "$v"
+          test "$v" = "$EXPECTED_SKOPEO"
+          b=$(sha256sum < "$tool"); b=${b%% *}
+          echo "skopeo binary sha256: $b"
+          test "$b" = "$EXPECTED_SKOPEO_SHA256"
+          bytes=$(wc -c < "$tool")
+          bytes=${bytes//[[:space:]]/}
+          [[ "$bytes" =~ ^[0-9]+$ ]] && [ "$bytes" -gt 0 ]
+          echo "skopeo binary path: $tool bytes: $bytes"
+          dpkg-query -W -f='skopeo package: ${Package} ${Version}\n' skopeo || true
+          echo "runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+
+      - name: Free-space gate for two stages (fail closed)
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          avail=$(df -B1 --output=avail "$RUNNER_TEMP" | tail -1 | tr -d ' ')
+          need=$(( 2 * STAGE_MAX_BYTES + HEADROOM_BYTES ))
+          echo "free bytes: $avail; required: $need"
+          test "$avail" -ge "$need"
+
+      - name: Acquire the full source graph (all source reads happen here, before any write)
+        timeout-minutes: 9
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$RUNNER_TEMP/stage/tmp"
+          export TMPDIR="$RUNNER_TEMP/stage/tmp"
+          bash .github/mirror/bounded.sh "$RUNNER_TEMP/stage" "$STAGE_MAX_BYTES" "$COPY_TIMEOUT_S" "$PER_FILE_BYTES" -- \
+            skopeo copy --all --preserve-digests --retry-times 0 \
+            "docker://$SRC_REPO@$DIGEST" "oci:$RUNNER_TEMP/stage/layout:src"
+          python3 -I .github/mirror/oci_graph.py "$RUNNER_TEMP/stage/layout" "$DIGEST" "$MAX_BYTES" \
+            --expect .github/mirror/expected-graph.json > "$RUNNER_TEMP/src-graph.json"
+          echo "source graph equals Stage I: sha256 $(sha256sum < "$RUNNER_TEMP/src-graph.json" | cut -d' ' -f1)"
+
+      - name: Publish from the verified local copy (no source registry reads)
+        timeout-minutes: 9
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$RUNNER_TEMP/ghcr-auth"
+          export TMPDIR="$RUNNER_TEMP/stage/tmp"
+          printf '%s' "$GHCR_TOKEN" | skopeo login --authfile "$RUNNER_TEMP/ghcr-auth/auth.json" \
+            ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
+          bash .github/mirror/bounded.sh "$RUNNER_TEMP/stage" "$STAGE_MAX_BYTES" "$COPY_TIMEOUT_S" "$PER_FILE_BYTES" -- \
+            skopeo copy --all --preserve-digests --retry-times 0 \
+            --dest-authfile "$RUNNER_TEMP/ghcr-auth/auth.json" \
+            "oci:$RUNNER_TEMP/stage/layout:src" "docker://$DEST_REPO@$DIGEST"
+
+      - name: Verify the private destination by downloading it back (authenticated)
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$RUNNER_TEMP/verify/tmp"
+          export TMPDIR="$RUNNER_TEMP/verify/tmp"
+          bash .github/mirror/bounded.sh "$RUNNER_TEMP/verify" "$STAGE_MAX_BYTES" "$COPY_TIMEOUT_S" "$PER_FILE_BYTES" -- \
+            skopeo copy --all --preserve-digests --retry-times 0 \
+            --src-authfile "$RUNNER_TEMP/ghcr-auth/auth.json" \
+            "docker://$DEST_REPO@$DIGEST" "oci:$RUNNER_TEMP/verify/layout:dst"
+          python3 -I .github/mirror/oci_graph.py "$RUNNER_TEMP/verify/layout" "$DIGEST" "$MAX_BYTES" \
+            --expect .github/mirror/expected-graph.json > "$RUNNER_TEMP/dst-graph.json"
+          for f in "$RUNNER_TEMP"/stage/layout/blobs/sha256/*; do
+            cmp "$f" "$RUNNER_TEMP/verify/layout/blobs/sha256/$(basename "$f")"
+          done
+          echo "destination equals source: every blob byte-identical; graph sha256 $(sha256sum < "$RUNNER_TEMP/dst-graph.json" | cut -d' ' -f1)"
+
+      - name: Cleanup (always; credentials first, then every other scope)
+        if: always()
+        timeout-minutes: 2
+        run: >-
+          bash .github/mirror/cleanup.sh "$RUNNER_TEMP/ghcr-auth"
+          "$RUNNER_TEMP/stage" "$RUNNER_TEMP/verify"
+          "$RUNNER_TEMP/src-graph.json" "$RUNNER_TEMP/dst-graph.json"
