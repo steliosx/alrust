@@ -25,9 +25,13 @@ info:
       `/userinfo`, OIDC `/auth/openid` and its aliases, SAML `/auth/saml`
       and `/auth/saml/metadata.xml` in full; signup, email confirmation,
       password reset, GitHub and CAS at inventory depth only; that sets
-      spec depth, not an alrust auth-contract or adoption decision).
-      Not yet written: other routes
-      the static inventory lists.
+      spec depth, not an alrust auth-contract or adoption decision); the
+      **bulk operations** (`/_bulk/alerts`, `/_bulk/alerts/action`,
+      `/_bulk/alerts/attributes`, `/_bulk/alerts/status`,
+      `/_bulk/alerts/tag`, `/_bulk/alerts/untag`, `/_bulk/task/{task_id}`);
+      and **oEmbed** (`/oembed`, `/oembed.{format}`, `/embed.js`).
+      Every route in the static inventory is now specified; none remains
+      unwritten.
     - **Reference security defects** are recorded where found (marked
       SECURITY). They describe the class of problem at source level only;
       no exploit was built or run. They are recorded for the owner's
@@ -2347,6 +2351,673 @@ paths:
         "401": {$ref: '#/components/responses/Unauthorized'}
         "403": {$ref: '#/components/responses/Forbidden'}
         "500": {$ref: '#/components/responses/ServerError'}
+  /_bulk/alerts:
+    delete:
+      operationId: bulkDeleteAlerts
+      x-source: alerta/views/bulk.py:141-150; alerta/models/alert.py:487-489; alerta/database/backends/postgres/base.py:390-397, :1604-1612; alerta/database/backends/postgres/utils.py:142-198
+      x-scope: write:alerts
+      summary: Delete every alert the query selects
+      description: |
+        **Selection, shared by every `/_bulk/alerts*` route.** Each bulk
+        view builds its WHERE clause with `qb.alerts.from_params(request.args)`
+        (`bulk.py:43`, `:85`, `:105`, `:120`, `:135`, `:147`), the same
+        builder as `GET /alerts`, so the `q=` grammar, the filters, `id`,
+        `from-date`/`to-date`, `sort-by` and `group-by` parameters below
+        apply, with the same 400s for an unparsable `q`
+        (`postgres/utils.py:144-155`), an invalid filter name or an invalid
+        sort name. Differences from the alert queries:
+        - **No customer scoping.** The bulk views do not pass `customers`,
+          so `from_params` adds no `customer = ANY(...)` predicate
+          (`postgres/utils.py:160-163`); every alert-query view passes
+          `customers=g.customers` (`views/alerts.py:316`, `:391`, and
+          peers). See BULK-SEC-1.
+        - **No `to-date` default**: `query_time` is not passed, so there is
+          no upper time bound unless `to-date` is given
+          (`postgres/utils.py:167`).
+        - `group-by` is parsed and ignored. `sort-by` is validated (400)
+          but only orders the status and action selections (which 1000
+          alerts are taken); the other bulk routes do not sort.
+        - **No row limit on the set-based routes.** DELETE, tag, untag and
+          attributes run one UPDATE or DELETE over the whole WHERE clause
+          with no LIMIT (`postgres/base.py:361-397`). `BULK_QUERY_LIMIT`
+          (`settings.py:54`, default 100000, commented "max number of
+          alerts for bulk endpoints") is read nowhere in the package. The
+          status and action routes instead load at most 1000 alerts (see
+          those entries).
+        - With **no query parameters at all**, the WHERE clause is `1=1`
+          (`postgres/utils.py:157`): every alert is selected.
+        - No bulk route writes an audit event (none calls
+          `write_audit_trail`, `bulk.py:1-150`), whereas each single-alert
+          operation does (`views/alerts.py:136-137`, `:185-186`, `:212-213`,
+          `:239-240`, `:266-267`, `:300-301`). See BULK-SEC-3.
+        - `@jsonp` applies (`bulk.py:22`, `:34`, and peers): `?callback=`
+          wraps the body as for other routes, except on `PUT
+          /_bulk/alerts/action`, whose tuple return breaks the wrapper (see
+          there).
+
+        **This operation** (`bulk.py:141-150`):
+        1. `DELETE FROM alerts WHERE <selection> RETURNING id`, committed
+           (`postgres/base.py:390-397`, `:1604-1612`).
+        2. 200 `{status: ok, deleted: [ids], count}`. An empty selection
+           gives 200 with `deleted: []` and `count: 0`, not 404.
+
+        Bulk-specific differences from `DELETE /alert/{alert_id}`
+        (`views/alerts.py:276-306`):
+        - It needs only `write:alerts`, not `delete:alerts` (`bulk.py:143`
+          versus `views/alerts.py:278`). Under `DELETE_SCOPES` containing
+          `delete:alerts` (default `[]`, `settings.py:75`), the single
+          delete requires `delete:alerts` or `admin:alerts`
+          (`models/permission.py:104-108`), while this route still admits
+          any `write:alerts` holder.
+        - No `process_delete`: plugin delete hooks do not run, so no plugin
+          can reject or observe the delete.
+        - No audit event.
+        - **SECURITY BULK-SEC-2 (bulk delete bypasses delete controls):**
+          the route admits `write:alerts` regardless of `DELETE_SCOPES`,
+          skips plugin delete hooks and auditing, and with no filter
+          deletes every alert in one committed statement (and, per
+          BULK-SEC-1, regardless of customer). Source-derived, NOT_RUN.
+
+        **SECURITY BULK-SEC-1 (no customer scoping on any bulk route):**
+        because `from_params` is called without `customers`, a caller whose
+        credentials are limited to some customers (API key `customer`, or
+        token `customers` under `CUSTOMER_VIEWS`) selects, modifies and
+        deletes alerts of **every** customer through these routes. The
+        single-alert operations scope the lookup (`views/alerts.py:117-118`
+        and peers; customer-mapping C16-C18). Source-derived, NOT_RUN.
+
+        **SECURITY BULK-SEC-3 (bulk mutations are unaudited):** none of the
+        bulk routes, nor the action task, sends an audit event, so a bulk
+        delete or update leaves no audit-trail record even when
+        `AUDIT_TRAIL` includes `write`. Source-derived, NOT_RUN.
+
+        Source-derived; runtime NOT_RUN.
+      parameters: &bulkSelectionParams
+        - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/QDf'}
+        - {$ref: '#/components/parameters/AlertFilters'}
+        - {$ref: '#/components/parameters/AlertQueryId'}
+        - {$ref: '#/components/parameters/AlertDateRange'}
+        - {name: to-date, in: query, schema: {type: string}, description: "see from-date; no default on bulk routes"}
+        - {$ref: '#/components/parameters/AlertSortBy'}
+        - {$ref: '#/components/parameters/AlertGroupBy'}
+      responses:
+        "200":
+          description: "Deleted (possibly none)"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, deleted, count]
+                properties:
+                  status: {const: ok}
+                  deleted: {type: array, items: {type: string}}
+                  count: {type: integer}
+        "400": {description: "q parse failure, or invalid filter or sort name", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+      x-runtime: "NOT_RUN"
+  /_bulk/alerts/action:
+    put:
+      operationId: bulkActionAlerts
+      x-source: alerta/views/bulk.py:70-93; alerta/tasks.py:1-46; alerta/app.py:96-123; alerta/settings.py:54-59
+      x-scope: write:alerts
+      summary: Queue an action for every selected alert (Celery task)
+      description: |
+        Selection as described under `DELETE /_bulk/alerts`, without
+        customer scoping (BULK-SEC-1). Steps in source order:
+        1. `from alerta.tasks import action_alerts` runs inside the request
+           (`bulk.py:76`), **before** the body is read, so when the import
+           fails (below) the generic 500 comes first and no body
+           validation happens. On first import, `tasks.py:10` calls
+           `create_celery_app()` (`app.py:102-123`), which first imports
+           `kombu` to register the `customjson` serializer
+           (`utils/format.py:72-76`), then builds a **second** Flask app
+           with `create_app()` (`app.py:106`) and a `Celery` instance with
+           `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND` (both default
+           null, `settings.py:55-56`), copying the whole app configuration
+           into the Celery configuration (`app.py:112`).
+           - **Celery is not a declared dependency**: it appears in neither
+             `setup.py` `install_requires` nor any `requirements*.txt`, and
+             `app.py:96-99` swallows its ImportError. Without Celery or
+             kombu installed, the import raises (ModuleNotFoundError for
+             `kombu`, or NameError for `Celery`), giving the generic 500,
+             and the module is not cached, so every call retries. Inferred,
+             NOT_RUN.
+           - With Celery installed but no broker configured, which broker
+             Celery falls back to, and whether `delay` then fails, is NOT
+             established (Celery is unpinned; its source was not read).
+           - The reference repository ships no worker launcher (no
+             `celery` or `worker` in `Dockerfile`, `docker-compose*.yml`,
+             `Makefile` or `contrib/`). Who runs the tasks is a deployment
+             matter, NOT established.
+        2. Body, only once the import succeeded (`bulk.py:78-83`): `action`
+           (falsy or absent: 400 `must supply 'action' as json data`);
+           `text` (default `bulk status update`, not the single route's
+           `<action> operator action`); `timeout` (default null). Not
+           type-checked. A non-object JSON body raises AttributeError at
+           `.get` (generic 500).
+        3. Selection: `Alert.find_all(query)` with the default page 1 and
+           page size 1000 (`models/alert.py:493-494`), so **at most 1000
+           alert ids** are taken, in `sort-by` order or, without it, in no
+           defined order (`ORDER BY (select 1)`,
+           `postgres/utils.py:50-51`; `postgres/base.py:434-440`). Further
+           alerts are silently left out. None: 404 `not found`.
+        4. `action_alerts.delay(ids, action, text, timeout, g.login)`
+           (`bulk.py:91`); 202 `{status: ok, message: '<n> alerts queued
+           for action'}` with `Location: absolute_url('/_bulk/task/<task
+           id>')` (`bulk.py:93`).
+        5. JSONP: `jsonp` wraps only when `callback` is present and
+           truthy (`utils/response.py:11-12`), and it runs inside the
+           permission check, so only after authentication and the scope
+           check pass. A non-empty `callback` makes it read `.data` from
+           the view's tuple return (`utils/response.py:13`), which raises
+           AttributeError: generic 500 **after** the task was queued. An
+           empty `callback=` takes the ordinary path (202).
+
+        **The task** (`action_alerts`, `tasks.py:13-46`), per alert id, in a
+        Celery worker under an app context (`app.py:115-122`):
+        1. `Alert.find_by_id(id)` with **no customer filter**
+           (`tasks.py:18`). This lookup runs **before** the per-alert `try`
+           (`:20`): an exception raised by the lookup itself (for example
+           a database error) is not caught, ends the task, and leaves the
+           remaining ids unprocessed, after earlier alerts were already
+           written. A vanished alert returns None; the AttributeError on
+           `alert.status` (`:22`) is inside the `try` and is caught.
+        2. `g.login` = the requester's login; pre-action plugins
+           (`process_action`, `utils/api.py:95-133`: each routed plugin's
+           `take_action`), then `from_action` (lifecycle A2-A5).
+        3. If the status changed, `process_status` (each plugin's
+           `status_change`, `utils/api.py:169-200`) and `from_status`
+           (`models/alert.py:616-642`) run as well, writing a **second**
+           history entry and storing the possibly re-mapped status
+           (`tasks.py:35-44`).
+        4. Inside the per-alert `try` blocks (`:20-33`, `:36-44`), any
+           exception (RejectException, InvalidAction, ForwardingLoop,
+           anything else) is appended to a local `errors` list and the
+           alert is skipped. Exceptions outside them (step 1's lookup,
+           `updated.append` at `:46`) escape the task.
+
+        Bulk-specific differences from `PUT /alert/{alert_id}/action`
+        (`views/alerts.py:145-191`):
+        - **post-action plugins never run** (no `post_action=True` call);
+        - the extra `process_status` and `from_status` pass of step 3;
+        - caught errors never reach the client: the task builds `updated`
+          and `errors` and **returns nothing** (`tasks.py:15-46`), so
+          neither a 409, 400 nor 202 per alert, nor the list of updated
+          alerts, is observable through the task-status route, which shows
+          only the lowercased state (`bulk.py:24-27`). Whether an uncaught
+          exception (step 1) shows up as a failure state there depends on
+          Celery and is NOT established;
+        - **carry-over between alerts:** `action`, `text` and `timeout`
+          are reassigned from each alert's plugin results
+          (`tasks.py:23`, `:37`), so a plugin's change for one alert
+          applies to every later alert in the batch;
+        - alerts loaded for the action are re-read by id (`get_alert`,
+          `id ~* '^<id>'`, `postgres/base.py:293-299`);
+        - no audit event (BULK-SEC-3).
+
+        Source-derived; runtime NOT_RUN.
+      parameters: *bulkSelectionParams
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                action: {type: string, description: "required (truthy); same names as the single action route"}
+                text: {type: string, default: bulk status update}
+                timeout: {description: "unvalidated; falsy values fall back per lifecycle A4"}
+      responses:
+        "202":
+          description: "Task queued"
+          headers:
+            Location: {description: "absolute URL of GET /_bulk/task/{task_id}", schema: {type: string}}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, message]
+                properties:
+                  status: {const: ok}
+                  message: {type: string, description: "`<n> alerts queued for action`"}
+        "400": {description: "missing action; q parse failure; invalid filter or sort name", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "404": {description: "no alert selected", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {description: "Celery/kombu not installed (raised before any body validation) or task submission failure; non-object body; a non-empty `callback` after queuing", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+      x-runtime: "NOT_RUN"
+  /_bulk/alerts/attributes:
+    put:
+      operationId: bulkUpdateAlertAttributes
+      x-source: alerta/views/bulk.py:126-138; alerta/models/alert.py:481-484; alerta/database/backends/postgres/base.py:381-388, :85
+      x-scope: write:alerts
+      summary: Merge attributes into every selected alert
+      description: |
+        Selection as described under `DELETE /_bulk/alerts`, without
+        customer scoping or a row limit (BULK-SEC-1).
+        1. `attributes` falsy or absent: 400 `must supply 'attributes' as
+           json data` (`bulk.py:132-133`). A non-object JSON body: generic
+           500 (AttributeError).
+        2. One statement: `UPDATE alerts SET attributes = attributes ||
+           <attributes> WHERE <selection> RETURNING id`, committed
+           (`postgres/base.py:381-388`). A dict is sent as JSON (the
+           registered `dict` adapter, `postgres/base.py:85`). Any other
+           truthy value passes the only guard (truthiness, `bulk.py:132`)
+           unchanged; how psycopg2 adapts it and whether PostgreSQL then
+           resolves `jsonb || <value>` or errors is NOT established.
+        3. 200 `{status: ok, updated: [ids], count}`; an empty selection
+           gives 200 with `count: 0`, not 404.
+
+        Bulk-specific differences from `PUT /alert/{alert_id}/attributes`:
+        - a top-level **JSON merge in SQL** (`jsonb ||`), not the
+          single route's Python read-modify-write: there is no lost-update
+          window, but a `null` value is **stored as JSON null**, not used
+          to delete the key (contrast `postgres/base.py:340-341`);
+        - no "committed, then 500" case: the response does not depend on
+          the resulting maps;
+        - no 404 and no audit event.
+        As for the single route, no history entry is written, `updateTime`
+        is unchanged and no plugins run.
+
+        Source-derived; runtime NOT_RUN.
+      parameters: *bulkSelectionParams
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                attributes: {type: object, description: "required (truthy); merged at the top level; null values are stored, not removed"}
+      responses:
+        "200": &bulkUpdatedResponse
+          description: "Updated (possibly none)"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, updated, count]
+                properties:
+                  status: {const: ok}
+                  updated: {type: array, items: {type: string}}
+                  count: {type: integer}
+        "400": {description: "missing or empty attributes; q parse failure; invalid filter or sort name", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+      x-runtime: "NOT_RUN"
+  /_bulk/alerts/status:
+    put:
+      operationId: bulkSetAlertStatus
+      x-source: alerta/views/bulk.py:30-67; alerta/models/alert.py:433-449, :493-494; alerta/utils/api.py:169-200; alerta/database/backends/postgres/base.py:303-310
+      x-scope: write:alerts
+      summary: Set the status of every selected alert (synchronous)
+      description: |
+        Selection as described under `DELETE /_bulk/alerts`, without
+        customer scoping (BULK-SEC-1).
+        1. Body: `status` (falsy or absent: 400 `must supply 'status' as
+           json data`); `text` (default `bulk status update`, not `''`);
+           `timeout` (default null). Not type-checked; any non-empty status
+           string is accepted, as on the single route (lifecycle A1.2).
+        2. `Alert.find_all(query)`: **at most 1000 alerts** (page 1, size
+           1000, `models/alert.py:493-494`), in `sort-by` order or no
+           defined order; the rest are silently skipped. These rows are
+           loaded **without history and raw data** (`postgres/base.py:415-423`),
+           so status plugins see an empty history. None: 404 `not found`.
+        3. Per alert, in order (`bulk.py:51-62`):
+           - `process_status` (each routed plugin's `status_change`,
+             `utils/api.py:169-200`). Any exception, RejectException
+             included, is appended to `errors` and the alert is skipped.
+           - `alert.set_status(status, text, timeout)`
+             (`models/alert.py:433-449`, `postgres/base.py:303-310`):
+             updates only `status`, `timeout` (the given value, else
+             `ALERT_TIMEOUT`), `update_time` and a status history entry
+             whose `timeout` is the alert's **previous** timeout
+             (`models/alert.py:447`). A truthy return adds the id to
+             `updated`. This call is outside the try: an exception here
+             (for example a `timeout` PostgreSQL cannot store) ends the
+             request with the generic 500, with earlier alerts already
+             committed.
+        4. Any collected error: 500 `failed to bulk set alert status` with
+           `errors` = the messages (`bulk.py:64-65`), **after** the other
+           alerts were updated. Otherwise 200 `{status: ok, updated: [ids],
+           count}`.
+
+        Bulk-specific differences from `PUT /alert/{alert_id}/status`
+        (`views/alerts.py:104-141`):
+        - it calls `set_status`, not `from_status`: severity, tags and
+          attributes are not rewritten by the status write, and an absent
+          timeout stores `ALERT_TIMEOUT` instead of NULL (contrast
+          lifecycle A1.3);
+        - a plugin rejection becomes part of a 500 (with partial success),
+          not a 400;
+        - **carry-over between alerts:** `status` and `text` are
+          reassigned from each alert's plugin result (`bulk.py:53`), so a
+          plugin's re-mapping for one alert applies to every later alert;
+        - no audit event (BULK-SEC-3) and at most 1000 alerts.
+
+        Source-derived; runtime NOT_RUN.
+      parameters: *bulkSelectionParams
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status: {type: string, description: "required (truthy)"}
+                text: {type: string, default: bulk status update}
+                timeout: {description: "unvalidated; falsy gives ALERT_TIMEOUT"}
+      responses:
+        "200": *bulkUpdatedResponse
+        "400": {description: "missing status; q parse failure; invalid filter or sort name", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "404": {description: "no alert selected", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {description: "`failed to bulk set alert status` with per-alert error messages (other alerts already updated), or an exception from set_status mid-batch", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+      x-runtime: "NOT_RUN"
+  /_bulk/alerts/tag:
+    put:
+      operationId: bulkTagAlerts
+      x-source: alerta/views/bulk.py:96-108; alerta/models/alert.py:471-474; alerta/database/backends/postgres/base.py:361-369
+      x-scope: write:alerts
+      summary: Add tags to every selected alert
+      description: |
+        Selection as described under `DELETE /_bulk/alerts`, without
+        customer scoping or a row limit (BULK-SEC-1).
+        1. `tags` falsy or absent: `ApiError("must supply 'tags' as json
+           list")` with no code, so **500**, not 400 (`bulk.py:102-103`;
+           `exceptions.py:10`), as on the single route.
+        2. One statement: `UPDATE alerts SET tags = ARRAY(SELECT DISTINCT
+           UNNEST(tags || <tags>)) WHERE <selection> RETURNING id`,
+           committed (`postgres/base.py:361-369`). Union, de-duplicated,
+           undefined order. `tags` is not type-checked (as on the single
+           route; non-list values NOT verified).
+        3. 200 `{status: ok, updated: [ids], count}`; an empty selection
+           gives 200 with `count: 0`, not 404.
+
+        Bulk-specific differences from `PUT /alert/{alert_id}/tag`: one
+        set-based statement with no per-alert lookup, no 404, no audit
+        event. As for the single route, no history, no `updateTime` change
+        and no plugins.
+
+        Source-derived; runtime NOT_RUN.
+      parameters: *bulkSelectionParams
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tags: {type: array, items: {type: string}}
+      responses:
+        "200": *bulkUpdatedResponse
+        "400": {description: "q parse failure, or invalid filter or sort name", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {description: "missing or empty tags (`must supply 'tags' as json list`), or SQL failure", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+      x-runtime: "NOT_RUN"
+  /_bulk/alerts/untag:
+    put:
+      operationId: bulkUntagAlerts
+      x-source: alerta/views/bulk.py:111-123; alerta/models/alert.py:476-479; alerta/database/backends/postgres/base.py:371-379
+      x-scope: write:alerts
+      summary: Remove tags from every selected alert
+      description: |
+        Selection as described under `DELETE /_bulk/alerts`, without
+        customer scoping or a row limit (BULK-SEC-1).
+        1. `tags` falsy or absent: 500 `must supply 'tags' as json list`
+           (no code given, `bulk.py:117-118`).
+        2. One statement: `UPDATE alerts SET tags = (SELECT array_agg(t)
+           FROM unnest(tags) t WHERE NOT t = ANY(<tags>)) WHERE <selection>
+           RETURNING id`, committed (`postgres/base.py:371-379`). An alert
+           left with no tags gets SQL NULL, as on the single route.
+        3. 200 `{status: ok, updated: [ids], count}`; an empty selection
+           gives 200 with `count: 0`. Every selected alert is counted,
+           whether or not it carried any of the tags.
+
+        Bulk-specific differences from `PUT /alert/{alert_id}/untag`: one
+        set-based statement, no 404, no audit event, and the `tag_timer`
+        metric rather than `untag_timer` (`bulk.py:114`;
+        `views/alerts.py:225`). No history, no `updateTime` change, no
+        plugins.
+
+        Source-derived; runtime NOT_RUN.
+      parameters: *bulkSelectionParams
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tags: {type: array, items: {type: string}}
+      responses:
+        "200": *bulkUpdatedResponse
+        "400": {description: "q parse failure, or invalid filter or sort name", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {description: "missing or empty tags, or SQL failure", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+      x-runtime: "NOT_RUN"
+  /_bulk/task/{task_id}:
+    parameters:
+      - {name: task_id, in: path, required: true, schema: {type: string}, description: "any string; not checked against tasks this caller submitted"}
+    get:
+      operationId: getBulkTaskStatus
+      x-source: alerta/views/bulk.py:18-27; alerta/tasks.py:10-14; alerta/app.py:96-123
+      x-scope: read:alerts
+      summary: Celery state of a bulk action task
+      description: |
+        1. Imports `alerta.tasks` (`bulk.py:24`), with the same Celery
+           and kombu requirements and failure modes as `PUT
+           /_bulk/alerts/action` (generic 500 without them).
+        2. `action_alerts.AsyncResult(task_id)`; 200 `{status:
+           <task.status lowercased>, id: <task_id>}` (`bulk.py:25-27`).
+           The value set is Celery's task-state names in lower case; which
+           states occur, what an unknown id reports, and what happens with
+           the default null `CELERY_RESULT_BACKEND` (`settings.py:56`) are
+           NOT established (Celery unpinned, not read).
+        3. The task returns nothing (`tasks.py:15-46`), so even a finished
+           task exposes no result, no updated ids and no errors here.
+        4. No customer or ownership check: any `read:alerts` caller can
+           query any task id (BULK-SEC-1 class). The response carries only
+           the state.
+
+        Source-derived; runtime NOT_RUN.
+      responses:
+        "200":
+          description: "Task state"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, id]
+                properties:
+                  status: {type: string, description: "Celery state, lowercased"}
+                  id: {type: string}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {description: "Celery or kombu not installed, or result-backend failure (NOT established)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+      x-runtime: "NOT_RUN"
+  /oembed:
+    get:
+      operationId: oembed
+      x-source: alerta/views/oembed.py:14-68; alerta/templates/oembed/counts.html:1-24; alerta/database/backends/postgres/utils.py:142-198
+      x-scope: read:oembed
+      summary: oEmbed counts widget for an `/alerts/count` URL
+      description: &oembedDescription |
+        `/oembed` (format defaults to `json`) and `/oembed.<format>` run the
+        same view (`oembed.py:14-19`). `@permission(Scope.read_oembed)`
+        (`models/enums.py:83`): `read:oembed`, or derived from `read`,
+        `write:oembed`, `write`, `admin:oembed` or `admin`
+        (`models/permission.py:96-103`), so `READONLY_SCOPES` (`['read']`)
+        and the default user scopes qualify. `OPTIONS` via `cross_origin()`.
+        1. `format` is **never read**: any value (for example
+           `/oembed.xml`) gives the same JSON. Flask's default path
+           converter excludes `/`.
+        2. `url` and `title` are both **required** query parameters
+           (`oembed.py:20-25`); either missing gives 400 `{status: error,
+           message: 'Client Error'}`. This is not the ApiError body (no
+           `code`, `errors` or `requestId`). The bundled `embed.js` sends
+           `title` only when configured (`static/embed.js:22`).
+        3. `urlparse(url)`; an exception (for example a malformed IPv6
+           host) gives the same 400 (`:27-31`). Only the URL's **path
+           suffix** and **query** are used: host, scheme and port are
+           ignored, so the counts always come from this server's database.
+        4. Path ending `/alerts/count` (`:33-62`):
+           - `qb.alerts.from_params(parse_qs(o.query))`: a plain `dict` of
+             lists, not a werkzeug MultiDict, and **no customer scoping**.
+             `from_params` calls `params.get('from-date', default=None,
+             type=DateTime.parse)` unconditionally
+             (`postgres/utils.py:166`), and `dict.get` accepts no keyword
+             arguments, so this raises TypeError; any `q` value fails
+             earlier in the parser or later at the same line. The
+             `except Exception` turns it into 500 `{status: error,
+             message: 'Server Error'}` (`:37-39`). **Inferred: this branch
+             always returns that 500**, so the widget never renders.
+             NOT_RUN.
+           - Code after that point, unreachable on the inferred path:
+             `get_counts_by_severity` (`SELECT severity, COUNT(*) ... GROUP
+             BY severity`, `postgres/base.py:538-545`); `max` = the highest
+             of `informational`, `warning`, `minor`, `major`, `critical`
+             with a non-zero count, else `none` (ALERTA-model names only);
+             `counts.html` rendered with `title`, `max` and the counts
+             (autoescaped, Flask `.html` rule); 200 `{version: '1.0', type:
+             rich, title, provider_name: Alerta, provider_url:
+             request.url_root, html}` with an explicit
+             `Access-Control-Allow-Origin: *` header. `title` is
+             HTML-escaped inside `html` but returned raw in the JSON
+             `title` member.
+        5. Path ending `/alerts/top10/count`: the branch is a TODO `pass`
+           (`:64-66`), so the view returns None. In Flask 3.1.3, turning
+           None into a response raises TypeError (`flask/app.py:1211-1212`).
+           Where that conversion first happens is NOT established: the
+           outer `cross_origin()` decorator (Flask-Cors 6.0.2, source not
+           read) may convert the return value inside dispatch, where the
+           app's `Exception` handler (`exceptions.py:80`, `:120-136`) would
+           give the generic 500; otherwise it happens in `finalize_request`
+           outside the view's handlers (`flask/app.py:920`), and
+           `handle_exception` (`:841-861`) passes an InternalServerError to
+           the registered 500 handler (`exceptions.py:74-95`). Either way a
+           500 with an Error-shaped body is the inferred outcome (NOT_RUN);
+           the exact message is NOT established.
+        6. Any other path: 400 `{status: error, message: 'unsupported
+           oEmbed URL scheme'}` (`:67-68`).
+        7. JSONP: `jsonp` runs inside the permission check, so only after
+           authentication and the scope check pass, and wraps only when
+           `callback` is present and truthy (`utils/response.py:11-12`). A
+           non-empty `callback` makes it read `.data` from the view's
+           return value (`:13`); every branch returns a tuple or None, so
+           this raises AttributeError: generic 500. An empty `callback=`
+           takes the ordinary path.
+
+        **SECURITY OEMBED-SEC-1 (unscoped counts, latent):** the counts
+        query is built without `customers` (`oembed.py:35`) and needs only
+        `read:oembed`, which plain `read` (including `READONLY_SCOPES` for
+        anonymous callers under `ALLOW_READONLY`) grants. If the branch
+        worked, a customer-limited or read-only caller would see severity
+        counts across every customer. Currently masked by the inferred
+        TypeError above. Source-derived, NOT_RUN.
+
+        Source-derived; runtime NOT_RUN.
+      parameters: &oembedParams
+        - {name: url, in: query, required: true, schema: {type: string}, description: "only its path suffix and query string are used"}
+        - {name: title, in: query, required: true, schema: {type: string}, description: "required; reflected"}
+      responses: &oembedResponses
+        "200":
+          description: "oEmbed rich response (inferred unreachable, step 4)"
+          headers:
+            Access-Control-Allow-Origin: {schema: {const: "*"}}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, type, title, provider_name, provider_url, html]
+                properties:
+                  version: {const: "1.0"}
+                  type: {const: rich}
+                  title: {type: string}
+                  provider_name: {const: Alerta}
+                  provider_url: {type: string}
+                  html: {type: string}
+        "400":
+          description: "missing url or title, unparsable url (`Client Error`), or unsupported path (`unsupported oEmbed URL scheme`)"
+          content:
+            application/json:
+              schema: &oembedError
+                type: object
+                required: [status, message]
+                properties:
+                  status: {const: error}
+                  message: {type: string}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500":
+          description: "`{status: error, message: 'Server Error'}` from the counts branch (inferred always), or an Error body for the top10 branch (inferred) and for a non-empty `callback`. The Error body also satisfies the minimal oEmbed error shape, so the alternatives overlap (anyOf)."
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - *oembedError
+                  - {$ref: '#/components/schemas/Error'}
+      x-runtime: "NOT_RUN"
+  /oembed.{format}:
+    parameters:
+      - {name: format, in: path, required: true, schema: {type: string}, description: "ignored; any value without '/'"}
+    get:
+      operationId: oembedWithFormat
+      x-source: alerta/views/oembed.py:15-68
+      x-scope: read:oembed
+      summary: Same view as /oembed; the format is ignored
+      description: *oembedDescription
+      parameters: *oembedParams
+      responses: *oembedResponses
+      x-runtime: "NOT_RUN"
+  /embed.js:
+    get:
+      operationId: embedJs
+      x-source: alerta/views/oembed.py:71-74; alerta/static/embed.js:1-36
+      x-scope: none
+      summary: jQuery plugin that loads the oEmbed widget
+      security: [{}]
+      description: |
+        No permission decorator and no `cross_origin`. Returns
+        `send_static_file('embed.js')` (`oembed.py:71-74`), status 200;
+        the Content-Type is set by Flask's static-file handling and is
+        NOT established here (no media type is claimed). The route lists
+        `OPTIONS` itself, so Flask's automatic OPTIONS response does not
+        apply and an OPTIONS request is routed to this view (Flask route
+        semantics, inferred); what the app-level Flask-Cors extension
+        (`app.py:35`) adds or intercepts is NOT established.
+
+        The script (`static/embed.js:1-36`) defines `$.fn.alerta(url,
+        options)`: it builds `<endpoint>/oembed?url=<encoded url>`, adds
+        `&api-key=<key>` (unencoded) and `&title=<encoded title>` when
+        configured, fetches it with `$.ajax`, and inserts `data.html` with
+        jQuery `.html()`. The default endpoint is `http://api.alerta.io`.
+
+        **SECURITY OEMBED-SEC-2 (credential placement in the embedding
+        page):** the documented embedding puts an API key into the
+        embedding page's script and the request query string (`:5`,
+        `:21`), so anyone who can view that page can read the key, and the
+        key travels in URLs (logs, referrers); the default endpoint is
+        plain HTTP (`:4`). The returned `html` is inserted as HTML
+        (`:29`). Source-derived, NOT_RUN.
+
+        Source-derived; runtime NOT_RUN.
+      responses:
+        "200": {description: "embed.js (`static/embed.js`); media type NOT established", content: {"*/*": {schema: {type: string}}}}
+        "500": {$ref: '#/components/responses/ServerError'}
+      x-runtime: "NOT_RUN"
   /blackout:
     post:
       operationId: createBlackout
