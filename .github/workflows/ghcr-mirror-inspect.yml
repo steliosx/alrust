@@ -1,0 +1,84 @@
+name: GHCR mirror inspection (one-time, read-only, ECR-RATE-1 option D)
+
+# Runs only when the dedicated branch claude/ghcr-mirror-inspect is pushed.
+# Never merged to main; never a pull request. No sudo or other privileged step.
+# Downloads the pinned PostgreSQL index and all referenced content into private
+# runner-local storage (bounded by .github/mirror/bounded.sh), verifies
+# the full content graph, prints it as evidence, and deletes it. No registry
+# writes: the job has no package permission and no credentials.
+on:
+  push:
+    branches: [claude/ghcr-mirror-inspect]
+
+permissions: {}
+
+concurrency:
+  group: ghcr-mirror-inspect
+  cancel-in-progress: false
+
+env:
+  SRC_REPO: public.ecr.aws/docker/library/postgres
+  DIGEST: sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
+  MAX_BYTES: "4294967296"
+  STAGE_MAX_BYTES: "5368709120"
+  PER_FILE_BYTES: "2147483648"
+  HEADROOM_BYTES: "1073741824"
+  ACQUIRE_TIMEOUT_S: "840"
+
+jobs:
+  inspect:
+    name: acquire and verify the source graph (read-only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        timeout-minutes: 2
+        with:
+          persist-credentials: false
+
+      - name: Record tool, runner and disk
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          skopeo --version
+          echo "skopeo path: $(command -v skopeo) sha256: $(sha256sum "$(command -v skopeo)" | cut -d' ' -f1)"
+          dpkg-query -W -f='skopeo package: ${Package} ${Version}\n' skopeo || true
+          python3 --version
+          echo "runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+          df -B1 --output=avail "$RUNNER_TEMP" | tail -1
+
+      - name: Free-space gate (fail closed)
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          avail=$(df -B1 --output=avail "$RUNNER_TEMP" | tail -1 | tr -d ' ')
+          need=$(( STAGE_MAX_BYTES + HEADROOM_BYTES ))
+          echo "free bytes: $avail; required: $need"
+          test "$avail" -ge "$need"
+
+      - name: Acquire the full source graph (bounded, unprivileged)
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$RUNNER_TEMP/stage/tmp"
+          chmod 700 "$RUNNER_TEMP/stage"
+          export TMPDIR="$RUNNER_TEMP/stage/tmp"
+          bash .github/mirror/bounded.sh "$RUNNER_TEMP/stage" "$STAGE_MAX_BYTES" "$ACQUIRE_TIMEOUT_S" "$PER_FILE_BYTES" -- \
+            skopeo copy --all --preserve-digests --retry-times 0 \
+            "docker://$SRC_REPO@$DIGEST" "oci:$RUNNER_TEMP/stage/layout:src"
+
+      - name: Verify and print the content graph
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          python3 -I .github/mirror/oci_graph.py "$RUNNER_TEMP/stage/layout" "$DIGEST" "$MAX_BYTES" > "$RUNNER_TEMP/graph.json"
+          echo "graph sha256: $(sha256sum < "$RUNNER_TEMP/graph.json" | cut -d' ' -f1) bytes: $(wc -c < "$RUNNER_TEMP/graph.json")"
+          cat "$RUNNER_TEMP/graph.json"
+
+      - name: Cleanup (always)
+        if: always()
+        timeout-minutes: 2
+        run: bash .github/mirror/cleanup.sh - "$RUNNER_TEMP/stage" "$RUNNER_TEMP/graph.json"
