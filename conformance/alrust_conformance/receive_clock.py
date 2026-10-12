@@ -56,13 +56,15 @@ class ReceiveClock:
         if not isinstance(history, list) or not history:
             raise ClockError('history required for the branch oracle')
         history_times = [timestamp(row['updateTime']) for row in history]
-        if any(left <= right for left, right in zip(history_times, history_times[1:])):
-            raise ClockError('history ties or non-descending history unsupported')
+        # Alert.serialize returns history ascending by update_time (alert.py:149).
+        # Ordinary fixture timestamps are distinct, so the newest entry is last.
+        if any(left >= right for left, right in zip(history_times, history_times[1:])):
+            raise ClockError('history ties or non-ascending history unsupported')
         for field in FIELDS:
             timestamp(alert.get(field))
         if any(alert.get(field) != payload[field] for field in ('environment', 'resource', 'event', 'severity')):
             raise ClockError('response does not match the controlled identity')
-        current = previous['history'][0]['status'] if previous else 'open'
+        current = previous['history'][-1]['status'] if previous else 'open'
         if current not in ('open', 'closed'):
             raise ClockError('unsupported history current status')
         # This fixture has only open/closed states, default incoming status and
@@ -86,7 +88,7 @@ class ReceiveClock:
         if alert.get('createTime') != expected_create:
             raise ClockError('client createTime retention differs')
         if branch != 'dedup' or changed:
-            if history[0]['updateTime'] != payload['createTime'] or history[0]['status'] != expected_status:
+            if history[-1]['updateTime'] != payload['createTime'] or history[-1]['status'] != expected_status:
                 raise ClockError('receive history must retain the client timestamp and transition')
         elif history != previous['history']:
             raise ClockError('unchanged duplicate unexpectedly changed history')
