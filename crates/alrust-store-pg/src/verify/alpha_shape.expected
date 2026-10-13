@@ -1,1 +1,100 @@
-PENDING GENERATION: replace with the output of scripts/store-db-run.sh generate
+alerts column 001 id text collation="default" not_null=t default=- identity= generated=
+alerts column 002 resource text collation="default" not_null=t default=- identity= generated=
+alerts column 003 event text collation="default" not_null=t default=- identity= generated=
+alerts column 004 environment text collation="default" not_null=t default=- identity= generated=
+alerts column 005 severity text collation="default" not_null=t default=- identity= generated=
+alerts column 006 correlate text[] collation="default" not_null=t default='{}'::text[] identity= generated=
+alerts column 007 status text collation="default" not_null=t default=- identity= generated=
+alerts column 008 service text[] collation="default" not_null=t default='{}'::text[] identity= generated=
+alerts column 009 group text collation="default" not_null=t default=- identity= generated=
+alerts column 010 value jsonb collation=- not_null=f default=- identity= generated=
+alerts column 011 text text collation="default" not_null=t default=''::text identity= generated=
+alerts column 012 tags text[] collation="default" not_null=t default='{}'::text[] identity= generated=
+alerts column 013 attributes jsonb collation=- not_null=t default='{}'::jsonb identity= generated=
+alerts column 014 origin text collation="default" not_null=t default=- identity= generated=
+alerts column 015 type text collation="default" not_null=t default=- identity= generated=
+alerts column 016 create_time timestamp with time zone collation=- not_null=t default=- identity= generated=
+alerts column 017 timeout bigint collation=- not_null=f default=- identity= generated=
+alerts column 018 raw_data text collation="default" not_null=f default=- identity= generated=
+alerts column 019 customer text collation="default" not_null=f default=- identity= generated=
+alerts column 020 duplicate_count bigint collation=- not_null=t default=0 identity= generated=
+alerts column 021 repeat boolean collation=- not_null=t default=false identity= generated=
+alerts column 022 previous_severity text collation="default" not_null=t default=- identity= generated=
+alerts column 023 trend_indication text collation="default" not_null=t default=- identity= generated=
+alerts column 024 receive_time timestamp with time zone collation=- not_null=t default=- identity= generated=
+alerts column 025 last_receive_id text collation="default" not_null=t default=- identity= generated=
+alerts column 026 last_receive_time timestamp with time zone collation=- not_null=t default=- identity= generated=
+alerts column 027 update_time timestamp with time zone collation=- not_null=t default=- identity= generated=
+alerts column 028 history jsonb collation=- not_null=t default='[]'::jsonb identity= generated=
+alerts constraint alerts_attributes_not_null n NOT NULL attributes
+alerts constraint alerts_correlate_not_null n NOT NULL correlate
+alerts constraint alerts_create_time_not_null n NOT NULL create_time
+alerts constraint alerts_duplicate_count_not_null n NOT NULL duplicate_count
+alerts constraint alerts_environment_not_null n NOT NULL environment
+alerts constraint alerts_event_not_null n NOT NULL event
+alerts constraint alerts_group_not_null n NOT NULL "group"
+alerts constraint alerts_history_not_null n NOT NULL history
+alerts constraint alerts_id_not_null n NOT NULL id
+alerts constraint alerts_last_receive_id_not_null n NOT NULL last_receive_id
+alerts constraint alerts_last_receive_time_not_null n NOT NULL last_receive_time
+alerts constraint alerts_origin_not_null n NOT NULL origin
+alerts constraint alerts_pkey p PRIMARY KEY (id)
+alerts constraint alerts_previous_severity_not_null n NOT NULL previous_severity
+alerts constraint alerts_receive_time_not_null n NOT NULL receive_time
+alerts constraint alerts_repeat_not_null n NOT NULL repeat
+alerts constraint alerts_resource_not_null n NOT NULL resource
+alerts constraint alerts_service_not_null n NOT NULL service
+alerts constraint alerts_severity_not_null n NOT NULL severity
+alerts constraint alerts_status_not_null n NOT NULL status
+alerts constraint alerts_tags_not_null n NOT NULL tags
+alerts constraint alerts_text_not_null n NOT NULL text
+alerts constraint alerts_trend_indication_not_null n NOT NULL trend_indication
+alerts constraint alerts_type_not_null n NOT NULL type
+alerts constraint alerts_update_time_not_null n NOT NULL update_time
+alerts index CREATE INDEX alerts_identity_idx ON public.alerts USING btree (environment, resource, COALESCE(customer, ''::text)) valid=t ready=t live=t
+alerts index CREATE INDEX alerts_last_receive_time_idx ON public.alerts USING btree (last_receive_time DESC) valid=t ready=t live=t
+alerts index CREATE INDEX alerts_status_idx ON public.alerts USING btree (status) valid=t ready=t live=t
+alerts index CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id) valid=t ready=t live=t
+alerts table kind=r persistence=p rls=f force_rls=f options=- tablespace=0 replica_identity=d partition=f
+heartbeats column 001 id text collation="default" not_null=t default=- identity= generated=
+heartbeats column 002 origin text collation="default" not_null=t default=- identity= generated=
+heartbeats column 003 tags text[] collation="default" not_null=t default='{}'::text[] identity= generated=
+heartbeats column 004 attributes jsonb collation=- not_null=t default='{}'::jsonb identity= generated=
+heartbeats column 005 type text collation="default" not_null=t default=- identity= generated=
+heartbeats column 006 create_time timestamp with time zone collation=- not_null=t default=- identity= generated=
+heartbeats column 007 timeout bigint collation=- not_null=t default=- identity= generated=
+heartbeats column 008 receive_time timestamp with time zone collation=- not_null=t default=- identity= generated=
+heartbeats column 009 customer text collation="default" not_null=f default=- identity= generated=
+heartbeats constraint heartbeats_attributes_not_null n NOT NULL attributes
+heartbeats constraint heartbeats_create_time_not_null n NOT NULL create_time
+heartbeats constraint heartbeats_id_not_null n NOT NULL id
+heartbeats constraint heartbeats_origin_not_null n NOT NULL origin
+heartbeats constraint heartbeats_pkey p PRIMARY KEY (id)
+heartbeats constraint heartbeats_receive_time_not_null n NOT NULL receive_time
+heartbeats constraint heartbeats_tags_not_null n NOT NULL tags
+heartbeats constraint heartbeats_timeout_not_null n NOT NULL timeout
+heartbeats constraint heartbeats_type_not_null n NOT NULL type
+heartbeats index CREATE UNIQUE INDEX heartbeats_origin_customer_idx ON public.heartbeats USING btree (origin, COALESCE(customer, ''::text)) valid=t ready=t live=t
+heartbeats index CREATE UNIQUE INDEX heartbeats_pkey ON public.heartbeats USING btree (id) valid=t ready=t live=t
+heartbeats table kind=r persistence=p rls=f force_rls=f options=- tablespace=0 replica_identity=d partition=f
+keys column 001 id text collation="default" not_null=t default=- identity= generated=
+keys column 002 key text collation="default" not_null=t default=- identity= generated=
+keys column 003 user text collation="default" not_null=t default=- identity= generated=
+keys column 004 scopes text[] collation="default" not_null=t default='{}'::text[] identity= generated=
+keys column 005 text text collation="default" not_null=t default=''::text identity= generated=
+keys column 006 expire_time timestamp with time zone collation=- not_null=t default=- identity= generated=
+keys column 007 count bigint collation=- not_null=t default=0 identity= generated=
+keys column 008 last_used_time timestamp with time zone collation=- not_null=f default=- identity= generated=
+keys column 009 customer text collation="default" not_null=f default=- identity= generated=
+keys constraint keys_count_not_null n NOT NULL count
+keys constraint keys_expire_time_not_null n NOT NULL expire_time
+keys constraint keys_id_not_null n NOT NULL id
+keys constraint keys_key_key u UNIQUE (key)
+keys constraint keys_key_not_null n NOT NULL key
+keys constraint keys_pkey p PRIMARY KEY (id)
+keys constraint keys_scopes_not_null n NOT NULL scopes
+keys constraint keys_text_not_null n NOT NULL text
+keys constraint keys_user_not_null n NOT NULL "user"
+keys index CREATE UNIQUE INDEX keys_key_key ON public.keys USING btree (key) valid=t ready=t live=t
+keys index CREATE UNIQUE INDEX keys_pkey ON public.keys USING btree (id) valid=t ready=t live=t
+keys table kind=r persistence=p rls=f force_rls=f options=- tablespace=0 replica_identity=d partition=f
