@@ -282,3 +282,81 @@ jobs:
           .github/scripts/alpha-server.py stop || fail=1
           .github/scripts/stop-postgres18.sh || fail=1
           exit $fail
+
+  store-generate:
+    # ADR-0005 generation step, draft pull requests only: run the two
+    # ignored generators against this job's throwaway PostgreSQL 18.6,
+    # regenerate 0002, and upload the three generated files with a SHA256
+    # manifest for review. Nothing is committed or pushed from here.
+    name: store catalog generation (PostgreSQL 18.6, draft PRs only)
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          persist-credentials: false
+      - name: PostgreSQL 18.6 (PGDG apt, no container registry)
+        timeout-minutes: 5
+        run: .github/scripts/start-postgres18.sh alrust
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the store tests
+        timeout-minutes: 12
+        run: cargo test --locked -p alrust-store-pg --no-run
+      - name: Generate reference-catalog.json and alpha_shape.expected
+        timeout-minutes: 3
+        env:
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/alrust
+          ALRUST_TEST_DB_PREFIX: alrust_t_ci_
+        run: |
+          cargo test --locked -p alrust-store-pg --test reference_layout -- \
+            --ignored --exact generate_reference_catalog generate_alpha_shape --test-threads=1
+      - name: Regenerate 0002
+        timeout-minutes: 1
+        run: python3 scripts/gen-0002.py
+      - name: No test database remains
+        timeout-minutes: 1
+        env:
+          PGPASSWORD: postgres
+        run: |
+          set -euo pipefail
+          left=$(/usr/lib/postgresql/18/bin/psql -X -qAt -h 127.0.0.1 -U postgres -d alrust \
+            -c "SELECT count(*) FROM pg_database WHERE datname LIKE 'alrust\_t\_ci\_%'")
+          [ "$left" = 0 ] || { echo "test databases remain: $left"; exit 1; }
+      - name: Manifest
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/store-generated"
+          mkdir -p "$out"
+          files="crates/alrust-store-pg/reference-catalog.json crates/alrust-store-pg/src/verify/alpha_shape.expected crates/alrust-store-pg/migrations/0002_reference_layout.sql"
+          {
+            echo "head ${{ github.event.pull_request.head.sha }}"
+            echo "run ${{ github.run_id }}.${{ github.run_attempt }}"
+            for f in $files; do
+              echo "$(sha256sum < "$f" | cut -c1-64) $(wc -c < "$f") $f"
+            done
+          } > "$out/manifest.txt"
+          for f in $files; do install -D -m 644 "$f" "$out/$f"; done
+          cat "$out/manifest.txt"
+          echo "STORE_GENERATED=$out" >> "$GITHUB_ENV"
+      - name: Upload the generated files (7-day artifact)
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: store-generated-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.STORE_GENERATED }}
+          retention-days: 7
+          if-no-files-found: error
+          overwrite: false
+          include-hidden-files: false
+      - name: Stop PostgreSQL 18.6
+        if: always()
+        timeout-minutes: 2
+        run: .github/scripts/stop-postgres18.sh
