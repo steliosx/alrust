@@ -198,6 +198,21 @@ $alrust$;
 ALTER TABLE alerts RENAME TO alerts_alpha;
 ALTER INDEX alerts_pkey RENAME TO alerts_alpha_pkey;
 DROP INDEX alerts_identity_idx, alerts_last_receive_time_idx, alerts_status_idx;
+-- PostgreSQL 18 names NOT NULL constraints (<table>_<column>_not_null), and
+-- a renamed table keeps them; free those names for the new table so that its
+-- constraints get exactly the reference's names.
+DO $alrust$
+DECLARE
+    c record;
+BEGIN
+    FOR c IN SELECT conname FROM pg_constraint
+              WHERE conrelid = 'public.alerts_alpha'::regclass AND conname LIKE 'alerts\\_%'
+              ORDER BY conname LOOP
+        EXECUTE format('ALTER TABLE public.alerts_alpha RENAME CONSTRAINT %I TO %I',
+                       c.conname, 'alpha_' || c.conname);
+    END LOOP;
+END
+$alrust$;
 
 {L(32, 62)}
 
@@ -239,6 +254,21 @@ DROP TABLE alerts_alpha;
 ALTER TABLE heartbeats RENAME TO heartbeats_alpha;
 ALTER INDEX heartbeats_pkey RENAME TO heartbeats_alpha_pkey;
 DROP INDEX heartbeats_origin_customer_idx;
+-- PostgreSQL 18 names NOT NULL constraints (<table>_<column>_not_null), and
+-- a renamed table keeps them; free those names for the new table so that its
+-- constraints get exactly the reference's names.
+DO $alrust$
+DECLARE
+    c record;
+BEGIN
+    FOR c IN SELECT conname FROM pg_constraint
+              WHERE conrelid = 'public.heartbeats_alpha'::regclass AND conname LIKE 'heartbeats\\_%'
+              ORDER BY conname LOOP
+        EXECUTE format('ALTER TABLE public.heartbeats_alpha RENAME CONSTRAINT %I TO %I',
+                       c.conname, 'alpha_' || c.conname);
+    END LOOP;
+END
+$alrust$;
 
 {L(109, 120)}
 

@@ -188,12 +188,13 @@ fn present(b: bool) -> &'static str {
 /// The reference tables that exist are locked before the comparison and
 /// stay locked until the baseline commits, so no table DDL can land between
 /// the two. Writers that are not alrust wait, or the lock times out and
-/// nothing is written. A standalone `ALTER TYPE history` locks only the
-/// type, not the tables: the second comparison below narrows that window
-/// but does not close it (a type change committed after that read and
-/// before the baseline commit is caught only by the post-commit catalog
-/// check, with the baseline already written). Closing it is an open design
-/// question (ADR-0005).
+/// nothing is written. A standalone `ALTER TYPE history ADD ATTRIBUTE` does
+/// not wait for the table locks (measured on PostgreSQL 18.6; test
+/// alter_type_history_does_not_wait_for_the_alerts_lock): the second
+/// comparison below narrows that window but does not close it (a type
+/// change committed after that read and before the baseline commit is caught
+/// only by the post-commit catalog check, with the baseline already
+/// written). Closing it is an open design question (ADR-0005, adoption P2).
 async fn adopt(conn: &mut PgConnection, existing: &[String]) -> Result<(), StartupError> {
     let mut tx = conn.begin().await?;
     sqlx::query("SET LOCAL lock_timeout = '30s'")

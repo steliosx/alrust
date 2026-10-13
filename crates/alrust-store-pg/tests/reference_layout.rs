@@ -1339,13 +1339,15 @@ async fn generate_alpha_shape() {
     eprintln!("wrote {path}");
 }
 
-/// Measures, rather than assumes, whether a standalone `ALTER TYPE history
-/// ADD ATTRIBUTE` waits for a lock on `alerts` (ADR-0005 open question).
-/// If it does, adoption's table locks already exclude the type race; if it
-/// does not, this test fails and the adoption design needs another
-/// exclusion.
+/// Measured on PostgreSQL 18.6 (CI run 38458334716): a standalone `ALTER
+/// TYPE history ADD ATTRIBUTE` does NOT wait for a lock on `alerts`. So
+/// adoption's table locks cannot exclude a concurrent type change; only
+/// the in-transaction re-check narrows it, and closing the remaining window
+/// is still open (ADR-0005, adoption P2). This test pins the measured fact,
+/// so a change in PostgreSQL's behaviour is noticed. It covers ADD
+/// ATTRIBUTE only.
 #[tokio::test]
-async fn alter_type_history_waits_for_the_alerts_lock() {
+async fn alter_type_history_does_not_wait_for_the_alerts_lock() {
     let Some(db) = test_db().await else { return };
     apply_reference_schema(&db.pool).await;
     let mut holder = db.pool.begin().await.unwrap();
@@ -1361,14 +1363,10 @@ async fn alter_type_history_waits_for_the_alerts_lock() {
     let altered = sqlx::query("ALTER TYPE public.history ADD ATTRIBUTE probe text")
         .execute(&mut *other)
         .await;
-    let blocked = matches!(
-        &altered,
-        Err(e) if e.as_database_error().and_then(|d| d.code()).as_deref() == Some("55P03")
-    );
     other.rollback().await.ok();
     holder.rollback().await.unwrap();
     assert!(
-        blocked,
-        "ALTER TYPE history did not wait for the alerts lock: {altered:?}"
+        altered.is_ok(),
+        "ALTER TYPE history now waits for (or fails on) the alerts lock; revisit ADR-0005 adoption P2: {altered:?}"
     );
 }
