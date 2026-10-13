@@ -192,13 +192,15 @@ pub struct Alert {
     pub timeout: Option<i64>,
     pub raw_data: Option<String>,
     pub customer: Option<String>,
-    pub duplicate_count: i64,
-    pub repeat: bool,
-    pub previous_severity: String,
-    pub trend_indication: String,
+    // The next six are NULL only in rows alrust did not write; the
+    // reference's model keeps them `None` (ADR-0005 decision 7).
+    pub duplicate_count: Option<i64>,
+    pub repeat: Option<bool>,
+    pub previous_severity: Option<String>,
+    pub trend_indication: Option<String>,
     pub receive_time: DateTime<Utc>,
-    pub last_receive_id: String,
-    pub last_receive_time: DateTime<Utc>,
+    pub last_receive_id: Option<String>,
+    pub last_receive_time: Option<DateTime<Utc>>,
     /// NULL in reference rows written before the column existed.
     pub update_time: Option<DateTime<Utc>>,
     /// Storage order: newest first.
@@ -231,15 +233,15 @@ pub struct AlertBody<'a> {
     pub timeout: i64,
     pub raw_data: Option<&'a str>,
     pub customer: Option<&'a str>,
-    pub duplicate_count: i64,
-    pub repeat: bool,
-    pub previous_severity: &'a str,
-    pub trend_indication: &'a str,
+    pub duplicate_count: Option<i64>,
+    pub repeat: Option<bool>,
+    pub previous_severity: Option<&'a str>,
+    pub trend_indication: Option<&'a str>,
     #[serde(serialize_with = "ser_time")]
     pub receive_time: DateTime<Utc>,
-    pub last_receive_id: &'a str,
-    #[serde(serialize_with = "ser_time")]
-    pub last_receive_time: DateTime<Utc>,
+    pub last_receive_id: Option<&'a str>,
+    #[serde(serialize_with = "ser_opt_time")]
+    pub last_receive_time: Option<DateTime<Utc>>,
     #[serde(serialize_with = "ser_opt_time")]
     pub update_time: Option<DateTime<Utc>>,
     pub history: Vec<HistoryBody<'a>>,
@@ -316,10 +318,10 @@ impl Alert {
             customer: self.customer.as_deref(),
             duplicate_count: self.duplicate_count,
             repeat: self.repeat,
-            previous_severity: &self.previous_severity,
-            trend_indication: &self.trend_indication,
+            previous_severity: self.previous_severity.as_deref(),
+            trend_indication: self.trend_indication.as_deref(),
             receive_time: self.receive_time,
-            last_receive_id: &self.last_receive_id,
+            last_receive_id: self.last_receive_id.as_deref(),
             last_receive_time: self.last_receive_time,
             update_time: self.update_time,
             history,
@@ -467,9 +469,12 @@ impl ApiKey {
         ApiKeyBody {
             id: &self.id,
             key: with_secret.then_some(self.key.as_str()),
-            // A NULL expiry is inactive, so it lists as expired.
-            status: match self.expire_time {
-                Some(t) if t >= now => "active",
+            // A NULL expiry or NULL scopes (rows alrust did not write) can
+            // never authenticate: "inactive", an alrust-only status
+            // (ADR-0005 decision 7).
+            status: match (self.expire_time, &self.scopes) {
+                (None, _) | (_, None) => "inactive",
+                (Some(t), Some(_)) if t >= now => "active",
                 _ => "expired",
             },
             href: format!("{base_url}/key/{}", path_segment(&self.id)),
@@ -602,7 +607,7 @@ mod tests {
     }
 
     #[test]
-    fn null_expiry_and_scopes_list_as_expired_with_no_scopes() {
+    fn null_expiry_and_scopes_list_as_inactive_with_no_scopes() {
         let t = parse_time("2026-10-13T01:00:00.000Z").unwrap();
         let k = ApiKey {
             id: "i".into(),
@@ -616,10 +621,27 @@ mod tests {
             customer: None,
         };
         let b = serde_json::to_value(k.body("http://x", t, false)).unwrap();
-        assert_eq!(b["status"], "expired");
+        assert_eq!(b["status"], "inactive");
         assert_eq!(b["expireTime"], Value::Null);
         assert_eq!(b["scopes"], serde_json::json!([]));
         assert_eq!(b["type"], "read-only");
+        let future = t + chrono::Duration::days(1);
+        let no_scopes = ApiKey {
+            expire_time: Some(future),
+            ..k.clone()
+        };
+        assert_eq!(no_scopes.body("http://x", t, false).status, "inactive");
+        let no_expiry = ApiKey {
+            scopes: Some(vec!["read".into()]),
+            ..k.clone()
+        };
+        assert_eq!(no_expiry.body("http://x", t, false).status, "inactive");
+        let active = ApiKey {
+            scopes: Some(vec!["read".into()]),
+            expire_time: Some(future),
+            ..k
+        };
+        assert_eq!(active.body("http://x", t, false).status, "active");
     }
 
     #[test]

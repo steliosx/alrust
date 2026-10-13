@@ -1,14 +1,21 @@
 //! ADR-0005: the reference layout, its three start-up states, the 0002
-//! conversion and its refusals, and the NULL rules. Each test creates its
-//! own database from `DATABASE_URL` and drops it at the end.
+//! conversion and its refusals, the NULL rules and the session pinning.
+//!
+//! Each test creates its own database named `<prefix><n>_<µs>`, where the
+//! prefix is `ALRUST_TEST_DB_PREFIX` (set by `scripts/store-db-run.sh`) or
+//! `alrust_t_<pid>_`. A guard drops it when the test ends, also when the
+//! test panics, and fails the test if the drop fails or the database is
+//! still there. The wrapper additionally drops anything left under its
+//! prefix (a killed process) and checks that none remain.
 //!
 //! Without `DATABASE_URL` the tests are skipped, except under CI (`CI` set),
-//! where a missing database is a failure. Test sessions use a far-from-UTC
-//! time zone on purpose: nothing may depend on it.
+//! where a missing database is a failure. Test sessions are pinned with
+//! `session_options` but use a far-from-UTC time zone on purpose: nothing
+//! may depend on it.
 
 use alrust_store_pg::catalog;
 use alrust_store_pg::{
-    NewAlert, Outcome, ReceiveKind, StartupError, Store, StoreConfig, StoreError,
+    NewAlert, Outcome, ReceiveKind, StartupError, Store, StoreConfig, StoreError, session_options,
 };
 use chrono::{TimeZone, Utc};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
@@ -22,21 +29,74 @@ const VERIFY_ALERTS: &str = include_str!("../src/verify/alerts.sql");
 const VERIFY_HISTORY: &str = include_str!("../src/verify/history.sql");
 const VERIFY_HEARTBEATS: &str = include_str!("../src/verify/heartbeats.sql");
 const VERIFY_KEYS: &str = include_str!("../src/verify/keys.sql");
+const ALPHA_SHAPE: &str = include_str!("../src/verify/alpha_shape.sql");
+const ALPHA_SHAPE_EXPECTED: &str = include_str!("../src/verify/alpha_shape.expected");
 const MIGRATION_0002: &str = include_str!("../migrations/0002_reference_layout.sql");
 
+/// An owned test database; dropped by `Drop`, whatever happens.
 struct TestDb {
-    admin: PgPool,
+    base: PgConnectOptions,
     name: String,
     pool: PgPool,
 }
 
 impl TestDb {
-    async fn drop(self) {
-        self.pool.close().await;
-        let _ = self
-            .admin
-            .execute(format!("DROP DATABASE IF EXISTS \"{}\" WITH (FORCE)", self.name).as_str())
-            .await;
+    /// Another pool on this database, with the given session settings.
+    async fn pool_with(&self, opts: PgConnectOptions) -> PgPool {
+        PgPoolOptions::new()
+            .max_connections(2)
+            .connect_with(opts.database(&self.name))
+            .await
+            .expect("connect to test database")
+    }
+}
+
+impl Drop for TestDb {
+    fn drop(&mut self) {
+        let admin = self.base.clone();
+        let name = self.name.clone();
+        // A fresh runtime on its own thread: Drop cannot await, and this
+        // also runs while a failed test unwinds.
+        let outcome = std::thread::spawn(move || -> Result<(), String> {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| e.to_string())?;
+            rt.block_on(async move {
+                let pool = PgPoolOptions::new()
+                    .max_connections(1)
+                    .connect_with(admin)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                sqlx::query(&format!("DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)"))
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let left: bool = sqlx::query_scalar(
+                    "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)",
+                )
+                .bind(&name)
+                .fetch_one(&pool)
+                .await
+                .map_err(|e| e.to_string())?;
+                pool.close().await;
+                if left {
+                    Err(format!("database {name} still exists after DROP"))
+                } else {
+                    Ok(())
+                }
+            })
+        })
+        .join()
+        .unwrap_or_else(|_| Err("cleanup thread panicked".into()));
+        if let Err(e) = outcome {
+            let msg = format!("cleanup of test database {} failed: {e}", self.name);
+            if std::thread::panicking() {
+                eprintln!("{msg}");
+            } else {
+                panic!("{msg}");
+            }
+        }
     }
 }
 
@@ -51,33 +111,49 @@ fn database_url() -> Option<String> {
     }
 }
 
+fn db_prefix() -> String {
+    let p = std::env::var("ALRUST_TEST_DB_PREFIX")
+        .unwrap_or_else(|_| format!("alrust_t_{}_", std::process::id()));
+    assert!(
+        p.starts_with("alrust_t_")
+            && p.chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+        "ALRUST_TEST_DB_PREFIX must be alrust_t_[a-z0-9_]*, not {p:?}"
+    );
+    p
+}
+
+/// The pinned test session: `session_options`, then the odd time zone.
+fn test_session(base: &PgConnectOptions) -> PgConnectOptions {
+    session_options(base.clone()).options([("TimeZone", SESSION_TIME_ZONE)])
+}
+
 async fn test_db() -> Option<TestDb> {
     let url = database_url()?;
     let base: PgConnectOptions = url.parse().expect("DATABASE_URL");
-    let admin = PgPoolOptions::new()
-        .max_connections(1)
-        .connect_with(base.clone())
-        .await
-        .expect("connect to DATABASE_URL");
     let name = format!(
-        "alrust_t_{}_{}_{}",
-        std::process::id(),
+        "{}{}_{}",
+        db_prefix(),
         COUNTER.fetch_add(1, Ordering::SeqCst),
         Utc::now().timestamp_micros()
     );
-    admin
-        .execute(format!("CREATE DATABASE \"{name}\"").as_str())
-        .await
-        .expect("create test database");
+    {
+        let admin = PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(base.clone())
+            .await
+            .expect("connect to DATABASE_URL");
+        admin
+            .execute(format!("CREATE DATABASE \"{name}\"").as_str())
+            .await
+            .expect("create test database");
+        admin.close().await;
+    }
+    // From here on the guard owns the database, even if connecting fails.
     let pool = PgPoolOptions::new()
         .max_connections(4)
-        .connect_with(
-            base.database(&name)
-                .options([("TimeZone", SESSION_TIME_ZONE)]),
-        )
-        .await
-        .expect("connect to test database");
-    Some(TestDb { admin, name, pool })
+        .connect_lazy_with(test_session(&base).database(&name));
+    Some(TestDb { base, name, pool })
 }
 
 fn reference_schema() -> String {
@@ -201,6 +277,11 @@ fn migration_0002_embeds_the_reference_and_verification_sql_verbatim() {
             "verification query missing from 0002:\n{q}"
         );
     }
+    assert!(MIGRATION_0002.contains(&format!("actual := ({});", ALPHA_SHAPE.trim())));
+    assert!(MIGRATION_0002.contains(&format!(
+        "IS DISTINCT FROM $shape${}$shape$",
+        ALPHA_SHAPE_EXPECTED.trim_end_matches('\n')
+    )));
     let reference = reference_schema();
     let lines: Vec<&str> = reference.split('\n').collect();
     for (a, b) in [
@@ -231,7 +312,6 @@ async fn reference_schema_matches_the_committed_catalog() {
         "reference-catalog.json is stale: {d:#?}\nregenerate it from:\n{}",
         serde_json::to_string_pretty(&actual).unwrap()
     );
-    db.drop().await;
 }
 
 #[tokio::test]
@@ -257,7 +337,6 @@ async fn fresh_database_gets_the_reference_layout_and_repeat_start_is_a_no_op() 
     .await
     .unwrap();
     assert_eq!(before, after);
-    db.drop().await;
 }
 
 #[tokio::test]
@@ -443,14 +522,13 @@ async fn alpha_upgrade_converts_every_field_as_declared() {
     );
 
     assert_eq!(s.prepare().await.unwrap().outcome, Outcome::Migrated);
-    db.drop().await;
 }
 
 /// Each fixture makes 0002 refuse. The alpha catalog, every row and the
 /// migration history must be exactly as before.
 #[tokio::test]
 async fn alpha_upgrade_refusals_change_nothing() {
-    let cases: [(&str, &str); 11] = [
+    let cases: &[(&str, &str)] = &[
         (
             "UPDATE alerts SET timeout = 3000000000 WHERE id = 'a1'",
             "outside integer range",
@@ -499,8 +577,60 @@ async fn alpha_upgrade_refusals_change_nothing() {
             "UPDATE alerts SET history = jsonb_set(history, '{1,value}', '[1, 2]') WHERE id = 'a1'",
             "decision 8 pending",
         ),
+        (
+            "ALTER TABLE alerts ADD COLUMN extra text; UPDATE alerts SET extra = 'kept data'",
+            "the alpha tables differ from what 0001 created",
+        ),
+        (
+            "ALTER TABLE heartbeats ADD COLUMN extra integer DEFAULT 1",
+            "the alpha tables differ from what 0001 created",
+        ),
+        (
+            "ALTER TABLE alerts ADD CONSTRAINT extra_check CHECK (duplicate_count >= 0)",
+            "the alpha tables differ from what 0001 created",
+        ),
+        (
+            "CREATE TABLE extra_customers (id text PRIMARY KEY); INSERT INTO extra_customers VALUES ('c1'); ALTER TABLE heartbeats ADD CONSTRAINT extra_fk FOREIGN KEY (customer) REFERENCES extra_customers (id)",
+            "the alpha tables differ from what 0001 created",
+        ),
+        (
+            "CREATE INDEX extra_idx ON keys (\"user\")",
+            "the alpha tables differ from what 0001 created",
+        ),
+        (
+            "CREATE RULE extra_rule AS ON UPDATE TO heartbeats DO ALSO NOTIFY alrust",
+            "the alpha tables differ from what 0001 created",
+        ),
+        (
+            "ALTER TABLE heartbeats SET UNLOGGED",
+            "the alpha tables differ from what 0001 created",
+        ),
+        (
+            "ALTER TABLE alerts SET (fillfactor = 50)",
+            "the alpha tables differ from what 0001 created",
+        ),
+        (
+            "ALTER TABLE keys ADD COLUMN extra text",
+            "the alpha tables differ from what 0001 created",
+        ),
+        (
+            "ALTER TABLE keys ALTER COLUMN text SET DEFAULT 'x'",
+            "the alpha tables differ from what 0001 created",
+        ),
+        (
+            "ALTER TABLE alerts ENABLE ROW LEVEL SECURITY",
+            "row-level security on alerts",
+        ),
+        (
+            "UPDATE alerts SET history = history || '[{\"id\": \"a1\", \"bogus\": 1}]' WHERE id = 'a1'",
+            "the history type cannot hold",
+        ),
+        (
+            "UPDATE alerts SET history = '{\"not\": \"an array\"}' WHERE id = 'a2'",
+            "the history type cannot hold",
+        ),
     ];
-    for (setup, expected) in cases {
+    for &(setup, expected) in cases {
         let Some(db) = alpha_db_with_rows().await else {
             return;
         };
@@ -520,7 +650,6 @@ async fn alpha_upgrade_refusals_change_nothing() {
             .map(|v| v.0)
             .collect();
         assert_eq!(versions, [1], "{setup}");
-        db.drop().await;
     }
 }
 
@@ -607,7 +736,6 @@ async fn copy_verification_detects_any_changed_field() {
             .unwrap();
     }
     tx.rollback().await.unwrap();
-    db.drop().await;
 }
 
 /// Reference-written rows, including NULLs the reference model fills in or
@@ -623,8 +751,19 @@ VALUES ('r1', 'web01', 'HttpError', NULL, 'major', NULL, 'open', '{Web}', NULL, 
         ARRAY[ROW('r1', 'HttpError', 'major', 'open', 'some text', 'new alert', 'new',
                   '2026-10-13 12:00:00', NULL, NULL)::history],
         NULL);
+INSERT INTO alerts (id, resource, event, environment, severity, correlate, status, service, "group",
+    value, text, tags, attributes, origin, type, create_time, timeout, raw_data, customer,
+    duplicate_count, repeat, previous_severity, trend_indication, receive_time, last_receive_id,
+    last_receive_time, history, update_time)
+VALUES ('r2', 'db01', 'Down', 'Production', '', '{}', '', '{Db}', '', NULL, '', '{}', '{}',
+        'alertad/host', '', '2026-10-13 12:00:00', 86400, NULL, NULL, 0, false, 'indeterminate',
+        'moreSevere', '2026-10-13 12:00:00', 'r2', '2026-10-13 12:00:00', '{}', '2026-10-13 12:00:00'),
+       ('r3', 'mq01', 'QueueFull', 'Production', 'major', '{}', 'open', '{Mq}', 'Mq', NULL, '', '{}',
+        '{}', 'alertad/host', 'exceptionAlert', '2026-10-13 12:00:00', 86400, NULL, NULL, NULL, NULL,
+        NULL, NULL, '2026-10-13 12:00:00', NULL, NULL, '{}', NULL);
 INSERT INTO heartbeats (id, origin, tags, type, create_time, timeout, receive_time, customer, attributes)
-VALUES ('hb1', 'origin-1', NULL, NULL, '2026-10-13 12:00:00', NULL, '2026-10-13 12:00:00', NULL, NULL);
+VALUES ('hb1', 'origin-1', NULL, NULL, '2026-10-13 12:00:00', NULL, '2026-10-13 12:00:00', NULL, NULL),
+       ('hb2', 'origin-2', '{}', '', '2026-10-13 12:00:00', 60, '2026-10-13 12:00:00', NULL, '{}');
 INSERT INTO keys (id, key, "user", scopes, text, expire_time, count, last_used_time, customer)
 VALUES ('ok', 'secret-ok', 'alice', '{read}', 'k', '2099-01-01 00:00:00', 1, NULL, NULL),
        ('noexp', 'secret-noexp', 'alice', '{admin}', NULL, NULL, 2, NULL, NULL),
@@ -699,7 +838,6 @@ async fn adoption_records_a_baseline_and_changes_no_row() {
     assert_eq!(noexp.expire_time, None);
     let noscope = listed.iter().find(|k| k.id == "noscope").unwrap();
     assert_eq!(noscope.scopes, None);
-    db.drop().await;
 }
 
 #[tokio::test]
@@ -709,6 +847,10 @@ async fn adoption_refuses_a_different_catalog_without_writing() {
         "CREATE INDEX extra_idx ON alerts (status)",
         "ALTER TABLE keys ALTER COLUMN count TYPE integer",
         "DROP TABLE groups",
+        "ALTER TABLE alerts ENABLE ROW LEVEL SECURITY; ALTER TABLE alerts FORCE ROW LEVEL SECURITY",
+        "CREATE POLICY extra_policy ON keys USING (true)",
+        "CREATE TABLE alerts_child () INHERITS (alerts)",
+        "ALTER TABLE heartbeats SET UNLOGGED",
     ] {
         let Some(db) = test_db().await else { return };
         apply_reference_schema(&db.pool).await;
@@ -726,7 +868,6 @@ async fn adoption_refuses_a_different_catalog_without_writing() {
                 .unwrap();
         assert!(!has_history, "{change}: nothing may be written");
         assert_eq!(catalog_of(&db.pool).await, catalog_before, "{change}");
-        db.drop().await;
     }
 }
 
@@ -746,7 +887,6 @@ async fn unrecognised_states_are_refused_without_writing() {
             "{setup}: {err}"
         );
         assert_eq!(catalog_of(&db.pool).await, before, "{setup}");
-        db.drop().await;
     }
 }
 
@@ -800,7 +940,6 @@ async fn times_round_trip_exactly_whatever_the_session_time_zone() {
     .await
     .unwrap();
     assert_eq!(s.housekeeping(0, 0).await.unwrap(), ["t1"]);
-    db.drop().await;
 }
 
 #[tokio::test]
@@ -823,5 +962,318 @@ async fn duplicate_count_at_the_integer_maximum_rolls_back() {
         "{err}"
     );
     assert_eq!(checksum(&db.pool).await, before);
-    db.drop().await;
+}
+
+/// Reference rows with empty strings and with NULL metadata read as the
+/// reference's model reads them, and the store keeps working on them.
+#[tokio::test]
+async fn adopted_empty_strings_and_null_metadata_read_like_the_reference() {
+    let Some(db) = test_db().await else { return };
+    apply_reference_schema(&db.pool).await;
+    sqlx::raw_sql(REFERENCE_ROWS)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let s = store(&db.pool);
+    assert_eq!(s.prepare().await.unwrap().outcome, Outcome::Adopted);
+
+    // Python's `or`: empty strings become the model's constants (EMPTY-1).
+    let a = s.get_alert("r2", None).await.unwrap();
+    assert_eq!(
+        (
+            a.severity.as_str(),
+            a.status.as_str(),
+            a.group.as_str(),
+            a.event_type.as_str()
+        ),
+        ("normal", "open", "Misc", "exceptionAlert")
+    );
+    let acked = s
+        .take_action("r2", None, "ack", "seen", None, "alice")
+        .await
+        .expect("an action on an adopted empty-severity alert");
+    assert_eq!(acked.status, "ack");
+    let hb = s.get_heartbeat("hb2").await.unwrap();
+    assert_eq!(hb.event_type, "Heartbeat");
+
+    // NULL metadata stays NULL, as the reference keeps None (NULL-1).
+    let a = s.get_alert("r3", None).await.unwrap();
+    assert_eq!(a.duplicate_count, None);
+    assert_eq!(a.repeat, None);
+    assert_eq!(a.previous_severity, None);
+    assert_eq!(a.trend_indication, None);
+    assert_eq!(a.last_receive_id, None);
+    assert_eq!(a.last_receive_time, None);
+    let page = s
+        .find_alerts(&Default::default(), 1, 100)
+        .await
+        .expect("listing includes NULL-metadata rows");
+    assert!(page.alerts.iter().any(|a| a.id == "r3"));
+    // A duplicate keeps a NULL count NULL (`duplicate_count + 1`), and sets
+    // the rest, as the reference's dedup UPDATE does.
+    let mut n = new_alert("r3-dup", 60);
+    n.resource = "mq01".into();
+    n.event = "QueueFull".into();
+    n.service = vec!["Mq".into()];
+    n.group = "Mq".into();
+    let (a, kind) = s.receive(n, "alice").await.unwrap();
+    assert_eq!(kind, ReceiveKind::Duplicate);
+    assert_eq!(a.id, "r3");
+    let (count, repeat, last_id): (Option<i32>, Option<bool>, Option<String>) = sqlx::query_as(
+        "SELECT duplicate_count, repeat, last_receive_id FROM alerts WHERE id = 'r3'",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        (count, repeat, last_id.as_deref()),
+        (None, Some(true), Some("r3-dup"))
+    );
+}
+
+/// An invalid same-definition unique index (a failed `CREATE UNIQUE INDEX
+/// CONCURRENTLY`) is refused, and adoption writes nothing (INDEX-1).
+#[tokio::test]
+async fn adoption_refuses_an_invalid_identity_index() {
+    let Some(db) = test_db().await else { return };
+    apply_reference_schema(&db.pool).await;
+    sqlx::raw_sql(
+        "DROP INDEX env_res_evt_cust_key;
+         INSERT INTO alerts (id, resource, event, environment, customer) VALUES
+             ('x1', 'r', 'e', 'Production', NULL), ('x2', 'r', 'e', 'Production', NULL);",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    let failed = sqlx::raw_sql(
+        "CREATE UNIQUE INDEX CONCURRENTLY env_res_evt_cust_key ON alerts USING btree \
+         (environment, resource, event, (COALESCE(customer, ''::text)))",
+    )
+    .execute(&db.pool)
+    .await;
+    assert!(failed.is_err(), "duplicates must make the build fail");
+    let valid: bool = sqlx::query_scalar(
+        "SELECT indisvalid FROM pg_index WHERE indexrelid = 'env_res_evt_cust_key'::regclass",
+    )
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert!(!valid, "the failed build leaves an invalid index behind");
+    let err = store(&db.pool).prepare().await.expect_err("invalid index");
+    assert!(
+        matches!(&err, StartupError::AdoptRefused(d) if d.iter().any(|l| l.contains("env_res_evt_cust_key"))),
+        "{err}"
+    );
+    let has_history: bool =
+        sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert!(!has_history);
+}
+
+/// DDL that commits while adoption waits for its locks is seen by the
+/// comparison, so adoption refuses and writes nothing (ADOPT-1).
+#[tokio::test]
+async fn adoption_waits_for_concurrent_ddl_and_then_refuses() {
+    let Some(db) = test_db().await else { return };
+    apply_reference_schema(&db.pool).await;
+    let mut other = db.pool.begin().await.unwrap();
+    sqlx::query("ALTER TABLE alerts ADD COLUMN racing text")
+        .execute(&mut *other)
+        .await
+        .unwrap();
+    let s = store(&db.pool);
+    let adopting = tokio::spawn(async move { s.prepare().await });
+    // Wait until adoption is blocked on a lock held by the open DDL.
+    let mut waiting = false;
+    for _ in 0..200 {
+        waiting = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE NOT granted AND relation = 'public.alerts'::regclass)",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        if waiting {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(waiting, "adoption should wait for the DDL's lock");
+    other.commit().await.unwrap();
+    let err = adopting.await.unwrap().expect_err("refused after the DDL");
+    assert!(
+        matches!(&err, StartupError::AdoptRefused(d) if d.iter().any(|l| l.contains("racing"))),
+        "{err}"
+    );
+    let has_history: bool =
+        sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert!(!has_history);
+}
+
+/// Sessions are pinned to `public`: a role schema with shadow tables is
+/// never used, and an unpinned pool is refused at start-up (PATH-1).
+#[tokio::test]
+async fn sessions_are_pinned_to_public_and_shadow_keys_never_authenticate() {
+    let Some(db) = test_db().await else { return };
+    assert_eq!(
+        store(&db.pool).prepare().await.unwrap().outcome,
+        Outcome::Fresh
+    );
+    sqlx::raw_sql(
+        r#"DO $$
+           BEGIN
+               EXECUTE format('CREATE SCHEMA %I', current_user);
+               EXECUTE format('CREATE TABLE %I.keys (LIKE public.keys INCLUDING ALL)', current_user);
+               EXECUTE format($q$INSERT INTO %I.keys (id, key, "user", scopes, text, expire_time, count)
+                                VALUES ('shadow', 'shadow-secret', 'mallory', '{admin}', '',
+                                        '2099-01-01', 0)$q$, current_user);
+               EXECUTE format('ALTER DATABASE %I SET search_path = "$user", public', current_database());
+           END $$;"#,
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+
+    // A pool that does not pin the search path would resolve `keys` to the
+    // shadow table; start-up refuses it.
+    let unpinned = db.pool_with(db.base.clone()).await;
+    let shadow_seen: i64 = sqlx::query_scalar("SELECT count(*) FROM keys WHERE id = 'shadow'")
+        .fetch_one(&unpinned)
+        .await
+        .unwrap();
+    assert_eq!(shadow_seen, 1, "the fixture must really shadow public.keys");
+    let err = store(&unpinned).prepare().await.expect_err("unpinned pool");
+    assert!(matches!(err, StartupError::SearchPath { .. }), "{err}");
+
+    // The pinned pool never sees the shadow table.
+    let pinned = db.pool_with(test_session(&db.base)).await;
+    let s = store(&pinned);
+    assert_eq!(s.prepare().await.unwrap().outcome, Outcome::Migrated);
+    assert!(s.use_key("shadow-secret").await.unwrap().is_none());
+    let tz: String = sqlx::query_scalar("SHOW TimeZone")
+        .fetch_one(&pinned)
+        .await
+        .unwrap();
+    assert_eq!(tz, SESSION_TIME_ZONE);
+    let shadow_count: Option<i64> = sqlx::query_scalar(
+        "SELECT count FROM keys WHERE id = 'shadow'", // resolves to public.keys: no row
+    )
+    .fetch_optional(&pinned)
+    .await
+    .unwrap();
+    assert_eq!(shadow_count, None);
+    let untouched: (i64, Option<chrono::NaiveDateTime>) = sqlx::query_as(&format!(
+        "SELECT count, last_used_time FROM {}.keys WHERE id = 'shadow'",
+        sqlx::query_scalar::<_, String>("SELECT quote_ident(current_user)")
+            .fetch_one(&pinned)
+            .await
+            .unwrap()
+    ))
+    .fetch_one(&pinned)
+    .await
+    .unwrap();
+    assert_eq!(untouched, (0, None), "no shadow write");
+}
+
+/// Injects a copy mismatch into the real migration: 0002 with one
+/// conversion altered runs through SQLx, raises, and the whole transaction
+/// rolls back, leaving the alpha catalog, rows and history as they were
+/// (ROLLBACK-1).
+#[tokio::test]
+async fn an_injected_copy_mismatch_rolls_the_real_migration_back() {
+    let cases: [(&str, &str, &str); 4] = [
+        (
+            "a.value #>> '{}', a.text, a.tags,",
+            "a.value #>> '{}', a.text || 'x', a.tags,",
+            "alert rows differ after the copy",
+        ),
+        (
+            "WITH ORDINALITY AS h(e, n) ORDER BY h.n),",
+            "WITH ORDINALITY AS h(e, n) ORDER BY h.n DESC),",
+            "history entries differ after the copy",
+        ),
+        (
+            "h.receive_time AT TIME ZONE 'UTC', h.customer, h.attributes",
+            "h.receive_time AT TIME ZONE 'UTC', upper(h.customer), h.attributes",
+            "heartbeat rows differ after the copy",
+        ),
+        (
+            "USING expire_time AT TIME ZONE 'UTC'",
+            "USING (expire_time + interval '1 second') AT TIME ZONE 'UTC'",
+            "key rows differ after the conversion",
+        ),
+    ];
+    for (from, to, expected) in cases {
+        assert_eq!(MIGRATION_0002.matches(from).count(), 1, "{from}");
+        let Some(db) = alpha_db_with_rows().await else {
+            return;
+        };
+        let catalog_before = catalog_of(&db.pool).await;
+        let rows_before = checksum(&db.pool).await;
+        let all = sqlx::migrate!("./migrations");
+        let real = &all.migrations[1];
+        let broken = sqlx::migrate::Migration::new(
+            real.version,
+            real.description.clone(),
+            real.migration_type,
+            std::borrow::Cow::Owned(MIGRATION_0002.replace(from, to)),
+            false,
+        );
+        let migrator = sqlx::migrate::Migrator {
+            migrations: std::borrow::Cow::Owned(vec![all.migrations[0].clone(), broken]),
+            ..sqlx::migrate::Migrator::DEFAULT
+        };
+        let err = migrator.run(&db.pool).await.expect_err(to);
+        assert!(err.to_string().contains(expected), "{to}: {err}");
+        assert_eq!(catalog_of(&db.pool).await, catalog_before, "{to}");
+        assert_eq!(checksum(&db.pool).await, rows_before, "{to}");
+        let versions: Vec<i64> = applied_versions(&db.pool)
+            .await
+            .into_iter()
+            .map(|v| v.0)
+            .collect();
+        assert_eq!(versions, [1], "{to}");
+    }
+}
+
+// ---- generation (scripts/store-db-run.sh generate); ignored otherwise ----
+
+/// Writes `reference-catalog.json` from the pinned reference schema.
+#[tokio::test]
+#[ignore = "generation step; run through scripts/store-db-run.sh generate"]
+async fn generate_reference_catalog() {
+    let db = test_db()
+        .await
+        .expect("DATABASE_URL is required to generate");
+    apply_reference_schema(&db.pool).await;
+    apply_reference_schema(&db.pool).await;
+    let c = catalog_of(&db.pool).await;
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/reference-catalog.json");
+    std::fs::write(path, serde_json::to_string_pretty(&c).unwrap() + "\n").unwrap();
+    eprintln!("wrote {path}");
+}
+
+/// Writes `src/verify/alpha_shape.expected` from a database holding only 0001.
+#[tokio::test]
+#[ignore = "generation step; run through scripts/store-db-run.sh generate"]
+async fn generate_alpha_shape() {
+    let db = test_db()
+        .await
+        .expect("DATABASE_URL is required to generate");
+    apply_alpha(&db.pool).await;
+    let shape: String = sqlx::query_scalar(ALPHA_SHAPE)
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert!(!shape.contains("$shape$"));
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/verify/alpha_shape.expected"
+    );
+    std::fs::write(path, shape + "\n").unwrap();
+    eprintln!("wrote {path}");
 }

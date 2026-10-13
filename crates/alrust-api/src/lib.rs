@@ -774,7 +774,7 @@ async fn search_alerts(
     let last_time = r
         .alerts
         .iter()
-        .map(|a| a.last_receive_time)
+        .filter_map(|a| a.last_receive_time)
         .max()
         .unwrap_or_else(Utc::now);
     let mut body = json!({

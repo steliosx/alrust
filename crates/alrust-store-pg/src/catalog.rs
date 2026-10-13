@@ -3,9 +3,12 @@
 //! `reference-catalog.json` describes what the pinned reference `schema.sql`
 //! creates on PostgreSQL 18.6: the `history` type and the ten tables, with
 //! their columns in order, constraints and indexes. Start-up compares the
-//! live database with it and refuses to serve on any difference. Excluded,
-//! by design: `_sqlx_migrations`, other schemas, ownership and privileges,
-//! and non-internal triggers (integrations attach their own).
+//! live database with it and refuses to serve on any difference. That
+//! includes index validity and the table state that changes behaviour (row
+//! security and policies, rules, inheritance, persistence, storage options,
+//! replica identity, tablespace). Excluded, by design: `_sqlx_migrations`,
+//! other schemas, ownership and privileges, and non-internal triggers
+//! (integrations attach their own).
 
 use serde::{Deserialize, Serialize};
 use sqlx::{PgConnection, Row};
@@ -53,10 +56,33 @@ pub struct Constraint {
 pub struct Index {
     pub name: String,
     pub definition: String,
+    /// `indisvalid`, `indisready`, `indislive`: a failed `CREATE INDEX
+    /// CONCURRENTLY` leaves the same definition but enforces nothing.
+    pub valid: bool,
+    pub ready: bool,
+    pub live: bool,
+}
+
+/// Table settings that change what alrust's queries see or do.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TableState {
+    pub persistence: String,
+    pub row_security: bool,
+    pub force_row_security: bool,
+    pub options: Option<Vec<String>>,
+    pub tablespace: Option<String>,
+    pub replica_identity: String,
+    pub is_partition: bool,
+    /// "name command permissive using check", sorted.
+    pub policies: Vec<String>,
+    pub rules: Vec<String>,
+    pub parents: Vec<String>,
+    pub children: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Table {
+    pub state: TableState,
     /// In `attnum` order, dropped columns skipped.
     pub columns: Vec<Column>,
     /// Sorted by name.
@@ -147,7 +173,8 @@ pub async fn read(conn: &mut PgConnection) -> Result<Catalog, sqlx::Error> {
             });
     }
     let rows = sqlx::query(
-        "SELECT c.relname, i.relname AS iname, pg_get_indexdef(i.oid) AS def
+        "SELECT c.relname, i.relname AS iname, pg_get_indexdef(i.oid) AS def,
+                x.indisvalid, x.indisready, x.indislive
            FROM pg_index x
            JOIN pg_class i ON i.oid = x.indexrelid
            JOIN pg_class c ON c.oid = x.indrelid
@@ -162,7 +189,45 @@ pub async fn read(conn: &mut PgConnection) -> Result<Catalog, sqlx::Error> {
         cat.tables.entry(relname).or_default().indexes.push(Index {
             name: r.try_get("iname")?,
             definition: r.try_get("def")?,
+            valid: r.try_get("indisvalid")?,
+            ready: r.try_get("indisready")?,
+            live: r.try_get("indislive")?,
         });
+    }
+    let rows = sqlx::query(
+        "SELECT c.relname, c.relpersistence::text AS persistence, c.relrowsecurity,
+                c.relforcerowsecurity, c.reloptions::text[] AS options, t.spcname::text AS tablespace,
+                c.relreplident::text AS replica_identity, c.relispartition,
+                ARRAY(SELECT p.polname || ' ' || p.polcmd::text || ' ' || p.polpermissive::text || ' '
+                             || COALESCE(pg_get_expr(p.polqual, p.polrelid), '') || ' '
+                             || COALESCE(pg_get_expr(p.polwithcheck, p.polrelid), '')
+                        FROM pg_policy p WHERE p.polrelid = c.oid ORDER BY 1) AS policies,
+                ARRAY(SELECT r.rulename::text FROM pg_rewrite r WHERE r.ev_class = c.oid ORDER BY 1) AS rules,
+                ARRAY(SELECT i.inhparent::regclass::text FROM pg_inherits i
+                       WHERE i.inhrelid = c.oid ORDER BY 1) AS parents,
+                ARRAY(SELECT i.inhrelid::regclass::text FROM pg_inherits i
+                       WHERE i.inhparent = c.oid ORDER BY 1) AS children
+           FROM pg_class c LEFT JOIN pg_tablespace t ON t.oid = c.reltablespace
+          WHERE c.relnamespace = 'public'::regnamespace AND c.relkind = 'r' AND c.relname = ANY($1)",
+    )
+    .bind(&TABLES[..])
+    .fetch_all(&mut *conn)
+    .await?;
+    for r in rows {
+        let relname: String = r.try_get("relname")?;
+        cat.tables.entry(relname).or_default().state = TableState {
+            persistence: r.try_get("persistence")?,
+            row_security: r.try_get("relrowsecurity")?,
+            force_row_security: r.try_get("relforcerowsecurity")?,
+            options: r.try_get("options")?,
+            tablespace: r.try_get("tablespace")?,
+            replica_identity: r.try_get("replica_identity")?,
+            is_partition: r.try_get("relispartition")?,
+            policies: r.try_get("policies")?,
+            rules: r.try_get("rules")?,
+            parents: r.try_get("parents")?,
+            children: r.try_get("children")?,
+        };
     }
     Ok(cat)
 }
@@ -197,6 +262,12 @@ pub fn diff(expected: &Catalog, actual: &Catalog) -> Vec<String> {
             (Some(_), None) => out.push(format!("table {name} is missing")),
             (None, Some(_)) => out.push(format!("table {name} is unexpected")),
             (Some(e), Some(a)) => {
+                if e.state != a.state {
+                    out.push(format!(
+                        "table {name} state: is {:?}, expected {:?}",
+                        a.state, e.state
+                    ));
+                }
                 diff_columns(&format!("table {name}"), &e.columns, &a.columns, &mut out);
                 diff_named(
                     &format!("table {name} constraint"),
@@ -279,6 +350,34 @@ mod tests {
         assert_eq!(alerts.columns[27].name, "update_time");
         assert_eq!(c.tables["heartbeats"].columns[8].name, "attributes");
         assert!(diff(&c, &c).is_empty());
+        for (name, t) in &c.tables {
+            assert!(
+                !t.state.row_security && t.state.policies.is_empty(),
+                "{name}"
+            );
+            assert!(
+                t.indexes.iter().all(|i| i.valid && i.ready && i.live),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn diff_reports_invalid_index_and_row_security() {
+        let e = expected();
+        let mut a = e.clone();
+        let alerts = a.tables.get_mut("alerts").unwrap();
+        alerts.state.row_security = true;
+        alerts
+            .indexes
+            .iter_mut()
+            .find(|i| i.name == "env_res_evt_cust_key")
+            .unwrap()
+            .valid = false;
+        let d = diff(&e, &a);
+        assert_eq!(d.len(), 2, "{d:#?}");
+        assert!(d[0].starts_with("table alerts state:"));
+        assert!(d[1].starts_with("table alerts index env_res_evt_cust_key:"));
     }
 
     #[test]
@@ -289,6 +388,9 @@ mod tests {
         a.tables.get_mut("alerts").unwrap().indexes.push(Index {
             name: "x".into(),
             definition: "CREATE INDEX x ON public.alerts USING btree (status)".into(),
+            valid: true,
+            ready: true,
+            live: true,
         });
         a.tables.remove("groups");
         let d = diff(&e, &a);

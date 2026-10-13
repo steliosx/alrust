@@ -18,10 +18,22 @@ use alrust_engine::{
 };
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde_json::{Map, Value};
-use sqlx::postgres::{PgPool, PgRow};
+use sqlx::postgres::{PgConnectOptions, PgPool, PgRow};
 use sqlx::{Postgres, QueryBuilder, Row, Transaction};
 
 pub use startup::{Outcome, Report as StartupReport, StartupError};
+
+/// The search path every alrust session uses: the reference objects live in
+/// `public`, and no other schema (a role's `"$user"` schema, say) may shadow
+/// them. `pg_temp` is listed last so a temporary table cannot either.
+pub const SEARCH_PATH: &str = "pg_catalog, public, pg_temp";
+
+/// Pin the session settings alrust relies on: `search_path` (see
+/// [`SEARCH_PATH`]) and `TimeZone=UTC`. [`Store::prepare`] refuses a pool
+/// whose sessions do not have the search path.
+pub fn session_options(opts: PgConnectOptions) -> PgConnectOptions {
+    opts.options([("search_path", SEARCH_PATH), ("TimeZone", "UTC")])
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -246,12 +258,18 @@ where
         .ok_or_else(|| null_column(table, id, column))
 }
 
-/// A column whose NULL the reference's model replaces with a constant
-/// (`models/alert.py:52-67`, `models/heartbeat.py`).
+/// A column the reference's model fills with a constant through Python's
+/// `or` (`models/alert.py:52-67`, `models/heartbeat.py`): NULL *and* the
+/// empty string read as the constant.
 fn or_default(row: &PgRow, column: &str, default: &str) -> Result<String, sqlx::Error> {
     Ok(row
         .try_get::<Option<String>, _>(column)?
+        .filter(|v| !v.is_empty())
         .unwrap_or_else(|| default.to_string()))
+}
+
+fn opt_time(row: &PgRow, column: &str) -> Result<Option<DateTime<Utc>>, sqlx::Error> {
+    Ok(row.try_get::<Option<NaiveDateTime>, _>(column)?.map(utc))
 }
 
 fn list(row: &PgRow, column: &str) -> Result<Vec<String>, sqlx::Error> {
@@ -331,16 +349,16 @@ fn row_to_alert(row: &PgRow) -> Result<Alert, sqlx::Error> {
         timeout: row.try_get::<Option<i32>, _>("timeout")?.map(i64::from),
         raw_data: row.try_get("raw_data")?,
         customer: row.try_get("customer")?,
-        duplicate_count: i64::from(required::<i32>(row, "alert", &id, "duplicate_count")?),
-        repeat: required(row, "alert", &id, "repeat")?,
-        previous_severity: text("previous_severity")?,
-        trend_indication: text("trend_indication")?,
+        duplicate_count: row
+            .try_get::<Option<i32>, _>("duplicate_count")?
+            .map(i64::from),
+        repeat: row.try_get("repeat")?,
+        previous_severity: row.try_get("previous_severity")?,
+        trend_indication: row.try_get("trend_indication")?,
         receive_time: time("receive_time")?,
-        last_receive_id: text("last_receive_id")?,
-        last_receive_time: time("last_receive_time")?,
-        update_time: row
-            .try_get::<Option<NaiveDateTime>, _>("update_time")?
-            .map(utc),
+        last_receive_id: row.try_get("last_receive_id")?,
+        last_receive_time: opt_time(row, "last_receive_time")?,
+        update_time: opt_time(row, "update_time")?,
         history,
         id,
     })
@@ -448,7 +466,10 @@ impl Store {
         let timeout = a.timeout.map(|t| int(t, "timeout")).transpose()?;
         // A duplicate past the integer maximum fails here, before any write,
         // and the caller's transaction rolls back (ADR-0005 decision 6).
-        let duplicate_count = int(a.duplicate_count, "duplicateCount")?;
+        let duplicate_count = a
+            .duplicate_count
+            .map(|c| int(c, "duplicateCount"))
+            .transpose()?;
         sqlx::query(sql)
             .bind(&a.id)
             .bind(&a.resource)
@@ -475,7 +496,7 @@ impl Store {
             .bind(&a.trend_indication)
             .bind(naive(a.receive_time))
             .bind(&a.last_receive_id)
-            .bind(naive(a.last_receive_time))
+            .bind(a.last_receive_time.map(naive))
             .bind(a.update_time.map(naive))
             .bind(history)
             .execute(&mut **tx)
@@ -550,10 +571,11 @@ impl Store {
             a.raw_data = n.raw_data;
             a.tags = union_tags(&a.tags, &n.tags);
             a.attributes = merge_attributes(&a.attributes, &n.attributes);
-            a.duplicate_count += 1;
-            a.repeat = true;
-            a.last_receive_id = n.id;
-            a.last_receive_time = now;
+            // The reference's `duplicate_count + 1` leaves a NULL count NULL.
+            a.duplicate_count = a.duplicate_count.map(|c| c + 1);
+            a.repeat = Some(true);
+            a.last_receive_id = Some(n.id);
+            a.last_receive_time = Some(now);
             if let Some(e) = entry {
                 self.push_history(&mut a.history, e);
             }
@@ -595,8 +617,8 @@ impl Store {
                 a.update_time = Some(now);
             }
             let entry = self.receive_entry(&n, &t.status, change_type::SEVERITY, login);
-            a.trend_indication = trend(&previous_severity, &n.severity).to_string();
-            a.previous_severity = previous_severity;
+            a.trend_indication = Some(trend(&previous_severity, &n.severity).to_string());
+            a.previous_severity = Some(previous_severity);
             a.event = n.event;
             a.severity = n.severity;
             a.status = t.status;
@@ -606,11 +628,11 @@ impl Store {
             a.timeout = Some(n.timeout);
             a.raw_data = n.raw_data;
             a.create_time = n.create_time;
-            a.duplicate_count = 0;
-            a.repeat = false;
+            a.duplicate_count = Some(0);
+            a.repeat = Some(false);
             a.receive_time = now;
-            a.last_receive_id = n.id;
-            a.last_receive_time = now;
+            a.last_receive_id = Some(n.id);
+            a.last_receive_time = Some(now);
             a.tags = union_tags(&a.tags, &n.tags);
             a.attributes = merge_attributes(&a.attributes, &n.attributes);
             self.push_history(&mut a.history, entry);
@@ -631,14 +653,14 @@ impl Store {
         let mut attributes = n.attributes.clone();
         attributes.retain(|_, v| !v.is_null());
         let a = Alert {
-            trend_indication: trend(DEFAULT_PREVIOUS_SEVERITY, &n.severity).to_string(),
-            previous_severity: DEFAULT_PREVIOUS_SEVERITY.to_string(),
+            trend_indication: Some(trend(DEFAULT_PREVIOUS_SEVERITY, &n.severity).to_string()),
+            previous_severity: Some(DEFAULT_PREVIOUS_SEVERITY.to_string()),
             status: t.status,
-            duplicate_count: 0,
-            repeat: false,
+            duplicate_count: Some(0),
+            repeat: Some(false),
             receive_time: now,
-            last_receive_id: n.id.clone(),
-            last_receive_time: now,
+            last_receive_id: Some(n.id.clone()),
+            last_receive_time: Some(now),
             update_time: Some(now),
             history: vec![entry],
             id: n.id,
@@ -823,7 +845,8 @@ impl Store {
         let t = transition(TransitionInput {
             severity: &a.severity,
             alert_status: &a.status,
-            previous_severity: Some(&a.previous_severity),
+            // NULL is the engine's default (`indeterminate`), as in the reference.
+            previous_severity: a.previous_severity.as_deref(),
             current_status: info.current_status.as_deref(),
             previous_status: info.previous_status.as_deref(),
             action: Some(act),
@@ -853,7 +876,7 @@ impl Store {
             timeout: Some(hist_timeout),
         };
         if t.severity != a.severity {
-            a.previous_severity = std::mem::replace(&mut a.severity, t.severity);
+            a.previous_severity = Some(std::mem::replace(&mut a.severity, t.severity));
         }
         a.status = t.status;
         a.update_time = Some(now);

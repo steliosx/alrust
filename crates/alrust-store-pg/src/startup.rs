@@ -45,6 +45,10 @@ pub enum StartupError {
     Unrecognised(String),
     #[error("the database does not match the reference schema after start-up: {}", .0.join("; "))]
     CatalogMismatch(Vec<String>),
+    #[error(
+        "database sessions must use search_path {expected:?} (see session_options); found {found:?}"
+    )]
+    SearchPath { expected: String, found: String },
 }
 
 const ADOPT_DESCRIPTION: &str = "baseline: adopted reference schema";
@@ -90,6 +94,17 @@ pub async fn prepare(pool: &PgPool) -> Result<Report, StartupError> {
 }
 
 async fn prepare_locked(conn: &mut PgConnection) -> Result<Report, StartupError> {
+    // Every name below, SQLx's bookkeeping and the store's runtime queries
+    // resolve through the search path; it must be exactly the pinned one.
+    let setting: String = sqlx::query_scalar("SELECT current_setting('search_path')")
+        .fetch_one(&mut *conn)
+        .await?;
+    if setting != crate::SEARCH_PATH {
+        return Err(StartupError::SearchPath {
+            expected: crate::SEARCH_PATH.to_string(),
+            found: setting,
+        });
+    }
     let mut migrator = Migrator {
         migrations: MIGRATOR.migrations.clone(),
         ..Migrator::DEFAULT
@@ -111,7 +126,7 @@ async fn prepare_locked(conn: &mut PgConnection) -> Result<Report, StartupError>
             Outcome::Migrated
         }
         (false, true, true) => {
-            adopt(conn).await?;
+            adopt(conn, &state.reference_tables).await?;
             // Validates the baseline against the embedded checksums; applies nothing.
             migrator.run_direct(conn).await?;
             Outcome::Adopted
@@ -153,8 +168,30 @@ fn present(b: bool) -> &'static str {
 /// Adopt an existing reference database: compare its catalog read-only, and
 /// only if it is exact record the SQLx baseline. On any difference nothing
 /// is written, not even `_sqlx_migrations`.
-async fn adopt(conn: &mut PgConnection) -> Result<(), StartupError> {
+///
+/// The reference tables that exist are locked before the comparison and
+/// stay locked until the baseline commits, so no DDL (including `ALTER TYPE
+/// history`, which must lock `alerts`) can land between the two. Writers
+/// that are not alrust wait, or the lock times out and nothing is written.
+async fn adopt(conn: &mut PgConnection, existing: &[String]) -> Result<(), StartupError> {
     let mut tx = conn.begin().await?;
+    sqlx::query("SET LOCAL lock_timeout = '30s'")
+        .execute(&mut *tx)
+        .await?;
+    let tables: Vec<&str> = catalog::TABLES
+        .into_iter()
+        .filter(|t| existing.iter().any(|e| e == t))
+        .collect();
+    sqlx::query(&format!(
+        "LOCK TABLE {} IN ACCESS EXCLUSIVE MODE",
+        tables
+            .iter()
+            .map(|t| format!("public.{t}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
+    .execute(&mut *tx)
+    .await?;
     let actual = catalog::read(&mut tx).await?;
     let differences = catalog::diff(&catalog::expected(), &actual);
     if !differences.is_empty() {

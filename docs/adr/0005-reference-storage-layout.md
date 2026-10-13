@@ -273,17 +273,19 @@ catalog check. Detection is read-only. A second alrust instance waits.
 **A NULL in a reference-nullable column never fails a read silently or
 gets an invented value.** Integrations and the reference's own code may write
 such rows. The reference's model (`Alert.__init__`, `models/alert.py:52-76`)
-fixes three cases, and alrust follows them column by column:
+keeps some NULLs as `None` and replaces others with a constant through
+Python's `or`, which replaces the empty string too. alrust follows it column
+by column:
 
 | Columns | NULL reads as | Why |
 |---|---|---|
-| alerts `value`, `raw_data`, `customer`, `update_time` | JSON `null` | the model keeps `None`; `update_time` is NULL in rows written before the column existed |
+| alerts `value`, `raw_data`, `customer`, `update_time`, `duplicate_count`, `repeat`, `previous_severity`, `trend_indication`, `last_receive_id`, `last_receive_time` | JSON `null` | the model keeps `None`; `update_time` is NULL in rows written before the column existed. A duplicate leaves a NULL `duplicate_count` NULL (`duplicate_count + 1`); a NULL `previous_severity` is the engine's default |
 | alerts `timeout` | `ALERT_TIMEOUT` in the API (A1.3a); stored NULL is kept | as today |
-| alerts `environment`, `severity`, `status`, `group`, `text`, `type` | `""`, `normal`, `open`, `Misc`, `""`, `exceptionAlert` | the model's constants |
+| alerts `environment`, `severity`, `status`, `group`, `text`, `type` | when NULL **or empty**: `""`, `normal`, `open`, `Misc`, `""`, `exceptionAlert` | the model's constants, through `or` |
 | alerts `correlate`, `service`, `tags`; heartbeats `tags` | `[]` | the model's `or list()` |
 | alerts and heartbeats `attributes` | `{}` | the reference would fail (`dict(None)`); alrust is deliberately tolerant |
-| heartbeats `type`, `timeout` | `Heartbeat`, alrust's heartbeat default | the model's constants |
-| alerts `origin`, `create_time`, `receive_time`, `duplicate_count`, `repeat`, `previous_severity`, `trend_indication`, `last_receive_id`, `last_receive_time`; heartbeats `create_time`, `receive_time`; history `id`, `event`, `type`, `update_time` | **the row is unreadable**: the request fails with 500 and the log names the table, row id and column | the reference always writes these itself; its model would substitute a moving `now()` or a host-specific origin, so alrust refuses rather than invent one |
+| heartbeats `type` (NULL or empty), `timeout` (NULL) | `Heartbeat`, alrust's heartbeat default | the model's constants |
+| alerts `origin`, `create_time`, `receive_time`; heartbeats `create_time`, `receive_time`; history `id`, `event`, `type`, `update_time` | **the row is unreadable**: the request fails with 500 and the log names the table, row id and column | **a deliberate divergence, for decision:** the reference always writes these itself, and for a NULL its model would show a moving `now()`, a host-specific origin, or (history) `null` fields that its own sorting and filtering then mishandle. alrust refuses rather than invent a value |
 | history `severity`, `status`, `value`, `text`, `user`, `timeout` | JSON `null` | as today |
 - **Keys: fail closed (ADR5-NULLAUTH-1).** alrust itself never creates a
   NULL `expire_time` or NULL `scopes`. (NULL `customer` and NULL
@@ -300,6 +302,8 @@ fixes three cases, and alrust follows them column by column:
   - `user` is `NOT NULL` in the reference too.
   - Authentication refuses in SQL (`AND scopes IS NOT NULL`), so a refused
     key's `count` and `last_used_time` do not change.
+  - Such a key lists with `"status": "inactive"`, a status only alrust uses
+    (the reference shows `active` or `expired`), whatever its expiry.
   - At start-up alrust logs the number of keys inactive for these reasons,
     never their secrets.
   - The secret-exposure, expiry and scope-ceiling rules (Y6, Y7, Y33,

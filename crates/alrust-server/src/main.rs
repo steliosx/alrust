@@ -60,12 +60,12 @@ fn env_bool(name: &str, default: bool) -> anyhow::Result<bool> {
 }
 
 async fn connect(url: &str) -> anyhow::Result<sqlx::PgPool> {
-    // The columns hold UTC without a time zone; pin every session to UTC as
-    // a second defence behind binding times explicitly (ADR-0005 decision 5).
-    let opts: PgConnectOptions = url
-        .parse::<PgConnectOptions>()
-        .context("DATABASE_URL is not a valid PostgreSQL URL")?
-        .options([("TimeZone", "UTC")]);
+    // Pin search_path to the reference objects and TimeZone to UTC on every
+    // session (ADR-0005 decisions 4 and 5).
+    let opts = alrust_store_pg::session_options(
+        url.parse::<PgConnectOptions>()
+            .context("DATABASE_URL is not a valid PostgreSQL URL")?,
+    );
     let mut delay = Duration::from_millis(500);
     for attempt in 1..=30 {
         match PgPoolOptions::new()
