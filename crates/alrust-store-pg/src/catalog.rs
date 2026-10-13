@@ -39,6 +39,8 @@ pub struct Column {
     #[serde(rename = "type")]
     pub data_type: String,
     pub not_null: bool,
+    /// The column's collation (`None` for non-collatable types).
+    pub collation: Option<String>,
     pub default: Option<String>,
     /// `pg_attribute.attidentity` and `attgenerated` ("" when unset).
     pub identity: String,
@@ -110,7 +112,8 @@ pub fn expected() -> Catalog {
 /// functions qualify names the same way everywhere; call it inside a
 /// transaction.
 pub async fn read(conn: &mut PgConnection) -> Result<Catalog, sqlx::Error> {
-    sqlx::query("SET LOCAL search_path TO public, pg_catalog")
+    // The session's own pinned order; pg_catalog stays implicitly first.
+    sqlx::query("SET LOCAL search_path TO public, pg_temp")
         .execute(&mut *conn)
         .await?;
     let mut names: Vec<&str> = TABLES.to_vec();
@@ -118,6 +121,8 @@ pub async fn read(conn: &mut PgConnection) -> Result<Catalog, sqlx::Error> {
     let rows = sqlx::query(
         "SELECT c.relname, c.relkind::text AS relkind, a.attname,
                 format_type(a.atttypid, a.atttypmod) AS data_type, a.attnotnull,
+                CASE WHEN a.attcollation = 0 THEN NULL
+                     ELSE a.attcollation::regcollation::text END AS collation,
                 pg_get_expr(d.adbin, d.adrelid) AS def,
                 a.attidentity::text AS ident, a.attgenerated::text AS gen
            FROM pg_class c
@@ -138,6 +143,7 @@ pub async fn read(conn: &mut PgConnection) -> Result<Catalog, sqlx::Error> {
             name: r.try_get("attname")?,
             data_type: r.try_get("data_type")?,
             not_null: r.try_get("attnotnull")?,
+            collation: r.try_get("collation")?,
             default: r.try_get("def")?,
             identity: r.try_get("ident")?,
             generated: r.try_get("gen")?,

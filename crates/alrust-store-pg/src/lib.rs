@@ -23,14 +23,19 @@ use sqlx::{Postgres, QueryBuilder, Row, Transaction};
 
 pub use startup::{Outcome, Report as StartupReport, StartupError};
 
-/// The search path every alrust session uses: the reference objects live in
-/// `public`, and no other schema (a role's `"$user"` schema, say) may shadow
-/// them. `pg_temp` is listed last so a temporary table cannot either.
-pub const SEARCH_PATH: &str = "pg_catalog, public, pg_temp";
+/// The search path every alrust session uses. PostgreSQL searches
+/// `pg_catalog` first whenever the path does not name it, so the effective
+/// order is `pg_catalog, public, pg_temp`: built-ins cannot be shadowed,
+/// unqualified objects (SQLx's `_sqlx_migrations`, 0001, the reference DDL)
+/// are created in `public`, no other schema (a role's `"$user"` schema, say)
+/// is searched, and a temporary table comes last. No spaces: SQLx passes
+/// the value as a raw `-c search_path=...` startup option.
+pub const SEARCH_PATH: &str = "public,pg_temp";
 
 /// Pin the session settings alrust relies on: `search_path` (see
-/// [`SEARCH_PATH`]) and `TimeZone=UTC`. [`Store::prepare`] refuses a pool
-/// whose sessions do not have the search path.
+/// [`SEARCH_PATH`]) and `TimeZone=UTC`. [`Store::prepare`] refuses a
+/// connection whose effective search order is not the pinned one; every
+/// connection in the pool must be made with these options.
 pub fn session_options(opts: PgConnectOptions) -> PgConnectOptions {
     opts.options([("search_path", SEARCH_PATH), ("TimeZone", "UTC")])
 }

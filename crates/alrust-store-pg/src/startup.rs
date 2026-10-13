@@ -95,14 +95,18 @@ pub async fn prepare(pool: &PgPool) -> Result<Report, StartupError> {
 
 async fn prepare_locked(conn: &mut PgConnection) -> Result<Report, StartupError> {
     // Every name below, SQLx's bookkeeping and the store's runtime queries
-    // resolve through the search path; it must be exactly the pinned one.
-    let setting: String = sqlx::query_scalar("SELECT current_setting('search_path')")
-        .fetch_one(&mut *conn)
-        .await?;
-    if setting != crate::SEARCH_PATH {
+    // resolve through the search path, and unqualified DDL creates in its
+    // first schema: the effective order must be exactly pg_catalog, public,
+    // then (only if this session has one) its own temporary schema.
+    let (setting, creation, order): (String, Option<String>, Vec<String>) = sqlx::query_as(
+        "SELECT current_setting('search_path'), current_schema()::text, current_schemas(true)::text[]",
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    if !search_order_is_pinned(creation.as_deref(), &order) {
         return Err(StartupError::SearchPath {
-            expected: crate::SEARCH_PATH.to_string(),
-            found: setting,
+            expected: format!("{} (pg_catalog, public, pg_temp)", crate::SEARCH_PATH),
+            found: format!("{setting} ({})", order.join(", ")),
         });
     }
     let mut migrator = Migrator {
@@ -161,6 +165,18 @@ async fn prepare_locked(conn: &mut PgConnection) -> Result<Report, StartupError>
     })
 }
 
+/// `current_schema()` must be `public`, and `current_schemas(true)` must be
+/// `pg_catalog, public` plus, at the end only, this session's temp schema.
+fn search_order_is_pinned(creation: Option<&str>, order: &[String]) -> bool {
+    let fixed = order.len() >= 2 && order[0] == "pg_catalog" && order[1] == "public";
+    let rest_ok = match &order[2.min(order.len())..] {
+        [] => true,
+        [temp] => temp.starts_with("pg_temp_"),
+        _ => false,
+    };
+    creation == Some("public") && fixed && rest_ok
+}
+
 fn present(b: bool) -> &'static str {
     if b { "present" } else { "absent" }
 }
@@ -210,6 +226,54 @@ async fn adopt(conn: &mut PgConnection, existing: &[String]) -> Result<(), Start
         .execute(&mut *tx)
         .await?;
     }
+    // The table locks do not cover a standalone `ALTER TYPE history`, which
+    // locks only the type. Compare once more inside this transaction, just
+    // before committing, so a type change that committed while the baseline
+    // was being written is refused with nothing written.
+    let differences = catalog::diff(&catalog::expected(), &catalog::read(&mut tx).await?);
+    if !differences.is_empty() {
+        tx.rollback().await?;
+        return Err(StartupError::AdoptRefused(differences));
+    }
     tx.commit().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::search_order_is_pinned;
+
+    fn v(s: &[&str]) -> Vec<String> {
+        s.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn only_the_pinned_search_order_is_accepted() {
+        assert!(search_order_is_pinned(
+            Some("public"),
+            &v(&["pg_catalog", "public"])
+        ));
+        assert!(search_order_is_pinned(
+            Some("public"),
+            &v(&["pg_catalog", "public", "pg_temp_3"])
+        ));
+        // A role schema first, a temp schema first, or creation elsewhere.
+        assert!(!search_order_is_pinned(
+            Some("alrust"),
+            &v(&["pg_catalog", "alrust", "public"])
+        ));
+        assert!(!search_order_is_pinned(
+            Some("public"),
+            &v(&["pg_temp_3", "pg_catalog", "public"])
+        ));
+        assert!(!search_order_is_pinned(
+            Some("pg_catalog"),
+            &v(&["pg_catalog", "public"])
+        ));
+        assert!(!search_order_is_pinned(
+            Some("public"),
+            &v(&["pg_catalog", "public", "other"])
+        ));
+        assert!(!search_order_is_pinned(None, &v(&["pg_catalog"])));
+    }
 }

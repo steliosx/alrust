@@ -68,11 +68,16 @@ generates it by applying the pinned `schema.sql` to an empty PostgreSQL
 18.6 database, and fails if the committed file differs. For each of the ten
 tables and the type it records:
 - the columns in `attnum` order, skipping dropped columns, with name,
-  `format_type`, `attnotnull`, the default (`pg_get_expr`) and
-  identity/generated status;
+  `format_type`, `attnotnull`, **collation**, the default (`pg_get_expr`)
+  and identity/generated status;
+- the table state that changes behaviour: persistence, row-level security
+  (enabled and forced) and policies, rules, inheritance parents and
+  children, partitioning, storage options, tablespace, replica identity;
 - the composite type's attributes in order;
 - the constraints, by name, `contype` and `pg_get_constraintdef`;
-- the indexes, by name and `pg_get_indexdef`.
+- the indexes, by name and `pg_get_indexdef`, with `indisvalid`,
+  `indisready` and `indislive` (a failed `CREATE INDEX CONCURRENTLY`
+  leaves the same definition but enforces nothing).
 
 **Excluded, and stated as excluded:**
 - `_sqlx_migrations`, which is alrust's own migration bookkeeping;
@@ -206,10 +211,23 @@ reason. `0001` is never edited, so its applied checksum stays valid.
 
 ### 4. Three database states, decided at start-up under one lock
 
-alrust holds a session-level advisory lock (a fixed key of its own, distinct
-from SQLx's) on a dedicated connection for the whole start-up decision. That
-covers state detection, then the migrator or the adoption, then the run-time
-catalog check. Detection is read-only. A second alrust instance waits.
+alrust holds SQLx's own migration lock on a dedicated connection for the
+whole start-up decision. That covers state detection, then the migrator
+(run with its own locking off on that connection) or the adoption, then
+the run-time catalog check. Detection is read-only. A second alrust
+instance, or any SQLx migrator on the database, waits.
+
+**Every session is pinned** with `search_path=public,pg_temp` (PostgreSQL
+then searches `pg_catalog` first implicitly), so built-ins cannot be
+shadowed, unqualified DDL creates in `public`, no role schema is searched,
+and temporary tables come last. Start-up refuses a connection whose
+effective order (`current_schemas(true)`) is anything else.
+
+**Adoption** locks every existing reference table (ACCESS EXCLUSIVE,
+30-second lock timeout) before comparing, and holds the locks through the
+baseline commit. A standalone `ALTER TYPE history` locks only the type, so
+adoption compares the catalog a second time inside its transaction, just
+before committing, and rolls back on any difference.
 
 1. **Fresh** (no `_sqlx_migrations`, no `public.alerts`, no type
    `public.history`): the SQLx migrator applies `0001` and then `0002`, the

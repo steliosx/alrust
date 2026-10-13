@@ -63,9 +63,13 @@ impl Drop for TestDb {
                 .build()
                 .map_err(|e| e.to_string())?;
             rt.block_on(async move {
+                // Bounded: connecting, each statement and each lock wait.
                 let pool = PgPoolOptions::new()
                     .max_connections(1)
-                    .connect_with(admin)
+                    .acquire_timeout(std::time::Duration::from_secs(10))
+                    .connect_with(
+                        admin.options([("statement_timeout", "20s"), ("lock_timeout", "10s")]),
+                    )
                     .await
                     .map_err(|e| e.to_string())?;
                 sqlx::query(&format!("DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)"))
@@ -622,6 +626,10 @@ async fn alpha_upgrade_refusals_change_nothing() {
             "row-level security on alerts",
         ),
         (
+            "CREATE PUBLICATION extra_pub FOR TABLES IN SCHEMA public",
+            "publication extra_pub includes schema public",
+        ),
+        (
             "UPDATE alerts SET history = history || '[{\"id\": \"a1\", \"bogus\": 1}]' WHERE id = 'a1'",
             "the history type cannot hold",
         ),
@@ -634,7 +642,16 @@ async fn alpha_upgrade_refusals_change_nothing() {
         let Some(db) = alpha_db_with_rows().await else {
             return;
         };
-        sqlx::raw_sql(setup).execute(&db.pool).await.expect(setup);
+        if let Err(e) = sqlx::raw_sql(setup).execute(&db.pool).await {
+            // Schema publications need superuser; CI's role has it.
+            if setup.contains("PUBLICATION")
+                && e.as_database_error().and_then(|d| d.code()).as_deref() == Some("42501")
+            {
+                eprintln!("NOT_RUN (needs superuser): {setup}");
+                continue;
+            }
+            panic!("{setup}: {e}");
+        }
         let catalog_before = catalog_of(&db.pool).await;
         let rows_before = checksum(&db.pool).await;
         let err = store(&db.pool).prepare().await.expect_err(setup);
@@ -851,6 +868,7 @@ async fn adoption_refuses_a_different_catalog_without_writing() {
         "CREATE POLICY extra_policy ON keys USING (true)",
         "CREATE TABLE alerts_child () INHERITS (alerts)",
         "ALTER TABLE heartbeats SET UNLOGGED",
+        "ALTER TABLE notes ALTER COLUMN text TYPE text COLLATE \"C\"",
     ] {
         let Some(db) = test_db().await else { return };
         apply_reference_schema(&db.pool).await;
@@ -1112,6 +1130,49 @@ async fn adoption_waits_for_concurrent_ddl_and_then_refuses() {
             .await
             .unwrap();
     assert!(!has_history);
+}
+
+/// A history-type change committed during adoption is caught by the second
+/// in-transaction comparison: an event trigger alters the type when
+/// adoption creates `_sqlx_migrations`, inside adoption's own transaction.
+/// Needs superuser (event triggers); NOT_RUN otherwise, run under CI.
+#[tokio::test]
+async fn adoption_rechecks_the_catalog_before_committing_the_baseline() {
+    let Some(db) = test_db().await else { return };
+    apply_reference_schema(&db.pool).await;
+    let setup = sqlx::raw_sql(
+        r#"CREATE FUNCTION racing_type_change() RETURNS event_trigger LANGUAGE plpgsql AS $$
+           BEGIN ALTER TYPE public.history ADD ATTRIBUTE racing text; END $$;
+           CREATE EVENT TRIGGER racing_type_change ON ddl_command_end WHEN TAG IN ('CREATE TABLE')
+               EXECUTE FUNCTION racing_type_change();"#,
+    )
+    .execute(&db.pool)
+    .await;
+    if let Err(e) = setup {
+        if e.as_database_error().and_then(|d| d.code()).as_deref() == Some("42501") {
+            eprintln!("NOT_RUN (needs superuser): event-trigger type race");
+            return;
+        }
+        panic!("{e}");
+    }
+    let err = store(&db.pool)
+        .prepare()
+        .await
+        .expect_err("type changed mid-adoption");
+    assert!(
+        matches!(&err, StartupError::AdoptRefused(d) if d.iter().any(|l| l.starts_with("type history"))),
+        "{err}"
+    );
+    let has_history: bool =
+        sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert!(!has_history, "the rollback must remove the baseline");
+    sqlx::raw_sql("DROP EVENT TRIGGER racing_type_change")
+        .execute(&db.pool)
+        .await
+        .unwrap();
 }
 
 /// Sessions are pinned to `public`: a role schema with shadow tables is

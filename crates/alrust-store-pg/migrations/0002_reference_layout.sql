@@ -37,6 +37,12 @@ BEGIN
         UNION
         SELECT format('publication %s includes all tables', pubname) FROM pg_publication WHERE puballtables
         UNION
+        SELECT format('publication %s includes schema %s', b.pubname, n.nspname)
+          FROM pg_publication_namespace pn
+          JOIN pg_publication b ON b.oid = pn.pnpubid
+          JOIN pg_namespace n ON n.oid = pn.pnnspid
+         WHERE pn.pnnspid = 'public'::regnamespace
+        UNION
         SELECT format('inheritance between %s and %s', i.inhrelid::regclass, i.inhparent::regclass)
           FROM pg_inherits i WHERE i.inhrelid IN ('public.alerts'::regclass, 'public.heartbeats'::regclass, 'public.keys'::regclass) OR i.inhparent IN ('public.alerts'::regclass, 'public.heartbeats'::regclass, 'public.keys'::regclass)
         UNION
