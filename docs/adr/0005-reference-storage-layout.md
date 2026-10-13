@@ -5,9 +5,9 @@
   fully support zabalack and voalack." **One part is pending an owner
   decision: the `value` rule (decision 8).**
 - Date: 2026-10-13
-- Revision 4. It answers Codex's design prerequisites (afaeaa46), findings
-  ADR5-CAT-1, ADR5-ADOPT-1, ADR5-VALUE-1 and ADR5-RANGE-1 (e06bdc32), and
-  ADR5-NULLAUTH-1 (f0abfc75).
+- Revision 5. It answers Codex's design prerequisites (afaeaa46), findings
+  ADR5-CAT-1, ADR5-ADOPT-1, ADR5-VALUE-1 and ADR5-RANGE-1 (e06bdc32),
+  ADR5-NULLAUTH-1 (f0abfc75), and ADR5-COPY-1 and ADR5-DEPS-1 (8b013c32).
 
 ## Why
 
@@ -88,6 +88,12 @@ exactly:**
 - (C) alrust `0001`, then synthetic alpha rows, then `0002`;
 - (D) database A after alrust has adopted it (decision 4).
 
+**CI also proves repeat starts:** a second start on databases B, C and D
+applies nothing, adopts nothing and passes the catalog check. A start
+against a database where `0002` failed (a fixture violating each preflight,
+and an injected copy mismatch) leaves the alpha catalog and the row
+checksums unchanged.
+
 **At every start**, after the path in decision 4, alrust compares the live
 catalog with the embedded file and refuses to serve on any mismatch,
 listing each difference.
@@ -99,8 +105,28 @@ SQLx runs a migration in one transaction. Any failure, including every
 exactly as they were, `0002` is not recorded, and alrust exits with the
 reason. `0001` is never edited, so its applied checksum stays valid.
 
-1. **Preflight.** Raise an exception listing every offending id; nothing is
-   narrowed, truncated, merged or skipped:
+0. **Lock and dependency preflight (ADR5-DEPS-1), before any change:**
+   - `SET LOCAL lock_timeout = '30s'`, then `LOCK TABLE alerts, heartbeats,
+     keys IN ACCESS EXCLUSIVE MODE`. Writers that are not alrust block until
+     commit, or the migration fails on the timeout and nothing changes.
+     alrust instances are already serialised by the start-up lock
+     (decision 4).
+   - Raise, listing each object, if any of these exist:
+     - for `alerts`, `heartbeats` or `keys`: a foreign key from another
+       table; a view, materialized view or rule depending on them
+       (`pg_depend`/`pg_rewrite`); a non-internal trigger; row-level
+       security enabled or a policy; publication membership; inheritance or
+       partitioning; extended statistics;
+     - a table or column ACL other than the default (`relacl`/`attacl` not
+       NULL);
+     - an owner other than the migrating role.
+   - An alpha database created by alrust has none of these. Anything else
+     is an unsupported layout, refused rather than carried over. **Nothing
+     is dropped with CASCADE**, so no external object can be silently
+     removed. The new tables get the migrating role as owner and default
+     privileges, the same as the alpha tables had.
+1. **Value preflight.** Raise an exception listing every offending id;
+   nothing is narrowed, truncated, merged or skipped:
    - `alerts.timeout`, `alerts.duplicate_count`, `heartbeats.timeout`, and
      every history element's `timeout`, outside PostgreSQL `integer`;
    - alert groups sharing (environment, resource, event,
@@ -133,25 +159,43 @@ reason. `0001` is never edited, so its applied checksum stays valid.
         exactly, newest first, including entries with equal timestamps, and
         keeps the array length (the history limit is untouched). JSON `null`
         and absent keys become SQL NULL; `""` stays `""`; `[]` stays `[]`.
-   4. **Verify before dropping anything:**
-      - the row counts are equal;
-      - the id sets are equal in both directions (`EXCEPT`);
-      - for every id, `cardinality(history)` equals
-        `jsonb_array_length` of the alpha history.
+   4. **Verify every field before dropping anything (ADR5-COPY-1).** One
+      query does a `FULL JOIN` of `alerts_alpha` and `alerts` on `id`. It
+      counts the rows where:
+      - either side is missing; or
+      - **any** of the 28 columns `IS DISTINCT FROM` the declared
+        conversion of the alpha value. Unchanged columns are compared
+        directly. Timestamps are compared both as `new = old AT TIME ZONE
+        'UTC'` and back as `new AT TIME ZONE 'UTC' = old`. Integers are
+        compared as `new::bigint = old`, and `value` by the decision-8 rule.
 
-      Any mismatch raises.
+      A second query does a `FULL JOIN` on (id, ordinal) of
+      `unnest(alerts.history) WITH ORDINALITY` and
+      `jsonb_array_elements(alerts_alpha.history) WITH ORDINALITY`. It counts
+      elements that are missing on either side, or whose 10 fields are
+      distinct from the declared conversion (NULL-safe, field by field, not
+      a whole-record comparison).
+
+      A non-zero count raises, and the transaction rolls back. The
+      conversion rules themselves are proved separately by CI fixtures that
+      cover every field, NULLs, `""`, `[]`, equal timestamps and each
+      `value` type (database C).
    5. Drop `alerts_alpha` and create `env_res_evt_cust_key` verbatim.
 
    Rows are dropped only after they are verified copied, inside the same
    transaction. This is a copy, not a destructive recreate.
-4. **`heartbeats`** is rebuilt the same way (the reference's `CREATE TABLE`,
-   then `ADD COLUMN attributes`; copy; verify; drop). Then `org_cust_key`
-   replaces `heartbeats_origin_customer_idx`.
+4. **`heartbeats`** is rebuilt the same way: the reference's `CREATE
+   TABLE`, then `ADD COLUMN attributes`; copy; the same full per-field
+   verification over all 9 columns; drop. Then `org_cust_key` replaces
+   `heartbeats_origin_customer_idx`.
 5. **`keys`** already has the reference's column order and is altered in
    place:
    - `timestamptz` → `timestamp` (using `AT TIME ZONE 'UTC'`);
    - drop `NOT NULL` and the defaults the reference lacks;
    - `count` stays `bigint`, as in the reference.
+   - It is verified the same way: a temporary snapshot (`CREATE TEMP TABLE
+     … ON COMMIT DROP AS SELECT * FROM keys`) taken before the `ALTER`s is
+     compared field by field with the result afterwards.
 6. **`notes`, `blackouts`, `customers`, `metrics`, `perms`, `users` and
    `groups`** are created by the reference's statements, copied verbatim and
    in the reference's order. That includes its later `ALTER`s and the `users`
@@ -278,11 +322,16 @@ to its database adapter unconverted, and what it then stores or answers is
 | `5`, `true` | `"5"`, `"True"` (R0.3) | unchanged | unchanged |
 | `null` / absent | `null` | `null` (SQL NULL) | `null` (SQL NULL) |
 | `1.5` | `1.5` (a number) | **400** | stored `1.5`, returned as the string `"1.5"` |
-| `[1,2]`, `{"a":1}` | returned as JSON | **400** | stored as compact JSON text, returned as the strings `"[1,2]"` and `"{\"a\":1}"` |
+| `[1,2]`, `{"a":1}` | returned as JSON | **400** | stored as PostgreSQL's `jsonb` text form, returned as the strings `"[1, 2]"` and `"{\"a\": 1}"` |
 | Alpha rows holding a float, array or object (in `0002`) | — | **migration refused**, listing ids | converted as above |
 | Reference rows (any text) | — | returned verbatim as a string, never parsed | the same |
 | History `value` | jsonb | the same rule as the alert's value | the same rule |
 
+- Under (b), one SQL expression is used both by the API's writes and by
+  `0002`: `CASE jsonb_typeof(v) WHEN 'string' THEN v #>> '{}' WHEN 'null'
+  THEN NULL ELSE v::text END`. That makes the stored text the same however
+  it got there. No database function is created, so nothing is added to an
+  adopted catalog.
 - Neither option is reversible: the stored text does not record the original
   JSON type, which is inherent to a `text` column.
 - (a) loses no data that was accepted, but **rejects alerts** that a sender
