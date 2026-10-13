@@ -8,6 +8,23 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Map, Value};
 
+/// `id` as one URI path segment for an `href`: every byte outside RFC 3986's
+/// unreserved set is percent-encoded, so a caller-supplied id containing `/`,
+/// `?`, `#`, `%` or non-ASCII stays one segment. Generated UUIDs are
+/// unchanged. The ids `.` and `..` remain dot segments, which a normalizing
+/// URI client may remove (a known limitation; ids are not validated).
+pub fn path_segment(id: &str) -> String {
+    let mut out = String::with_capacity(id.len());
+    for b in id.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
 /// Severity levels of the default `ALERTA` alarm model (`sm.py:7-58`).
 /// A lower level is more severe.
 pub fn severity_level(severity: &str) -> Option<u8> {
@@ -258,7 +275,7 @@ impl Alert {
             h.into_iter()
                 .map(|e| HistoryBody {
                     id: &e.id,
-                    href: format!("{base_url}/alert/{}", e.id),
+                    href: format!("{base_url}/alert/{}", path_segment(&e.id)),
                     event: &e.event,
                     severity: e.severity.as_deref(),
                     status: e.status.as_deref(),
@@ -275,7 +292,7 @@ impl Alert {
         };
         AlertBody {
             id: &self.id,
-            href: format!("{base_url}/alert/{}", self.id),
+            href: format!("{base_url}/alert/{}", path_segment(&self.id)),
             resource: &self.resource,
             event: &self.event,
             environment: &self.environment,
@@ -371,7 +388,7 @@ impl Heartbeat {
         };
         HeartbeatBody {
             id: &self.id,
-            href: format!("{base_url}/heartbeat/{}", self.id),
+            href: format!("{base_url}/heartbeat/{}", path_segment(&self.id)),
             origin: &self.origin,
             tags: &self.tags,
             attributes: &self.attributes,
@@ -449,7 +466,7 @@ impl ApiKey {
             } else {
                 "active"
             },
-            href: format!("{base_url}/key/{}", self.id),
+            href: format!("{base_url}/key/{}", path_segment(&self.id)),
             user: &self.user,
             scopes: &self.scopes,
             key_type,
@@ -568,6 +585,12 @@ mod tests {
         let listed = serde_json::to_value(k.body("http://x", t, false)).unwrap();
         assert!(listed.get("key").is_none());
         assert_eq!(listed["href"], "http://x/key/pub-id");
+        let odd = ApiKey {
+            id: "a/b?c#d%e é".into(),
+            ..k.clone()
+        };
+        let b = serde_json::to_value(odd.body("http://x", t, false)).unwrap();
+        assert_eq!(b["href"], "http://x/key/a%2Fb%3Fc%23d%25e%20%C3%A9");
         let created = serde_json::to_value(k.body("http://x", t, true)).unwrap();
         assert_eq!(created["key"], "secret");
     }

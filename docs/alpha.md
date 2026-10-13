@@ -55,7 +55,7 @@ start-up.
 | `PUT /alert/{id}/action` | open, assign, ack, unack, shelve, unshelve, close, expired, timeout (A2–A5) |
 | `DELETE /alert/{id}` | |
 | `POST /heartbeat`, `GET /heartbeats`, `GET`/`DELETE /heartbeat/{id}` | Upsert by origin and customer; derived latency, since and status |
-| `POST /key`, `GET /keys`, `DELETE /key/{id}` | API keys (`Authorization: Key …`, `X-API-Key`, or `?api-key=`). A new key's scopes must be within the creator's; the secret is shown only in the creation response; lists and `href`s use the public id |
+| `POST /key`, `GET /keys`, `DELETE /key/{id}` | API keys (`Authorization: Key …`, `X-API-Key`, or `?api-key=`). A new key's scopes must be within the creator's; the secret is shown only in the creation response; lists and `href`s use the public id. As in the reference, `POST /key` may supply its own `key` and `id`: a Python-falsy value (`null`, `false`, `0`, `""`, `[]`, `{}`) generates one, a duplicate is refused (500), and a truthy non-string is rejected with 400, an intentional divergence by the owner's ruling (DECISIONS Y33; the reference passes such values unchanged to the database adapter, and type-specific outcomes have not been qualified). `href`s percent-encode the id as one path segment |
 | `GET /management/gtg`, `/management/healthcheck` | No key needed |
 | `GET`/`POST /management/housekeeping` | Deletion and expiry (K1, K2) |
 
@@ -83,6 +83,8 @@ start-up.
   row; the reference's UPDATE can touch several.
 - **Tags:** the de-duplicated union keeps first-seen order; the reference may
   reorder tags.
+- **Dot-segment ids:** an `href` for an id of exactly `.` or `..` is a dot
+  segment, which a URI-normalizing client may remove; ids are not validated.
 - **Id lookup:** a prefix match on `id` or `lastReceiveId`; the reference
   uses a case-insensitive unanchored regex.
 - **Not yet implemented:** blackouts, notes, tag/untag/attribute routes,

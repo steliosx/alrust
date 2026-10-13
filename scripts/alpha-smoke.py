@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 
@@ -227,6 +228,62 @@ code, body = call('DELETE', f'/key/{ro_id}')
 check('DELETE /key/<id> works [S3]', code == 200, (code, body))
 code, body = call('GET', f'/alert/{aid}', key=ro)
 check('deleted key no longer authenticates', code == 401, (code, body))
+
+# --- a caller-supplied key value and id [models/key.py:50-56]
+chosen, chosen_id = f'alpha-smoke-chosen-{RUN}', f'alpha-smoke-id-{RUN}'
+code, body = call('POST', '/key', {'key': chosen, 'id': chosen_id, 'scopes': ['read:alerts'], 'text': f'smoke {RUN}'})
+check('POST /key keeps a supplied key and id', code == 201 and body.get('key') == chosen
+      and body.get('data', {}).get('id') == chosen_id, (code, body.get('data', {}).get('id')))
+code, body = call('GET', f'/alert/{aid}', key=chosen)
+check('the supplied key authenticates', code == 200, (code, body))
+code, body = call('POST', '/key', {'key': chosen, 'scopes': ['read:alerts']})
+check('a duplicate supplied key is refused (500, as the reference)', code == 500, (code, body))
+code, body = call('POST', '/key', {'key': 5, 'scopes': ['read:alerts']})
+check('a truthy non-string supplied key is 400', code == 400, (code, body))
+call('DELETE', f'/key/{chosen_id}')
+# Python-falsy values generate, as the reference's `or` does [KEYSUP-AUTH-1]
+for falsy in (False, 0, 0.0, '', [], {}, None):
+    code, body = call('POST', '/key', {'key': falsy, 'id': falsy, 'scopes': ['read:alerts']})
+    made, made_id = body.get('key'), body.get('data', {}).get('id')
+    check(f'a falsy supplied key/id ({json.dumps(falsy)}) is generated',
+          code == 201 and isinstance(made, str) and len(made) == 40 and isinstance(made_id, str)
+          and len(made_id) == 36, (code, made_id))
+    if made_id:
+        call('DELETE', f'/key/{made_id}')
+
+
+def via_href(href):
+    # The href's own path, still percent-encoded; its host is ALRUST_BASE_URL.
+    path = urllib.parse.urlsplit(href).path if href else ''
+    return path if path.startswith('/') and '?' not in href and '#' not in href else None
+
+
+# hrefs carry an id as one path segment [KEYSUP-R1]
+for odd in ('a/b', 'a?b', 'a#b', 'a%2Fb', 'é ü'):
+    kid = f'{odd}-{RUN}'
+    code, body = call('POST', '/key', {'id': kid, 'scopes': ['read:alerts']})
+    href = via_href(body.get('data', {}).get('href', ''))
+    code2, _ = call('DELETE', href) if href else (None, None)
+    code3, body3 = call('GET', '/keys')
+    gone = all(k.get('id') != kid for k in body3.get('keys', []))
+    check(f'key id {odd!r}: href deletes exactly that key', code == 201 and code2 == 200 and gone,
+          (code, href, code2, gone))
+odd_alert = f'x/y?z#{RUN}'
+code, body = call('POST', '/alert', alert(id=odd_alert, resource=f'odd-{RUN}'))
+href = via_href(body.get('alert', {}).get('href', ''))
+code2, body2 = call('GET', href) if href else (None, {})
+check('alert with an odd id: href reads that alert', code == 201 and code2 == 200
+      and body2.get('alert', {}).get('id') == odd_alert, (code, href, code2))
+if href:
+    call('DELETE', href)
+odd_hb = f'h/b?#{RUN}'
+code, body = call('POST', '/heartbeat', {'id': odd_hb, 'origin': f'odd-{RUN}', 'timeout': 60})
+href = via_href(body.get('heartbeat', {}).get('href', ''))
+code2, body2 = call('GET', href) if href else (None, {})
+check('heartbeat with an odd id: href reads that heartbeat', code == 201 and code2 == 200
+      and body2.get('heartbeat', {}).get('id') == odd_hb, (code, href, code2))
+if href:
+    call('DELETE', href)
 
 # --- key listing is per user unless admin [views/keys.py:84-91, A2V2-API-R1]
 ALICE, BOB = f'alice-{RUN}', f'bob-{RUN}'

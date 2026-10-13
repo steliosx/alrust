@@ -783,6 +783,26 @@ async fn delete_heartbeat(
 
 // ---------------------------------------------------------------- keys
 
+/// A caller-supplied `id` or `key` on `POST /key` (`models/key.py:50-56`).
+/// The reference keeps the value only when it is truthy
+/// (`kwargs.get('key', None) or key_helper.generate()`), so every Python-falsy
+/// value (absent, null, false, 0, 0.0, "", [], {}) generates one here too.
+/// A truthy non-string is rejected with 400: an intentional divergence, by
+/// the owner's ruling (KEYSUP-AUTH-1, DECISIONS Y33). The reference passes such values
+/// unchanged to the database adapter; type-specific outcomes have not been
+/// qualified.
+fn supplied(obj: &serde_json::Map<String, Value>, field: &str) -> Result<Option<String>, ApiError> {
+    match obj.get(field) {
+        None | Some(Value::Null) | Some(Value::Bool(false)) => Ok(None),
+        Some(Value::Number(n)) if n.as_f64() == Some(0.0) => Ok(None),
+        Some(Value::String(s)) if s.is_empty() => Ok(None),
+        Some(Value::Array(a)) if a.is_empty() => Ok(None),
+        Some(Value::Object(o)) if o.is_empty() => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s.clone())),
+        Some(_) => Err(ApiError::bad(format!("{field} must be a string"))),
+    }
+}
+
 pub fn new_key_value() -> String {
     let a = uuid::Uuid::new_v4().simple().to_string();
     let b = uuid::Uuid::new_v4().simple().to_string();
@@ -838,8 +858,8 @@ async fn create_key(
         _ => Utc::now() + Duration::days(365),
     };
     let key = ApiKey {
-        id: uuid::Uuid::new_v4().to_string(),
-        key: new_key_value(),
+        id: supplied(obj, "id")?.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+        key: supplied(obj, "key")?.unwrap_or_else(new_key_value),
         user,
         scopes,
         text: opt_str(obj.get("text")).unwrap_or_else(|| "API Key for alrust".into()),
