@@ -143,11 +143,15 @@ async fn prepare_locked(conn: &mut PgConnection) -> Result<Report, StartupError>
         }
     };
 
-    // The check reads several catalogs; ACCESS SHARE on the reference tables
-    // keeps table DDL (which needs ACCESS EXCLUSIVE) from landing in the
-    // middle of it, without blocking writers. It needs only SELECT. The
-    // history type's attributes come from the same single columns query as
-    // the tables, so a concurrent ALTER TYPE cannot tear that part.
+    // The check reads several catalogs. ACCESS SHARE on the reference tables
+    // conflicts only with ACCESS EXCLUSIVE, so it keeps the DDL that takes
+    // it (most ALTER TABLE forms, DROP, TRUNCATE) out of the middle of the
+    // read without blocking writers, and needs only SELECT. It does not
+    // exclude all catalog DDL: CREATE INDEX, some ALTER TABLE forms and a
+    // standalone ALTER TYPE take weaker or different locks. The type's
+    // attributes come from one statement (one consistent snapshot); the
+    // catalog is not frozen beyond that. Whatever lands is runtime drift,
+    // refused at the next start, and alrust has written nothing either way.
     let mut tx = conn.begin().await?;
     sqlx::query("SET LOCAL lock_timeout = '30s'")
         .execute(&mut *tx)

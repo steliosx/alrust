@@ -224,9 +224,10 @@ and temporary tables come last. Start-up refuses a connection whose
 effective order (`current_schemas(true)`) is anything else.
 
 **Adoption writes nothing** (amended after hosted run 38458334716 measured
-that a standalone `ALTER TYPE history ADD ATTRIBUTE` does not wait for the
-table locks, so no lock-based design could keep a recorded baseline in step
-with the catalog). An existing reference database is never migrated and
+that a standalone `ALTER TYPE history ADD ATTRIBUTE` does not wait for a
+lock on `alerts`: the table locks available to alrust's role therefore could
+not keep a recorded baseline in step with the type, and no other exclusion
+is known to work without superuser). An existing reference database is never migrated and
 never gets an SQLx baseline; every start just checks it read-only. The
 earlier baseline existed only so the migrator could validate, and alrust
 applies no migrations to a reference database, so it bought nothing and
@@ -248,12 +249,19 @@ that needs its own design.
    1. No migrator runs and no `_sqlx_migrations` is created.
    2. The common catalog check below compares the live catalog with
       `reference-catalog.json` under ACCESS SHARE locks on the reference
-      tables (they keep table DDL from tearing the multi-catalog read
-      without blocking Alerta's writers, and need only SELECT; ACCESS
-      EXCLUSIVE would also need UPDATE, DELETE, TRUNCATE or MAINTAIN, which
-      a split-role deployment's runtime login may lack). The history type's
-      attributes come from the same single columns query as the tables, so
-      a concurrent `ALTER TYPE` cannot tear that part.
+      tables. These conflict only with ACCESS EXCLUSIVE, so they keep the
+      DDL that takes it (most `ALTER TABLE` forms, `DROP`, `TRUNCATE`) from
+      landing mid-read, without blocking Alerta's writers, and need only
+      SELECT (per the PostgreSQL 18 `LOCK` documentation, any stronger mode
+      needs UPDATE, DELETE, TRUNCATE or MAINTAIN, which a split-role
+      deployment's runtime login may lack). **They do not exclude all
+      catalog DDL:** `CREATE INDEX` (plain or `CONCURRENTLY`), some `ALTER
+      TABLE` forms and standalone `ALTER TYPE` take weaker or different
+      locks and can still change the catalog during the check. The type's
+      attributes are read by one statement, so that part is one consistent
+      snapshot; the catalog is not frozen for the rest of the check or
+      afterwards. A change that lands then is runtime drift, refused at the
+      next start; in either case alrust has written nothing.
    3. **On any difference, alrust refuses to serve, listing the
       differences.** This includes a database created by an older Alerta,
       which is upgraded by starting that Alerta 9.1.0 once, outside alrust.
