@@ -26,9 +26,11 @@ machine for one profile (contract section 1). This design proposes:
   including `hosted profiles (inert preflight, all NOT_RUN)`, is left
   untouched. Publishing the file is not a dispatch; any first execution
   needs its own admission (section 8).
-- **Hosted only at first.** GitHub-hosted `ubuntu-24.04`, the same
-  `postgres:16` service shape as the existing `conformance-reference`
-  job: `ports: ["5432:5432"]`, which publishes `0.0.0.0:5432`, matching
+- **Hosted only at first.** GitHub-hosted `ubuntu-24.04` with a
+  PostgreSQL 18.6 service container (the owner's PostgreSQL 18.6 direction,
+  2026-10-13; the image is pinned by digest from ECR Public under Y25's
+  digest-update rule, and `database_stage` accepts only server 180006):
+  `ports: ["5432:5432"]`, which publishes `0.0.0.0:5432`, matching
   the PR #100 endpoint check (`database_stage.container_identity(...,
   port=5432)`, `ENDPOINT_HOSTS`). The service container id is
   `${{ job.services.postgres.id }}`. No self-hosted runner, shared VM or

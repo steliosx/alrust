@@ -78,9 +78,9 @@ def test_wrong_endpoint_mapping_is_refused(monkeypatch):
 
 def test_container_refusal_precedes_any_sql(tmp_path, monkeypatch):
     calls = []
-    cluster = {"server_version_num": 160004, "system_identifier": "7300000000000000001",
+    cluster = {"server_version_num": 180006, "system_identifier": "7300000000000000001",
                "postmaster_start_time": "2026-10-03T01:02:03.456789Z",
-               "version": "PostgreSQL 16.4 (synthetic)"}
+               "version": "PostgreSQL 18.6 (synthetic)"}
     name = ds.database_name("scaffold", "123", "1")
 
     class FakePsql:

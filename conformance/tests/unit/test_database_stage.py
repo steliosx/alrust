@@ -29,9 +29,9 @@ from alrust_conformance import stage_journal as sj
 SUPERUSER_PASSWORD = "public-workflow-superuser-password"
 CONTAINER = "0123456789abcdef0123"
 IMAGE = "sha256:" + "a" * 64
-CLUSTER = {"server_version_num": 160004, "system_identifier": "7300000000000000001",
+CLUSTER = {"server_version_num": 180006, "system_identifier": "7300000000000000001",
            "postmaster_start_time": "2026-10-03T01:02:03.456789Z",
-           "version": "PostgreSQL 16.4 (synthetic)"}
+           "version": "PostgreSQL 18.6 (synthetic)"}
 
 STUB_PSQL = r'''#!%(python)s
 import json, os, re, sys, time
@@ -307,7 +307,7 @@ def test_existing_name_is_refused_before_anything_is_attempted(env):
     assert "database_role_attempted" not in kinds
 
 
-@pytest.mark.parametrize("version", [150007, 170000])
+@pytest.mark.parametrize("version", [160004, 180005, 180007, 190000])
 def test_unsupported_server_version_is_refused(env, version):
     job, stub = env
     set_state(stub, cluster=dict(CLUSTER, server_version_num=version))

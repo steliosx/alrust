@@ -131,8 +131,8 @@ def build(tmp_path, monkeypatch, *, report=b'{"result": "passed"}\n',
                 (reference / "terminal.json").read_bytes()).hexdigest()}
     if stop_change:
         stop_change(stop)
-    created = dict(DB_IDENTITY, name="alrust_scaffold_123_1", server_version_num=160004,
-                   version="PostgreSQL 16.4 (synthetic)",
+    created = dict(DB_IDENTITY, name="alrust_scaffold_123_1", server_version_num=180006,
+                   version="PostgreSQL 18.6 (synthetic)",
                    psql={"path": "/usr/bin/psql", "version": "psql (PostgreSQL) 16.4"})
     if created_change:
         created_change(created)
