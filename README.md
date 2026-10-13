@@ -1,17 +1,18 @@
 # alrust
 
 <p align="center">
-  <img src="docs/assets/readme-hero.png" alt="alrust — Many signals. One clear view. Planned, Phase 0." width="1280">
+  <img src="docs/assets/readme-hero.png" alt="alrust — Many signals. One clear view. Early Rust alpha." width="1280">
 </p>
 
-**A planned alert aggregation and deduplication server for an MSP network
-operations centre: a Rust rewrite of [Alerta](https://github.com/alerta/alerta).
-Its goal is to be API-compatible with the Alerta API as the existing Alerta
-web UI and our scripts use it.**
+**An early Rust alert aggregation and deduplication server for an MSP network
+operations centre: a rewrite of [Alerta](https://github.com/alerta/alerta).
+The compatibility target is the Alerta API used by the existing web UI and
+our scripts.**
 
-> **Project stage: planning and Phase 0 (specification and conformance
-> harness).** There is no working alrust server, API or desktop app yet. The
-> status table below separates what exists from what is planned.
+> **Project stage: runnable Rust API alpha on PostgreSQL 18.6.** Core alert,
+> action, heartbeat and API-key routes have executing smoke-test evidence.
+> Full API parity, the web UI, desktop apps and live acceptance remain open.
+> The status table separates merged capabilities from unmerged work and plans.
 
 [Project website](https://alrust.stel.chatgpt.site/) ·
 [What it is](#what-it-is) ·
@@ -26,11 +27,11 @@ web UI and our scripts use it.**
 
 ## What it is
 
-The goal: alrust **will** receive alerts from many monitoring systems, such
-as per-tenant Zabbix instances, Veeam ONE and generic webhooks. It will
-deduplicate and correlate them, and present them to NOC operators through
-the existing Alerta web UI, wrapped as Windows and macOS desktop apps. None
-of this runs yet.
+Alrust's merged alpha receives and stores alerts, applies lifecycle decisions,
+and exposes a core Alerta-shaped HTTP API. The broader goal is to collect
+signals from per-tenant Zabbix instances, Veeam ONE and generic webhooks,
+and present them through the Alerta web UI and desktop wrappers. Those
+receivers, UI and desktop integrations remain planned.
 
 These are the planned design decisions, fixed in the kickoff:
 
@@ -49,33 +50,27 @@ The full plan and its fixed decisions are in the
 
 ## Status
 
-**Current checkpoint: 11 October 2026**, inspected at main
-[`5574b86`](https://github.com/steliosx/alrust/tree/5574b86cd0d49290195f136f25609b6540552d99).
-The scaffold, extracted specifications and conformance tooling are merged.
-**Phase 0 remains open; no Rust server or two-server conformance result is claimed.**
-Presentation checked **12 October 2026** against main [`8b9c8c`](https://github.com/steliosx/alrust/commit/8b9c8c9b79376868d1122679bcd1e57d748f87bf). The first admitted S0 infrastructure run completed its designed no-launch path;
-it is infrastructure evidence, not conformance credit.
+**Reviewed checkpoint: 13 October 2026**, main
+[`ab385dc`](https://github.com/steliosx/alrust/commit/ab385dc0fb97df5a8d8a17d1336058504b0da032).
+Rust implementation now exists. Phase 0 and full compatibility qualification
+remain open; the current process permits reviewed alpha work in parallel.
 
-| Area | Current evidence | What it does not establish |
+| Area | Current evidence | Remaining limit |
 |---|---|---|
-| CI bootstrap and scaffold | [Run 38169997320](https://github.com/steliosx/alrust/actions/runs/38169997320) passed all four jobs on main `5574b86`: reference guard, Rust formatting/lint/test, inert profile preflight and supervised reference-server bootstrap. | The Rust crates still have no product tests; this does not establish an implemented Alrust server or two-server conformance. |
-| PostgreSQL service-image source | [PR #125](https://github.com/steliosx/alrust/pull/125), head `704c831`, replaced Docker Hub pulls with the digest-pinned ECR Public mirror; its [four-job run](https://github.com/steliosx/alrust/actions/runs/38064948410) passed and the change is merged. | This fixes the observed Docker Hub pull-rate failure. It does not verify ECR publisher identity, guarantee future quota, or add conformance credit. |
-| Permanent execution controls | The 15 PR100/P4 controls from [PR #127](https://github.com/steliosx/alrust/pull/127), head `66b8636`, later recorded a selected local synthetic pass: 15 passed, zero skipped ([PR #129](https://github.com/steliosx/alrust/pull/129)). | This was not hosted, reference-server, Rust-product or Phase 0 conformance evidence. Codex's P2 ordering-oracle thread remains unresolved, so the pass does not establish that every intended regression is discriminated. |
-| First admitted S0 infrastructure run | [Run 37986106038](https://github.com/steliosx/alrust/actions/runs/37986106038) completed database create, supervised exit and drop on `1a37e36`; the finalizer returned its expected `NOT_FINALIZED / NONE` result, credential files were disposed and a one-day evidence artifact was staged. | This was the designed infrastructure expected-failure path. Cleanup remains `UNPROVEN`; all 19 execution profiles remain `NOT_RUN`. It is not conformance, an Alrust server test or a reusable execution window. |
-| Supervised reference process | [PR #88](https://github.com/steliosx/alrust/pull/88) integrates the supervisor/launcher into hosted CI. The reference job observes a healthy Python server, then verifies `tree_empty / COMPLETE` and no remaining listener after shutdown. | This is reference bootstrap and cleanup evidence, not an implemented Alrust server or full-suite conformance. |
-| Profile inventory and entrypoint | All **19 profiles return `NOT_RUN`**, with execution disabled, in the current preflight job. | A green preflight gives no Phase 0 execution credit. Each enabling head and the complete reference suite still need qualification. |
-| Launch and observer interoperability | [PR #98](https://github.com/steliosx/alrust/pull/98), head `effe4099`, adds opt-in launch journals and launch confirmation. Codex-authored [#99](https://github.com/steliosx/alrust/pull/99), head `583cd721`, is merged after Claude's reported exact-head component review; it corrects the receipt reader's socket path and adds synthetic producer/consumer controls. Source inspected. | Synthetic HTTP stand-ins and offline components do not establish actual reference-observer capture, SQL qualification or complete Phase 0 execution. |
-| Evidence finalizer and database lifecycle | Finalizer components are merged. [PR #100](https://github.com/steliosx/alrust/pull/100), head `d9ad6378`, adds database creation, guarded drop and finalizer linkage. Its three automatic P1 findings (the SQL port bound to the inspected container; required container evidence; the drop verdict bound to its stage) are fixed by [PR #109](https://github.com/steliosx/alrust/pull/109), head `54cebbb0`, merged after Codex's source/offline approval. | CI does not execute these component unit tests or qualify these database-lifecycle operations against real PostgreSQL; the fixes have source/offline evidence only. No workflow calls the finalizer yet; see [interfaces](conformance/finalizer-interfaces.md). |
-| Auth-route specification | [PR #132](https://github.com/steliosx/alrust/pull/132), head `456d108`, added source-derived basic/LDAP, OIDC and SAML route specifications. Runtime claims remain `NOT_RUN`. | Two automatic-review P2 findings remain unresolved on main: OIDC role/group item types and LDAP availability of password-recovery routes. This is specification work, not an implemented auth service. |
-| Bulk and oEmbed specification | [PR #134](https://github.com/steliosx/alrust/pull/134), head `1d652ed`, completed the static route inventory; [CI 38190221102](https://github.com/steliosx/alrust/actions/runs/38190221102) passed its four ordinary scaffold/reference jobs. | An automatic P1 finding remains unresolved on main: the oEmbed count path is modelled as permanently failing before the reference's `MultiDict` conversion, which can misstate both behaviour and the unscoped-count exposure. No runtime profile ran. |
-| Receive-clock history correction | Open [PR #136](https://github.com/steliosx/alrust/pull/136), head `a16104d`, changes the oracle to the reference's ascending history order and reads the newest entry at index `-1`; its body records Claude's signed exact-head source review. [CI 38259741471](https://github.com/steliosx/alrust/actions/runs/38259741471) passed. | Codex authored it; ordinary CI still leaves all 19 execution profiles `NOT_RUN`. It is unmerged and provides no Rust-server or two-server conformance credit. |
-| Local reference and offline checks | Scoped results and attributed independent dispositions are recorded in [STATUS](docs/STATUS.md). | Local passes and published review summaries are separate from CI qualification, direct inspection of signed private records and cross-implementation parity. |
-| Open proposals | [PR #136](https://github.com/steliosx/alrust/pull/136) corrects the receive-clock oracle; [PR #71](https://github.com/steliosx/alrust/pull/71) proposes structural OpenAPI validation; draft [PR #70](https://github.com/steliosx/alrust/pull/70) addresses batch retry safety. | None is part of the main checkpoint yet. The retry contract still needs an owner decision. |
+| Rust API alpha | [PR #138](https://github.com/steliosx/alrust/pull/138), head `17eacd61`, and follow-up fixes are merged. Alert receive/query/status/action/delete, heartbeat and API-key routes execute against native PostgreSQL 18.6. | Early alpha; no release, live acceptance or complete Alerta parity is claimed. |
+| Alpha smoke and ordinary CI | [PR #147](https://github.com/steliosx/alrust/pull/147), head `2686ac98`, merged the exclusion-filter correction. Its [six-job run 38409638287](https://github.com/steliosx/alrust/actions/runs/38409638287) passed; the [smoke log](https://github.com/steliosx/alrust/actions/runs/38409638287/job/115338245533) reports zero failures and zero not-run checks. | This is the Rust/native-database alpha lane, not the complete conformance suite or production qualification. |
+| Selected two-target conformance | [STATUS](docs/STATUS.md) records the narrow local A3B run at `ff7bc55a`: Python reference 10/10, Rust candidate 9/10. The failed `event!=` case was corrected by #147. | The corrected two-target pairing has not been rerun. All 19 full executing profiles remain `NOT_RUN`; full compatibility is unproved. |
+| Reference-storage compatibility | Draft [PR #150](https://github.com/steliosx/alrust/pull/150), head `6cccb023`, is **unmerged**. [Run 38468819974](https://github.com/steliosx/alrust/actions/runs/38468819974) passed seven jobs on tested merge `c44e395c`. Its real-PostgreSQL storage tests passed 20 cases, with two generation helpers ignored; conformance tooling unit tests passed 3,310 cases. | These results cover the draft, not main. Exact-head peer review, remaining compatibility decisions, complete two-server conformance and Zabalack/Voalack integration are still open. |
+| Open API review findings | Source inspection at this checkpoint confirms the [heartbeat healthcheck overflow finding](https://github.com/steliosx/alrust/pull/138#discussion_r4253845380) and [API-key default-scope finding](https://github.com/steliosx/alrust/pull/138#discussion_r4253845404) remain unresolved on main. | Passing ordinary smoke checks do not close these findings. |
+| Compose and UI delivery | [Alpha guide](docs/alpha.md) contains Compose and native startup instructions; native startup is exercised in the alpha CI lane. | Compose startup itself remains `NOT_RUN` in the current records. Web UI, desktop apps, auth logins and monitoring receivers remain unimplemented. |
+| Specification and execution profiles | Merged specifications, supervisors, finalizers and conformance tooling remain available; see [STATUS](docs/STATUS.md) for their exact historical bindings. | Earlier source/offline or reference-only passes are not retrospectively promoted to Rust conformance. Open specification and oracle review findings remain distinct from alpha runtime evidence. |
+| Security and acceptance | Ordinary CI is executing. | This presentation review did not obtain a current separate whole-repository/Codex Security report and does not claim one clean. Independent acceptance and owner release decisions remain open. |
 
-Hosted jobs are now executing; earlier billing-refused runs remain historical
-failures to execute. The cost policy is **no paid CI**: free hosted allowance
-and the authorised self-hosted x64 path, subject to its own qualification.
-See [DECISIONS](docs/DECISIONS.md) for the current policy and merge authority.
+The cost policy is **no paid CI**: free hosted allowance and the authorised
+self-hosted x64 path, subject to its own qualification.
+See [DECISIONS](docs/DECISIONS.md) for current policy and merge authority.
+Signed private peer records are not reproduced here; published summaries
+are evidence of recorded dispositions, not an independently inspected mailbox.
 
 <details>
 <summary>Historical checkpoint — 29 September 2026</summary>
@@ -104,13 +99,15 @@ independently reviewed, but had not yet been pushed to this repository.
 
 ## Architecture (planned)
 
-Nothing in this diagram runs yet. By design, `alrust-engine` is a pure
-library with no I/O: it computes lifecycle decisions, and the surrounding
-server code (orchestration) does the database reads and writes through
+The illustration shows the broader target architecture. The Rust API,
+domain/engine libraries and PostgreSQL store now have alpha implementation
+and executing evidence; the dedicated receivers, web UI, SSE delivery and
+desktop integrations shown here remain planned. The engine computes
+lifecycle decisions; API orchestration performs database I/O through
 `alrust-store-pg`.
 
 <p align="center">
-  <img src="docs/assets/architecture-planned.svg" alt="Planned Alrust architecture. Receivers feed API orchestration, which separately calls the pure engine and reads or writes PostgreSQL. The Alerta UI and Tauri desktop consume the API; SSE and outbound webhooks deliver notifications. All runtime components are planned." width="1280">
+  <img src="docs/assets/architecture-planned.svg" alt="Planned Alrust architecture. Receivers feed API orchestration, which separately calls the pure engine and reads or writes PostgreSQL. The Alerta UI and Tauri desktop consume the API; SSE and outbound webhooks deliver notifications. Target architecture; API, engine and store now have alpha implementation." width="1280">
 </p>
 
 <details>
@@ -141,43 +138,22 @@ and
 
 ## Getting started
 
-**The repository now contains the scaffold, specifications and conformance
-tooling. There is no working alrust server to start.** See
-[the current status record](docs/STATUS.md) for the latest development state.
+Start with the [alpha guide](docs/alpha.md) for configuration and native
+PostgreSQL 18.6 startup. The Rust server is exercised by the alpha CI lane;
+the guide's Compose path has not yet been executed in the recorded
+qualification environment. Use a disposable development database while
+the alpha's compatibility and security findings are open.
 
-```sh
-git clone https://github.com/steliosx/alrust.git   # private repository: needs access
-cd alrust
-```
-
-**Optional: inspect the original scaffold snapshot** from PR #1, pinned to
-its reviewed commit:
-
-```sh
-git fetch origin pull/1/head
-git switch --detach e839ceaf8cb43d6ed996c8fe12f884d0bb141743
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace               # 0 tests: the crates are empty
-```
-
-What has been checked:
-- **The git steps** were verified in a fresh clone to land on `e839ceaf`.
-- **The three `cargo` commands** passed with Rust 1.98.1 at the scaffold's
-  earlier commit `a674546`. `Cargo.toml`, `Cargo.lock`,
-  `rust-toolchain.toml`, `rustfmt.toml` and `crates/` are unchanged at
-  `e839ceaf`, so that result carries over. They were not re-run for this
-  README. They show only that the empty, zero-test scaffold compiles, not
-  anything about compatibility.
-
-The upstream reference sources are git submodules
-(`git submodule update --init`). The cargo checks don't need them, and that
-step was not run as part of validating this README.
+The current [CI smoke script](scripts/alpha-smoke.py) and
+[STATUS](docs/STATUS.md) describe the executed checks. This README update
+does not claim an additional local startup or test run.
 
 ## Roadmap
 
-Each phase is **planned** and has a gate that must pass before dependent work
-starts. The details are in the
+The original phase roadmap remains the target. Reviewed Rust alpha work now
+proceeds alongside the still-open Phase 0 qualification under the current
+owner decision Y32; implemented subsets do not close a later phase's gate.
+The original details are in the
 [kickoff](https://github.com/steliosx/alrust/blob/e839ceaf8cb43d6ed996c8fe12f884d0bb141743/docs/KICKOFF.md).
 
 <p align="center">
@@ -202,12 +178,12 @@ starts. The details are in the
   signed bundles, one concern each.
 - Reviews are recorded as signed dispositions and PR comments. Both agents
   share one GitHub login, so they are **not** formal GitHub approvals.
-- Claude merges a pull request into `main` once the other agent has
-  approved its exact head, has admitted a signed merge window for that
-  head, and Claude's advisor has no objection to that exact head (owner
-  decisions Y5 and Y20). **Only the repository owner** cuts releases and
-  decides on billing, repository settings, branch protection, security,
-  production and cutover.
+- Under the current Y32 minimal process, Codex reviews Claude's exact diff
+  before Claude publishes and merges it; Claude independently reviews
+  Codex-authored changes. The established signed mailbox workflow remains
+  in place. **Only the repository owner** decides releases, authentication
+  contract changes, repository settings, secrets, runners, production and
+  cutover. Consult [DECISIONS](docs/DECISIONS.md) for the current authority.
 - Behaviour must match the pinned upstream release. Any intentional
   difference in alert lifecycle, authentication or data retention is
   recorded in an ADR and decided by the owner.
