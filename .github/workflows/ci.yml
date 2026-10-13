@@ -286,19 +286,33 @@ jobs:
   store-generate:
     # ADR-0005 generation step, draft pull requests only: run the two
     # ignored generators against this job's throwaway PostgreSQL 18.6,
-    # regenerate 0002, and upload the three generated files with a SHA256
-    # manifest for review. Nothing is committed or pushed from here.
+    # regenerate 0002, prove no test database remains, stop and remove the
+    # cluster, and only then upload the three generated files with a
+    # manifest and a cleanup record. A successful upload therefore implies
+    # completed cleanup. Nothing is committed or pushed from here.
     name: store catalog generation (PostgreSQL 18.6, draft PRs only)
     if: github.event_name == 'pull_request' && github.event.pull_request.draft
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:
       contents: read
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
+      # The pull request's head commit itself, not the synthetic merge commit.
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           submodules: true
           persist-credentials: false
+      - name: Checked-out source is the pull request head
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          actual=$(git rev-parse HEAD)
+          [ "$actual" = "$HEAD_SHA" ] || { echo "HEAD $actual is not the PR head $HEAD_SHA"; exit 1; }
+          [ -z "$(git status --porcelain --untracked-files=all)" ] || { echo "the checkout is not clean"; exit 1; }
+          echo "HEAD $actual tree $(git rev-parse 'HEAD^{tree}') reference $(git -C reference/alerta rev-parse HEAD)"
       - name: PostgreSQL 18.6 (PGDG apt, no container registry)
         timeout-minutes: 5
         run: .github/scripts/start-postgres18.sh alrust
@@ -329,7 +343,12 @@ jobs:
           left=$(/usr/lib/postgresql/18/bin/psql -X -qAt -h 127.0.0.1 -U postgres -d alrust \
             -c "SELECT count(*) FROM pg_database WHERE datname LIKE 'alrust\_t\_ci\_%'")
           [ "$left" = 0 ] || { echo "test databases remain: $left"; exit 1; }
-      - name: Manifest
+          echo "test databases under alrust_t_ci_: 0 (successful query)"
+      - name: Stop and remove PostgreSQL 18.6
+        id: stop
+        timeout-minutes: 2
+        run: .github/scripts/stop-postgres18.sh
+      - name: Manifest and cleanup record
         timeout-minutes: 1
         run: |
           set -euo pipefail
@@ -337,14 +356,22 @@ jobs:
           mkdir -p "$out"
           files="crates/alrust-store-pg/reference-catalog.json crates/alrust-store-pg/src/verify/alpha_shape.expected crates/alrust-store-pg/migrations/0002_reference_layout.sql"
           {
-            echo "head ${{ github.event.pull_request.head.sha }}"
-            echo "run ${{ github.run_id }}.${{ github.run_attempt }}"
+            echo "head $(git rev-parse HEAD)"
+            echo "tree $(git rev-parse 'HEAD^{tree}')"
+            echo "reference $(git -C reference/alerta rev-parse HEAD)"
+            echo "run ${{ github.run_id }} attempt ${{ github.run_attempt }}"
             for f in $files; do
               echo "$(sha256sum < "$f" | cut -c1-64) $(wc -c < "$f") $f"
             done
           } > "$out/manifest.txt"
+          {
+            echo "test databases under alrust_t_ci_ after generation: 0"
+            echo "PostgreSQL cluster stop and removal: ${{ steps.stop.outcome }}"
+            [ -z "${PG18_ROOT:-}" ] || [ ! -e "$PG18_ROOT" ] || { echo "cluster directory remains"; exit 1; }
+            echo "cluster directory removed: yes"
+          } > "$out/cleanup.txt"
           for f in $files; do install -D -m 644 "$f" "$out/$f"; done
-          cat "$out/manifest.txt"
+          cat "$out/manifest.txt" "$out/cleanup.txt"
           echo "STORE_GENERATED=$out" >> "$GITHUB_ENV"
       - name: Upload the generated files (7-day artifact)
         timeout-minutes: 2
@@ -356,7 +383,7 @@ jobs:
           if-no-files-found: error
           overwrite: false
           include-hidden-files: false
-      - name: Stop PostgreSQL 18.6
-        if: always()
+      - name: Stop PostgreSQL 18.6 (only if the normal stop did not succeed)
+        if: always() && steps.stop.outcome != 'success'
         timeout-minutes: 2
         run: .github/scripts/stop-postgres18.sh
