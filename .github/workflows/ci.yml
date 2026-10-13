@@ -229,7 +229,7 @@ jobs:
           key=$(python3 -c 'import secrets; print(secrets.token_hex(20))')
           echo "::add-mask::$key"
           echo "ALPHA_KEY=$key" >> "$GITHUB_ENV"
-          .github/scripts/alpha-server.sh start http://127.0.0.1:8080/management/gtg -- \
+          .github/scripts/alpha-server.py start http://127.0.0.1:8080/management/gtg -- \
             env DATABASE_URL=postgres://alrust:alrust@127.0.0.1:5432/alrust ALRUST_BIND=127.0.0.1:8080 \
             ALRUST_ADMIN_KEY="$key" target/debug/alrust
       - name: Smoke test
@@ -244,6 +244,6 @@ jobs:
         run: |
           set -uo pipefail
           fail=0
-          .github/scripts/alpha-server.sh stop || fail=1
+          .github/scripts/alpha-server.py stop || fail=1
           .github/scripts/stop-postgres18.sh || fail=1
           exit $fail
