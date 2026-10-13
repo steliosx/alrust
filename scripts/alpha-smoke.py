@@ -292,6 +292,31 @@ code, body = call('GET', '/heartbeats')
 check('heartbeat list with a max-i64 timeout still renders', code == 200, code)
 call('DELETE', f'/heartbeat/{hmax}')
 
+# --- housekeeping expiry [K2.1-K2.3, A2V3-STORE-N1]
+def mk(resource, **kw):
+    code, body = call('POST', '/alert', alert(resource=resource, **kw))
+    return body.get('id', '') if isinstance(body, dict) else ''
+
+short = mk(f'hk-short-{RUN}', timeout=1)
+zero = mk(f'hk-zero-{RUN}', timeout=0)
+huge = mk(f'hk-huge-{RUN}', timeout=9223372036854775807)
+null = mk(f'hk-null-{RUN}', timeout=1)
+call('PUT', f'/alert/{null}/status', {'status': 'open', 'text': 'null timeout'})  # stores NULL [A1.3]
+time.sleep(2.2)
+code, body = call('POST', '/management/housekeeping')
+expired = body.get('expired', []) if isinstance(body, dict) else []
+check('housekeeping returns 200 with a max-i64 timeout present', code == 200, (code, body))
+check('timeout 1 expires after 2 s [K2.1]', short in expired, expired)
+check('timeout 0 never expires [K2.3]', zero not in expired, expired)
+check('NULL timeout never expires [K2.2]', null not in expired, expired)
+check('max-i64 timeout does not expire', huge not in expired, expired)
+code, body = call('GET', f'/alert/{short}')
+check('expired alert has status expired and an "expired" history entry [K2.5]',
+      body.get('alert', {}).get('status') == 'expired'
+      and body.get('alert', {}).get('history', [{}])[-1].get('type') == 'expired', body.get('alert', {}).get('status'))
+for i in (short, zero, huge, null):
+    call('DELETE', f'/alert/{i}')
+
 # --- delete and 404
 code, body = call('DELETE', f'/alert/{aid}')
 check('DELETE /alert/<id>', code == 200, (code, body))

@@ -961,20 +961,35 @@ impl Store {
                 .execute(&self.pool)
                 .await?;
         }
-        let ids: Vec<String> = sqlx::query_scalar(
-            "SELECT id FROM alerts WHERE status <> 'expired' AND COALESCE(timeout, $1) <> 0
-               AND last_receive_time + make_interval(secs => LEAST(timeout, 3155760000)) < now()",
-        )
-        .bind(self.cfg.alert_timeout)
-        .fetch_all(&self.pool)
-        .await?;
+        // K2.1: elapsed seconds since last_receive_time, compared numerically
+        // with the raw timeout. A NULL timeout never expires (K2.2), 0 never
+        // expires (K2.3), and any stored bigint compares without overflow.
+        const EXPIRED: &str = "status <> 'expired' AND COALESCE(timeout, $1) <> 0
+               AND EXTRACT(EPOCH FROM (now() - last_receive_time)) > timeout";
+        let ids: Vec<String> =
+            sqlx::query_scalar(&format!("SELECT id FROM alerts WHERE {EXPIRED}"))
+                .bind(self.cfg.alert_timeout)
+                .fetch_all(&self.pool)
+                .await?;
         for id in &ids {
             let mut tx = self.pool.begin().await?;
-            let a = Self::lock_alert(&mut tx, id, None).await?;
-            self.apply_action(&mut tx, a, "expired", "alert timeout", None, "housekeeping")
-                .await?;
+            // Re-check under the row lock: a receive or action since the
+            // SELECT may have refreshed or changed the alert.
+            let row = sqlx::query(&format!(
+                "SELECT * FROM alerts WHERE id = $2 AND {EXPIRED} FOR UPDATE"
+            ))
+            .bind(self.cfg.alert_timeout)
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if let Some(row) = row {
+                let a = row_to_alert(&row)?;
+                self.apply_action(&mut tx, a, "expired", "alert timeout", None, "housekeeping")
+                    .await?;
+            }
             tx.commit().await?;
         }
+        // The response lists the ids selected before processing (K4.1).
         Ok(ids)
     }
 }
