@@ -223,11 +223,16 @@ shadowed, unqualified DDL creates in `public`, no role schema is searched,
 and temporary tables come last. Start-up refuses a connection whose
 effective order (`current_schemas(true)`) is anything else.
 
-**Adoption** locks every existing reference table (ACCESS EXCLUSIVE,
-30-second lock timeout) before comparing, and holds the locks through the
-baseline commit. A standalone `ALTER TYPE history` locks only the type, so
-adoption compares the catalog a second time inside its transaction, just
-before committing, and rolls back on any difference.
+**Adoption writes nothing** (amended after hosted run 38458334716 measured
+that a standalone `ALTER TYPE history ADD ATTRIBUTE` does not wait for the
+table locks, so no lock-based design could keep a recorded baseline in step
+with the catalog). An existing reference database is never migrated and
+never gets an SQLx baseline; every start just checks it read-only. The
+earlier baseline existed only so the migrator could validate, and alrust
+applies no migrations to a reference database, so it bought nothing and
+cost the race. **Not solved, deferred:** if alrust ever has to change the
+schema of a served reference database (a future reference re-pin, say),
+that needs its own design.
 
 1. **Fresh** (no `_sqlx_migrations`, no `public.alerts`, no type
    `public.history`): the SQLx migrator applies `0001` and then `0002`, the
@@ -237,20 +242,25 @@ before committing, and rolls back on any difference.
    checksum): the migrator applies `0002` (decision 3). If the checksum is
    wrong or a version is unknown, SQLx's own refusal applies.
 3. **Existing reference database** (no `_sqlx_migrations`, but
-   `public.alerts` and type `public.history` exist). This is an adoption,
-   not a migration. In one transaction:
-   1. Compare the live catalog with `reference-catalog.json`, read-only.
-   2. **On any difference, roll back and refuse, listing the differences.**
-      Nothing is written, not even `_sqlx_migrations`. This includes a
-      database created by an older Alerta, which is upgraded by starting
-      that Alerta 9.1.0 once, outside alrust.
-   3. If the catalog is exact, create `_sqlx_migrations` with SQLx's own
-      definition and record a **baseline**: versions 1 and 2 with their
-      embedded checksums, `success = true`, and a description beginning
-      `baseline: adopted reference schema`.
-   4. No table, column, constraint or row is touched. CI database D proves
-      this: a checksum of every row of every reference table, taken before
-      and after adoption, must be equal.
+   `public.alerts` and type `public.history` exist). This is adoption, not a
+   migration, and **it writes nothing**, on the first start or any later
+   one:
+   1. No migrator runs and no `_sqlx_migrations` is created.
+   2. The common catalog check below compares the live catalog with
+      `reference-catalog.json` under ACCESS SHARE locks on the reference
+      tables (they keep table DDL from tearing the multi-catalog read
+      without blocking Alerta's writers, and need only SELECT; ACCESS
+      EXCLUSIVE would also need UPDATE, DELETE, TRUNCATE or MAINTAIN, which
+      a split-role deployment's runtime login may lack). The history type's
+      attributes come from the same single columns query as the tables, so
+      a concurrent `ALTER TYPE` cannot tear that part.
+   3. **On any difference, alrust refuses to serve, listing the
+      differences.** This includes a database created by an older Alerta,
+      which is upgraded by starting that Alerta 9.1.0 once, outside alrust.
+   4. Tests prove "nothing written" positively: statement-level triggers on
+      all ten tables that reject any write, an event trigger that rejects
+      any DDL, no `_sqlx_migrations` afterwards, and unchanged row
+      checksums.
 4. **Anything else is refused at start-up, with nothing written.** For
    example: `public.alerts` without the type, the type without
    `public.alerts`, `_sqlx_migrations` without `public.alerts`, or a

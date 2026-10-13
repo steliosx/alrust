@@ -821,7 +821,7 @@ VALUES ('u1', 'Alice', 'alice', 'alice@example.invalid', 'x', 'active', '{user}'
 "#;
 
 #[tokio::test]
-async fn adoption_records_a_baseline_and_changes_no_row() {
+async fn adoption_writes_nothing_and_changes_no_row() {
     let Some(db) = test_db().await else { return };
     apply_reference_schema(&db.pool).await;
     sqlx::raw_sql(REFERENCE_ROWS)
@@ -831,18 +831,41 @@ async fn adoption_records_a_baseline_and_changes_no_row() {
     let rows_before = checksum(&db.pool).await;
     assert_eq!(rows_before.len(), 10);
 
+    // Positive proof of "no DML": every reference table rejects any write
+    // while the two starts run (statement-level, so even zero-row writes).
+    let mut deny = String::from(
+        "CREATE FUNCTION deny_writes() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN RAISE EXCEPTION 'adoption wrote to %', TG_TABLE_NAME; END $$;",
+    );
+    for t in catalog::TABLES {
+        deny.push_str(&format!(
+            "CREATE TRIGGER deny_writes BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON {t}
+             FOR EACH STATEMENT EXECUTE FUNCTION deny_writes();"
+        ));
+    }
+    sqlx::raw_sql(&deny).execute(&db.pool).await.unwrap();
+
     let s = store(&db.pool);
     let r = s.prepare().await.expect("adopt");
     assert_eq!(r.outcome, Outcome::Adopted);
     assert_eq!(r.inactive_keys, 2);
-    assert_eq!(checksum(&db.pool).await, rows_before);
-    let v = applied_versions(&db.pool).await;
-    assert_eq!(v.iter().map(|v| v.0).collect::<Vec<_>>(), [1, 2]);
-    assert!(
-        v.iter()
-            .all(|v| v.1.starts_with("baseline: adopted reference schema"))
+    assert_eq!(
+        r.triggers.len(),
+        10,
+        "the deny triggers are listed, not refused"
     );
-    assert_eq!(s.prepare().await.unwrap().outcome, Outcome::Migrated);
+    assert_eq!(s.prepare().await.unwrap().outcome, Outcome::Adopted);
+    let has_history: bool =
+        sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert!(!has_history, "adoption records no baseline");
+    let mut allow = String::new();
+    for t in catalog::TABLES {
+        allow.push_str(&format!("DROP TRIGGER deny_writes ON {t};"));
+    }
+    sqlx::raw_sql(&allow).execute(&db.pool).await.unwrap();
     assert_eq!(checksum(&db.pool).await, rows_before);
 
     // Reads apply the reference model's constants, never invented values.
@@ -1164,44 +1187,37 @@ async fn adoption_waits_for_concurrent_ddl_and_then_refuses() {
     assert!(!has_history);
 }
 
-/// A history-type change committed during adoption is caught by the second
-/// in-transaction comparison: an event trigger alters the type when
-/// adoption creates `_sqlx_migrations`, inside adoption's own transaction.
-/// Needs superuser (event triggers); NOT_RUN otherwise, run under CI.
+/// Positive proof of "no DDL": an event trigger rejects every DDL command
+/// while adoption runs, twice. Needs superuser (event triggers); NOT_RUN
+/// otherwise, run under CI.
 #[tokio::test]
-async fn adoption_rechecks_the_catalog_before_committing_the_baseline() {
+async fn adoption_runs_no_ddl() {
     let Some(db) = test_db().await else { return };
     apply_reference_schema(&db.pool).await;
     let setup = sqlx::raw_sql(
-        r#"CREATE FUNCTION racing_type_change() RETURNS event_trigger LANGUAGE plpgsql AS $$
-           BEGIN ALTER TYPE public.history ADD ATTRIBUTE racing text; END $$;
-           CREATE EVENT TRIGGER racing_type_change ON ddl_command_end WHEN TAG IN ('CREATE TABLE')
-               EXECUTE FUNCTION racing_type_change();"#,
+        r#"CREATE FUNCTION deny_ddl() RETURNS event_trigger LANGUAGE plpgsql AS $$
+           BEGIN RAISE EXCEPTION 'adoption ran DDL: %', TG_TAG; END $$;
+           CREATE EVENT TRIGGER deny_ddl ON ddl_command_start EXECUTE FUNCTION deny_ddl();"#,
     )
     .execute(&db.pool)
     .await;
     if let Err(e) = setup {
         if e.as_database_error().and_then(|d| d.code()).as_deref() == Some("42501") {
-            eprintln!("NOT_RUN (needs superuser): event-trigger type race");
+            eprintln!("NOT_RUN (needs superuser): event-trigger DDL denial");
             return;
         }
         panic!("{e}");
     }
-    let err = store(&db.pool)
-        .prepare()
-        .await
-        .expect_err("type changed mid-adoption");
-    assert!(
-        matches!(&err, StartupError::AdoptRefused(d) if d.iter().any(|l| l.starts_with("type history"))),
-        "{err}"
-    );
-    let has_history: bool =
-        sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL")
+    let s = store(&db.pool);
+    assert_eq!(s.prepare().await.expect("no DDL").outcome, Outcome::Adopted);
+    assert_eq!(s.prepare().await.expect("no DDL").outcome, Outcome::Adopted);
+    let n: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM pg_event_trigger WHERE evtname = 'deny_ddl'")
             .fetch_one(&db.pool)
             .await
             .unwrap();
-    assert!(!has_history, "the rollback must remove the baseline");
-    sqlx::raw_sql("DROP EVENT TRIGGER racing_type_change")
+    assert_eq!(n, 1, "the denial was in force throughout");
+    sqlx::raw_sql("DROP EVENT TRIGGER deny_ddl")
         .execute(&db.pool)
         .await
         .unwrap();
@@ -1394,12 +1410,10 @@ async fn generate_alpha_shape() {
 }
 
 /// Measured on PostgreSQL 18.6 (CI run 38458334716): a standalone `ALTER
-/// TYPE history ADD ATTRIBUTE` does NOT wait for a lock on `alerts`. So
-/// adoption's table locks cannot exclude a concurrent type change; only
-/// the in-transaction re-check narrows it, and closing the remaining window
-/// is still open (ADR-0005, adoption P2). This test pins the measured fact,
-/// so a change in PostgreSQL's behaviour is noticed. It covers ADD
-/// ATTRIBUTE only.
+/// TYPE history ADD ATTRIBUTE` does NOT wait for a lock on `alerts`. This
+/// is why adoption does not rely on locks for safety: it writes nothing at
+/// all (ADR-0005 decision 4). The test pins the measured fact; it covers
+/// ADD ATTRIBUTE only and is a characterisation, not a safety test.
 #[tokio::test]
 async fn alter_type_history_does_not_wait_for_the_alerts_lock() {
     let Some(db) = test_db().await else { return };

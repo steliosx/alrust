@@ -1,5 +1,5 @@
-//! Start-up: decide the database's state, then migrate, adopt or refuse
-//! (ADR-0005 decision 4).
+//! Start-up: decide the database's state, then migrate, serve an existing
+//! reference database as it is, or refuse (ADR-0005 decision 4).
 //!
 //! Everything runs on one dedicated connection holding SQLx's own migration
 //! lock, so a second alrust (or any SQLx migrator on this database) waits;
@@ -20,7 +20,8 @@ pub enum Outcome {
     Fresh,
     /// An alrust database: pending migrations applied (none on a repeat start).
     Migrated,
-    /// An exact reference database adopted: baseline recorded, nothing else written.
+    /// An exact reference database, served as it is. Nothing is written,
+    /// on the first start or any later one (ADR-0005 decision 4).
     Adopted,
 }
 
@@ -39,7 +40,7 @@ pub enum StartupError {
     Db(#[from] sqlx::Error),
     #[error("migration failed: {0}")]
     Migrate(#[from] MigrateError),
-    #[error("refusing to adopt the existing database; nothing was written. Differences from the reference schema: {}", .0.join("; "))]
+    #[error("refusing to serve the existing reference database; nothing was written. Differences from the reference schema: {}", .0.join("; "))]
     AdoptRefused(Vec<String>),
     #[error("refusing an unrecognised database state; nothing was written: {0}")]
     Unrecognised(String),
@@ -50,8 +51,6 @@ pub enum StartupError {
     )]
     SearchPath { expected: String, found: String },
 }
-
-const ADOPT_DESCRIPTION: &str = "baseline: adopted reference schema";
 
 struct State {
     has_migrations: bool,
@@ -129,12 +128,10 @@ async fn prepare_locked(conn: &mut PgConnection) -> Result<Report, StartupError>
             migrator.run_direct(conn).await?;
             Outcome::Migrated
         }
-        (false, true, true) => {
-            adopt(conn, &state.reference_tables).await?;
-            // Validates the baseline against the embedded checksums; applies nothing.
-            migrator.run_direct(conn).await?;
-            Outcome::Adopted
-        }
+        // An existing reference database: no migrator and no baseline. Only
+        // the read-only catalog check below decides, on every start, so
+        // adoption can never write anything (ADR-0005 decision 4).
+        (false, true, true) => Outcome::Adopted,
         _ => {
             return Err(StartupError::Unrecognised(format!(
                 "_sqlx_migrations {}, alerts table {}, history type {}, reference tables present: [{}]",
@@ -146,7 +143,34 @@ async fn prepare_locked(conn: &mut PgConnection) -> Result<Report, StartupError>
         }
     };
 
+    // The check reads several catalogs; ACCESS SHARE on the reference tables
+    // keeps table DDL (which needs ACCESS EXCLUSIVE) from landing in the
+    // middle of it, without blocking writers. It needs only SELECT. The
+    // history type's attributes come from the same single columns query as
+    // the tables, so a concurrent ALTER TYPE cannot tear that part.
     let mut tx = conn.begin().await?;
+    sqlx::query("SET LOCAL lock_timeout = '30s'")
+        .execute(&mut *tx)
+        .await?;
+    let present: Vec<String> = sqlx::query_scalar(
+        "SELECT relname::text FROM pg_class WHERE relnamespace = 'public'::regnamespace
+            AND relkind = 'r' AND relname = ANY($1) ORDER BY relname",
+    )
+    .bind(&catalog::TABLES[..])
+    .fetch_all(&mut *tx)
+    .await?;
+    if !present.is_empty() {
+        sqlx::query(&format!(
+            "LOCK TABLE {} IN ACCESS SHARE MODE",
+            present
+                .iter()
+                .map(|t| format!("public.{t}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+        .execute(&mut *tx)
+        .await?;
+    }
     let actual = catalog::read(&mut tx).await?;
     let differences = catalog::diff(&catalog::expected(), &actual);
     let triggers = catalog::triggers(&mut tx).await?;
@@ -156,7 +180,11 @@ async fn prepare_locked(conn: &mut PgConnection) -> Result<Report, StartupError>
             .await?;
     tx.rollback().await?;
     if !differences.is_empty() {
-        return Err(StartupError::CatalogMismatch(differences));
+        return Err(if outcome == Outcome::Adopted {
+            StartupError::AdoptRefused(differences)
+        } else {
+            StartupError::CatalogMismatch(differences)
+        });
     }
     Ok(Report {
         outcome,
@@ -179,70 +207,6 @@ fn search_order_is_pinned(creation: Option<&str>, order: &[String]) -> bool {
 
 fn present(b: bool) -> &'static str {
     if b { "present" } else { "absent" }
-}
-
-/// Adopt an existing reference database: compare its catalog read-only, and
-/// only if it is exact record the SQLx baseline. On any difference nothing
-/// is written, not even `_sqlx_migrations`.
-///
-/// The reference tables that exist are locked before the comparison and
-/// stay locked until the baseline commits, so no table DDL can land between
-/// the two. Writers that are not alrust wait, or the lock times out and
-/// nothing is written. A standalone `ALTER TYPE history ADD ATTRIBUTE` does
-/// not wait for the table locks (measured on PostgreSQL 18.6; test
-/// alter_type_history_does_not_wait_for_the_alerts_lock): the second
-/// comparison below narrows that window but does not close it (a type
-/// change committed after that read and before the baseline commit is caught
-/// only by the post-commit catalog check, with the baseline already
-/// written). Closing it is an open design question (ADR-0005, adoption P2).
-async fn adopt(conn: &mut PgConnection, existing: &[String]) -> Result<(), StartupError> {
-    let mut tx = conn.begin().await?;
-    sqlx::query("SET LOCAL lock_timeout = '30s'")
-        .execute(&mut *tx)
-        .await?;
-    let tables: Vec<&str> = catalog::TABLES
-        .into_iter()
-        .filter(|t| existing.iter().any(|e| e == t))
-        .collect();
-    sqlx::query(&format!(
-        "LOCK TABLE {} IN ACCESS EXCLUSIVE MODE",
-        tables
-            .iter()
-            .map(|t| format!("public.{t}"))
-            .collect::<Vec<_>>()
-            .join(", ")
-    ))
-    .execute(&mut *tx)
-    .await?;
-    let actual = catalog::read(&mut tx).await?;
-    let differences = catalog::diff(&catalog::expected(), &actual);
-    if !differences.is_empty() {
-        tx.rollback().await?;
-        return Err(StartupError::AdoptRefused(differences));
-    }
-    tx.ensure_migrations_table().await?;
-    for m in MIGRATOR.iter() {
-        sqlx::query(
-            "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time)
-             VALUES ($1, $2, TRUE, $3, -1)",
-        )
-        .bind(m.version)
-        .bind(format!("{ADOPT_DESCRIPTION} ({})", m.description))
-        .bind(&*m.checksum)
-        .execute(&mut *tx)
-        .await?;
-    }
-    // The table locks do not cover a standalone `ALTER TYPE history`, which
-    // locks only the type. Compare once more inside this transaction, just
-    // before committing, so a type change that committed while the baseline
-    // was being written is refused with nothing written.
-    let differences = catalog::diff(&catalog::expected(), &catalog::read(&mut tx).await?);
-    if !differences.is_empty() {
-        tx.rollback().await?;
-        return Err(StartupError::AdoptRefused(differences));
-    }
-    tx.commit().await?;
-    Ok(())
 }
 
 #[cfg(test)]
