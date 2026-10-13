@@ -323,6 +323,57 @@ check('heartbeat inherits the key customer', code == 201 and body.get('heartbeat
 code, body = call('GET', f'/alerts?resource=cust2-{RUN}', key=wx)
 check('customer-X key does not see customer-Y alerts [C16]', code == 200 and body.get('total') == 0, body)
 
+# --- tags and attributes [views/alerts.py:194-272]
+code, body = call('POST', '/alert', alert(resource=f'tag-{RUN}', tags=['t1'], attributes={'keep': 1, 'drop': 'x'}))
+tid = body.get('id', '')
+before = call('GET', f'/alert/{tid}')[1].get('alert', {})
+code, body = call('PUT', f'/alert/{tid}/tag', {'tags': ['t2', 't1', 't2']})
+check('PUT /alert/<id>/tag', code == 200 and body == {'status': 'ok'}, (code, body))
+after = call('GET', f'/alert/{tid}')[1].get('alert', {})
+check('tag adds without duplicates', sorted(after.get('tags', [])) == ['t1', 't2'], after.get('tags'))
+check('tag adds no history and keeps updateTime',
+      len(after.get('history', [])) == len(before.get('history', [])) and after.get('updateTime') == before.get('updateTime'),
+      (len(after.get('history', [])), len(before.get('history', []))))
+code, body = call('PUT', f'/alert/{tid[:8]}/untag', {'tags': ['t1', 'absent']})
+after = call('GET', f'/alert/{tid}')[1].get('alert', {})
+check('untag by id prefix removes only the named tags', code == 200 and after.get('tags') == ['t2'], (code, after.get('tags')))
+call('PUT', f'/alert/{tid}/untag', {'tags': ['t2']})
+after = call('GET', f'/alert/{tid}')[1].get('alert', {})
+check('untagging every tag leaves an empty list', after.get('tags') == [], after.get('tags'))
+code, body = call('PUT', f'/alert/{tid}/attributes', {'attributes': {'new': 'v', 'drop': None}})
+after = call('GET', f'/alert/{tid}')[1].get('alert', {})
+check('attributes merge, and null removes a key', code == 200 and after.get('attributes', {}).get('new') == 'v'
+      and after.get('attributes', {}).get('keep') == 1 and 'drop' not in after.get('attributes', {}), (code, after.get('attributes')))
+for path, bad in (('tag', {}), ('tag', {'tags': []}), ('tag', {'tags': 'x'}), ('tag', {'tags': ['ok', 5]}),
+                  ('untag', {'tags': []}), ('untag', {'tags': [None]}),
+                  ('attributes', {}), ('attributes', {'attributes': {}}), ('attributes', {'attributes': ['x']}),
+                  ('attributes', {'attributes': [['x', 'v']]}), ('attributes', {'attributes': 'x=v'})):
+    code, body = call('PUT', f'/alert/{tid}/{path}', bad)
+    check(f'{path} with {json.dumps(bad)} is 400', code == 400, (code, body))
+# an update that leaves no attributes is 200 [DECISIONS Y34; the reference answers 500]
+before = call('GET', f'/alert/{tid}')[1].get('alert', {})
+code, body = call('PUT', f'/alert/{tid}/attributes', {'attributes': {'keep': None, 'new': None}})
+after = call('GET', f'/alert/{tid}')[1].get('alert', {})
+check('removing the last attributes is 200 with {} stored', code == 200 and after.get('attributes') == {}, (code, after.get('attributes')))
+code, body = call('PUT', f'/alert/{tid}/attributes', {'attributes': {'missing': None}})
+after2 = call('GET', f'/alert/{tid}')[1].get('alert', {})
+check('nulling a missing key on an empty alert is 200', code == 200 and after2.get('attributes') == {}, (code, after2.get('attributes')))
+check('attribute edits add no history and keep updateTime',
+      len(after2.get('history', [])) == len(before.get('history', [])) and after2.get('updateTime') == before.get('updateTime'),
+      (len(after2.get('history', [])), len(before.get('history', []))))
+code, body = call('PUT', f'/alert/no-such-{RUN}/tag', {'tags': ['x']})
+check('tag on an unknown id is 404', code == 404, (code, body))
+code, body = call('POST', '/alert', alert(resource=f'tagy-{RUN}', customer=Y), key=ax)
+yid = body.get('id', '')
+code, body = call('PUT', f'/alert/{yid}/tag', {'tags': ['x']}, key=wx)
+check("customer-X key cannot tag a customer-Y alert (404)", code == 404, (code, body))
+_, rk, rk_id = mint(['read:alerts'])
+code, body = call('PUT', f'/alert/{tid}/attributes', {'attributes': {'a': 1}}, key=rk)
+check('read-only key cannot change attributes (403)', code == 403, (code, body))
+for i in (tid, yid):
+    call('DELETE', f'/alert/{i}')
+call('DELETE', f'/key/{rk_id}')
+
 # --- concurrent first receives [A2-STORE-R1]
 def burst(resource, severities):
     results = []

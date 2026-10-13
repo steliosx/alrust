@@ -119,6 +119,13 @@ pub struct AlertPage {
     pub status_counts: Map<String, Value>,
 }
 
+/// A tags or attributes edit of one alert.
+pub enum AlertEdit {
+    Tag(Vec<String>),
+    Untag(Vec<String>),
+    Attributes(serde_json::Map<String, serde_json::Value>),
+}
+
 #[derive(Clone)]
 pub struct Store {
     pool: PgPool,
@@ -612,6 +619,41 @@ impl Store {
         a.timeout = timeout;
         a.attributes.retain(|_, v| !v.is_null());
         self.push_history(&mut a.history, entry);
+        Self::write_alert(&mut tx, &a, false).await?;
+        tx.commit().await?;
+        Ok(a)
+    }
+
+    /// `PUT /alert/<id>/tag`, `/untag` and `/attributes` (`views/alerts.py:194-272`).
+    /// The reference updates only `tags` or `attributes`: no history entry,
+    /// no `update_time` change. Tag adds keep the first-seen order (the
+    /// reference's `DISTINCT UNNEST` may reorder); untagging every tag leaves
+    /// an empty list. An attribute set to null is removed
+    /// (`postgres/base.py:339-349`).
+    pub async fn edit_alert(
+        &self,
+        id: &str,
+        customers: Option<&[String]>,
+        edit: AlertEdit,
+    ) -> Result<Alert, StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let mut a = Self::lock_alert(&mut tx, id, customers).await?;
+        match edit {
+            AlertEdit::Tag(tags) => {
+                for t in tags {
+                    if !a.tags.contains(&t) {
+                        a.tags.push(t);
+                    }
+                }
+            }
+            AlertEdit::Untag(tags) => a.tags.retain(|t| !tags.contains(t)),
+            AlertEdit::Attributes(attrs) => {
+                for (k, v) in attrs {
+                    a.attributes.insert(k, v);
+                }
+                a.attributes.retain(|_, v| !v.is_null());
+            }
+        }
         Self::write_alert(&mut tx, &a, false).await?;
         tx.commit().await?;
         Ok(a)

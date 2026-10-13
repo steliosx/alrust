@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use alrust_domain::{Alert, ApiKey, iso8601, parse_time, scope_allows, truncate_ms};
-use alrust_store_pg::{AlertQuery, NewAlert, Store, StoreError};
+use alrust_store_pg::{AlertEdit, AlertQuery, NewAlert, Store, StoreError};
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -234,6 +234,9 @@ pub fn router(state: Shared) -> Router {
         .route("/alert/{id}", get(get_alert).delete(delete_alert))
         .route("/alert/{id}/status", put(set_status))
         .route("/alert/{id}/action", put(take_action))
+        .route("/alert/{id}/tag", put(tag_alert))
+        .route("/alert/{id}/untag", put(untag_alert))
+        .route("/alert/{id}/attributes", put(update_attributes))
         .route("/alerts", get(search_alerts))
         .route("/alerts/count", get(count_alerts))
         .route("/heartbeat", post(create_heartbeat))
@@ -505,6 +508,89 @@ async fn set_status(
             text,
             timeout,
             caller.login(),
+        )
+        .await?;
+    Ok(Json(json!({"status": "ok"})))
+}
+
+/// `PUT /alert/<id>/tag` and `/untag` (`views/alerts.py:194-245`): a
+/// non-empty `tags` list is required (400 otherwise, the reference's
+/// message); the alert is found by id or id prefix within the caller's
+/// customers (404 otherwise).
+async fn edit_tags(
+    st: &AppState,
+    headers: &HeaderMap,
+    params: &[(String, String)],
+    id: &str,
+    body: &Value,
+    untag: bool,
+) -> ApiResult<Json<Value>> {
+    let caller = authenticate(st, headers, params).await?;
+    caller.require("write:alerts")?;
+    // Only a non-empty list of strings: a non-list, an empty list or a
+    // non-string element is 400 (the reference would fail such values in SQL).
+    let tags: Vec<String> = match body.get("tags") {
+        Some(Value::Array(a)) if !a.is_empty() && a.iter().all(Value::is_string) => a
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect(),
+        _ => return Err(ApiError::bad("must supply 'tags' as json list")),
+    };
+    let edit = if untag {
+        AlertEdit::Untag(tags)
+    } else {
+        AlertEdit::Tag(tags)
+    };
+    st.store
+        .edit_alert(id, caller.customers().as_deref(), edit)
+        .await?;
+    Ok(Json(json!({"status": "ok"})))
+}
+
+async fn tag_alert(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> ApiResult<Json<Value>> {
+    edit_tags(&st, &headers, &params, &id, &body, false).await
+}
+
+async fn untag_alert(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> ApiResult<Json<Value>> {
+    edit_tags(&st, &headers, &params, &id, &body, true).await
+}
+
+/// `PUT /alert/<id>/attributes` (`views/alerts.py:248-272`): a non-empty
+/// `attributes` object is required (400 otherwise, including the list of
+/// pairs the reference's `dict.update` would accept); keys are merged into
+/// the stored attributes and a null value removes its key. A successful
+/// update that leaves no attributes is 200; the reference stores it and then
+/// answers 500 "failed to update attributes" (DECISIONS Y34).
+async fn update_attributes(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> ApiResult<Json<Value>> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("write:alerts")?;
+    let attrs = match body.get("attributes") {
+        Some(Value::Object(m)) if !m.is_empty() => m.clone(),
+        _ => return Err(ApiError::bad("must supply 'attributes' as json data")),
+    };
+    st.store
+        .edit_alert(
+            &id,
+            caller.customers().as_deref(),
+            AlertEdit::Attributes(attrs),
         )
         .await?;
     Ok(Json(json!({"status": "ok"})))
