@@ -269,7 +269,10 @@ before committing, and rolls back on any difference.
     TimeZone.
   - For example, key authentication's `expire_time > now()` becomes
     `expire_time > (now() AT TIME ZONE 'UTC')`.
-  - As a second defence, every pool connection runs `SET TIME ZONE 'UTC'`.
+  - As a second defence, every session is UTC: SQLx itself sends a
+    `TimeZone=UTC` startup parameter, and `session_options` pins it too.
+    The tests move their sessions to a far-from-UTC zone after connecting,
+    to prove nothing depends on it.
   - Round trips stay exact: alrust writes milliseconds, and the column holds
     microseconds.
 - **Widths:** the domain and API types keep their current `i64` widths. The

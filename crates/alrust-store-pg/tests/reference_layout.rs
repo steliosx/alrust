@@ -9,9 +9,9 @@
 //! prefix (a killed process) and checks that none remain.
 //!
 //! Without `DATABASE_URL` the tests are skipped, except under CI (`CI` set),
-//! where a missing database is a failure. Test sessions are pinned with
-//! `session_options` but use a far-from-UTC time zone on purpose: nothing
-//! may depend on it.
+//! where a missing database is a failure. Test sessions use alrust's
+//! pinned search path but are moved to a far-from-UTC time zone after
+//! connecting (`odd_zone_pool`) on purpose: nothing may depend on it.
 
 use alrust_store_pg::catalog;
 use alrust_store_pg::{
@@ -48,6 +48,14 @@ impl TestDb {
     async fn pool_with(&self, opts: PgConnectOptions) -> PgPool {
         PgPoolOptions::new()
             .max_connections(2)
+            .connect_with(opts.database(&self.name))
+            .await
+            .expect("connect to test database")
+    }
+
+    /// Like `pool_with`, with every session moved to the odd time zone.
+    async fn odd_zone_pool_with(&self, opts: PgConnectOptions) -> PgPool {
+        odd_zone_pool(2)
             .connect_with(opts.database(&self.name))
             .await
             .expect("connect to test database")
@@ -130,15 +138,27 @@ fn db_prefix() -> String {
     p
 }
 
-/// The pinned test session: alrust's search path with the odd time zone.
-/// Built directly, not as `session_options` plus an override: a second
-/// `TimeZone` startup option does not replace the first (CI run 38459899496
-/// showed the sessions stayed on UTC).
+/// The pinned test session: alrust's search path. (The odd time zone is set
+/// after connecting, by `odd_zone_pool`.)
 fn test_session(base: &PgConnectOptions) -> PgConnectOptions {
-    base.clone().options([
-        ("search_path", alrust_store_pg::SEARCH_PATH),
-        ("TimeZone", SESSION_TIME_ZONE),
-    ])
+    base.clone()
+        .options([("search_path", alrust_store_pg::SEARCH_PATH)])
+}
+
+/// Pool options whose sessions run `SET TIME ZONE` to the odd zone right
+/// after connecting. A startup option cannot do it: SQLx always sends its
+/// own `TimeZone=UTC` startup parameter, which wins (sqlx-postgres 0.8.6
+/// connection/establish.rs; CI runs 38459899496 and 38461412602).
+fn odd_zone_pool(max: u32) -> PgPoolOptions {
+    PgPoolOptions::new()
+        .max_connections(max)
+        .after_connect(|conn, _meta| {
+            Box::pin(async move {
+                conn.execute(format!("SET TIME ZONE '{SESSION_TIME_ZONE}'").as_str())
+                    .await?;
+                Ok(())
+            })
+        })
 }
 
 async fn test_db() -> Option<TestDb> {
@@ -163,9 +183,7 @@ async fn test_db() -> Option<TestDb> {
         admin.close().await;
     }
     // From here on the guard owns the database, even if connecting fails.
-    let pool = PgPoolOptions::new()
-        .max_connections(4)
-        .connect_lazy_with(test_session(&base).database(&name));
+    let pool = odd_zone_pool(4).connect_lazy_with(test_session(&base).database(&name));
     Some(TestDb { base, name, pool })
 }
 
@@ -1247,7 +1265,7 @@ async fn sessions_are_pinned_to_public_and_shadow_keys_never_authenticate() {
     assert!(matches!(err, StartupError::SearchPath { .. }), "{err}");
 
     // The pinned pool never sees the shadow table.
-    let pinned = db.pool_with(test_session(&db.base)).await;
+    let pinned = db.odd_zone_pool_with(test_session(&db.base)).await;
     let s = store(&pinned);
     assert_eq!(s.prepare().await.unwrap().outcome, Outcome::Migrated);
     assert!(s.use_key("shadow-secret").await.unwrap().is_none());
