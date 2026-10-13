@@ -186,9 +186,14 @@ fn present(b: bool) -> &'static str {
 /// is written, not even `_sqlx_migrations`.
 ///
 /// The reference tables that exist are locked before the comparison and
-/// stay locked until the baseline commits, so no DDL (including `ALTER TYPE
-/// history`, which must lock `alerts`) can land between the two. Writers
-/// that are not alrust wait, or the lock times out and nothing is written.
+/// stay locked until the baseline commits, so no table DDL can land between
+/// the two. Writers that are not alrust wait, or the lock times out and
+/// nothing is written. A standalone `ALTER TYPE history` locks only the
+/// type, not the tables: the second comparison below narrows that window
+/// but does not close it (a type change committed after that read and
+/// before the baseline commit is caught only by the post-commit catalog
+/// check, with the baseline already written). Closing it is an open design
+/// question (ADR-0005).
 async fn adopt(conn: &mut PgConnection, existing: &[String]) -> Result<(), StartupError> {
     let mut tx = conn.begin().await?;
     sqlx::query("SET LOCAL lock_timeout = '30s'")
