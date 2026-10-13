@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-13T15:15Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-13T21:00Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -31,6 +31,37 @@ truthy non-string values), alert tags and attributes (#145; Y34), the
 reference's `field!=value` query exclusions (#147), a launcher startup-race
 fix (#148) and two documentation updates (#143, #146). The hosted alpha smoke
 passes 115 of 115 at #147.
+
+**Storage switch to the reference layout (ADR-0005; owner direction Y35,
+2026-10-13).** alrust's store is being moved onto the reference Alerta
+PostgreSQL schema exactly, so that Zabalack's and Voalack's SQL can attach.
+The design and implementation are on **draft PR #150 (DO NOT MERGE)**, at
+`04970f72`. Status:
+
+- The migration from the alpha schema (`0002`) rebuilds `alerts` and
+  `heartbeats` by verified copy in one transaction, after strict layout and
+  dependency checks; a fresh database gets the same result. An existing
+  reference database is served as it is after a read-only exact-catalog
+  check, and alrust writes nothing to it (P2, the adoption race, closed by
+  Codex on that basis).
+- The generated files (reference catalog, alpha shape, `0002`) came from the
+  reviewed draft-only CI job (run `38457334307`, qualified by Codex) after two
+  local generation windows cancelled with no action because the CPU was
+  above the 80 °C limit.
+- Hosted validation on the draft PR found and fixed a PostgreSQL 18
+  constraint-name collision and three test-fixture defects. The test sessions
+  were found to have run in UTC only (SQLx forces `TimeZone=UTC`); this is
+  corrected. Runs `38462504472` (`515ae962`) and `38464710746` (`aa2b232a`)
+  passed all seven jobs, including 19 store integration tests on CI's
+  PostgreSQL 18.6, with the non-UTC and no-write assertions executed. This
+  covers the tested cases only, not full parity.
+- **Before merge:** the owner's choices on alert `value` (floats, arrays,
+  objects; a fail-closed placeholder refuses them meanwhile), on the
+  remaining NULL-read refusals and on an extra-index allowlist (Zabalack
+  documents an optional index on `public.alerts`), then Codex's full
+  implementation review. Also pending with the owner: hook or port for the
+  integrations' plugin layers, who changes their repositories, and the
+  local developer-smoke process.
 
 **First broader conformance run (A3B, 2026-10-13).** Codex ran ten selected
 cases against each of two local targets that Claude stood up, captured once
