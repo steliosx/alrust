@@ -528,7 +528,9 @@ async fn edit_tags(
     let caller = authenticate(st, headers, params).await?;
     caller.require("write:alerts")?;
     // Only a non-empty list of strings: a non-list, an empty list or a
-    // non-string element is 400 (the reference would fail such values in SQL).
+    // non-string element is 400. The reference rejects only an absent or
+    // empty value before SQL; other values reach its SQL, with outcomes that
+    // vary by type.
     let tags: Vec<String> = match body.get("tags") {
         Some(Value::Array(a)) if !a.is_empty() && a.iter().all(Value::is_string) => a
             .iter()
