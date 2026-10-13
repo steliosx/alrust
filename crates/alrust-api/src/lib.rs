@@ -783,13 +783,22 @@ async fn delete_heartbeat(
 
 // ---------------------------------------------------------------- keys
 
-/// A caller-supplied `id` or `key` on `POST /key` (`models/key.py:50-56`):
-/// absent, null or empty generates one, as the reference's `or` does; a
-/// non-string is 400 (the reference would store its text form).
+/// A caller-supplied `id` or `key` on `POST /key` (`models/key.py:50-56`).
+/// The reference keeps the value only when it is truthy
+/// (`kwargs.get('key', None) or key_helper.generate()`), so every Python-falsy
+/// value (absent, null, false, 0, 0.0, "", [], {}) generates one here too.
+/// A truthy non-string is refused with 400 (pending the owner's ruling,
+/// KEYSUP-AUTH-1). In the reference it reaches psycopg2 unchanged, whose
+/// adaptation and PostgreSQL's assignment casts would store e.g. `true` as
+/// "true" and `5` as "5", a list as array text, and fail an object with 500
+/// (read from the source, not measured).
 fn supplied(obj: &serde_json::Map<String, Value>, field: &str) -> Result<Option<String>, ApiError> {
     match obj.get(field) {
-        None | Some(Value::Null) => Ok(None),
+        None | Some(Value::Null) | Some(Value::Bool(false)) => Ok(None),
+        Some(Value::Number(n)) if n.as_f64() == Some(0.0) => Ok(None),
         Some(Value::String(s)) if s.is_empty() => Ok(None),
+        Some(Value::Array(a)) if a.is_empty() => Ok(None),
+        Some(Value::Object(o)) if o.is_empty() => Ok(None),
         Some(Value::String(s)) => Ok(Some(s.clone())),
         Some(_) => Err(ApiError::bad(format!("{field} must be a string"))),
     }

@@ -55,7 +55,7 @@ start-up.
 | `PUT /alert/{id}/action` | open, assign, ack, unack, shelve, unshelve, close, expired, timeout (A2–A5) |
 | `DELETE /alert/{id}` | |
 | `POST /heartbeat`, `GET /heartbeats`, `GET`/`DELETE /heartbeat/{id}` | Upsert by origin and customer; derived latency, since and status |
-| `POST /key`, `GET /keys`, `DELETE /key/{id}` | API keys (`Authorization: Key …`, `X-API-Key`, or `?api-key=`). A new key's scopes must be within the creator's; the secret is shown only in the creation response; lists and `href`s use the public id. As in the reference, `POST /key` may supply its own `key` and `id` (a duplicate is refused) |
+| `POST /key`, `GET /keys`, `DELETE /key/{id}` | API keys (`Authorization: Key …`, `X-API-Key`, or `?api-key=`). A new key's scopes must be within the creator's; the secret is shown only in the creation response; lists and `href`s use the public id. As in the reference, `POST /key` may supply its own `key` and `id`: a Python-falsy value (`null`, `false`, `0`, `""`, `[]`, `{}`) generates one, a duplicate is refused (500), and a truthy non-string is 400 where the reference would coerce it. `href`s percent-encode the id as one path segment |
 | `GET /management/gtg`, `/management/healthcheck` | No key needed |
 | `GET`/`POST /management/housekeeping` | Deletion and expiry (K1, K2) |
 
