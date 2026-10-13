@@ -1003,10 +1003,13 @@ def test_reader_refusals_before_any_registry(env, tmp_path, monkeypatch, case, c
             data = snapshot.read_bytes().replace(b"r" * 24, b"x" * 24)
             snapshot.write_bytes(data)
         elif case == "replaced_file":
+            # Same bytes, new inode: the replacement is created while the
+            # original still exists, so no filesystem can reuse its inode.
             data = snapshot.read_bytes()
-            snapshot.unlink()
-            snapshot.write_bytes(data)
-            snapshot.chmod(0o600)
+            fresh = job / "entrypoint-secrets.json.new"
+            fresh.write_bytes(data)
+            fresh.chmod(0o600)
+            os.replace(fresh, snapshot)
         elif case == "symlinked_file":
             moved = job / "elsewhere.json"
             snapshot.rename(moved)          # same inode, reached only via a link

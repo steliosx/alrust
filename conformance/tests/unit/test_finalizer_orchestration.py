@@ -463,8 +463,10 @@ def test_removal_mismatch_is_unproven_but_sealed(tmp_path, monkeypatch):
     # evidence can be read.
     job = build(tmp_path, monkeypatch)
     settings = job / "settings.py"
-    settings.unlink()
-    settings.write_text("replacement\n")
+    # Created while the original exists, so its inode is necessarily new.
+    fresh = job / "settings.py.new"
+    fresh.write_text("replacement\n")
+    os.replace(fresh, settings)
     report = fz.finalize(str(job), STAGES, EXPECTED)
     assert (report["outcome"], report["cleanup"]) == ("SEALED", "UNPROVEN")
     receipt = json.loads((job / "export" / "terminal-cleanup.json").read_text())
