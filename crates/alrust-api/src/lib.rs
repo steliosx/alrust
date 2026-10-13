@@ -787,11 +787,10 @@ async fn delete_heartbeat(
 /// The reference keeps the value only when it is truthy
 /// (`kwargs.get('key', None) or key_helper.generate()`), so every Python-falsy
 /// value (absent, null, false, 0, 0.0, "", [], {}) generates one here too.
-/// A truthy non-string is refused with 400 (pending the owner's ruling,
-/// KEYSUP-AUTH-1). In the reference it reaches psycopg2 unchanged, whose
-/// adaptation and PostgreSQL's assignment casts would store e.g. `true` as
-/// "true" and `5` as "5", a list as array text, and fail an object with 500
-/// (read from the source, not measured).
+/// A truthy non-string is rejected with 400 under the proposed strict policy
+/// (owner ruling pending, KEYSUP-AUTH-1). The reference passes such values
+/// unchanged to the database adapter; type-specific outcomes have not been
+/// qualified.
 fn supplied(obj: &serde_json::Map<String, Value>, field: &str) -> Result<Option<String>, ApiError> {
     match obj.get(field) {
         None | Some(Value::Null) | Some(Value::Bool(false)) => Ok(None),

@@ -8,12 +8,11 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Map, Value};
 
-/// Severity levels of the default `ALERTA` alarm model (`sm.py:7-58`).
-/// A lower level is more severe.
 /// `id` as one URI path segment for an `href`: every byte outside RFC 3986's
 /// unreserved set is percent-encoded, so a caller-supplied id containing `/`,
-/// `?`, `#`, `%` or non-ASCII still names exactly one resource. Generated
-/// UUIDs are unchanged.
+/// `?`, `#`, `%` or non-ASCII stays one segment. Generated UUIDs are
+/// unchanged. The ids `.` and `..` remain dot segments, which a normalizing
+/// URI client may remove (a known limitation; ids are not validated).
 pub fn path_segment(id: &str) -> String {
     let mut out = String::with_capacity(id.len());
     for b in id.bytes() {
@@ -26,6 +25,8 @@ pub fn path_segment(id: &str) -> String {
     out
 }
 
+/// Severity levels of the default `ALERTA` alarm model (`sm.py:7-58`).
+/// A lower level is more severe.
 pub fn severity_level(severity: &str) -> Option<u8> {
     Some(match severity {
         "security" => 0,
