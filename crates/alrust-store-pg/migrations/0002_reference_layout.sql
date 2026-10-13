@@ -244,6 +244,22 @@ BEGIN
     IF bad IS NOT NULL THEN
         RAISE EXCEPTION 'alrust 0002: alerts with a history entry the history type cannot hold; nothing was changed: %', bad;
     END IF;
+    -- Field types (ADR5-HISTORY-TYPE-1): the text fields must be JSON strings
+    -- (or null or absent), and timeout a whole JSON number (or null or
+    -- absent). Anything else would be coerced by ->>, so it is refused, not
+    -- converted. value is checked by the value rule below.
+    SELECT string_agg(id, ', ' ORDER BY id) INTO bad FROM alerts a
+     WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(a.history) e
+                    WHERE EXISTS (SELECT 1 FROM jsonb_each(e) f
+                                   WHERE (f.key IN ('id', 'event', 'severity', 'status', 'text', 'type', 'user', 'updateTime')
+                                          AND jsonb_typeof(f.value) NOT IN ('string', 'null'))
+                                      OR (f.key = 'timeout'
+                                          AND NOT (jsonb_typeof(f.value) = 'null'
+                                                   OR (jsonb_typeof(f.value) = 'number'
+                                                       AND (f.value #>> '{}')::numeric = trunc((f.value #>> '{}')::numeric))))));
+    IF bad IS NOT NULL THEN
+        RAISE EXCEPTION 'alrust 0002: alerts with a history entry field of the wrong JSON type; nothing was changed: %', bad;
+    END IF;
     SELECT string_agg(id, ', ' ORDER BY id) INTO bad FROM alerts a
      WHERE NOT (a.timeout BETWEEN -2147483648 AND 2147483647) OR NOT (a.duplicate_count BETWEEN -2147483648 AND 2147483647)
         OR EXISTS (SELECT 1 FROM jsonb_array_elements(a.history) e

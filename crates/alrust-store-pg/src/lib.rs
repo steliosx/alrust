@@ -409,6 +409,115 @@ fn row_to_key(row: &PgRow) -> Result<ApiKey, sqlx::Error> {
     })
 }
 
+/// The alert columns an operation may write (see `Store::update_alert`).
+#[derive(Debug, Clone, Copy)]
+enum Col {
+    Event,
+    Severity,
+    Status,
+    Service,
+    Value,
+    Text,
+    CreateTime,
+    Timeout,
+    RawData,
+    DuplicateCount,
+    Repeat,
+    PreviousSeverity,
+    TrendIndication,
+    ReceiveTime,
+    LastReceiveId,
+    LastReceiveTime,
+    Tags,
+    Attributes,
+    UpdateTime,
+    History,
+}
+
+impl Col {
+    fn name(self) -> &'static str {
+        match self {
+            Col::Event => "event",
+            Col::Severity => "severity",
+            Col::Status => "status",
+            Col::Service => "service",
+            Col::Value => "value",
+            Col::Text => "text",
+            Col::CreateTime => "create_time",
+            Col::Timeout => "timeout",
+            Col::RawData => "raw_data",
+            Col::DuplicateCount => "duplicate_count",
+            Col::Repeat => "repeat",
+            Col::PreviousSeverity => "previous_severity",
+            Col::TrendIndication => "trend_indication",
+            Col::ReceiveTime => "receive_time",
+            Col::LastReceiveId => "last_receive_id",
+            Col::LastReceiveTime => "last_receive_time",
+            Col::Tags => "tags",
+            Col::Attributes => "attributes",
+            Col::UpdateTime => "update_time",
+            Col::History => "history",
+        }
+    }
+}
+
+/// `dedup_alert` (`postgres/base.py:218-226`).
+const DEDUP_COLS: &[Col] = &[
+    Col::Status,
+    Col::Service,
+    Col::Value,
+    Col::Text,
+    Col::Timeout,
+    Col::RawData,
+    Col::Repeat,
+    Col::LastReceiveId,
+    Col::LastReceiveTime,
+    Col::Tags,
+    Col::Attributes,
+    Col::DuplicateCount,
+    Col::UpdateTime,
+    Col::History,
+];
+
+/// `correlate_alert` (`postgres/base.py:244-252`).
+const CORRELATE_COLS: &[Col] = &[
+    Col::Event,
+    Col::Severity,
+    Col::Status,
+    Col::Service,
+    Col::Value,
+    Col::Text,
+    Col::CreateTime,
+    Col::Timeout,
+    Col::RawData,
+    Col::DuplicateCount,
+    Col::Repeat,
+    Col::PreviousSeverity,
+    Col::TrendIndication,
+    Col::ReceiveTime,
+    Col::LastReceiveId,
+    Col::LastReceiveTime,
+    Col::Tags,
+    Col::Attributes,
+    Col::UpdateTime,
+    Col::History,
+];
+
+/// `set_alert`, used by actions (`postgres/base.py:279-289`).
+const ACTION_COLS: &[Col] = &[
+    Col::Severity,
+    Col::Status,
+    Col::Tags,
+    Col::Attributes,
+    Col::Timeout,
+    Col::PreviousSeverity,
+    Col::UpdateTime,
+    Col::History,
+];
+
+/// `set_status` (`postgres/base.py:303-310`).
+const STATUS_COLS: &[Col] = &[Col::Status, Col::Timeout, Col::UpdateTime, Col::History];
+
 /// History entries that count for an incoming event (spec R7.1, restricted
 /// to the matched alert's own history in the alpha).
 fn identity_history<'a>(alert: &'a Alert, event: &str) -> Vec<&'a HistoryEntry> {
@@ -444,68 +553,110 @@ impl Store {
         history.truncate(self.cfg.history_limit);
     }
 
-    async fn write_alert(
-        tx: &mut Transaction<'_, Postgres>,
-        a: &Alert,
-        insert: bool,
-    ) -> Result<(), StoreError> {
-        let sql = if insert {
-            r#"INSERT INTO alerts (id, resource, event, environment, severity, correlate, status, service, "group",
-                value, text, tags, attributes, origin, type, create_time, timeout, raw_data, customer,
-                duplicate_count, repeat, previous_severity, trend_indication, receive_time, last_receive_id,
-                last_receive_time, update_time, history)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)"#
-        } else {
-            r#"UPDATE alerts SET resource=$2, event=$3, environment=$4, severity=$5, correlate=$6, status=$7,
-                service=$8, "group"=$9, value=$10, text=$11, tags=$12, attributes=$13, origin=$14, type=$15,
-                create_time=$16, timeout=$17, raw_data=$18, customer=$19, duplicate_count=$20, repeat=$21,
-                previous_severity=$22, trend_indication=$23, receive_time=$24, last_receive_id=$25,
-                last_receive_time=$26, update_time=$27, history=$28
-               WHERE id=$1"#
-        };
+    async fn insert_alert(tx: &mut Transaction<'_, Postgres>, a: &Alert) -> Result<(), StoreError> {
         let history = a
             .history
             .iter()
             .map(history_to_pg)
             .collect::<Result<Vec<_>, _>>()?;
         let timeout = a.timeout.map(|t| int(t, "timeout")).transpose()?;
-        // A duplicate past the integer maximum fails here, before any write,
-        // and the caller's transaction rolls back (ADR-0005 decision 6).
         let duplicate_count = a
             .duplicate_count
             .map(|c| int(c, "duplicateCount"))
             .transpose()?;
-        sqlx::query(sql)
-            .bind(&a.id)
-            .bind(&a.resource)
-            .bind(&a.event)
-            .bind(&a.environment)
-            .bind(&a.severity)
-            .bind(&a.correlate)
-            .bind(&a.status)
-            .bind(&a.service)
-            .bind(&a.group)
-            .bind(&a.value)
-            .bind(&a.text)
-            .bind(&a.tags)
-            .bind(Value::Object(a.attributes.clone()))
-            .bind(&a.origin)
-            .bind(&a.event_type)
-            .bind(naive(a.create_time))
-            .bind(timeout)
-            .bind(&a.raw_data)
-            .bind(&a.customer)
-            .bind(duplicate_count)
-            .bind(a.repeat)
-            .bind(&a.previous_severity)
-            .bind(&a.trend_indication)
-            .bind(naive(a.receive_time))
-            .bind(&a.last_receive_id)
-            .bind(a.last_receive_time.map(naive))
-            .bind(a.update_time.map(naive))
-            .bind(history)
-            .execute(&mut **tx)
-            .await?;
+        sqlx::query(
+            r#"INSERT INTO alerts (id, resource, event, environment, severity, correlate, status, service, "group",
+                value, text, tags, attributes, origin, type, create_time, timeout, raw_data, customer,
+                duplicate_count, repeat, previous_severity, trend_indication, receive_time, last_receive_id,
+                last_receive_time, update_time, history)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)"#,
+        )
+        .bind(&a.id)
+        .bind(&a.resource)
+        .bind(&a.event)
+        .bind(&a.environment)
+        .bind(&a.severity)
+        .bind(&a.correlate)
+        .bind(&a.status)
+        .bind(&a.service)
+        .bind(&a.group)
+        .bind(&a.value)
+        .bind(&a.text)
+        .bind(&a.tags)
+        .bind(Value::Object(a.attributes.clone()))
+        .bind(&a.origin)
+        .bind(&a.event_type)
+        .bind(naive(a.create_time))
+        .bind(timeout)
+        .bind(&a.raw_data)
+        .bind(&a.customer)
+        .bind(duplicate_count)
+        .bind(a.repeat)
+        .bind(&a.previous_severity)
+        .bind(&a.trend_indication)
+        .bind(naive(a.receive_time))
+        .bind(&a.last_receive_id)
+        .bind(a.last_receive_time.map(naive))
+        .bind(a.update_time.map(naive))
+        .bind(history)
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    /// Update only the given columns of a locked alert, as the reference's
+    /// operation-specific UPDATEs do (`postgres/base.py`: `dedup_alert`,
+    /// `correlate_alert`, `set_alert`, `set_status`, `tag_alert`,
+    /// `update_tags`, `update_attributes`). Every other column keeps its
+    /// stored value, including a NULL or empty string that reads hydrated as
+    /// a default (ADR5-EDIT-PRESERVE-1).
+    async fn update_alert(
+        tx: &mut Transaction<'_, Postgres>,
+        a: &Alert,
+        cols: &[Col],
+    ) -> Result<(), StoreError> {
+        let mut qb: QueryBuilder<Postgres> = QueryBuilder::new("UPDATE alerts SET ");
+        for (i, col) in cols.iter().enumerate() {
+            if i > 0 {
+                qb.push(", ");
+            }
+            qb.push(col.name()).push(" = ");
+            match col {
+                Col::Event => qb.push_bind(a.event.clone()),
+                Col::Severity => qb.push_bind(a.severity.clone()),
+                Col::Status => qb.push_bind(a.status.clone()),
+                Col::Service => qb.push_bind(a.service.clone()),
+                Col::Value => qb.push_bind(a.value.clone()),
+                Col::Text => qb.push_bind(a.text.clone()),
+                Col::CreateTime => qb.push_bind(naive(a.create_time)),
+                Col::Timeout => qb.push_bind(a.timeout.map(|t| int(t, "timeout")).transpose()?),
+                Col::RawData => qb.push_bind(a.raw_data.clone()),
+                // A duplicate past the integer maximum fails here, before any
+                // write, and the caller's transaction rolls back (decision 6).
+                Col::DuplicateCount => qb.push_bind(
+                    a.duplicate_count
+                        .map(|c| int(c, "duplicateCount"))
+                        .transpose()?,
+                ),
+                Col::Repeat => qb.push_bind(a.repeat),
+                Col::PreviousSeverity => qb.push_bind(a.previous_severity.clone()),
+                Col::TrendIndication => qb.push_bind(a.trend_indication.clone()),
+                Col::ReceiveTime => qb.push_bind(naive(a.receive_time)),
+                Col::LastReceiveId => qb.push_bind(a.last_receive_id.clone()),
+                Col::LastReceiveTime => qb.push_bind(a.last_receive_time.map(naive)),
+                Col::Tags => qb.push_bind(a.tags.clone()),
+                Col::Attributes => qb.push_bind(Value::Object(a.attributes.clone())),
+                Col::UpdateTime => qb.push_bind(a.update_time.map(naive)),
+                Col::History => qb.push_bind(
+                    a.history
+                        .iter()
+                        .map(history_to_pg)
+                        .collect::<Result<Vec<_>, _>>()?,
+                ),
+            };
+        }
+        qb.push(" WHERE id = ").push_bind(a.id.clone());
+        qb.build().execute(&mut **tx).await?;
         Ok(())
     }
 
@@ -584,7 +735,7 @@ impl Store {
             if let Some(e) = entry {
                 self.push_history(&mut a.history, e);
             }
-            Self::write_alert(&mut tx, &a, false).await?;
+            Self::update_alert(&mut tx, &a, DEDUP_COLS).await?;
             tx.commit().await?;
             return Ok((a, ReceiveKind::Duplicate));
         }
@@ -641,7 +792,7 @@ impl Store {
             a.tags = union_tags(&a.tags, &n.tags);
             a.attributes = merge_attributes(&a.attributes, &n.attributes);
             self.push_history(&mut a.history, entry);
-            Self::write_alert(&mut tx, &a, false).await?;
+            Self::update_alert(&mut tx, &a, CORRELATE_COLS).await?;
             tx.commit().await?;
             return Ok((a, ReceiveKind::Correlated));
         }
@@ -687,7 +838,7 @@ impl Store {
             raw_data: n.raw_data,
             customer: n.customer,
         };
-        Self::write_alert(&mut tx, &a, true).await?;
+        Self::insert_alert(&mut tx, &a).await?;
         tx.commit().await?;
         Ok((a, ReceiveKind::Created))
     }
@@ -775,9 +926,8 @@ impl Store {
         a.status = new_status.to_string();
         a.update_time = Some(now);
         a.timeout = timeout;
-        a.attributes.retain(|_, v| !v.is_null());
         self.push_history(&mut a.history, entry);
-        Self::write_alert(&mut tx, &a, false).await?;
+        Self::update_alert(&mut tx, &a, STATUS_COLS).await?;
         tx.commit().await?;
         Ok(a)
     }
@@ -796,6 +946,12 @@ impl Store {
     ) -> Result<Alert, StoreError> {
         let mut tx = self.pool.begin().await?;
         let mut a = Self::lock_alert(&mut tx, id, customers).await?;
+        // Only the edited column is written (`tag_alert`, `update_tags`,
+        // `update_attributes`), so no other stored value changes.
+        let col = match &edit {
+            AlertEdit::Tag(_) | AlertEdit::Untag(_) => Col::Tags,
+            AlertEdit::Attributes(_) => Col::Attributes,
+        };
         match edit {
             AlertEdit::Tag(tags) => {
                 for t in tags {
@@ -812,7 +968,7 @@ impl Store {
                 a.attributes.retain(|_, v| !v.is_null());
             }
         }
-        Self::write_alert(&mut tx, &a, false).await?;
+        Self::update_alert(&mut tx, &a, &[col]).await?;
         tx.commit().await?;
         Ok(a)
     }
@@ -889,7 +1045,7 @@ impl Store {
         a.timeout = Some(a.timeout.unwrap_or(self.cfg.alert_timeout));
         a.attributes.retain(|_, v| !v.is_null());
         self.push_history(&mut a.history, entry);
-        Self::write_alert(tx, &a, false).await?;
+        Self::update_alert(tx, &a, ACTION_COLS).await?;
         Ok(a)
     }
 

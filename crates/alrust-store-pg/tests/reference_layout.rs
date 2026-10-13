@@ -657,6 +657,34 @@ async fn alpha_upgrade_refusals_change_nothing() {
             "publication extra_pub includes schema public",
         ),
         (
+            "UPDATE alerts SET history = jsonb_set(history, '{0,severity}', 'false') WHERE id = 'a1'",
+            "a history entry field of the wrong JSON type",
+        ),
+        (
+            "UPDATE alerts SET history = jsonb_set(history, '{0,event}', '5') WHERE id = 'a1'",
+            "a history entry field of the wrong JSON type",
+        ),
+        (
+            "UPDATE alerts SET history = jsonb_set(history, '{1,text}', '[]') WHERE id = 'a1'",
+            "a history entry field of the wrong JSON type",
+        ),
+        (
+            "UPDATE alerts SET history = jsonb_set(history, '{0,user}', '{\"a\": 1}') WHERE id = 'a1'",
+            "a history entry field of the wrong JSON type",
+        ),
+        (
+            "UPDATE alerts SET history = jsonb_set(history, '{0,timeout}', '\"7200\"') WHERE id = 'a1'",
+            "a history entry field of the wrong JSON type",
+        ),
+        (
+            "UPDATE alerts SET history = jsonb_set(history, '{0,timeout}', '1.5') WHERE id = 'a1'",
+            "a history entry field of the wrong JSON type",
+        ),
+        (
+            "UPDATE alerts SET history = jsonb_set(history, '{0,updateTime}', '5') WHERE id = 'a1'",
+            "a history entry field of the wrong JSON type",
+        ),
+        (
             "UPDATE alerts SET history = history || '[{\"id\": \"a1\", \"bogus\": 1}]' WHERE id = 'a1'",
             "the history type cannot hold",
         ),
@@ -1101,6 +1129,120 @@ async fn adopted_empty_strings_and_null_metadata_read_like_the_reference() {
     assert_eq!(
         (count, repeat, last_id.as_deref()),
         (None, Some(true), Some("r3-dup"))
+    );
+}
+
+/// The stored row with the given columns removed, as text, to compare
+/// everything an operation must not touch (NULL and "" stay distinct).
+async fn row_without(pool: &PgPool, id: &str, cols: &[&str]) -> String {
+    sqlx::query_scalar("SELECT (to_jsonb(a) - $2::text[])::text FROM alerts a WHERE id = $1")
+        .bind(id)
+        .bind(cols)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// Each operation writes only the reference's own columns for it, so stored
+/// NULLs and empty strings that read hydrated as defaults are never written
+/// back by an unrelated edit (ADR5-EDIT-PRESERVE-1).
+#[tokio::test]
+async fn edits_write_only_their_own_columns() {
+    let Some(db) = test_db().await else { return };
+    apply_reference_schema(&db.pool).await;
+    sqlx::raw_sql(REFERENCE_ROWS)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let s = store(&db.pool);
+    assert_eq!(s.prepare().await.unwrap().outcome, Outcome::Adopted);
+    use alrust_store_pg::AlertEdit;
+    let cases: Vec<(&str, AlertEdit, &[&str])> = vec![
+        ("tag", AlertEdit::Tag(vec!["x".into()]), &["tags"]),
+        ("untag", AlertEdit::Untag(vec!["x".into()]), &["tags"]),
+        (
+            "attributes",
+            AlertEdit::Attributes(serde_json::from_str(r#"{"k": "v"}"#).unwrap()),
+            &["attributes"],
+        ),
+    ];
+    for (name, edit, cols) in cases {
+        let before = row_without(&db.pool, "r2", cols).await;
+        s.edit_alert("r2", None, edit).await.expect(name);
+        assert_eq!(row_without(&db.pool, "r2", cols).await, before, "{name}");
+    }
+    let raw: (String, String, String, String) =
+        sqlx::query_as("SELECT severity, status, \"group\", type FROM alerts WHERE id = 'r2'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        raw,
+        ("".into(), "".into(), "".into(), "".into()),
+        "stored empties kept"
+    );
+
+    let status_cols: &[&str] = &["status", "timeout", "update_time", "history"];
+    let before = row_without(&db.pool, "r2", status_cols).await;
+    s.set_status("r2", None, "assign", "mine", None, "alice")
+        .await
+        .unwrap();
+    assert_eq!(
+        row_without(&db.pool, "r2", status_cols).await,
+        before,
+        "set_status"
+    );
+
+    let action_cols: &[&str] = &[
+        "severity",
+        "status",
+        "tags",
+        "attributes",
+        "timeout",
+        "previous_severity",
+        "update_time",
+        "history",
+    ];
+    let before = row_without(&db.pool, "r2", action_cols).await;
+    s.take_action("r2", None, "ack", "seen", None, "alice")
+        .await
+        .unwrap();
+    assert_eq!(
+        row_without(&db.pool, "r2", action_cols).await,
+        before,
+        "action"
+    );
+
+    let dedup_cols: &[&str] = &[
+        "status",
+        "service",
+        "value",
+        "text",
+        "timeout",
+        "raw_data",
+        "repeat",
+        "last_receive_id",
+        "last_receive_time",
+        "tags",
+        "attributes",
+        "duplicate_count",
+        "update_time",
+        "history",
+    ];
+    let before = row_without(&db.pool, "r3", dedup_cols).await;
+    let mut n = new_alert("r3-dup", 60);
+    n.resource = "mq01".into();
+    n.event = "QueueFull".into();
+    n.service = vec!["Mq".into()];
+    n.group = "Mq".into();
+    assert_eq!(
+        s.receive(n, "alice").await.unwrap().1,
+        ReceiveKind::Duplicate
+    );
+    assert_eq!(
+        row_without(&db.pool, "r3", dedup_cols).await,
+        before,
+        "duplicate"
     );
 }
 
