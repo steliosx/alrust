@@ -5,8 +5,14 @@
 #
 #   .github/scripts/start-postgres18.sh <database> [user] [password] [port]
 #
-# The server listens on 127.0.0.1 only and runs as the runner user with its
-# data under $RUNNER_TEMP. Exports nothing; callers build their own URL.
+# Ownership: before anything is installed or initialised, this invocation
+# acquires a fresh private directory with mktemp -d (exclusive creation) and
+# writes a random token into it. The directory and token are exported to
+# later steps of this job only (PG18_ROOT, PG18_TOKEN via $GITHUB_ENV), and
+# .github/scripts/stop-postgres18.sh acts only on that pair. No pre-existing
+# path is ever adopted. PG_BIN overrides the server binaries (for the
+# scripts' own tests, which also read PG18_ROOT/PG18_TOKEN from stdout).
+# The server listens on 127.0.0.1 only and runs as the runner user.
 set -euo pipefail
 
 db=${1:?database name}
@@ -14,29 +20,51 @@ user=${2:-postgres}
 password=${3:-postgres}
 port=${4:-5432}
 version=18.6-1.pgdg24.04+2
+: "${RUNNER_TEMP:?RUNNER_TEMP is required}"
 
-# The PGDG signing key (fingerprint B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8).
-sudo install -d /usr/share/postgresql-common/pgdg
-sudo curl -fsSL --retry 3 -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
-  https://www.postgresql.org/media/keys/ACCC4CF8.asc
-gpg --show-keys --with-colons /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
-  | grep -q '^fpr:::::::::B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8:' \
-  || { echo "unexpected PGDG key fingerprint" >&2; exit 1; }
-echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" \
-  | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
-sudo apt-get update -q
-sudo apt-get install -y -q --no-install-recommends "postgresql-18=$version" "postgresql-client-18=$version"
+if ss -ltnH "sport = :$port" | grep -q .; then
+  echo "port $port is already in use; nothing acquired" >&2
+  ss -ltnp "sport = :$port" >&2 || true
+  exit 1
+fi
 
-bin=/usr/lib/postgresql/18/bin
+# Acquire: a new directory only this invocation can have created.
+root=$(mktemp -d "$RUNNER_TEMP/pg18.XXXXXXXX")
+token=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+( umask 077; printf '%s\n' "$token" > "$root/owner" )
+if [[ -n "${GITHUB_ENV:-}" ]]; then
+  { echo "PG18_ROOT=$root"; echo "PG18_TOKEN=$token"; } >> "$GITHUB_ENV"
+fi
+echo "PG18_ROOT=$root"
+echo "PG18_TOKEN=$token"
+data="$root/data"
+
+if [[ -z "${PG_BIN:-}" ]]; then
+  # The PGDG signing key (fingerprint B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8).
+  sudo install -d /usr/share/postgresql-common/pgdg
+  sudo curl -fsSL --retry 3 -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+    https://www.postgresql.org/media/keys/ACCC4CF8.asc
+  gpg --show-keys --with-colons /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+    | grep -q '^fpr:::::::::B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8:' \
+    || { echo "unexpected PGDG key fingerprint" >&2; exit 1; }
+  echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" \
+    | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+  # Do not let the package create and start its own "18 main" cluster.
+  sudo install -d /etc/postgresql-common/createcluster.d
+  echo 'create_main_cluster = false' | sudo tee /etc/postgresql-common/createcluster.d/alrust-ci.conf >/dev/null
+  sudo apt-get update -q
+  sudo apt-get install -y -q --no-install-recommends "postgresql-18=$version" "postgresql-client-18=$version"
+fi
+
+bin=${PG_BIN:-/usr/lib/postgresql/18/bin}
 "$bin/postgres" -V
-data="${RUNNER_TEMP:-/tmp}/pg18-data"
-rm -rf "$data"
-pwfile=$(mktemp)
-printf '%s' "$password" > "$pwfile"
+pwfile="$root/pwfile"
+trap 'rm -f "$pwfile"' EXIT
+( umask 077; printf '%s' "$password" > "$pwfile" )
 "$bin/initdb" -D "$data" -U "$user" --pwfile="$pwfile" -A scram-sha-256 >/dev/null
 rm -f "$pwfile"
-"$bin/pg_ctl" -D "$data" -l "${RUNNER_TEMP:-/tmp}/pg18.log" -w \
-  -o "-p $port -c listen_addresses=127.0.0.1 -c unix_socket_directories=''" start
+"$bin/pg_ctl" -D "$data" -l "$root/pg.log" -w \
+  -o "-p $port -c listen_addresses=127.0.0.1 -c unix_socket_directories=''" start >/dev/null
 PGPASSWORD="$password" "$bin/psql" -h 127.0.0.1 -p "$port" -U "$user" -d postgres -v ON_ERROR_STOP=1 \
-  -c "CREATE DATABASE \"$db\""
+  -c "CREATE DATABASE \"$db\"" >/dev/null
 PGPASSWORD="$password" "$bin/psql" -h 127.0.0.1 -p "$port" -U "$user" -d "$db" -tAc 'SELECT version()'
