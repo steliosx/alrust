@@ -356,7 +356,13 @@ impl Heartbeat {
         // Expiry compares the full elapsed time (`since.total_seconds() > timeout`);
         // only the serialized `since` is truncated to whole seconds (spec HB2).
         let since = elapsed.num_seconds();
-        let status = if elapsed > chrono::Duration::seconds(self.timeout) {
+        // Compare in i128 microseconds: any stored i64 timeout fits, so a very
+        // large timeout reads as not expired instead of overflowing.
+        let elapsed_us = elapsed
+            .num_microseconds()
+            .map(i128::from)
+            .unwrap_or_else(|| i128::from(elapsed.num_seconds()) * 1_000_000);
+        let status = if elapsed_us > i128::from(self.timeout) * 1_000_000 {
             "expired"
         } else if latency > max_latency_ms {
             "slow"
@@ -521,6 +527,28 @@ mod tests {
         let b = hb.body("http://x", 2000, now);
         assert_eq!((b.status, b.since), ("expired", 0));
         assert_eq!(hb.body("http://x", 2000, t).status, "ok");
+    }
+
+    #[test]
+    fn heartbeat_huge_timeouts_do_not_overflow() {
+        let t = parse_time("2026-10-13T01:00:00.000Z").unwrap();
+        let now = parse_time("2026-10-14T01:00:00.500Z").unwrap();
+        for timeout in [i64::MAX, 9_223_372_036_854_776, 86_400] {
+            let hb = Heartbeat {
+                id: "h".into(),
+                origin: "o".into(),
+                tags: vec![],
+                attributes: Map::new(),
+                event_type: "Heartbeat".into(),
+                create_time: t,
+                timeout,
+                receive_time: t,
+                customer: None,
+            };
+            let b = hb.body("http://x", 2000, now);
+            let want = if timeout == 86_400 { "expired" } else { "ok" };
+            assert_eq!((b.status, b.since), (want, 86_400), "timeout {timeout}");
+        }
     }
 
     #[test]

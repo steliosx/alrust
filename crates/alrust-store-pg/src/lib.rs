@@ -917,6 +917,14 @@ impl Store {
         Ok(rows.iter().map(row_to_key).collect::<Result<Vec<_>, _>>()?)
     }
 
+    pub async fn list_keys_by_user(&self, user: &str) -> Result<Vec<ApiKey>, StoreError> {
+        let rows = sqlx::query(r#"SELECT * FROM keys WHERE "user" = $1 ORDER BY expire_time DESC"#)
+            .bind(user)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows.iter().map(row_to_key).collect::<Result<Vec<_>, _>>()?)
+    }
+
     pub async fn delete_key(&self, id: &str) -> Result<(), StoreError> {
         let r = sqlx::query("DELETE FROM keys WHERE id = $1")
             .bind(id)
@@ -955,7 +963,7 @@ impl Store {
         }
         let ids: Vec<String> = sqlx::query_scalar(
             "SELECT id FROM alerts WHERE status <> 'expired' AND COALESCE(timeout, $1) <> 0
-               AND last_receive_time + make_interval(secs => timeout) < now()",
+               AND last_receive_time + make_interval(secs => LEAST(timeout, 3155760000)) < now()",
         )
         .bind(self.cfg.alert_timeout)
         .fetch_all(&self.pool)

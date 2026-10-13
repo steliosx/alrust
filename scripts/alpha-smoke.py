@@ -215,6 +215,22 @@ check('DELETE /key/<id> works [S3]', code == 200, (code, body))
 code, body = call('GET', f'/alert/{aid}', key=ro)
 check('deleted key no longer authenticates', code == 401, (code, body))
 
+# --- key listing is per user unless admin [views/keys.py:84-91, A2V2-API-R1]
+ALICE, BOB = f'alice-{RUN}', f'bob-{RUN}'
+code, body = call('POST', '/key', {'user': ALICE, 'scopes': ['read:keys'], 'text': 'alice'})
+alice, alice_id = body.get('key'), body.get('data', {}).get('id')
+code, body = call('POST', '/key', {'user': BOB, 'scopes': ['read:keys'], 'text': 'bob'})
+bob_id = body.get('data', {}).get('id')
+code, body = call('GET', '/keys', key=alice)
+ids = {k.get('id') for k in body.get('keys', [])}
+check('read:keys user lists only their own keys', code == 200 and alice_id in ids and bob_id not in ids
+      and all(k.get('user') == ALICE for k in body.get('keys', [])), (code, ids))
+code, body = call('GET', '/keys')
+ids = {k.get('id') for k in body.get('keys', [])}
+check('admin lists every key', code == 200 and {alice_id, bob_id} <= ids, (code, len(ids)))
+for kid in (alice_id, bob_id):
+    call('DELETE', f'/key/{kid}')
+
 # --- customer assignment [customer-mapping C5-C10, A2-API-R3]
 X, Y = f'cx-{RUN}', f'cy-{RUN}'
 _, wx, _ = mint(['write:alerts', 'read:alerts', 'write:heartbeats'], customer=X)
@@ -268,6 +284,13 @@ hb = body.get('heartbeat', {})
 check('timeout 0 heartbeat is expired at +0.5 s with since 0 [HB2]',
       hb.get('status') == 'expired' and hb.get('since') == 0, hb)
 call('DELETE', f'/heartbeat/{h0}')
+code, body = call('POST', '/heartbeat', {'origin': f'hbmax/{RUN}', 'timeout': 9223372036854775807})
+hmax = body.get('id', '') if isinstance(body, dict) else ''
+check('max-i64 heartbeat timeout is accepted and renders [A2V2-DOM-R1]',
+      code == 201 and body.get('heartbeat', {}).get('status') == 'ok', (code, body))
+code, body = call('GET', '/heartbeats')
+check('heartbeat list with a max-i64 timeout still renders', code == 200, code)
+call('DELETE', f'/heartbeat/{hmax}')
 
 # --- delete and 404
 code, body = call('DELETE', f'/alert/{aid}')

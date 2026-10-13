@@ -867,10 +867,22 @@ async fn list_keys(
     let caller = authenticate(&st, &headers, &params).await?;
     caller.require("read:keys")?;
     let now = Utc::now();
-    let keys: Vec<Value> = st
-        .store
-        .list_keys(caller.customers().as_deref())
-        .await?
+    // views/keys.py:84-91: every key only with auth disabled or an exact
+    // admin/admin:keys scope; otherwise the caller's own keys.
+    let all = !st.cfg.auth_required
+        || caller
+            .scopes
+            .iter()
+            .any(|s| s == "admin" || s == "admin:keys");
+    let rows = if all {
+        st.store.list_keys(caller.customers().as_deref()).await?
+    } else {
+        let Some(login) = caller.login.as_deref().filter(|l| !l.is_empty()) else {
+            return Err(ApiError::bad("Must define 'user' to list user keys"));
+        };
+        st.store.list_keys_by_user(login).await?
+    };
+    let keys: Vec<Value> = rows
         .iter()
         .map(|k| serde_json::to_value(k.body(&st.cfg.base_url, now, false)).unwrap_or(Value::Null))
         .collect();
