@@ -659,6 +659,14 @@ fn parse_search(st: &AppState, caller: &Caller, params: &[(String, String)]) -> 
             "group" => q.groups.push(v.clone()),
             "origin" => q.origins.push(v.clone()),
             "tag" | "tags" => q.tags.push(v.clone()),
+            "id!" => q.not_ids.push(v.clone()),
+            "resource!" => q.not_resources.push(v.clone()),
+            "event!" => q.not_events.push(v.clone()),
+            "environment!" => q.not_environments.push(v.clone()),
+            "severity!" => q.not_severities.push(v.clone()),
+            "status!" => q.not_statuses.push(v.clone()),
+            "group!" => q.not_groups.push(v.clone()),
+            "origin!" => q.not_origins.push(v.clone()),
             "page" => {
                 page = v
                     .parse()

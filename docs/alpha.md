@@ -50,7 +50,7 @@ start-up.
 |---|---|
 | `POST /alert` | Parsing and defaults (R0), the reject policy (R1.2), heartbeat diversion (HB3), duplicate / correlate / create with the reference state machine (R2–R6) |
 | `GET /alert/{id}` | Full id, id prefix or `lastReceiveId` |
-| `GET /alerts`, `GET /alerts/count` | Filters: `id`, `resource`, `event`, `environment`, `severity`, `status`, `service`, `group`, `origin`, `tag`; `page`, `page-size`, `show-history` |
+| `GET /alerts`, `GET /alerts/count` | Filters: `id`, `resource`, `event`, `environment`, `severity`, `status`, `service`, `group`, `origin`, `tag`, and the exclusions `id!`, `resource!`, `event!`, `environment!`, `severity!`, `status!`, `group!`, `origin!` (for example `event!=X`; repeated values exclude each); `page`, `page-size`, `show-history` |
 | `PUT /alert/{id}/status` | Reference semantics, including the raw timeout write (A1) |
 | `PUT /alert/{id}/action` | open, assign, ack, unack, shelve, unshelve, close, expired, timeout (A2–A5) |
 | `DELETE /alert/{id}` | |
@@ -86,6 +86,8 @@ start-up.
   reorder tags.
 - **Dot-segment ids:** an `href` for an id of exactly `.` or `..` is a dot
   segment, which a URI-normalizing client may remove; ids are not validated.
+- **Query parameters:** an unknown filter parameter is ignored; the reference answers 400
+  "Invalid filter parameter". `~` (regex) values are not supported.
 - **Id lookup:** a prefix match on `id` or `lastReceiveId`; the reference
   uses a case-insensitive unanchored regex.
 - **Not yet implemented:** blackouts, notes,
