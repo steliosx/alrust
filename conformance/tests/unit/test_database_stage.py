@@ -346,13 +346,17 @@ def test_create_timeout_is_an_unknown_outcome(env):
     assert ds.allocation_states(create_bytes(job))[:2] == ("UNKNOWN", "NONE")
 
 
-def test_container_failure_after_the_database_is_recorded(env):
+def test_container_failure_refuses_before_any_sql_or_allocation(env):
+    # The service container is proved before any SQL (PR #100 review,
+    # comment 4174199627), so a docker failure allocates nothing. Faults
+    # after allocation are test_partial_allocation_states.
     job, stub = env
     (stub / "docker").write_text("#!/bin/sh\nexit 1\n")
     url, error = run_create(job, stub)
-    assert error == "docker_failed"
-    # The database identity was recorded first, so it can be dropped.
-    assert ds.allocation_states(create_bytes(job))[:2] == ("RECORDED", "RECORDED")
+    assert url is None and error == "docker_failed"
+    assert not (stub / "received.log").exists()
+    assert ds.allocation_states(create_bytes(job))[:2] == ("NONE", "NONE")
+    assert sj.aggregate(str(job), [ds.CREATE_STAGE])["verdict"] == "FAILED"
 
 
 # --- drop -------------------------------------------------------------------
@@ -371,9 +375,9 @@ def test_drop_complete_after_a_full_create(env):
 
 
 def test_drop_runner_gates_before_any_sql(env):
-    # launched=True with a prefix that has launch but no launch-confirm,
-    # entrypoint or stop: writer_quiescence refuses, before the drop journal
-    # opens and before any SQL. The stage then closes FAILED with the code.
+    # launched=True with a prefix that has launch but no registry: the drop
+    # routes to the failed-entrypoint gate, which refuses this prefix before
+    # any SQL. The stage then closes FAILED with the code.
     job, stub = env
     run_create(job, stub)
     close_create_exit(job)
@@ -381,12 +385,12 @@ def test_drop_runner_gates_before_any_sql(env):
         pass
     before = (stub / "received.log").read_text()
     prefix = NO_LAUNCH + ["launch"]
-    with pytest.raises(ds.DatabaseStageError, match="gate_stages_invalid"):
+    with pytest.raises(ds.DatabaseStageError, match="failed_gate_prefix_invalid"):
         ds.run_drop_stage(str(job), prefix, launched=True, expected=EXPECTED, **kw(stub))
     assert (stub / "received.log").read_text() == before
     assert state(stub)["databases"] and state(stub)["roles"]
     last = records(Path(sj.journal_path(str(job), 3, ds.DROP_STAGE)).read_bytes())[-1]
-    assert last["payload"] == {"result": "FAILED", "code": "gate_stages_invalid"}
+    assert last["payload"] == {"result": "FAILED", "code": "failed_gate_prefix_invalid"}
 
 
 def test_drop_runner_refuses_a_flag_that_disagrees_with_the_evidence(env):
@@ -1062,10 +1066,17 @@ def test_reader_gate_refusal_opens_no_inventory(env, tmp_path, monkeypatch):
         opened.append(str(path))
         return real_open(path, *args, **kwargs)
     monkeypatch.setattr(ds.os, "open", spy)
-    with pytest.raises(ds.DatabaseStageError, match="writer_gate_stages_invalid"):
-        run_reader(job, stub, ["database-create", "launch"])
+    before = (stub / "received.log").read_bytes() if (stub / "received.log").exists() else b""
+    # A contiguous journal prefix that stops at launch: every named journal
+    # exists, but the writer has not reached the stages the reader needs.
+    with pytest.raises(ds.DatabaseStageError, match="gate_stages_invalid"):
+        run_reader(job, stub, ["database-create", "database-create-exit", "launch"])
     monkeypatch.undo()
     assert not any(p.endswith("entrypoint-secrets.json") for p in opened)
+    after = (stub / "received.log").read_bytes() if (stub / "received.log").exists() else b""
+    assert after == before
+    # The gate refuses before the registry journal is opened at all.
+    assert not Path(sj.journal_path(str(job), 7, "registry")).exists()
 
 
 # --- Q1R44-R1: the held root, bound to the validated core, after the gate ---
