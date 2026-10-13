@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-13T00:58Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-13T04:05Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -16,11 +16,25 @@ everywhere going forward. The PostgreSQL 16 GHCR mirror run on 2026-10-12/13
 (Stage I run `38300290643`, Stage M run `38326742829`, both qualified and
 closed) is superseded and unused.
 
+**Alpha state (2026-10-13T04:05Z).** The alpha server is on `main` (PR #138,
+`docs/alpha.md`): the Rust API on PostgreSQL 18.6 with receive, query, status
+and actions, heartbeats, API keys and housekeeping. Follow-ups merged under
+the Minimal process: housekeeping expiry fixes (#139), CI cleanup bound to
+each job's own PostgreSQL and server (#140), and the dispatch-only executing
+workflow moved to PostgreSQL 18.6 (#141), and eight stale conformance unit
+tests repaired with a new `conformance-unit` CI job (#142, CONF-UNIT-ROT-1).
+The final qualifying pull-request runs for #137 to #142 succeeded; the cited
+push runs for #137 to #141 succeeded. #142's initial unit run failed and is
+retained below; its push run on `main` is not yet independently qualified
+here. The hosted alpha smoke passes 67 of 67. Not yet run: `docker compose up` itself (Claude's user has no Docker access), and the
+conformance suite against alrust beyond Codex's initial A3 run (two scaffold
+cases, PASS).
+
 | Phase | State | Gate |
 |---|---|---|
 | 0 Spec + conformance | Lifecycle (receive, actions, housekeeping, heartbeats) and customer-mapping specs source-derived and reviewed. Separate scoped reference HTTP runs: smoke 2, customer 4, operator 5, metadata 2, heartbeat 3, heartbeat input/query 4, metadata mutations 3, alert queries 3, HF7 scaffold smoke 2, alert notes 2, blackouts 2, API keys 1, config 1, groups 1, permissions 1, management health 1, management gtg 1, root debug 1, root index 1 (each HTTP LOCAL_PASS at its own head and window; the first metadata-mutations attempt FAILED on a harness precondition, HF9, and is preserved). OpenAPI: heartbeat, single-alert, alert-query, `q=`, notes, blackouts, API keys, users, groups, permissions, customers, `/config`, management, the root routes `/` and `/_`, the generic webhook dispatcher, all twelve provider webhook mappings (reviewed; the eleven after prometheus merged as PR #64, approved at `abfcc823`), and the auth routes (PR #132, approved at `456d108f`: `/auth/login` with its basic and LDAP paths, `/auth/logout`, `/userinfo`, OIDC and its aliases, and SAML in full; signup, confirm, forgot, reset, GitHub and CAS at inventory depth, per DECISIONS Y28; reference security observations AUTH-SEC-1 to AUTH-SEC-11; every auth operation NOT_RUN), and the bulk and oEmbed routes (PR #134, approved at `1d652edb`: the seven `/_bulk` alert operations and the three oEmbed routes in full, per DECISIONS Y29; reference security observations BULK-SEC-1 to BULK-SEC-3 and OEMBED-SEC-1 to OEMBED-SEC-2; every operation NOT_RUN). With PR #134, every route-method in the reference's static inventory has an OpenAPI entry (Codex's static count: 115 literal route-methods); this is static source evidence, not a live or all-routes run and not Phase 0 completion. Both root routes now have one reference HTTP run each (`GET /_` and `GET /`). Remaining: outstanding source work (priorities from the web UI consumer inventory; auth contract changes stay with the owner) | **Open.** These are separate scoped runs, not a full-suite pass. Hosted CI now executes, at scaffold scope only (fmt/clippy with no Rust tests, the reference guard, one healthcheck); no full conformance suite has run on it. The push run on `main` at `f2f11f5a` failed its conformance job on an ECR data-limit refusal before checkout (ECR-RATE-1), so `main`'s CI at that commit is FAILED and its conformance is NOT_RUN (ECR-blocked). The next push run on `main`, at `8b9c8c9b`, succeeded with all four jobs, at scaffold scope; that result covers `8b9c8c9b` only. OpenAPI extraction and broader vectors are outstanding |
-| 1 Domain/engine/store | blocked on 0 | — |
-| 2 HTTP API | blocked on 1 | — |
+| 1 Domain/engine/store | alpha subset on `main` (Y32: built alongside Phase 0) | — |
+| 2 HTTP API | alpha subset on `main` (`docs/alpha.md` lists what is missing) | — |
 | 3 Auth | blocked on 2 | — |
 | 4 Receivers | blocked on 3 (see PIN inputs) | — |
 | 5 Ops | blocked on 4 (see PIN inputs) | — |
@@ -156,6 +170,12 @@ are kept.
 | #133 | `claude/status-2026-10-11d` (STATUS: PRs #131 and #132; DECISIONS Y28) | `047b902c` (approved `475ae33e`) | `5574b86c` |
 | #134 | `claude/spec-openapi-bulk-oembed-1` (OpenAPI: bulk alert operations and oEmbed) | `1d652edb` (approved `dd1af8fa`; review rounds BULK7-R1/R2, OEMBED-R1, BULK-OEMBED-R3, BULK-ORDER-R4 and OEMBED-PROOF-R5) | `f2f11f5a` |
 | #135 | `claude/status-2026-10-12` (STATUS: PRs #133 and #134; DECISIONS Y29 and Y30) | `403775b8` (approved `e0865e06`) | `8b9c8c9b` |
+| #137 | `claude/status-2026-10-12b` (STATUS; DECISIONS Y31 and Y32) | `c5934060` | `65f0e0e6` |
+| #138 | `claude/alpha-server` (the alpha server on PostgreSQL 18.6) | `17eacd61` (three review rounds, eight findings fixed) | `1b76344b` |
+| #139 | `claude/alpha-housekeeping` (housekeeping expiry; disposable-only smoke checks) | `8d0e13c3` | `89c8f762` |
+| #140 | `claude/ci-pg18-hardening` (CI cleanup bound to the job's own acquisition) | `cdbe135a` (five review rounds) | `3ddd2289` |
+| #141 | `claude/executing-pg18` (executing workflow on PostgreSQL 18.6) | `352a6ef7` | `f87f5aa7` |
+| #142 | `claude/conf-unit-rot` (eight conformance unit tests repaired; `conformance-unit` CI job) | `22cc836c` (approved `a34e04b9`; `ebfdcffb` approved earlier, its hosted run failed two tests on inode reuse) | `c2f002b7` |
 
 PRs #110 to #114 were merged by Claude under the standing merge rule (DECISIONS Y20), each in its own window admitted by Codex with the advisor's no-objection for that exact head: ALRUST-MERGE-CLAUDE-4-W1 (#110) and ALRUST-PR-CLAUDE-5-W1 to -8-W1 (#111 to #114). Each push run on `main` succeeded with cleanup log-verified per job and was closed by Codex: [37696114824](https://github.com/steliosx/alrust/actions/runs/37696114824) (`aef651e2`), [37707716755](https://github.com/steliosx/alrust/actions/runs/37707716755) (`9ddb1dfe`), [37714697899](https://github.com/steliosx/alrust/actions/runs/37714697899) (`eac206f3`), [37722664444](https://github.com/steliosx/alrust/actions/runs/37722664444) (`ad5188a6`), [37729218021](https://github.com/steliosx/alrust/actions/runs/37729218021) (`661986a4`). These runs are scaffold scope: no pytest step, `cargo test` ran with zero Rust behavior tests, all 19 profiles NOT_RUN. They give no coverage of the R-EP stack, the W-components or E1c, which remain offline-evidenced.
 
@@ -188,6 +208,8 @@ The owner then removed the cooperative coupling for hosted Alrust windows (DECIS
 PR #134 was published in one window, ALRUST-PR28-PUBLICATION-W1, with guard v5. Stage A: pull-request run [38190221102](https://github.com/steliosx/alrust/actions/runs/38190221102) succeeded; every job checked out the API preview, each service job made one clean pinned pull, and cleanup was log-verified. Codex qualified it (`8288d6e4`). Stage B merged PR #134 as `f2f11f5a`, whose tree equals the approved `187fbebb`. Push run [38191587298](https://github.com/steliosx/alrust/actions/runs/38191587298) **failed**: in its conformance job, ECR Public refused all three of the runner's built-in pull attempts for the pinned PostgreSQL image with `toomanyrequests: Data limit exceeded` during "Initialize containers", before checkout. No container or reference server started; the job's network was created and removed. The other three jobs succeeded on `f2f11f5a`; fmt/clippy/test's pull of the same digest started at the same moment and succeeded later. Under ECR-RATE-1 this differs from the PR #129 event above: there, one refused pull was recovered by the runner's built-in retry; here, all three built-in attempts were refused before checkout (correction PR134-B-HISTORY-N2, reissued as `82a4178d`). No rerun was made. Codex qualified the merge and the scoped cleanup, chose to close the window with the failure recorded, and admitted no rerun (`9ade926c`); after Claude's separate full release, Codex closed it (`82a4178d`). The same tree passed all four checks, conformance included, in Stage A; that does not make the failed `main` run green: `main`'s conformance at `f2f11f5a` stays NOT_RUN (ECR-blocked). ECR-RATE-1 stays open.
 
 PR #135 followed in one window, ALRUST-PR29-PUBLICATION-W1, with guard v5. Codex ruled in advance that any ECR refusal or failed pull would stop the window, even if the runner's built-in retry recovered. Pull-request run [38196051216](https://github.com/steliosx/alrust/actions/runs/38196051216) succeeded (qualified `5c7efb1f`); one guard invocation merged PR #135 as `8b9c8c9b`, and push run [38197504133](https://github.com/steliosx/alrust/actions/runs/38197504133) succeeded (qualified `a061f8e6`). In both runs every job checked out the expected commit, each service job made one pinned pull with no ECR refusal or failed pull, and container, network and reference-server cleanup were log-verified. Codex closed the window (`cfe038a3`). This success is a scaffold-scope result for `8b9c8c9b` only: it gives no credit for quota or reliability, `f2f11f5a` stays FAILED with its conformance NOT_RUN (ECR-blocked), and ECR-RATE-1 stays open.
+
+PRs #137 to #142 were merged under the Minimal process (DECISIONS Y32): Codex approved each exact head, Claude merged it with `--match-head-commit` after its pull-request run succeeded, and Codex reconciled each merge independently. Pull-request runs: [38330567908](https://github.com/steliosx/alrust/actions/runs/38330567908) (#137), [38331981412](https://github.com/steliosx/alrust/actions/runs/38331981412) (#138), [38334696707](https://github.com/steliosx/alrust/actions/runs/38334696707) (#139), [38337774707](https://github.com/steliosx/alrust/actions/runs/38337774707) (#140) [38340353812](https://github.com/steliosx/alrust/actions/runs/38340353812) (#141) and [38343550646](https://github.com/steliosx/alrust/actions/runs/38343550646) (#142; the corrected successful conformance-unit run: 3310 tests and 97 subtests passed, zero skips). #142's first run, [38343087787](https://github.com/steliosx/alrust/actions/runs/38343087787) at the earlier approved head `ebfdcffb`, failed two unit tests: the runner reused a freed inode, so a "replaced" fixture file kept its identity. Claude pushed the fix `22cc836c` to the draft PR before Codex reviewed it, a deviation from the Minimal process (acknowledged in `fc5da1d9`); Codex then approved that exact head. Push runs on `main`: [38330672344](https://github.com/steliosx/alrust/actions/runs/38330672344), [38332292895](https://github.com/steliosx/alrust/actions/runs/38332292895), [38334846510](https://github.com/steliosx/alrust/actions/runs/38334846510), [38337914829](https://github.com/steliosx/alrust/actions/runs/38337914829) and [38340516702](https://github.com/steliosx/alrust/actions/runs/38340516702). All succeeded. Since #138 the CI PostgreSQL comes from the PGDG apt repository rather than a container registry, so ECR-RATE-1 no longer applies to `ci.yml`.
 
 After PR #10, `main` was at `bcd60ea3`; its hosted CI run [36859021523](https://github.com/steliosx/alrust/actions/runs/36859021523) completed successfully at scaffold scope (retrieved by Codex), and Codex independently verified every merge's parents and trees (`5bd706c0`). Checks then: README, STATUS, OpenAPI and the customer mapping are byte-identical to their reviewed versions; DECISIONS is charter-sync's plus only the ADR-0004 row; `spec/lifecycle.md` is the heartbeats version plus exactly the R1.2 clarification from PR #3's later approved head.
 
@@ -757,6 +779,20 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
    `spec/customer-mapping.md` Q1. KICKOFF is unedited. No divergence.
 
 ## Next actions
+
+- **Alpha (Minimal process), as of 2026-10-13T04:05Z:**
+  - `claude/key-supplied` (`b6773c82`, unpublished): `POST /key` keeps a
+    caller-supplied `key` and `id`, as the reference does, and hrefs
+    percent-encode ids. Codex's technical review is complete; it waits for
+    the owner's ruling on truthy non-string values (KEYSUP-AUTH-1: strict
+    400, recommended, or the applicable reference behavior; the reference
+    passes such values unchanged to its database adapter, and the adapter's
+    type-specific outcomes remain unqualified).
+  - Broader A3: Codex's plan of ten cases per target (`2eecc6c3`) against
+    F-ALR (alrust, auth off, four synthetic keys) and F-REF (the reference),
+    both run by Claude and captured by Codex. Not admitted or started; it
+    needs the key change merged first.
+  - Open: Codex's PR #136 (`codex/receive-clock-history-1`).
 
 - **codex-alrust** (current task `01a0f3d9`): review this STATUS head. The
   broker is approved at c7 for source/offline scope; the next Alrust
