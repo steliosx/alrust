@@ -10,6 +10,7 @@ run against a database that already holds data.
 """
 import json
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -182,16 +183,91 @@ check('GET /heartbeats lists it', code == 200 and any(h.get('id') == hid for h i
 code, body = call('DELETE', f'/heartbeat/{hid}')
 check('DELETE /heartbeat/<id>', code == 200, (code, body))
 
-# --- keys
-code, body = call('POST', '/key', {'scopes': ['read:alerts'], 'text': f'smoke {RUN}'})
-ro = body.get('key', '') if isinstance(body, dict) else ''
-check('POST /key creates a key', code == 201 and len(ro) == 40, (code, body))
+# --- keys [SF-KEYS S1-S3, views/keys.py:38-41]
+def mint(scopes, customer=None, key=KEY):
+    body = {'scopes': scopes, 'text': f'smoke {RUN}'}
+    if customer is not None:
+        body['customer'] = customer
+    code, body = call('POST', '/key', body, key=key)
+    if code != 201:
+        return code, None, None
+    return code, body.get('key'), body.get('data', {}).get('id')
+
+code, ro, ro_id = mint(['read:alerts'])
+check('POST /key creates a key, secret shown at creation [S1]', code == 201 and ro and len(ro) == 40, code)
+code, body = call('GET', '/keys')
+listed = [k for k in body.get('keys', []) if k.get('id') == ro_id]
+check('GET /keys omits secrets and uses id hrefs [S1, S2]',
+      listed and all('key' not in k for k in body.get('keys', [])) and listed[0]['href'].endswith('/key/' + ro_id), listed)
 code, body = call('GET', f'/alert/{aid}', key=ro)
 check('read-only key can read', code == 200, (code, body))
 code, body = call('POST', '/alert', alert(), key=ro)
 check('read-only key cannot write (403)', code == 403, (code, body))
+code, km, km_id = mint(['admin:keys', 'write:keys', 'read:keys'])
+code, body = call('POST', '/key', {'scopes': ['admin']}, key=km)
+check('admin:keys holder cannot mint admin (403) [A2-API-R1]', code == 403, (code, body))
+code, body = call('POST', '/key', {}, key=km)
+check('default scopes are held to the ceiling too (403) [A2-API-R1]', code == 403, (code, body))
 code, body = call('DELETE', f'/key/{ro}')
-check('DELETE /key', code == 200, (code, body))
+check('DELETE /key/<secret> is 404 [S3, A2-API-R2]', code == 404, (code, body))
+code, body = call('DELETE', f'/key/{ro_id}')
+check('DELETE /key/<id> works [S3]', code == 200, (code, body))
+code, body = call('GET', f'/alert/{aid}', key=ro)
+check('deleted key no longer authenticates', code == 401, (code, body))
+
+# --- customer assignment [customer-mapping C5-C10, A2-API-R3]
+X, Y = f'cx-{RUN}', f'cy-{RUN}'
+_, wx, _ = mint(['write:alerts', 'read:alerts', 'write:heartbeats'], customer=X)
+_, ax, _ = mint(['admin:alerts', 'write:alerts', 'read:alerts'], customer=X)
+_, wn, _ = mint(['write:alerts', 'read:alerts'])
+code, body = call('POST', '/alert', alert(resource=f'cust-{RUN}'), key=wx)
+check('omitted customer inherits the key customer [C7]', code == 201 and body.get('alert', {}).get('customer') == X, (code, body))
+code, body = call('POST', '/alert', alert(resource=f'cust-{RUN}', customer=Y), key=wx)
+check('conflicting customer from a non-admin key is 400 [C7]', code == 400, (code, body))
+code, body = call('POST', '/alert', alert(resource=f'cust2-{RUN}', customer=Y), key=ax)
+check('admin:alerts key may set another customer [C8]', code == 201 and body.get('alert', {}).get('customer') == Y, (code, body))
+code, body = call('POST', '/alert', alert(resource=f'cust3-{RUN}', customer=Y), key=wn)
+check('unscoped non-admin key cannot name a customer [C9]', code == 400, (code, body))
+code, body = call('POST', '/alert', alert(resource=f'cust3-{RUN}', customer=''), key=wn)
+check('empty customer is 400 [C5]', code == 400, (code, body))
+code, body = call('POST', '/heartbeat', {'origin': f'cust/{RUN}', 'customer': Y}, key=wx)
+check('heartbeat: conflicting customer is 400 [C11]', code == 400, (code, body))
+code, body = call('POST', '/heartbeat', {'origin': f'cust/{RUN}'}, key=wx)
+check('heartbeat inherits the key customer', code == 201 and body.get('heartbeat', {}).get('customer') == X, (code, body))
+code, body = call('GET', f'/alerts?resource=cust2-{RUN}', key=wx)
+check('customer-X key does not see customer-Y alerts [C16]', code == 200 and body.get('total') == 0, body)
+
+# --- concurrent first receives [A2-STORE-R1]
+def burst(resource, severities):
+    results = []
+    def one(sev):
+        results.append(call('POST', '/alert', alert(resource=resource, severity=sev, value=None)))
+    threads = [threading.Thread(target=one, args=(sev,)) for sev in severities]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return results
+
+res = burst(f'race-{RUN}', ['major'] * 8)
+code, body = call('GET', f'/alerts?resource=race-{RUN}')
+a1 = body.get('alerts', [])
+check('8 concurrent identical first receives make one alert with duplicateCount 7',
+      all(c == 201 for c, _ in res) and len(a1) == 1 and a1[0].get('duplicateCount') == 7, [len(a1), a1[:1]])
+res = burst(f'race2-{RUN}', ['major', 'minor', 'critical', 'warning'] * 2)
+code, body = call('GET', f'/alerts?resource=race2-{RUN}')
+check('8 concurrent first receives with mixed severities make one alert (correlation)',
+      all(c == 201 for c, _ in res) and body.get('total') == 1, body.get('total'))
+
+# --- heartbeat expiry boundary [A2-DOM-HB-1]
+code, body = call('POST', '/heartbeat', {'origin': f'hb0/{RUN}', 'timeout': 0})
+h0 = body.get('id', '')
+time.sleep(0.5)
+code, body = call('GET', f'/heartbeat/{h0}')
+hb = body.get('heartbeat', {})
+check('timeout 0 heartbeat is expired at +0.5 s with since 0 [HB2]',
+      hb.get('status') == 'expired' and hb.get('since') == 0, hb)
+call('DELETE', f'/heartbeat/{h0}')
 
 # --- delete and 404
 code, body = call('DELETE', f'/alert/{aid}')

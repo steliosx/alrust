@@ -110,14 +110,18 @@ type ApiResult<T> = Result<T, ApiError>;
 /// The authenticated caller.
 #[derive(Debug, Clone)]
 struct Caller {
-    login: String,
+    /// `g.login`; `None` for an unauthenticated request with auth disabled.
+    login: Option<String>,
     scopes: Vec<String>,
     customer: Option<String>,
+    /// `AUTH_REQUIRED=False` with no credential: the route permission check
+    /// is skipped, but the caller holds **no** scopes (`auth/decorators.py:156-161`).
+    auth_off: bool,
 }
 
 impl Caller {
     fn require(&self, scope: &str) -> ApiResult<()> {
-        if scope_allows(&self.scopes, scope) {
+        if self.auth_off || scope_allows(&self.scopes, scope) {
             Ok(())
         } else {
             Err(ApiError::new(
@@ -126,8 +130,39 @@ impl Caller {
             ))
         }
     }
+
+    /// `g.customers`: the key's customer, if any.
     fn customers(&self) -> Option<Vec<String>> {
         self.customer.as_ref().map(|c| vec![c.clone()])
+    }
+
+    fn login(&self) -> &str {
+        self.login.as_deref().unwrap_or("")
+    }
+
+    /// `assign_customer(wanted, permission)` (`utils/api.py:14-28`,
+    /// customer-mapping C5-C11). The override test is exact list membership
+    /// of `admin` or `permission` (C6), not the scope hierarchy.
+    fn assign_customer(
+        &self,
+        wanted: Option<String>,
+        permission: &str,
+    ) -> ApiResult<Option<String>> {
+        let customers: Vec<String> = self.customer.iter().cloned().collect();
+        match wanted {
+            Some(w) => {
+                if self.scopes.iter().any(|s| s == "admin" || s == permission)
+                    || customers.contains(&w)
+                {
+                    Ok(Some(w))
+                } else {
+                    Err(ApiError::bad(format!(
+                        "not allowed to set customer to '{w}'"
+                    )))
+                }
+            }
+            None => Ok(customers.into_iter().next()),
+        }
     }
 }
 
@@ -146,6 +181,8 @@ fn key_from_request(headers: &HeaderMap, params: &[(String, String)]) -> Option<
         .map(|(_, v)| v.clone())
 }
 
+/// A presented key is checked before `AUTH_REQUIRED` (C1); only the secret
+/// authenticates (SF-KEYS S4), never the public id.
 async fn authenticate(
     st: &AppState,
     headers: &HeaderMap,
@@ -154,24 +191,39 @@ async fn authenticate(
     match key_from_request(headers, params) {
         Some(k) => match st.store.use_key(&k).await? {
             Some(key) => Ok(Caller {
-                login: key.user,
+                login: Some(key.user),
                 scopes: key.scopes,
                 customer: key.customer,
+                auth_off: false,
             }),
             None => Err(ApiError::new(
                 StatusCode::UNAUTHORIZED,
-                "API key parameter is invalid",
+                format!("API key parameter '{k}' is invalid"),
             )),
         },
         None if !st.cfg.auth_required => Ok(Caller {
-            login: "anonymous".into(),
-            scopes: vec!["admin".into()],
+            login: None,
+            scopes: Vec::new(),
             customer: None,
+            auth_off: true,
         }),
         None => Err(ApiError::new(
             StatusCode::UNAUTHORIZED,
             "Missing authorization API Key or Bearer Token",
         )),
+    }
+}
+
+/// The `customer` field of a submitted object: absent/null → `None`;
+/// `""` → 400 (C5); any other string → `Some`.
+fn wanted_customer(obj: &Map<String, Value>) -> ApiResult<Option<String>> {
+    match obj.get("customer") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) if s.is_empty() => {
+            Err(ApiError::bad("customer must not be an empty string"))
+        }
+        Some(Value::String(s)) => Ok(Some(s.clone())),
+        Some(_) => Err(ApiError::bad("customer must be a string")),
     }
 }
 
@@ -192,7 +244,7 @@ pub fn router(state: Shared) -> Router {
         .route("/heartbeats", get(list_heartbeats))
         .route("/key", post(create_key))
         .route("/keys", get(list_keys))
-        .route("/key/{key}", axum::routing::delete(delete_key))
+        .route("/key/{id}", axum::routing::delete(delete_key))
         .route("/management/gtg", get(gtg))
         .route("/management/healthcheck", get(healthcheck))
         .route(
@@ -319,7 +371,7 @@ fn parse_alert(body: &Value, st: &AppState, alert_timeout: i64) -> ApiResult<New
         create_time,
         timeout,
         raw_data,
-        customer: opt_str(obj.get("customer")),
+        customer: wanted_customer(obj)?,
     })
 }
 
@@ -337,9 +389,7 @@ async fn receive(
     let caller = authenticate(&st, &headers, &params).await?;
     caller.require("write:alerts")?;
     let mut n = parse_alert(&body, &st, st.store.config().alert_timeout)?;
-    if caller.customer.is_some() {
-        n.customer = caller.customer.clone();
-    }
+    n.customer = caller.assign_customer(n.customer.take(), "admin:alerts")?;
 
     // Reject policy (spec R1.2), unless the alert arrives already in blackout.
     if n.status != "blackout" {
@@ -392,7 +442,7 @@ async fn receive(
         }
     }
 
-    let (alert, _kind) = st.store.receive(n, &caller.login).await?;
+    let (alert, _kind) = st.store.receive(n, caller.login()).await?;
     Ok((
         StatusCode::CREATED,
         Json(json!({"status": "ok", "id": alert.id, "alert": alert_json(&st, &alert)})),
@@ -454,7 +504,7 @@ async fn set_status(
             &status,
             text,
             timeout,
-            &caller.login,
+            caller.login(),
         )
         .await?;
     Ok(Json(json!({"status": "ok"})))
@@ -487,7 +537,7 @@ async fn take_action(
             &action,
             text,
             timeout,
-            &caller.login,
+            caller.login(),
         )
         .await?;
     Ok(Json(json!({"status": "ok"})))
@@ -634,9 +684,6 @@ async fn create_heartbeat(
     let obj = body
         .as_object()
         .ok_or_else(|| ApiError::bad("heartbeat must be a JSON object"))?;
-    if matches!(obj.get("customer"), Some(Value::String(s)) if s.is_empty()) {
-        return Err(ApiError::bad("customer must not be an empty string"));
-    }
     let timeout = parse_timeout(obj.get("timeout"), st.store.config().alert_timeout)?;
     let attributes = parse_attributes(obj.get("attributes"))?;
     let create_time = match obj.get("createTime") {
@@ -645,10 +692,7 @@ async fn create_heartbeat(
         })?),
         _ => truncate_ms(Utc::now()),
     };
-    let customer = caller
-        .customer
-        .clone()
-        .or_else(|| opt_str(obj.get("customer")));
+    let customer = caller.assign_customer(wanted_customer(obj)?, "admin:heartbeats")?;
     let hb = st
         .store
         .upsert_heartbeat(
@@ -752,12 +796,42 @@ async fn create_key(
     Json(body): Json<Value>,
 ) -> ApiResult<Response> {
     let caller = authenticate(&st, &headers, &params).await?;
-    caller.require("admin:keys")?;
-    let scopes = match body.get("scopes") {
+    caller.require("write:keys")?;
+    let obj = body
+        .as_object()
+        .ok_or_else(|| ApiError::bad("key must be a JSON object"))?;
+    let scopes = match obj.get("scopes") {
         None | Some(Value::Null) => vec!["read".into(), "write".into()],
         v => str_list(v, "scopes")?,
     };
-    let expire_time = match body.get("expireTime") {
+    // Every resulting scope must be within the caller's own (views/keys.py:38-41).
+    for want in &scopes {
+        if caller.auth_off || !scope_allows(&caller.scopes, want) {
+            return Err(ApiError::new(
+                StatusCode::FORBIDDEN,
+                format!(
+                    "Requested scope '{want}' not in existing scopes: {}",
+                    caller.scopes.join(",")
+                ),
+            ));
+        }
+    }
+    let can_set_user = caller
+        .scopes
+        .iter()
+        .any(|s| s == "admin" || s == "admin:keys");
+    let user = if can_set_user {
+        opt_str(obj.get("user")).or_else(|| caller.login.clone())
+    } else {
+        caller.login.clone()
+    };
+    let Some(user) = user.filter(|u| !u.is_empty()) else {
+        return Err(ApiError::bad(
+            "An API key must be associated with a 'user'. Retry with user credentials.",
+        ));
+    };
+    let customer = caller.assign_customer(wanted_customer(obj)?, "admin:keys")?;
+    let expire_time = match obj.get("expireTime") {
         Some(Value::String(s)) => {
             parse_time(s).ok_or_else(|| ApiError::bad("invalid expireTime"))?
         }
@@ -765,17 +839,19 @@ async fn create_key(
     };
     let key = ApiKey {
         id: uuid::Uuid::new_v4().to_string(),
-        key: opt_str(body.get("key")).unwrap_or_else(new_key_value),
-        user: opt_str(body.get("user")).unwrap_or_else(|| caller.login.clone()),
+        key: new_key_value(),
+        user,
         scopes,
-        text: opt_str(body.get("text")).unwrap_or_else(|| "API Key for alrust".into()),
+        text: opt_str(obj.get("text")).unwrap_or_else(|| "API Key for alrust".into()),
         expire_time: truncate_ms(expire_time),
         count: 0,
         last_used_time: None,
-        customer: opt_str(body.get("customer")),
+        customer,
     };
     let k = st.store.create_key(&key).await?;
-    let data = serde_json::to_value(k.body(&st.cfg.base_url, Utc::now())).unwrap_or(Value::Null);
+    // The secret is shown once, here (owner decision Y6, SF-KEYS S1).
+    let data =
+        serde_json::to_value(k.body(&st.cfg.base_url, Utc::now(), true)).unwrap_or(Value::Null);
     Ok((
         StatusCode::CREATED,
         Json(json!({"status": "ok", "key": k.key, "data": data})),
@@ -789,28 +865,29 @@ async fn list_keys(
     Query(params): Params,
 ) -> ApiResult<Json<Value>> {
     let caller = authenticate(&st, &headers, &params).await?;
-    caller.require("admin:keys")?;
+    caller.require("read:keys")?;
     let now = Utc::now();
     let keys: Vec<Value> = st
         .store
-        .list_keys()
+        .list_keys(caller.customers().as_deref())
         .await?
         .iter()
-        .map(|k| serde_json::to_value(k.body(&st.cfg.base_url, now)).unwrap_or(Value::Null))
+        .map(|k| serde_json::to_value(k.body(&st.cfg.base_url, now, false)).unwrap_or(Value::Null))
         .collect();
     let total = keys.len();
     Ok(Json(json!({"status": "ok", "keys": keys, "total": total})))
 }
 
+/// Key management addresses keys by public id only (SF-KEYS S3).
 async fn delete_key(
     State(st): State<Shared>,
     headers: HeaderMap,
     Query(params): Params,
-    Path(key): Path<String>,
+    Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
     let caller = authenticate(&st, &headers, &params).await?;
     caller.require("admin:keys")?;
-    st.store.delete_key(&key).await?;
+    st.store.delete_key(&id).await?;
     Ok(Json(json!({"status": "ok"})))
 }
 

@@ -151,6 +151,21 @@ fn merge_attributes(
     out
 }
 
+/// The advisory-lock key for an alert identity. A `None` customer and every
+/// string customer map to distinct keys.
+fn identity_lock_key(environment: &str, resource: &str, customer: Option<&str>) -> String {
+    let customer = match customer {
+        Some(c) => format!("c:{c}"),
+        None => "n".to_string(),
+    };
+    format!("alrust-alert\u{1f}{environment}\u{1f}{resource}\u{1f}{customer}")
+}
+
+/// `g.login` is `None` for an unauthenticated request with auth disabled.
+fn user_of(login: &str) -> Option<String> {
+    (!login.is_empty()).then(|| login.to_string())
+}
+
 fn like_prefix(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 1);
     for c in s.chars() {
@@ -331,12 +346,25 @@ impl Store {
     }
 
     /// The receive path: duplicate, else correlate, else create (spec R1 step 4).
+    ///
+    /// Both lookups and the insert run under a transaction-scoped advisory
+    /// lock on the alert identity (environment, resource, customer), which
+    /// covers every duplicate and correlation match. Two first-time alerts
+    /// for the same identity therefore cannot both miss and insert twice.
     pub async fn receive(
         &self,
         n: NewAlert,
         login: &str,
     ) -> Result<(Alert, ReceiveKind), StoreError> {
         let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(identity_lock_key(
+                &n.environment,
+                &n.resource,
+                n.customer.as_deref(),
+            ))
+            .execute(&mut *tx)
+            .await?;
         let now = truncate_ms(Utc::now());
 
         let dup = sqlx::query(
@@ -510,7 +538,7 @@ impl Store {
             change_type: kind.to_string(),
             // Receive entries carry the client's createTime (spec R4.2, R5.4, R6.4).
             update_time: n.create_time,
-            user: Some(login.to_string()),
+            user: user_of(login),
             timeout: Some(n.timeout),
         }
     }
@@ -572,7 +600,7 @@ impl Store {
             text: Some(text.to_string()),
             change_type: change_type::STATUS.to_string(),
             update_time: now,
-            user: Some(login.to_string()),
+            user: user_of(login),
             timeout: Some(
                 timeout
                     .filter(|t| *t != 0)
@@ -648,7 +676,7 @@ impl Store {
             text: Some(text.to_string()),
             change_type: kind.to_string(),
             update_time: now,
-            user: Some(login.to_string()),
+            user: user_of(login),
             timeout: Some(hist_timeout),
         };
         if t.severity != a.severity {
@@ -879,16 +907,19 @@ impl Store {
         Ok(row.as_ref().map(row_to_key).transpose()?)
     }
 
-    pub async fn list_keys(&self) -> Result<Vec<ApiKey>, StoreError> {
-        let rows = sqlx::query("SELECT * FROM keys ORDER BY expire_time DESC")
-            .fetch_all(&self.pool)
-            .await?;
+    pub async fn list_keys(&self, customers: Option<&[String]>) -> Result<Vec<ApiKey>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT * FROM keys WHERE ($1::text[] IS NULL OR customer = ANY($1)) ORDER BY expire_time DESC",
+        )
+        .bind(customers)
+        .fetch_all(&self.pool)
+        .await?;
         Ok(rows.iter().map(row_to_key).collect::<Result<Vec<_>, _>>()?)
     }
 
-    pub async fn delete_key(&self, key_or_id: &str) -> Result<(), StoreError> {
-        let r = sqlx::query("DELETE FROM keys WHERE key = $1 OR id = $1")
-            .bind(key_or_id)
+    pub async fn delete_key(&self, id: &str) -> Result<(), StoreError> {
+        let r = sqlx::query("DELETE FROM keys WHERE id = $1")
+            .bind(id)
             .execute(&self.pool)
             .await?;
         if r.rows_affected() == 0 {
@@ -957,6 +988,22 @@ mod tests {
         let i: Map<String, Value> = serde_json::from_str(r#"{"b":3,"a":null,"c":4}"#).unwrap();
         let m = merge_attributes(&s, &i);
         assert_eq!(Value::Object(m), serde_json::json!({"b":3,"c":4}));
+    }
+
+    #[test]
+    fn identity_lock_keys_distinguish_null_customer() {
+        assert_ne!(
+            identity_lock_key("P", "r", None),
+            identity_lock_key("P", "r", Some("n"))
+        );
+        assert_ne!(
+            identity_lock_key("P", "r", Some("")),
+            identity_lock_key("P", "r", None)
+        );
+        assert_eq!(
+            identity_lock_key("P", "r", Some("x")),
+            identity_lock_key("P", "r", Some("x"))
+        );
     }
 
     #[test]

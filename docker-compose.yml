@@ -34,7 +34,8 @@ services:
       ALRUST_HOUSEKEEPING_INTERVAL: ${ALRUST_HOUSEKEEPING_INTERVAL:-0}
       RUST_LOG: ${RUST_LOG:-info}
     ports:
-      - "${ALRUST_PORT:-8080}:8080"
+      # Loopback only by default; set ALRUST_LISTEN=0.0.0.0 to expose it.
+      - "${ALRUST_LISTEN:-127.0.0.1}:${ALRUST_PORT:-8080}:8080"
     restart: unless-stopped
 
 volumes:

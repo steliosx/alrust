@@ -352,8 +352,11 @@ impl Heartbeat {
         now: DateTime<Utc>,
     ) -> HeartbeatBody<'a> {
         let latency = (self.receive_time - self.create_time).num_milliseconds();
-        let since = (now - self.receive_time).num_seconds();
-        let status = if since > self.timeout {
+        let elapsed = now - self.receive_time;
+        // Expiry compares the full elapsed time (`since.total_seconds() > timeout`);
+        // only the serialized `since` is truncated to whole seconds (spec HB2).
+        let since = elapsed.num_seconds();
+        let status = if elapsed > chrono::Duration::seconds(self.timeout) {
             "expired"
         } else if latency > max_latency_ms {
             "slow"
@@ -397,7 +400,9 @@ pub struct ApiKey {
 #[serde(rename_all = "camelCase")]
 pub struct ApiKeyBody<'a> {
     pub id: &'a str,
-    pub key: &'a str,
+    /// The secret: present only in the creation response (SF-KEYS S1).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<&'a str>,
     pub status: &'static str,
     pub href: String,
     pub user: &'a str,
@@ -414,7 +419,13 @@ pub struct ApiKeyBody<'a> {
 }
 
 impl ApiKey {
-    pub fn body<'a>(&'a self, base_url: &str, now: DateTime<Utc>) -> ApiKeyBody<'a> {
+    /// Serialize a key. `with_secret` is true only for the creation response.
+    pub fn body<'a>(
+        &'a self,
+        base_url: &str,
+        now: DateTime<Utc>,
+        with_secret: bool,
+    ) -> ApiKeyBody<'a> {
         let key_type = if self
             .scopes
             .iter()
@@ -426,13 +437,13 @@ impl ApiKey {
         };
         ApiKeyBody {
             id: &self.id,
-            key: &self.key,
+            key: with_secret.then_some(self.key.as_str()),
             status: if self.expire_time < now {
                 "expired"
             } else {
                 "active"
             },
-            href: format!("{base_url}/key/{}", self.key),
+            href: format!("{base_url}/key/{}", self.id),
             user: &self.user,
             scopes: &self.scopes,
             key_type,
@@ -490,6 +501,47 @@ mod tests {
     fn iso8601_has_millis_and_z() {
         let t = parse_time("2026-10-13T01:02:03.456Z").unwrap();
         assert_eq!(iso8601(&t), "2026-10-13T01:02:03.456Z");
+    }
+
+    #[test]
+    fn heartbeat_expires_inside_the_boundary_second() {
+        let t = parse_time("2026-10-13T01:00:00.000Z").unwrap();
+        let hb = Heartbeat {
+            id: "h".into(),
+            origin: "o".into(),
+            tags: vec![],
+            attributes: Map::new(),
+            event_type: "Heartbeat".into(),
+            create_time: t,
+            timeout: 0,
+            receive_time: t,
+            customer: None,
+        };
+        let now = parse_time("2026-10-13T01:00:00.500Z").unwrap();
+        let b = hb.body("http://x", 2000, now);
+        assert_eq!((b.status, b.since), ("expired", 0));
+        assert_eq!(hb.body("http://x", 2000, t).status, "ok");
+    }
+
+    #[test]
+    fn key_secret_only_with_secret_and_href_by_id() {
+        let t = parse_time("2026-10-13T01:00:00.000Z").unwrap();
+        let k = ApiKey {
+            id: "pub-id".into(),
+            key: "secret".into(),
+            user: "u".into(),
+            scopes: vec!["read".into()],
+            text: String::new(),
+            expire_time: t,
+            count: 0,
+            last_used_time: None,
+            customer: None,
+        };
+        let listed = serde_json::to_value(k.body("http://x", t, false)).unwrap();
+        assert!(listed.get("key").is_none());
+        assert_eq!(listed["href"], "http://x/key/pub-id");
+        let created = serde_json::to_value(k.body("http://x", t, true)).unwrap();
+        assert_eq!(created["key"], "secret");
     }
 
     #[test]

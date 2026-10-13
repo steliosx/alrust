@@ -12,7 +12,7 @@ You need Docker with the compose plugin.
 ```sh
 export ALRUST_ADMIN_KEY=$(openssl rand -hex 20)   # your admin API key
 docker compose up --build -d
-curl http://localhost:8080/management/gtg          # -> OK
+curl http://localhost:8080/management/gtg          # -> OK (bound to 127.0.0.1; set ALRUST_LISTEN=0.0.0.0 to expose)
 ```
 
 Send an alert and read it back:
@@ -51,7 +51,7 @@ start-up.
 | `PUT /alert/{id}/action` | open, assign, ack, unack, shelve, unshelve, close, expired, timeout (A2–A5) |
 | `DELETE /alert/{id}` | |
 | `POST /heartbeat`, `GET /heartbeats`, `GET`/`DELETE /heartbeat/{id}` | Upsert by origin and customer; derived latency, since and status |
-| `POST /key`, `GET /keys`, `DELETE /key/{key}` | API keys (`Authorization: Key …`, `X-API-Key`, or `?api-key=`) |
+| `POST /key`, `GET /keys`, `DELETE /key/{id}` | API keys (`Authorization: Key …`, `X-API-Key`, or `?api-key=`). A new key's scopes must be within the creator's; the secret is shown only in the creation response; lists and `href`s use the public id |
 | `GET /management/gtg`, `/management/healthcheck` | No key needed |
 | `GET`/`POST /management/housekeeping` | Deletion and expiry (K1, K2) |
 
@@ -61,7 +61,7 @@ start-up.
 |---|---|---|
 | `DATABASE_URL` | (required) | PostgreSQL connection URL |
 | `ALRUST_ADMIN_KEY` | (unset) | Ensures an admin API key with this value |
-| `ALRUST_AUTH_REQUIRED` | `true` | `false` lets requests without a key act as admin (the reference default) |
+| `ALRUST_AUTH_REQUIRED` | `true` | `false` (the reference default) skips route permission checks for requests without a key; such requests hold no scopes, so they cannot name a customer or mint keys. Any value other than true/false/1/0/yes/no/on/off stops start-up |
 | `ALRUST_BIND` | `0.0.0.0:8080` | Listen address |
 | `ALRUST_BASE_URL` | `http://localhost:8080` | Used in `href` fields |
 | `ALRUST_ALLOWED_ENVIRONMENTS` | `Production,Development` | Exact environment names accepted on receive |
@@ -86,7 +86,8 @@ start-up.
   SAML), webhooks, bulk routes, the top-N counts, auto-unshelve and auto-unack
   in housekeeping, `q=` queries, the web UI and the desktop app.
 - **Scopes:** `admin` grants everything; `write` and `write:<resource>` grant
-  the matching reads. Roles, customers per user and the reference's full
+  the matching reads. Customer assignment follows `assign_customer`
+  (customer-mapping C5–C11). Roles, users and the reference's full
   permission model are not implemented.
 - The conformance suite has not yet been run against alrust; differences
   found there will be tracked as issues.

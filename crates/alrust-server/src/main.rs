@@ -6,7 +6,9 @@
 //! - `DATABASE_URL` (required), e.g. `postgres://alrust:alrust@db:5432/alrust`
 //! - `ALRUST_BIND` (default `0.0.0.0:8080`)
 //! - `ALRUST_BASE_URL` (default `http://localhost:8080`), used in `href` fields
-//! - `ALRUST_AUTH_REQUIRED` (default `true`)
+//! - `ALRUST_AUTH_REQUIRED` (default `true`; `false` skips route permission
+//!   checks for requests without a key, which then hold no scopes, as in the
+//!   reference; any value other than true/false/1/0/yes/no/on/off is an error)
 //! - `ALRUST_ADMIN_KEY`: if set, an admin API key with this value is ensured
 //! - `ALRUST_ALLOWED_ENVIRONMENTS` (default `Production,Development`)
 //! - `ALRUST_ALERT_TIMEOUT` (default 86400), `ALRUST_ACK_TIMEOUT` (0),
@@ -43,10 +45,16 @@ fn env_i64(name: &str, default: i64) -> anyhow::Result<i64> {
     }
 }
 
-fn env_bool(name: &str, default: bool) -> bool {
+/// Strict boolean settings: an unrecognised value stops start-up rather than
+/// silently reading as false (a typo must never disable authentication).
+fn env_bool(name: &str, default: bool) -> anyhow::Result<bool> {
     match std::env::var(name) {
-        Ok(v) if !v.is_empty() => matches!(v.to_lowercase().as_str(), "1" | "true" | "yes" | "on"),
-        _ => default,
+        Ok(v) if !v.trim().is_empty() => match v.trim().to_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Ok(true),
+            "0" | "false" | "no" | "off" => Ok(false),
+            _ => anyhow::bail!("{name} must be true or false, not {v:?}"),
+        },
+        _ => Ok(default),
     }
 }
 
@@ -97,7 +105,7 @@ async fn main() -> anyhow::Result<()> {
         ack_timeout: env_i64("ALRUST_ACK_TIMEOUT", 0)?,
         shelve_timeout: env_i64("ALRUST_SHELVE_TIMEOUT", 7200)?,
         history_limit: env_i64("ALRUST_HISTORY_LIMIT", 100)?.max(1) as usize,
-        history_on_value_change: env_bool("ALRUST_HISTORY_ON_VALUE_CHANGE", true),
+        history_on_value_change: env_bool("ALRUST_HISTORY_ON_VALUE_CHANGE", true)?,
     };
     let hostname = std::fs::read_to_string("/etc/hostname")
         .map(|h| h.trim().to_string())
@@ -106,7 +114,7 @@ async fn main() -> anyhow::Result<()> {
         base_url: env_or("ALRUST_BASE_URL", "http://localhost:8080")
             .trim_end_matches('/')
             .to_string(),
-        auth_required: env_bool("ALRUST_AUTH_REQUIRED", true),
+        auth_required: env_bool("ALRUST_AUTH_REQUIRED", true)?,
         allowed_environments: env_or("ALRUST_ALLOWED_ENVIRONMENTS", "Production,Development")
             .split(',')
             .map(|s| s.trim().to_string())
