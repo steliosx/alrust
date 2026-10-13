@@ -5,8 +5,9 @@
   fully support zabalack and voalack." **One part is pending an owner
   decision: the `value` rule (decision 8).**
 - Date: 2026-10-13
-- Revision 3. It answers Codex's design prerequisites (afaeaa46) and findings
-  ADR5-CAT-1, ADR5-ADOPT-1, ADR5-VALUE-1 and ADR5-RANGE-1 (e06bdc32).
+- Revision 4. It answers Codex's design prerequisites (afaeaa46), findings
+  ADR5-CAT-1, ADR5-ADOPT-1, ADR5-VALUE-1 and ADR5-RANGE-1 (e06bdc32), and
+  ADR5-NULLAUTH-1 (f0abfc75).
 
 ## Why
 
@@ -155,8 +156,16 @@ reason. `0001` is never edited, so its applied checksum stays valid.
    `groups`** are created by the reference's statements, copied verbatim and
    in the reference's order. That includes its later `ALTER`s and the `users`
    `login` DO block, so the positions and constraint names match.
+   That block's `UPDATE users SET login = email` runs here only on the
+   `users` table `0002` has just created, which is empty. alrust never runs
+   the reference's `schema.sql` against an existing database (decision 4).
 
-### 4. Three database states, decided at start-up under the migration lock
+### 4. Three database states, decided at start-up under one lock
+
+alrust holds a session-level advisory lock (a fixed key of its own, distinct
+from SQLx's) on a dedicated connection for the whole start-up decision. That
+covers state detection, then the migrator or the adoption, then the run-time
+catalog check. Detection is read-only. A second alrust instance waits.
 
 1. **Fresh** (no `_sqlx_migrations`, no `public.alerts`, no type
    `public.history`): the SQLx migrator applies `0001` and then `0002`, the
@@ -196,6 +205,8 @@ reason. `0001` is never edited, so its applied checksum stays valid.
     'UTC')` or a bound parameter, never a bare `now()` against a
     `timestamp` column, because that comparison depends on the session
     TimeZone.
+  - For example, key authentication's `expire_time > now()` becomes
+    `expire_time > (now() AT TIME ZONE 'UTC')`.
   - As a second defence, every pool connection runs `SET TIME ZONE 'UTC'`.
   - Round trips stay exact: alrust writes milliseconds, and the column holds
     microseconds.
@@ -223,9 +234,26 @@ Integrations and the reference's own code may write such rows.
   (`dict(None)`); alrust is deliberately tolerant.
 - NULL scalars read as JSON `null`, except where the spec already fixes a
   read default: a NULL `timeout` reads as `ALERT_TIMEOUT` (A1.3a).
-- **Keys:** a NULL `expire_time` reads as now + `API_KEY_EXPIRE_DAYS`
-  (`models/key.py:31`), and NULL `scopes` read as the default user scopes.
-  The secret-exposure and scope rules (Y6, Y7, Y33) are unchanged.
+- **Keys: fail closed (ADR5-NULLAUTH-1).** alrust itself never writes NULL
+  to a key column. A NULL can only come from an adopted reference database
+  or another writer, and is handled separately for each use:
+
+  | Stored NULL | Authentication | Display (`GET /keys`, `GET /key/{id}`) | Edit (`PUT /key/{id}`) |
+  |---|---|---|---|
+  | `expire_time` | **refused**: the key is inactive, as today, because `expire_time > now` is never true for NULL | `"expireTime": null`; never a computed or moving default | an omitted `expireTime` keeps NULL (still inactive), as SF-KEYS preserves an omitted expiry; a supplied one is validated as today |
+  | `scopes` | **refused**: no default scopes are granted | `"scopes": []` | an omitted `scopes` keeps NULL (still refused); a supplied value is validated as today (no empty list, within the editor's ceiling) |
+  | `text`, `count`, `last_used_time`, `customer` | unaffected (a NULL `customer` means no customer, as today) | `""`, `0`, `null`, `null` | as today |
+
+  - `user` is `NOT NULL` in the reference too.
+  - Authentication refuses in SQL (`AND scopes IS NOT NULL`), so a refused
+    key's `count` and `last_used_time` do not change.
+  - At start-up alrust logs the number of keys inactive for these reasons,
+    never their secrets.
+  - The secret-exposure, expiry and scope-ceiling rules (Y6, Y7, Y33,
+    SF-KEYS) are unchanged.
+  - A key becomes active only through an edit that supplies a valid expiry
+    and valid scopes. The owner may later choose a different policy for
+    imported keys; that would be a separate decision.
 
 **Uniqueness:**
 - `env_res_evt_cust_key` sits under the receive path's existing advisory
