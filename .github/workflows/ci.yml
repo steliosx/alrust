@@ -226,7 +226,8 @@ jobs:
           for i in $(seq 60); do curl -fsS http://127.0.0.1:8080/management/gtg && exit 0; sleep 1; done
           cat "$RUNNER_TEMP/alrust.log"; exit 1
       - name: Smoke test
-        run: python3 scripts/alpha-smoke.py http://127.0.0.1:8080 "$ALPHA_KEY"
+        # The job's database and server are created here and discarded after it.
+        run: python3 scripts/alpha-smoke.py http://127.0.0.1:8080 "$ALPHA_KEY" --disposable-target
       - name: Server log
         if: always()
         run: cat "$RUNNER_TEMP/alrust.log" || true

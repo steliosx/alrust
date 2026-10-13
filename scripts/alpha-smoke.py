@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """End-to-end smoke test for a running alrust alpha server.
 
-    python3 scripts/alpha-smoke.py http://localhost:8080 <admin-api-key>
+    python3 scripts/alpha-smoke.py http://localhost:8080 <admin-api-key> [--disposable-target]
 
-Standard library only. Each step prints PASS or FAIL; the exit status is the
-number of failures. Expected values come from spec/lifecycle.md (rule names
-in brackets). Every resource name carries a unique run id, so the test can
-run against a database that already holds data.
+Standard library only. Each step prints PASS, FAIL or NOT_RUN; the exit
+status is the number of failures. Expected values come from
+spec/lifecycle.md (rule names in brackets).
+
+Every resource name carries a unique run id, so the default run is safe
+against a database that already holds data. The housekeeping checks are the
+exception: POST /management/housekeeping is global and can expire or delete
+alerts that are not this run's. They run only with --disposable-target,
+which asserts the target and its database are owned by this run and may be
+discarded. Without it they are reported NOT_RUN, never PASS.
 """
 import json
 import sys
@@ -16,10 +22,17 @@ import urllib.error
 import urllib.request
 import uuid
 
-BASE = sys.argv[1].rstrip('/') if len(sys.argv) > 1 else 'http://localhost:8080'
-KEY = sys.argv[2] if len(sys.argv) > 2 else ''
+ARGS = [a for a in sys.argv[1:] if not a.startswith('--')]
+FLAGS = {a for a in sys.argv[1:] if a.startswith('--')}
+unknown = FLAGS - {'--disposable-target'}
+if unknown:
+    sys.exit(f'unknown option(s): {sorted(unknown)}')
+BASE = ARGS[0].rstrip('/') if ARGS else 'http://localhost:8080'
+KEY = ARGS[1] if len(ARGS) > 1 else ''
+DISPOSABLE = '--disposable-target' in FLAGS
 RUN = uuid.uuid4().hex[:8]
 failures = 0
+not_run = 0
 
 
 def call(method, path, body=None, key=KEY, headers=None):
@@ -292,11 +305,41 @@ code, body = call('GET', '/heartbeats')
 check('heartbeat list with a max-i64 timeout still renders', code == 200, code)
 call('DELETE', f'/heartbeat/{hmax}')
 
+# --- housekeeping expiry [K2.1-K2.3, A2V3-STORE-N1]: global, so disposable targets only
+HK_CASES = 6
+if not DISPOSABLE:
+    not_run += HK_CASES
+    print(f'NOT_RUN housekeeping expiry ({HK_CASES} checks): global maintenance needs --disposable-target')
+else:
+    def mk(resource, **kw):
+        code, body = call('POST', '/alert', alert(resource=resource, **kw))
+        return body.get('id', '') if isinstance(body, dict) else ''
+
+    short = mk(f'hk-short-{RUN}', timeout=1)
+    zero = mk(f'hk-zero-{RUN}', timeout=0)
+    huge = mk(f'hk-huge-{RUN}', timeout=9223372036854775807)
+    null = mk(f'hk-null-{RUN}', timeout=1)
+    call('PUT', f'/alert/{null}/status', {'status': 'open', 'text': 'null timeout'})  # stores NULL [A1.3]
+    time.sleep(2.2)
+    code, body = call('POST', '/management/housekeeping')
+    expired = body.get('expired', []) if isinstance(body, dict) else []
+    check('housekeeping returns 200 with a max-i64 timeout present', code == 200, (code, body))
+    check('timeout 1 expires after 2 s [K2.1]', short in expired, expired)
+    check('timeout 0 never expires [K2.3]', zero not in expired, expired)
+    check('NULL timeout never expires [K2.2]', null not in expired, expired)
+    check('max-i64 timeout does not expire', huge not in expired, expired)
+    code, body = call('GET', f'/alert/{short}')
+    check('expired alert has status expired and an "expired" history entry [K2.5]',
+          body.get('alert', {}).get('status') == 'expired'
+          and body.get('alert', {}).get('history', [{}])[-1].get('type') == 'expired', body.get('alert', {}).get('status'))
+    for i in (short, zero, huge, null):
+        call('DELETE', f'/alert/{i}')
+
 # --- delete and 404
 code, body = call('DELETE', f'/alert/{aid}')
 check('DELETE /alert/<id>', code == 200, (code, body))
 code, body = call('GET', f'/alert/{aid}')
 check('deleted alert is 404', code == 404, (code, body))
 
-print(f'\n{failures} failure(s)')
+print(f'\n{failures} failure(s), {not_run} not run')
 sys.exit(failures)

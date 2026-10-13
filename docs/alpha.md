@@ -32,6 +32,10 @@ Run the end-to-end check (needs only Python 3):
 python3 scripts/alpha-smoke.py http://localhost:8080 "$ALRUST_ADMIN_KEY"
 ```
 
+Add `--disposable-target` only against a server and database you are about
+to throw away: it also runs the housekeeping checks, and housekeeping is
+global (it can expire or delete any alert).
+
 Stop with `docker compose down`; add `-v` to delete the database volume.
 
 ### Without Docker
