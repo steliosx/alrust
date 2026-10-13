@@ -787,8 +787,8 @@ async fn delete_heartbeat(
 /// The reference keeps the value only when it is truthy
 /// (`kwargs.get('key', None) or key_helper.generate()`), so every Python-falsy
 /// value (absent, null, false, 0, 0.0, "", [], {}) generates one here too.
-/// A truthy non-string is rejected with 400 under the proposed strict policy
-/// (owner ruling pending, KEYSUP-AUTH-1). The reference passes such values
+/// A truthy non-string is rejected with 400: an intentional divergence, by
+/// the owner's ruling (KEYSUP-AUTH-1, DECISIONS Y33). The reference passes such values
 /// unchanged to the database adapter; type-specific outcomes have not been
 /// qualified.
 fn supplied(obj: &serde_json::Map<String, Value>, field: &str) -> Result<Option<String>, ApiError> {
