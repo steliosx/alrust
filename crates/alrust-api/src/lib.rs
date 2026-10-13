@@ -101,6 +101,16 @@ impl From<StoreError> for ApiError {
                 tracing::error!(error = %e, "database error");
                 ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error")
             }
+            // Input ranges are refused with 400 before the store; this is a
+            // stored value that cannot be written back, such as a duplicate
+            // count at the integer maximum. Nothing was written.
+            StoreError::OutOfRange(what) => {
+                tracing::error!(field = what, "value outside the reference integer range");
+                ApiError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("{what} is outside the integer range of the database"),
+                )
+            }
         }
     }
 }
@@ -192,7 +202,8 @@ async fn authenticate(
         Some(k) => match st.store.use_key(&k).await? {
             Some(key) => Ok(Caller {
                 login: Some(key.user),
-                scopes: key.scopes,
+                // use_key matches only keys with scopes.
+                scopes: key.scopes.unwrap_or_default(),
                 customer: key.customer,
                 auth_off: false,
             }),
@@ -291,17 +302,27 @@ fn opt_str(v: Option<&Value>) -> Option<String> {
     }
 }
 
+/// The largest timeout the reference's `integer` columns hold.
+pub const MAX_TIMEOUT: i64 = i32::MAX as i64;
+
 /// `timeout` parsing (spec R0.4): null/absent → default; bool → 1/0;
-/// negative → 400; strings and floats → 400.
+/// negative → 400; strings and floats → 400. Above `MAX_TIMEOUT` → 400, a
+/// documented divergence (ADR-0005 decision 6).
 fn parse_timeout(v: Option<&Value>, default: i64) -> ApiResult<i64> {
     match v {
         None | Some(Value::Null) => Ok(default),
         Some(Value::Bool(b)) => Ok(i64::from(*b)),
         Some(Value::Number(n)) => match n.as_i64() {
+            Some(t) if t > MAX_TIMEOUT => Err(ApiError::bad(format!(
+                "timeout must be an integer less than or equal to {MAX_TIMEOUT}"
+            ))),
             Some(t) if t >= 0 => Ok(t),
             Some(_) => Err(ApiError::bad(
                 "timeout must be an integer greater than or equal to 0",
             )),
+            None if n.is_u64() => Err(ApiError::bad(format!(
+                "timeout must be an integer less than or equal to {MAX_TIMEOUT}"
+            ))),
             None => Err(ApiError::bad("timeout must be an integer")),
         },
         Some(_) => Err(ApiError::bad("timeout must be an integer")),
@@ -337,12 +358,20 @@ fn parse_alert(body: &Value, st: &AppState, alert_timeout: i64) -> ApiResult<New
     if !correlate.is_empty() && !correlate.contains(&event) {
         correlate.push(event.clone());
     }
-    // An integer value is stored as a string; JSON booleans as "True"/"False" (spec R0.3).
+    // An integer value is stored as a string; JSON booleans as "True"/"False"
+    // (spec R0.3). The column is text, as in the reference.
     let value = match obj.get("value") {
-        Some(Value::Bool(b)) => Value::String(if *b { "True" } else { "False" }.into()),
-        Some(Value::Number(n)) if n.is_i64() || n.is_u64() => Value::String(n.to_string()),
-        Some(v) => v.clone(),
-        None => Value::Null,
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(Value::Bool(b)) => Some(if *b { "True" } else { "False" }.to_string()),
+        Some(Value::Number(n)) if n.is_i64() || n.is_u64() => Some(n.to_string()),
+        // ADR-0005 decision 8 is PENDING THE OWNER: until it is decided, a
+        // float, array or object is refused rather than converted.
+        Some(_) => {
+            return Err(ApiError::bad(
+                "value must be a string, an integer, a boolean or null",
+            ));
+        }
     };
     let create_time = match obj.get("createTime") {
         Some(Value::String(s)) => truncate_ms(parse_time(s).ok_or_else(|| {
@@ -957,9 +986,9 @@ async fn create_key(
         id: supplied(obj, "id")?.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         key: supplied(obj, "key")?.unwrap_or_else(new_key_value),
         user,
-        scopes,
+        scopes: Some(scopes),
         text: opt_str(obj.get("text")).unwrap_or_else(|| "API Key for alrust".into()),
-        expire_time: truncate_ms(expire_time),
+        expire_time: Some(truncate_ms(expire_time)),
         count: 0,
         last_used_time: None,
         customer,

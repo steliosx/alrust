@@ -157,7 +157,8 @@ pub struct HistoryEntry {
     pub event: String,
     pub severity: Option<String>,
     pub status: Option<String>,
-    pub value: Value,
+    /// Stored as text, as in the reference's `history` type.
+    pub value: Option<String>,
     pub text: Option<String>,
     #[serde(rename = "type")]
     pub change_type: String,
@@ -178,7 +179,8 @@ pub struct Alert {
     pub status: String,
     pub service: Vec<String>,
     pub group: String,
-    pub value: Value,
+    /// The reference column is `text`; NULL is `None`.
+    pub value: Option<String>,
     pub text: String,
     pub tags: Vec<String>,
     pub attributes: Map<String, Value>,
@@ -197,7 +199,8 @@ pub struct Alert {
     pub receive_time: DateTime<Utc>,
     pub last_receive_id: String,
     pub last_receive_time: DateTime<Utc>,
-    pub update_time: DateTime<Utc>,
+    /// NULL in reference rows written before the column existed.
+    pub update_time: Option<DateTime<Utc>>,
     /// Storage order: newest first.
     pub history: Vec<HistoryEntry>,
 }
@@ -216,7 +219,7 @@ pub struct AlertBody<'a> {
     pub status: &'a str,
     pub service: &'a [String],
     pub group: &'a str,
-    pub value: &'a Value,
+    pub value: Option<&'a str>,
     pub text: &'a str,
     pub tags: &'a [String],
     pub attributes: &'a Map<String, Value>,
@@ -237,8 +240,8 @@ pub struct AlertBody<'a> {
     pub last_receive_id: &'a str,
     #[serde(serialize_with = "ser_time")]
     pub last_receive_time: DateTime<Utc>,
-    #[serde(serialize_with = "ser_time")]
-    pub update_time: DateTime<Utc>,
+    #[serde(serialize_with = "ser_opt_time")]
+    pub update_time: Option<DateTime<Utc>>,
     pub history: Vec<HistoryBody<'a>>,
 }
 
@@ -250,7 +253,7 @@ pub struct HistoryBody<'a> {
     pub event: &'a str,
     pub severity: Option<&'a str>,
     pub status: Option<&'a str>,
-    pub value: &'a Value,
+    pub value: Option<&'a str>,
     pub text: Option<&'a str>,
     #[serde(rename = "type")]
     pub change_type: &'a str,
@@ -279,7 +282,7 @@ impl Alert {
                     event: &e.event,
                     severity: e.severity.as_deref(),
                     status: e.status.as_deref(),
-                    value: &e.value,
+                    value: e.value.as_deref(),
                     text: e.text.as_deref(),
                     change_type: &e.change_type,
                     update_time: e.update_time,
@@ -301,7 +304,7 @@ impl Alert {
             status: &self.status,
             service: &self.service,
             group: &self.group,
-            value: &self.value,
+            value: self.value.as_deref(),
             text: &self.text,
             tags: &self.tags,
             attributes: &self.attributes,
@@ -411,9 +414,12 @@ pub struct ApiKey {
     pub id: String,
     pub key: String,
     pub user: String,
-    pub scopes: Vec<String>,
+    /// NULL only in rows alrust did not write; such a key never authenticates
+    /// (ADR-0005 decision 7).
+    pub scopes: Option<Vec<String>>,
     pub text: String,
-    pub expire_time: DateTime<Utc>,
+    /// NULL only in rows alrust did not write; such a key never authenticates.
+    pub expire_time: Option<DateTime<Utc>>,
     pub count: i64,
     pub last_used_time: Option<DateTime<Utc>>,
     pub customer: Option<String>,
@@ -433,8 +439,8 @@ pub struct ApiKeyBody<'a> {
     #[serde(rename = "type")]
     pub key_type: &'static str,
     pub text: &'a str,
-    #[serde(serialize_with = "ser_time")]
-    pub expire_time: DateTime<Utc>,
+    #[serde(serialize_with = "ser_opt_time")]
+    pub expire_time: Option<DateTime<Utc>>,
     pub count: i64,
     #[serde(serialize_with = "ser_opt_time")]
     pub last_used_time: Option<DateTime<Utc>>,
@@ -449,8 +455,8 @@ impl ApiKey {
         now: DateTime<Utc>,
         with_secret: bool,
     ) -> ApiKeyBody<'a> {
-        let key_type = if self
-            .scopes
+        let scopes: &[String] = self.scopes.as_deref().unwrap_or(&[]);
+        let key_type = if scopes
             .iter()
             .any(|s| s.starts_with("write") || s.starts_with("admin"))
         {
@@ -461,14 +467,14 @@ impl ApiKey {
         ApiKeyBody {
             id: &self.id,
             key: with_secret.then_some(self.key.as_str()),
-            status: if self.expire_time < now {
-                "expired"
-            } else {
-                "active"
+            // A NULL expiry is inactive, so it lists as expired.
+            status: match self.expire_time {
+                Some(t) if t >= now => "active",
+                _ => "expired",
             },
             href: format!("{base_url}/key/{}", path_segment(&self.id)),
             user: &self.user,
-            scopes: &self.scopes,
+            scopes,
             key_type,
             text: &self.text,
             expire_time: self.expire_time,
@@ -481,7 +487,7 @@ impl ApiKey {
     /// Scope check: `admin` grants everything; `write` and `write:<x>` grant
     /// the matching read too, as in the reference's scope hierarchy.
     pub fn has_scope(&self, wanted: &str) -> bool {
-        scope_allows(&self.scopes, wanted)
+        scope_allows(self.scopes.as_deref().unwrap_or(&[]), wanted)
     }
 }
 
@@ -575,9 +581,9 @@ mod tests {
             id: "pub-id".into(),
             key: "secret".into(),
             user: "u".into(),
-            scopes: vec!["read".into()],
+            scopes: Some(vec!["read".into()]),
             text: String::new(),
-            expire_time: t,
+            expire_time: Some(t),
             count: 0,
             last_used_time: None,
             customer: None,
@@ -593,6 +599,27 @@ mod tests {
         assert_eq!(b["href"], "http://x/key/a%2Fb%3Fc%23d%25e%20%C3%A9");
         let created = serde_json::to_value(k.body("http://x", t, true)).unwrap();
         assert_eq!(created["key"], "secret");
+    }
+
+    #[test]
+    fn null_expiry_and_scopes_list_as_expired_with_no_scopes() {
+        let t = parse_time("2026-10-13T01:00:00.000Z").unwrap();
+        let k = ApiKey {
+            id: "i".into(),
+            key: "s".into(),
+            user: "u".into(),
+            scopes: None,
+            text: String::new(),
+            expire_time: None,
+            count: 0,
+            last_used_time: None,
+            customer: None,
+        };
+        let b = serde_json::to_value(k.body("http://x", t, false)).unwrap();
+        assert_eq!(b["status"], "expired");
+        assert_eq!(b["expireTime"], Value::Null);
+        assert_eq!(b["scopes"], serde_json::json!([]));
+        assert_eq!(b["type"], "read-only");
     }
 
     #[test]

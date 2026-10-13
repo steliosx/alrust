@@ -6,19 +6,22 @@
 //! simplifications are listed in the crate README section of the top-level
 //! README ("Alpha limitations").
 
+pub mod catalog;
+pub mod startup;
+
 use alrust_domain::{
     Alert, ApiKey, DEFAULT_PREVIOUS_SEVERITY, Heartbeat, HistoryEntry, INFORM_SEVERITY,
-    change_type, status, trend, truncate_ms,
+    NORMAL_SEVERITY, change_type, status, trend, truncate_ms,
 };
 use alrust_engine::{
     HistInfo, Timeouts, TransitionError, TransitionInput, action_timeout, hist_info, transition,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use serde_json::{Map, Value};
 use sqlx::postgres::{PgPool, PgRow};
 use sqlx::{Postgres, QueryBuilder, Row, Transaction};
 
-pub use sqlx::migrate::MigrateError;
+pub use startup::{Outcome, Report as StartupReport, StartupError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -28,6 +31,10 @@ pub enum StoreError {
     Transition(#[from] TransitionError),
     #[error("not found")]
     NotFound,
+    /// A value outside the reference column's `integer` range. The API
+    /// refuses such input first; this guards the store boundary.
+    #[error("{0} is outside the integer range of the reference schema")]
+    OutOfRange(&'static str),
 }
 
 /// Behaviour knobs, defaulting to the reference settings.
@@ -74,7 +81,7 @@ pub struct NewAlert {
     pub status: String,
     pub service: Vec<String>,
     pub group: String,
-    pub value: Value,
+    pub value: Option<String>,
     pub text: String,
     pub tags: Vec<String>,
     pub attributes: Map<String, Value>,
@@ -142,8 +149,6 @@ pub struct Store {
     cfg: StoreConfig,
 }
 
-static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
-
 fn union_tags(stored: &[String], incoming: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::with_capacity(stored.len() + incoming.len());
     for t in stored.iter().chain(incoming) {
@@ -195,76 +200,188 @@ fn like_prefix(s: &str) -> String {
     out
 }
 
+/// The reference's composite `history` type, field for field in its
+/// positional order (`schema.sql:4-15`).
+#[derive(Debug, Clone, sqlx::Type)]
+#[sqlx(type_name = "history")]
+struct PgHistory {
+    id: Option<String>,
+    event: Option<String>,
+    severity: Option<String>,
+    status: Option<String>,
+    value: Option<String>,
+    text: Option<String>,
+    change_type: Option<String>,
+    update_time: Option<NaiveDateTime>,
+    user: Option<String>,
+    timeout: Option<i32>,
+}
+
+/// Columns are `timestamp without time zone` holding UTC (ADR-0005 decision 5).
+fn naive(t: DateTime<Utc>) -> NaiveDateTime {
+    t.naive_utc()
+}
+
+fn utc(t: NaiveDateTime) -> DateTime<Utc> {
+    t.and_utc()
+}
+
+/// Checked narrowing to the reference's `integer` (ADR-0005 decision 6).
+fn int(v: i64, what: &'static str) -> Result<i32, StoreError> {
+    i32::try_from(v).map_err(|_| StoreError::OutOfRange(what))
+}
+
+fn null_column(table: &str, id: &str, column: &str) -> sqlx::Error {
+    sqlx::Error::Decode(format!("{table} {id}: column {column} is NULL").into())
+}
+
+/// A column the reference always writes itself; a NULL there (from another
+/// writer) makes the row unreadable rather than inventing a value
+/// (ADR-0005 decision 7).
+fn required<'r, T>(row: &'r PgRow, table: &str, id: &str, column: &str) -> Result<T, sqlx::Error>
+where
+    T: sqlx::Decode<'r, sqlx::Postgres> + sqlx::Type<sqlx::Postgres>,
+{
+    row.try_get::<Option<T>, _>(column)?
+        .ok_or_else(|| null_column(table, id, column))
+}
+
+/// A column whose NULL the reference's model replaces with a constant
+/// (`models/alert.py:52-67`, `models/heartbeat.py`).
+fn or_default(row: &PgRow, column: &str, default: &str) -> Result<String, sqlx::Error> {
+    Ok(row
+        .try_get::<Option<String>, _>(column)?
+        .unwrap_or_else(|| default.to_string()))
+}
+
+fn list(row: &PgRow, column: &str) -> Result<Vec<String>, sqlx::Error> {
+    Ok(row
+        .try_get::<Option<Vec<String>>, _>(column)?
+        .unwrap_or_default())
+}
+
+fn object(row: &PgRow, column: &str) -> Result<Map<String, Value>, sqlx::Error> {
+    Ok(match row.try_get::<Option<Value>, _>(column)? {
+        Some(Value::Object(m)) => m,
+        _ => Map::new(),
+    })
+}
+
+fn history_from_pg(alert_id: &str, h: PgHistory) -> Result<HistoryEntry, sqlx::Error> {
+    let need = |v: Option<String>, field: &str| {
+        v.ok_or_else(|| null_column("alert", alert_id, &format!("history.{field}")))
+    };
+    Ok(HistoryEntry {
+        id: need(h.id, "id")?,
+        event: need(h.event, "event")?,
+        severity: h.severity,
+        status: h.status,
+        value: h.value,
+        text: h.text,
+        change_type: need(h.change_type, "type")?,
+        update_time: utc(h
+            .update_time
+            .ok_or_else(|| null_column("alert", alert_id, "history.update_time"))?),
+        user: h.user,
+        timeout: h.timeout.map(i64::from),
+    })
+}
+
+fn history_to_pg(e: &HistoryEntry) -> Result<PgHistory, StoreError> {
+    Ok(PgHistory {
+        id: Some(e.id.clone()),
+        event: Some(e.event.clone()),
+        severity: e.severity.clone(),
+        status: e.status.clone(),
+        value: e.value.clone(),
+        text: e.text.clone(),
+        change_type: Some(e.change_type.clone()),
+        update_time: Some(naive(e.update_time)),
+        user: e.user.clone(),
+        timeout: e.timeout.map(|t| int(t, "history timeout")).transpose()?,
+    })
+}
+
 fn row_to_alert(row: &PgRow) -> Result<Alert, sqlx::Error> {
-    let attributes: Value = row.try_get("attributes")?;
-    let history: Value = row.try_get("history")?;
-    let history: Vec<HistoryEntry> =
-        serde_json::from_value(history).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    let id: String = row.try_get("id")?;
+    let history = row
+        .try_get::<Option<Vec<PgHistory>>, _>("history")?
+        .unwrap_or_default()
+        .into_iter()
+        .map(|h| history_from_pg(&id, h))
+        .collect::<Result<Vec<_>, _>>()?;
+    let time = |column: &str| required::<NaiveDateTime>(row, "alert", &id, column).map(utc);
+    let text = |column: &str| required::<String>(row, "alert", &id, column);
     Ok(Alert {
-        id: row.try_get("id")?,
         resource: row.try_get("resource")?,
         event: row.try_get("event")?,
-        environment: row.try_get("environment")?,
-        severity: row.try_get("severity")?,
-        correlate: row.try_get("correlate")?,
-        status: row.try_get("status")?,
-        service: row.try_get("service")?,
-        group: row.try_get("group")?,
-        value: row
-            .try_get::<Option<Value>, _>("value")?
-            .unwrap_or(Value::Null),
-        text: row.try_get("text")?,
-        tags: row.try_get("tags")?,
-        attributes: match attributes {
-            Value::Object(m) => m,
-            _ => Map::new(),
-        },
-        origin: row.try_get("origin")?,
-        event_type: row.try_get("type")?,
-        create_time: row.try_get("create_time")?,
-        timeout: row.try_get("timeout")?,
+        environment: or_default(row, "environment", "")?,
+        severity: or_default(row, "severity", NORMAL_SEVERITY)?,
+        correlate: list(row, "correlate")?,
+        status: or_default(row, "status", status::OPEN)?,
+        service: list(row, "service")?,
+        group: or_default(row, "group", "Misc")?,
+        value: row.try_get("value")?,
+        text: or_default(row, "text", "")?,
+        tags: list(row, "tags")?,
+        attributes: object(row, "attributes")?,
+        origin: text("origin")?,
+        event_type: or_default(row, "type", "exceptionAlert")?,
+        create_time: time("create_time")?,
+        timeout: row.try_get::<Option<i32>, _>("timeout")?.map(i64::from),
         raw_data: row.try_get("raw_data")?,
         customer: row.try_get("customer")?,
-        duplicate_count: row.try_get("duplicate_count")?,
-        repeat: row.try_get("repeat")?,
-        previous_severity: row.try_get("previous_severity")?,
-        trend_indication: row.try_get("trend_indication")?,
-        receive_time: row.try_get("receive_time")?,
-        last_receive_id: row.try_get("last_receive_id")?,
-        last_receive_time: row.try_get("last_receive_time")?,
-        update_time: row.try_get("update_time")?,
+        duplicate_count: i64::from(required::<i32>(row, "alert", &id, "duplicate_count")?),
+        repeat: required(row, "alert", &id, "repeat")?,
+        previous_severity: text("previous_severity")?,
+        trend_indication: text("trend_indication")?,
+        receive_time: time("receive_time")?,
+        last_receive_id: text("last_receive_id")?,
+        last_receive_time: time("last_receive_time")?,
+        update_time: row
+            .try_get::<Option<NaiveDateTime>, _>("update_time")?
+            .map(utc),
         history,
+        id,
     })
 }
 
-fn row_to_heartbeat(row: &PgRow) -> Result<Heartbeat, sqlx::Error> {
-    let attributes: Value = row.try_get("attributes")?;
+/// `default_timeout` replaces a NULL `timeout`, as the reference's model
+/// does with `HEARTBEAT_TIMEOUT`.
+fn row_to_heartbeat(row: &PgRow, default_timeout: i64) -> Result<Heartbeat, sqlx::Error> {
+    let id: String = row.try_get("id")?;
+    let time = |column: &str| required::<NaiveDateTime>(row, "heartbeat", &id, column).map(utc);
     Ok(Heartbeat {
-        id: row.try_get("id")?,
         origin: row.try_get("origin")?,
-        tags: row.try_get("tags")?,
-        attributes: match attributes {
-            Value::Object(m) => m,
-            _ => Map::new(),
-        },
-        event_type: row.try_get("type")?,
-        create_time: row.try_get("create_time")?,
-        timeout: row.try_get("timeout")?,
-        receive_time: row.try_get("receive_time")?,
+        tags: list(row, "tags")?,
+        attributes: object(row, "attributes")?,
+        event_type: or_default(row, "type", "Heartbeat")?,
+        create_time: time("create_time")?,
+        timeout: row
+            .try_get::<Option<i32>, _>("timeout")?
+            .map_or(default_timeout, i64::from),
+        receive_time: time("receive_time")?,
         customer: row.try_get("customer")?,
+        id,
     })
 }
 
+/// NULL `expire_time` or `scopes` stay `None`: such a key is inactive and
+/// shown as such, never given a computed default (ADR-0005 decision 7).
 fn row_to_key(row: &PgRow) -> Result<ApiKey, sqlx::Error> {
     Ok(ApiKey {
         id: row.try_get("id")?,
         key: row.try_get("key")?,
         user: row.try_get("user")?,
         scopes: row.try_get("scopes")?,
-        text: row.try_get("text")?,
-        expire_time: row.try_get("expire_time")?,
-        count: row.try_get("count")?,
-        last_used_time: row.try_get("last_used_time")?,
+        text: or_default(row, "text", "")?,
+        expire_time: row
+            .try_get::<Option<NaiveDateTime>, _>("expire_time")?
+            .map(utc),
+        count: row.try_get::<Option<i64>, _>("count")?.unwrap_or(0),
+        last_used_time: row
+            .try_get::<Option<NaiveDateTime>, _>("last_used_time")?
+            .map(utc),
         customer: row.try_get("customer")?,
     })
 }
@@ -289,8 +406,9 @@ impl Store {
         &self.cfg
     }
 
-    pub async fn migrate(&self) -> Result<(), MigrateError> {
-        MIGRATOR.run(&self.pool).await
+    /// Migrate, adopt or refuse the database (ADR-0005 decision 4).
+    pub async fn prepare(&self) -> Result<StartupReport, StartupError> {
+        startup::prepare(&self.pool).await
     }
 
     pub async fn ping(&self) -> Result<(), StoreError> {
@@ -307,7 +425,7 @@ impl Store {
         tx: &mut Transaction<'_, Postgres>,
         a: &Alert,
         insert: bool,
-    ) -> Result<(), sqlx::Error> {
+    ) -> Result<(), StoreError> {
         let sql = if insert {
             r#"INSERT INTO alerts (id, resource, event, environment, severity, correlate, status, service, "group",
                 value, text, tags, attributes, origin, type, create_time, timeout, raw_data, customer,
@@ -322,8 +440,15 @@ impl Store {
                 last_receive_time=$26, update_time=$27, history=$28
                WHERE id=$1"#
         };
-        let history =
-            serde_json::to_value(&a.history).map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
+        let history = a
+            .history
+            .iter()
+            .map(history_to_pg)
+            .collect::<Result<Vec<_>, _>>()?;
+        let timeout = a.timeout.map(|t| int(t, "timeout")).transpose()?;
+        // A duplicate past the integer maximum fails here, before any write,
+        // and the caller's transaction rolls back (ADR-0005 decision 6).
+        let duplicate_count = int(a.duplicate_count, "duplicateCount")?;
         sqlx::query(sql)
             .bind(&a.id)
             .bind(&a.resource)
@@ -334,28 +459,24 @@ impl Store {
             .bind(&a.status)
             .bind(&a.service)
             .bind(&a.group)
-            .bind(if a.value.is_null() {
-                None
-            } else {
-                Some(&a.value)
-            })
+            .bind(&a.value)
             .bind(&a.text)
             .bind(&a.tags)
             .bind(Value::Object(a.attributes.clone()))
             .bind(&a.origin)
             .bind(&a.event_type)
-            .bind(a.create_time)
-            .bind(a.timeout)
+            .bind(naive(a.create_time))
+            .bind(timeout)
             .bind(&a.raw_data)
             .bind(&a.customer)
-            .bind(a.duplicate_count)
+            .bind(duplicate_count)
             .bind(a.repeat)
             .bind(&a.previous_severity)
             .bind(&a.trend_indication)
-            .bind(a.receive_time)
+            .bind(naive(a.receive_time))
             .bind(&a.last_receive_id)
-            .bind(a.last_receive_time)
-            .bind(a.update_time)
+            .bind(naive(a.last_receive_time))
+            .bind(a.update_time.map(naive))
             .bind(history)
             .execute(&mut **tx)
             .await?;
@@ -412,7 +533,7 @@ impl Store {
                 .clone()
                 .unwrap_or_else(|| status::OPEN.to_string());
             let entry = if t.status != current {
-                a.update_time = now;
+                a.update_time = Some(now);
                 Some(self.receive_entry(&n, &t.status, change_type::STATUS, login))
             } else if self.cfg.history_on_value_change
                 && Some(&n.value) != info.current_value.as_ref()
@@ -471,7 +592,7 @@ impl Store {
                 .clone()
                 .unwrap_or_else(|| status::OPEN.to_string());
             if t.status != current {
-                a.update_time = now;
+                a.update_time = Some(now);
             }
             let entry = self.receive_entry(&n, &t.status, change_type::SEVERITY, login);
             a.trend_indication = trend(&previous_severity, &n.severity).to_string();
@@ -518,7 +639,7 @@ impl Store {
             receive_time: now,
             last_receive_id: n.id.clone(),
             last_receive_time: now,
-            update_time: now,
+            update_time: Some(now),
             history: vec![entry],
             id: n.id,
             resource: n.resource,
@@ -625,7 +746,7 @@ impl Store {
             ),
         };
         a.status = new_status.to_string();
-        a.update_time = now;
+        a.update_time = Some(now);
         a.timeout = timeout;
         a.attributes.retain(|_, v| !v.is_null());
         self.push_history(&mut a.history, entry);
@@ -735,7 +856,7 @@ impl Store {
             a.previous_severity = std::mem::replace(&mut a.severity, t.severity);
         }
         a.status = t.status;
-        a.update_time = now;
+        a.update_time = Some(now);
         // The row keeps the hydrated model timeout: NULL becomes ALERT_TIMEOUT (spec A4.1).
         a.timeout = Some(a.timeout.unwrap_or(self.cfg.alert_timeout));
         a.attributes.retain(|_, v| !v.is_null());
@@ -827,8 +948,8 @@ impl Store {
         let mut status_counts = Map::new();
         let mut total = 0i64;
         for r in rows {
-            let sev: String = r.try_get("severity")?;
-            let st: String = r.try_get("status")?;
+            let sev = or_default(&r, "severity", NORMAL_SEVERITY)?;
+            let st = or_default(&r, "status", status::OPEN)?;
             let n: i64 = r.try_get("n")?;
             total += n;
             let e = severity_counts.entry(sev).or_insert(Value::from(0));
@@ -883,13 +1004,13 @@ impl Store {
         .bind(tags)
         .bind(Value::Object(attributes.clone()))
         .bind(event_type)
-        .bind(create_time)
-        .bind(timeout)
-        .bind(now)
+        .bind(naive(create_time))
+        .bind(int(timeout, "timeout")?)
+        .bind(naive(now))
         .bind(customer)
         .fetch_one(&self.pool)
         .await?;
-        Ok(row_to_heartbeat(&row)?)
+        Ok(row_to_heartbeat(&row, self.cfg.alert_timeout)?)
     }
 
     pub async fn get_heartbeat(&self, id: &str) -> Result<Heartbeat, StoreError> {
@@ -898,7 +1019,7 @@ impl Store {
             .fetch_optional(&self.pool)
             .await?
             .ok_or(StoreError::NotFound)?;
-        Ok(row_to_heartbeat(&row)?)
+        Ok(row_to_heartbeat(&row, self.cfg.alert_timeout)?)
     }
 
     pub async fn list_heartbeats(
@@ -913,7 +1034,7 @@ impl Store {
         .await?;
         Ok(rows
             .iter()
-            .map(row_to_heartbeat)
+            .map(|r| row_to_heartbeat(r, self.cfg.alert_timeout))
             .collect::<Result<Vec<_>, _>>()?)
     }
 
@@ -940,7 +1061,7 @@ impl Store {
         .bind(&k.user)
         .bind(&k.scopes)
         .bind(&k.text)
-        .bind(k.expire_time)
+        .bind(k.expire_time.map(naive))
         .bind(&k.customer)
         .fetch_one(&self.pool)
         .await?;
@@ -959,20 +1080,23 @@ impl Store {
         .bind(&k.user)
         .bind(&k.scopes)
         .bind(&k.text)
-        .bind(k.expire_time)
+        .bind(k.expire_time.map(naive))
         .bind(&k.customer)
         .execute(&self.pool)
         .await?;
         Ok(())
     }
 
-    /// Look up an active key and record its use.
+    /// Look up an active key and record its use. A key with a NULL expiry
+    /// or NULL scopes never matches, so its count and last use are unchanged
+    /// (ADR-0005 decision 7).
     pub async fn use_key(&self, key: &str) -> Result<Option<ApiKey>, StoreError> {
         let row = sqlx::query(
-            "UPDATE keys SET count = count + 1, last_used_time = now()
-              WHERE key = $1 AND expire_time > now() RETURNING *",
+            "UPDATE keys SET count = count + 1, last_used_time = $2
+              WHERE key = $1 AND expire_time > $2 AND scopes IS NOT NULL RETURNING *",
         )
         .bind(key)
+        .bind(naive(Utc::now()))
         .fetch_optional(&self.pool)
         .await?;
         Ok(row.as_ref().map(row_to_key).transpose()?)
@@ -1016,30 +1140,36 @@ impl Store {
         expired_after_s: i64,
         info_after_s: i64,
     ) -> Result<Vec<String>, StoreError> {
+        // `now` is bound, never SQL now(): the columns hold UTC without a
+        // time zone, and now() would be converted by the session TimeZone.
+        let now = naive(Utc::now());
         if expired_after_s > 0 {
             sqlx::query(
                 "DELETE FROM alerts WHERE status IN ('closed','expired')
-                   AND last_receive_time < now() - make_interval(secs => $1)",
+                   AND last_receive_time < $2 - make_interval(secs => $1)",
             )
             .bind(expired_after_s as f64)
+            .bind(now)
             .execute(&self.pool)
             .await?;
         }
         if info_after_s > 0 {
-            sqlx::query("DELETE FROM alerts WHERE severity = $1 AND last_receive_time < now() - make_interval(secs => $2)")
+            sqlx::query("DELETE FROM alerts WHERE severity = $1 AND last_receive_time < $3 - make_interval(secs => $2)")
                 .bind(INFORM_SEVERITY)
                 .bind(info_after_s as f64)
+                .bind(now)
                 .execute(&self.pool)
                 .await?;
         }
         // K2.1: elapsed seconds since last_receive_time, compared numerically
-        // with the raw timeout. A NULL timeout never expires (K2.2), 0 never
-        // expires (K2.3), and any stored bigint compares without overflow.
+        // with the raw timeout. A NULL timeout never expires (K2.2), and 0
+        // never expires (K2.3).
         const EXPIRED: &str = "status <> 'expired' AND COALESCE(timeout, $1) <> 0
-               AND EXTRACT(EPOCH FROM (now() - last_receive_time)) > timeout";
+               AND EXTRACT(EPOCH FROM ($2 - last_receive_time)) > timeout";
         let ids: Vec<String> =
             sqlx::query_scalar(&format!("SELECT id FROM alerts WHERE {EXPIRED}"))
                 .bind(self.cfg.alert_timeout)
+                .bind(now)
                 .fetch_all(&self.pool)
                 .await?;
         for id in &ids {
@@ -1047,9 +1177,10 @@ impl Store {
             // Re-check under the row lock: a receive or action since the
             // SELECT may have refreshed or changed the alert.
             let row = sqlx::query(&format!(
-                "SELECT * FROM alerts WHERE id = $2 AND {EXPIRED} FOR UPDATE"
+                "SELECT * FROM alerts WHERE id = $3 AND {EXPIRED} FOR UPDATE"
             ))
             .bind(self.cfg.alert_timeout)
+            .bind(now)
             .bind(id)
             .fetch_optional(&mut *tx)
             .await?;

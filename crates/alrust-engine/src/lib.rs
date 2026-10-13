@@ -220,7 +220,8 @@ pub fn transition(i: TransitionInput<'_>) -> Result<Transition, TransitionError>
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct HistInfo {
     pub current_status: Option<String>,
-    pub current_value: Option<serde_json::Value>,
+    /// `None` without history; `Some(None)` for a NULL value.
+    pub current_value: Option<Option<String>>,
     pub previous_status: Option<String>,
     pub previous_timeout: Option<i64>,
 }

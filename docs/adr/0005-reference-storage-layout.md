@@ -270,14 +270,21 @@ catalog check. Detection is read-only. A second alrust instance waits.
 
 ### 7. NULL decoding and uniqueness
 
-**Every column the reference leaves nullable is read as optional.**
-Integrations and the reference's own code may write such rows.
-- NULL `correlate`, `service` and `tags` read as `[]`, as the reference's
-  constructor does.
-- NULL `attributes` reads as `{}`. The reference would fail here
-  (`dict(None)`); alrust is deliberately tolerant.
-- NULL scalars read as JSON `null`, except where the spec already fixes a
-  read default: a NULL `timeout` reads as `ALERT_TIMEOUT` (A1.3a).
+**A NULL in a reference-nullable column never fails a read silently or
+gets an invented value.** Integrations and the reference's own code may write
+such rows. The reference's model (`Alert.__init__`, `models/alert.py:52-76`)
+fixes three cases, and alrust follows them column by column:
+
+| Columns | NULL reads as | Why |
+|---|---|---|
+| alerts `value`, `raw_data`, `customer`, `update_time` | JSON `null` | the model keeps `None`; `update_time` is NULL in rows written before the column existed |
+| alerts `timeout` | `ALERT_TIMEOUT` in the API (A1.3a); stored NULL is kept | as today |
+| alerts `environment`, `severity`, `status`, `group`, `text`, `type` | `""`, `normal`, `open`, `Misc`, `""`, `exceptionAlert` | the model's constants |
+| alerts `correlate`, `service`, `tags`; heartbeats `tags` | `[]` | the model's `or list()` |
+| alerts and heartbeats `attributes` | `{}` | the reference would fail (`dict(None)`); alrust is deliberately tolerant |
+| heartbeats `type`, `timeout` | `Heartbeat`, alrust's heartbeat default | the model's constants |
+| alerts `origin`, `create_time`, `receive_time`, `duplicate_count`, `repeat`, `previous_severity`, `trend_indication`, `last_receive_id`, `last_receive_time`; heartbeats `create_time`, `receive_time`; history `id`, `event`, `type`, `update_time` | **the row is unreadable**: the request fails with 500 and the log names the table, row id and column | the reference always writes these itself; its model would substitute a moving `now()` or a host-specific origin, so alrust refuses rather than invent one |
+| history `severity`, `status`, `value`, `text`, `user`, `timeout` | JSON `null` | as today |
 - **Keys: fail closed (ADR5-NULLAUTH-1).** alrust itself never creates a
   NULL `expire_time` or NULL `scopes`. (NULL `customer` and NULL
   `last_used_time` are legitimate, as today.) A NULL expiry or scopes can

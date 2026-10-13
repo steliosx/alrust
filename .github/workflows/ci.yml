@@ -40,6 +40,9 @@ jobs:
       DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/alrust
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The store tests apply the pinned reference schema.sql (ADR-0005).
+          submodules: true
       - name: PostgreSQL 18.6 (PGDG apt, no container registry)
         timeout-minutes: 5
         run: .github/scripts/start-postgres18.sh alrust
