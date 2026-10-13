@@ -346,13 +346,17 @@ def test_create_timeout_is_an_unknown_outcome(env):
     assert ds.allocation_states(create_bytes(job))[:2] == ("UNKNOWN", "NONE")
 
 
-def test_container_failure_after_the_database_is_recorded(env):
+def test_container_failure_refuses_before_any_sql_or_allocation(env):
+    # The service container is proved before any SQL (PR #100 review,
+    # comment 4174199627), so a docker failure allocates nothing. Faults
+    # after allocation are test_partial_allocation_states.
     job, stub = env
     (stub / "docker").write_text("#!/bin/sh\nexit 1\n")
     url, error = run_create(job, stub)
-    assert error == "docker_failed"
-    # The database identity was recorded first, so it can be dropped.
-    assert ds.allocation_states(create_bytes(job))[:2] == ("RECORDED", "RECORDED")
+    assert url is None and error == "docker_failed"
+    assert not (stub / "received.log").exists()
+    assert ds.allocation_states(create_bytes(job))[:2] == ("NONE", "NONE")
+    assert sj.aggregate(str(job), [ds.CREATE_STAGE])["verdict"] == "FAILED"
 
 
 # --- drop -------------------------------------------------------------------
@@ -371,9 +375,9 @@ def test_drop_complete_after_a_full_create(env):
 
 
 def test_drop_runner_gates_before_any_sql(env):
-    # launched=True with a prefix that has launch but no launch-confirm,
-    # entrypoint or stop: writer_quiescence refuses, before the drop journal
-    # opens and before any SQL. The stage then closes FAILED with the code.
+    # launched=True with a prefix that has launch but no registry: the drop
+    # routes to the failed-entrypoint gate, which refuses this prefix before
+    # any SQL. The stage then closes FAILED with the code.
     job, stub = env
     run_create(job, stub)
     close_create_exit(job)
@@ -381,12 +385,12 @@ def test_drop_runner_gates_before_any_sql(env):
         pass
     before = (stub / "received.log").read_text()
     prefix = NO_LAUNCH + ["launch"]
-    with pytest.raises(ds.DatabaseStageError, match="gate_stages_invalid"):
+    with pytest.raises(ds.DatabaseStageError, match="failed_gate_prefix_invalid"):
         ds.run_drop_stage(str(job), prefix, launched=True, expected=EXPECTED, **kw(stub))
     assert (stub / "received.log").read_text() == before
     assert state(stub)["databases"] and state(stub)["roles"]
     last = records(Path(sj.journal_path(str(job), 3, ds.DROP_STAGE)).read_bytes())[-1]
-    assert last["payload"] == {"result": "FAILED", "code": "gate_stages_invalid"}
+    assert last["payload"] == {"result": "FAILED", "code": "failed_gate_prefix_invalid"}
 
 
 def test_drop_runner_refuses_a_flag_that_disagrees_with_the_evidence(env):
@@ -999,10 +1003,13 @@ def test_reader_refusals_before_any_registry(env, tmp_path, monkeypatch, case, c
             data = snapshot.read_bytes().replace(b"r" * 24, b"x" * 24)
             snapshot.write_bytes(data)
         elif case == "replaced_file":
+            # Same bytes, new inode: the replacement is created while the
+            # original still exists, so no filesystem can reuse its inode.
             data = snapshot.read_bytes()
-            snapshot.unlink()
-            snapshot.write_bytes(data)
-            snapshot.chmod(0o600)
+            fresh = job / "entrypoint-secrets.json.new"
+            fresh.write_bytes(data)
+            fresh.chmod(0o600)
+            os.replace(fresh, snapshot)
         elif case == "symlinked_file":
             moved = job / "elsewhere.json"
             snapshot.rename(moved)          # same inode, reached only via a link
@@ -1054,7 +1061,24 @@ def test_reader_refuses_a_same_count_different_secret_registry(env, tmp_path, mo
 
 
 def test_reader_gate_refusal_opens_no_inventory(env, tmp_path, monkeypatch):
-    job, stub, prefix = reader_job(env, tmp_path, monkeypatch)
+    # A fresh job whose writer journals stop at launch: the reader's gate
+    # needs the stages through stop, so it refuses. The gate runs read-only
+    # before any journal of this stage is open; _run_stage then opens the
+    # registry journal at index len(prefix), bound to launch, and closes it
+    # FAILED with the gate's code. No inventory is read and no SQL is sent.
+    from test_finalizer_orchestration import build
+    _, stub = env
+    (tmp_path / "reader3").mkdir()
+    job = build(tmp_path / "reader3", monkeypatch, upto="launch")
+    prefix = ["database-create", "database-create-exit", "launch"]
+    # A private inventory sentinel, so a wrong read would be seen by the spy.
+    sentinel = job / ds.INVENTORY_NAME
+    if not sentinel.exists():
+        sentinel.write_text('["sentinel-inventory-' + "s" * 24 + '"]')
+    sentinel.chmod(0o600)
+    (job / "database").mkdir(mode=0o700, exist_ok=True)
+    (job / "secret-key").write_text(SECRET_KEY)
+    (job / "secret-key").chmod(0o600)
     opened = []
     real_open = os.open
 
@@ -1062,10 +1086,24 @@ def test_reader_gate_refusal_opens_no_inventory(env, tmp_path, monkeypatch):
         opened.append(str(path))
         return real_open(path, *args, **kwargs)
     monkeypatch.setattr(ds.os, "open", spy)
-    with pytest.raises(ds.DatabaseStageError, match="writer_gate_stages_invalid"):
-        run_reader(job, stub, ["database-create", "launch"])
+    before = (stub / "received.log").read_bytes() if (stub / "received.log").exists() else b""
+    with pytest.raises(ds.DatabaseStageError, match="gate_stages_invalid"):
+        run_reader(job, stub, prefix)
     monkeypatch.undo()
-    assert not any(p.endswith("entrypoint-secrets.json") for p in opened)
+    # The spy saw the gate read the writer journals, and never the inventory.
+    assert any(p.endswith("02-launch.jsonl") for p in opened)
+    assert not any(p.endswith(ds.INVENTORY_NAME) for p in opened)
+    after = (stub / "received.log").read_bytes() if (stub / "received.log").exists() else b""
+    assert after == before
+    refusal = Path(sj.journal_path(str(job), len(prefix), "registry"))
+    assert refusal.name == "03-registry.jsonl"
+    rows = records(refusal.read_bytes())
+    launch = Path(sj.journal_path(str(job), 2, "launch")).read_bytes()
+    assert rows[0]["kind"] == "stage_begin"
+    assert rows[0]["payload"]["previous_stage"] == {
+        "index": 2, "name": "launch", "sha256": hashlib.sha256(launch).hexdigest()}
+    assert rows[-1]["kind"] == "stage_complete"
+    assert rows[-1]["payload"] == {"result": "FAILED", "code": "gate_stages_invalid"}
 
 
 # --- Q1R44-R1: the held root, bound to the validated core, after the gate ---

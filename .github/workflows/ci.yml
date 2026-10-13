@@ -201,6 +201,37 @@ jobs:
         timeout-minutes: 2
         run: .github/scripts/stop-postgres18.sh
 
+  conformance-unit:
+    # The conformance harness's own unit tests, which no job ran before
+    # (CONF-UNIT-ROT-1). No PostgreSQL or upstream reference server; synthetic
+    # subprocesses and loopback HTTP fixtures after locked wheel installation.
+    name: conformance unit tests (Python 3.12)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Locked test environment
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/conformance-venv"
+          "$RUNNER_TEMP/conformance-venv/bin/python" -m pip install -q --require-hashes \
+            --only-binary=:all: -r conformance/requirements.lock
+      - name: Unit tests
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$PWD/conformance:$PWD/conformance/tests/unit" \
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONDONTWRITEBYTECODE=1 \
+            "$RUNNER_TEMP/conformance-venv/bin/python" -m pytest -c conformance/pytest.ini \
+            -p no:cacheprovider -q --basetemp="$RUNNER_TEMP/pytest" conformance/tests/unit
+
   alpha-smoke:
     # The alpha server end to end: build the binary, start it on PostgreSQL
     # 18.6 and run scripts/alpha-smoke.py against it.

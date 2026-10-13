@@ -1080,6 +1080,11 @@ CORE_ENV = {"GITHUB_REPOSITORY": "steliosx/alrust", "GITHUB_RUN_ID": "1",
             "ImageOS": "ubuntu24", "ImageVersion": "20261001.1"}
 
 
+# The contiguous journal prefix through the launch stage (the create stage's
+# exit journal sits between them).
+LAUNCH_STAGES = ["database-create", "database-create-exit", "launch"]
+
+
 def stage_job(tmp_path, mode="healthy", previous=True):
     """A job root with a core identity and, optionally, a closed previous
     stage (database-create), as the workflow will prepare it."""
@@ -1106,7 +1111,7 @@ def test_stage_mode_records_launch_and_readiness(tmp_path):
     records = stage_records(job)
     assert records[-1]["kind"] == "stage_complete"
     assert records[-1]["payload"] == {"result": "COMPLETE"}
-    report = sj.aggregate(str(job), ["database-create", "launch"])
+    report = sj.aggregate(str(job), LAUNCH_STAGES)
     assert report["verdict"] == "VALID", report
     owned = {r["path"]: r for r in by_kind(records, "owned_resource")}
     for path in (job / "venv", job / "home"):
@@ -1151,7 +1156,7 @@ def test_stage_mode_unhealthy_server_closes_the_stage_failed(tmp_path):
     records = stage_records(job)
     assert records[-1]["payload"] == {"result": "FAILED", "code": "launch_not_ready"}
     assert by_kind(records, "launch_readiness") == []
-    assert sj.aggregate(str(job), ["database-create", "launch"])["verdict"] == "FAILED"
+    assert sj.aggregate(str(job), LAUNCH_STAGES)["verdict"] == "FAILED"
     assert tree_gone(job)
 
 
@@ -1290,7 +1295,7 @@ def test_late_stage_close_failure_stops_the_tree(tmp_path, fault):
     assert tree_gone(job)
     records = stage_records(job)
     completes = [r["payload"] for r in records if r["kind"] == "stage_complete"]
-    report = sj.aggregate(str(job), ["database-create", "launch"])
+    report = sj.aggregate(str(job), LAUNCH_STAGES)
     # Never COMPLETE. If the journal is still open after the fault, the
     # failure path records FAILED; if the fault closed it, the stage stays
     # without stage_complete (INCOMPLETE).
@@ -1299,7 +1304,8 @@ def test_late_stage_close_failure_stops_the_tree(tmp_path, fault):
         assert report["verdict"] == "FAILED"
     else:
         assert completes == [] and records[-1]["kind"] == "launch_readiness"
-        assert report["verdict"] == "INCOMPLETE"
+        # Missing stage_complete, not a mismatched journal set.
+        assert report["verdict"] == "INCOMPLETE" and report["reason"] == "no_stage_complete"
 
 
 def test_stage_preflight_refuses_an_invalid_previous_stage_name(tmp_path):
@@ -1390,7 +1396,7 @@ def test_complete_bytes_after_a_failed_close_never_confirm(tmp_path, fault):
     records = stage_records(job)
     assert records[-1]["kind"] == "stage_complete"
     assert records[-1]["payload"] == {"result": "COMPLETE"}
-    assert sj.aggregate(str(job), ["database-create", "launch"])["verdict"] == "VALID"
+    assert sj.aggregate(str(job), LAUNCH_STAGES)["verdict"] == "VALID"
     # The confirmation (unpatched copy) refuses: P and C are gone.
     digest = READY.match(out.strip())[5]
     rc, out, err = confirm(job, digest)
