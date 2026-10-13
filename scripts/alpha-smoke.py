@@ -183,6 +183,27 @@ check('GET /alerts/count', code == 200 and body.get('total') == 1, body)
 code, body = call('GET', f'/alerts?resource=nothing-{RUN}')
 check('empty query says not found', code == 200 and body.get('total') == 0 and body.get('message') == 'not found', body)
 
+# --- field!=value exclusions [postgres/utils.py filter_query; A3B-EVENT-NEGATION-1]
+NR = f'neg-{RUN}'
+for ev, sev in (('NegA', 'major'), ('NegB', 'minor'), ('NegC', 'major')):
+    call('POST', '/alert', alert(resource=NR, event=ev, severity=sev))
+def total(path):
+    c, b = call('GET', path)
+    return b.get('total') if c == 200 else ('HTTP', c)
+check('baseline: three alerts on the resource', total(f'/alerts/count?resource={NR}') == 3, total(f'/alerts/count?resource={NR}'))
+check('event!= excludes one value (count)', total(f'/alerts/count?resource={NR}&event%21=NegA') == 2, total(f'/alerts/count?resource={NR}&event%21=NegA'))
+check('event!= excludes one value (list)', total(f'/alerts?resource={NR}&event%21=NegA') == 2, total(f'/alerts?resource={NR}&event%21=NegA'))
+check('repeated event!= excludes every value', total(f'/alerts/count?resource={NR}&event%21=NegA&event%21=NegB') == 1,
+      total(f'/alerts/count?resource={NR}&event%21=NegA&event%21=NegB'))
+check('event!= with a positive severity filter', total(f'/alerts/count?resource={NR}&severity=major&event%21=NegA') == 1,
+      total(f'/alerts/count?resource={NR}&severity=major&event%21=NegA'))
+check('severity!= excludes', total(f'/alerts/count?resource={NR}&severity%21=major') == 1, total(f'/alerts/count?resource={NR}&severity%21=major'))
+check('resource!= excludes the whole resource', total(f'/alerts/count?resource={NR}&resource%21={NR}') == 0,
+      total(f'/alerts/count?resource={NR}&resource%21={NR}'))
+c, b = call('GET', f'/alerts?resource={NR}')
+for a_ in b.get('alerts', []):
+    call('DELETE', f"/alert/{a_.get('id')}")
+
 # --- heartbeats [HB]
 origin = f'smoke/{RUN}'
 code, body = call('POST', '/heartbeat', {'origin': origin, 'timeout': 60, 'tags': ['smoke']})

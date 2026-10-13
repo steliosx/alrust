@@ -108,6 +108,16 @@ pub struct AlertQuery {
     pub groups: Vec<String>,
     pub origins: Vec<String>,
     pub tags: Vec<String>,
+    /// `field!=value` exclusions (`postgres/utils.py` filter_query): the
+    /// alert's column must equal none of the values.
+    pub not_ids: Vec<String>,
+    pub not_resources: Vec<String>,
+    pub not_events: Vec<String>,
+    pub not_environments: Vec<String>,
+    pub not_severities: Vec<String>,
+    pub not_statuses: Vec<String>,
+    pub not_groups: Vec<String>,
+    pub not_origins: Vec<String>,
     /// `None` means no customer restriction.
     pub customers: Option<Vec<String>>,
 }
@@ -770,6 +780,25 @@ impl Store {
                 qb.push(format!(" AND {col} = ANY("))
                     .push_bind(vals)
                     .push(")");
+            }
+        }
+        // The reference writes `col != v` for one value and `NOT col = ANY(..)`
+        // for several; both exclude NULL columns, as this does.
+        let negated: [(&str, &Vec<String>); 8] = [
+            ("environment", &q.not_environments),
+            ("severity", &q.not_severities),
+            ("status", &q.not_statuses),
+            ("resource", &q.not_resources),
+            ("event", &q.not_events),
+            ("\"group\"", &q.not_groups),
+            ("origin", &q.not_origins),
+            ("id", &q.not_ids),
+        ];
+        for (col, vals) in negated {
+            if !vals.is_empty() {
+                qb.push(format!(" AND NOT ({col} = ANY("))
+                    .push_bind(vals)
+                    .push("))");
             }
         }
         if !q.services.is_empty() {
