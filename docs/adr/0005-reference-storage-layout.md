@@ -278,9 +278,11 @@ Integrations and the reference's own code may write such rows.
   (`dict(None)`); alrust is deliberately tolerant.
 - NULL scalars read as JSON `null`, except where the spec already fixes a
   read default: a NULL `timeout` reads as `ALERT_TIMEOUT` (A1.3a).
-- **Keys: fail closed (ADR5-NULLAUTH-1).** alrust itself never writes NULL
-  to a key column. A NULL can only come from an adopted reference database
-  or another writer, and is handled separately for each use:
+- **Keys: fail closed (ADR5-NULLAUTH-1).** alrust itself never creates a
+  NULL `expire_time` or NULL `scopes`. (NULL `customer` and NULL
+  `last_used_time` are legitimate, as today.) A NULL expiry or scopes can
+  only come from an adopted reference database or another writer, and is
+  handled separately for each use:
 
   | Stored NULL | Authentication | Display (`GET /keys`, `GET /key/{id}`) | Edit (`PUT /key/{id}`) |
   |---|---|---|---|
