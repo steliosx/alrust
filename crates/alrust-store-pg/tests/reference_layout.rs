@@ -1338,3 +1338,37 @@ async fn generate_alpha_shape() {
     std::fs::write(path, shape + "\n").unwrap();
     eprintln!("wrote {path}");
 }
+
+/// Measures, rather than assumes, whether a standalone `ALTER TYPE history
+/// ADD ATTRIBUTE` waits for a lock on `alerts` (ADR-0005 open question).
+/// If it does, adoption's table locks already exclude the type race; if it
+/// does not, this test fails and the adoption design needs another
+/// exclusion.
+#[tokio::test]
+async fn alter_type_history_waits_for_the_alerts_lock() {
+    let Some(db) = test_db().await else { return };
+    apply_reference_schema(&db.pool).await;
+    let mut holder = db.pool.begin().await.unwrap();
+    sqlx::query("LOCK TABLE public.alerts IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *holder)
+        .await
+        .unwrap();
+    let mut other = db.pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL lock_timeout = '2s'")
+        .execute(&mut *other)
+        .await
+        .unwrap();
+    let altered = sqlx::query("ALTER TYPE public.history ADD ATTRIBUTE probe text")
+        .execute(&mut *other)
+        .await;
+    let blocked = matches!(
+        &altered,
+        Err(e) if e.as_database_error().and_then(|d| d.code()).as_deref() == Some("55P03")
+    );
+    other.rollback().await.ok();
+    holder.rollback().await.unwrap();
+    assert!(
+        blocked,
+        "ALTER TYPE history did not wait for the alerts lock: {altered:?}"
+    );
+}
