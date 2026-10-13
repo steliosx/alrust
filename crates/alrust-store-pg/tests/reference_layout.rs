@@ -32,6 +32,9 @@ const VERIFY_KEYS: &str = include_str!("../src/verify/keys.sql");
 const ALPHA_SHAPE: &str = include_str!("../src/verify/alpha_shape.sql");
 const ALPHA_SHAPE_EXPECTED: &str = include_str!("../src/verify/alpha_shape.expected");
 const MIGRATION_0002: &str = include_str!("../migrations/0002_reference_layout.sql");
+/// The header of 0002's verification blocks (other DO blocks declare other
+/// variables), used to cut 0002 into the sections that precede them.
+const VERIFY_BLOCK: &str = "DO $alrust$\nDECLARE\n    n bigint;";
 
 /// An owned test database; dropped by `Drop`, whatever happens.
 struct TestDb {
@@ -127,9 +130,15 @@ fn db_prefix() -> String {
     p
 }
 
-/// The pinned test session: `session_options`, then the odd time zone.
+/// The pinned test session: alrust's search path with the odd time zone.
+/// Built directly, not as `session_options` plus an override: a second
+/// `TimeZone` startup option does not replace the first (CI run 38459899496
+/// showed the sessions stayed on UTC).
 fn test_session(base: &PgConnectOptions) -> PgConnectOptions {
-    session_options(base.clone()).options([("TimeZone", SESSION_TIME_ZONE)])
+    base.clone().options([
+        ("search_path", alrust_store_pg::SEARCH_PATH),
+        ("TimeZone", SESSION_TIME_ZONE),
+    ])
 }
 
 async fn test_db() -> Option<TestDb> {
@@ -688,11 +697,11 @@ async fn copy_verification_detects_any_changed_field() {
         .execute(&mut *tx)
         .await
         .unwrap();
-    sqlx::raw_sql(&section("-- 3.4:", "DO $alrust$"))
+    sqlx::raw_sql(&section("-- 3.4:", VERIFY_BLOCK))
         .execute(&mut *tx)
         .await
         .unwrap();
-    sqlx::raw_sql(&section("-- 3.5:", "DO $alrust$"))
+    sqlx::raw_sql(&section("-- 3.5:", VERIFY_BLOCK))
         .execute(&mut *tx)
         .await
         .unwrap();
@@ -936,6 +945,11 @@ fn new_alert(id: &str, timeout: i64) -> NewAlert {
 #[tokio::test]
 async fn times_round_trip_exactly_whatever_the_session_time_zone() {
     let Some(db) = test_db().await else { return };
+    let tz: String = sqlx::query_scalar("SHOW TimeZone")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(tz, SESSION_TIME_ZONE, "the test session must not be UTC");
     let s = store(&db.pool);
     s.prepare().await.unwrap();
     let (a, kind) = s.receive(new_alert("t1", 1), "alice").await.unwrap();
@@ -1173,6 +1187,28 @@ async fn adoption_rechecks_the_catalog_before_committing_the_baseline() {
         .execute(&db.pool)
         .await
         .unwrap();
+}
+
+/// The server's own session options: search path pinned, TimeZone UTC, and
+/// start-up accepts them.
+#[tokio::test]
+async fn session_options_pin_the_search_path_and_utc() {
+    let Some(db) = test_db().await else { return };
+    let pool = db.pool_with(session_options(db.base.clone())).await;
+    let (tz, path, order): (String, String, Vec<String>) = sqlx::query_as(
+        "SELECT current_setting('TimeZone'), current_setting('search_path'), current_schemas(true)::text[]",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(tz, "UTC");
+    assert_eq!(path, alrust_store_pg::SEARCH_PATH);
+    assert_eq!(order, ["pg_catalog", "public"]);
+    assert_eq!(
+        store(&pool).prepare().await.unwrap().outcome,
+        Outcome::Fresh
+    );
+    pool.close().await;
 }
 
 /// Sessions are pinned to `public`: a role schema with shadow tables is
