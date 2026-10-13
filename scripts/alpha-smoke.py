@@ -228,6 +228,19 @@ check('DELETE /key/<id> works [S3]', code == 200, (code, body))
 code, body = call('GET', f'/alert/{aid}', key=ro)
 check('deleted key no longer authenticates', code == 401, (code, body))
 
+# --- a caller-supplied key value and id [models/key.py:50-56]
+chosen, chosen_id = f'alpha-smoke-chosen-{RUN}', f'alpha-smoke-id-{RUN}'
+code, body = call('POST', '/key', {'key': chosen, 'id': chosen_id, 'scopes': ['read:alerts'], 'text': f'smoke {RUN}'})
+check('POST /key keeps a supplied key and id', code == 201 and body.get('key') == chosen
+      and body.get('data', {}).get('id') == chosen_id, (code, body.get('data', {}).get('id')))
+code, body = call('GET', f'/alert/{aid}', key=chosen)
+check('the supplied key authenticates', code == 200, (code, body))
+code, body = call('POST', '/key', {'key': chosen, 'scopes': ['read:alerts']})
+check('a duplicate supplied key is refused (500, as the reference)', code == 500, (code, body))
+code, body = call('POST', '/key', {'key': 5, 'scopes': ['read:alerts']})
+check('a non-string supplied key is 400', code == 400, (code, body))
+call('DELETE', f'/key/{chosen_id}')
+
 # --- key listing is per user unless admin [views/keys.py:84-91, A2V2-API-R1]
 ALICE, BOB = f'alice-{RUN}', f'bob-{RUN}'
 code, body = call('POST', '/key', {'user': ALICE, 'scopes': ['read:keys'], 'text': 'alice'})

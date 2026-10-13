@@ -783,6 +783,18 @@ async fn delete_heartbeat(
 
 // ---------------------------------------------------------------- keys
 
+/// A caller-supplied `id` or `key` on `POST /key` (`models/key.py:50-56`):
+/// absent, null or empty generates one, as the reference's `or` does; a
+/// non-string is 400 (the reference would store its text form).
+fn supplied(obj: &serde_json::Map<String, Value>, field: &str) -> Result<Option<String>, ApiError> {
+    match obj.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) if s.is_empty() => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s.clone())),
+        Some(_) => Err(ApiError::bad(format!("{field} must be a string"))),
+    }
+}
+
 pub fn new_key_value() -> String {
     let a = uuid::Uuid::new_v4().simple().to_string();
     let b = uuid::Uuid::new_v4().simple().to_string();
@@ -838,8 +850,8 @@ async fn create_key(
         _ => Utc::now() + Duration::days(365),
     };
     let key = ApiKey {
-        id: uuid::Uuid::new_v4().to_string(),
-        key: new_key_value(),
+        id: supplied(obj, "id")?.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+        key: supplied(obj, "key")?.unwrap_or_else(new_key_value),
         user,
         scopes,
         text: opt_str(obj.get("text")).unwrap_or_else(|| "API Key for alrust".into()),
