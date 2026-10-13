@@ -203,8 +203,8 @@ jobs:
 
   conformance-unit:
     # The conformance harness's own unit tests, which no job ran before
-    # (CONF-UNIT-ROT-1). Offline: no PostgreSQL, no reference server, no
-    # network after the locked wheels are installed.
+    # (CONF-UNIT-ROT-1). No PostgreSQL or upstream reference server; synthetic
+    # subprocesses and loopback HTTP fixtures after locked wheel installation.
     name: conformance unit tests (Python 3.12)
     runs-on: ubuntu-24.04
     timeout-minutes: 20

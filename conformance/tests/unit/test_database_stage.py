@@ -1058,7 +1058,24 @@ def test_reader_refuses_a_same_count_different_secret_registry(env, tmp_path, mo
 
 
 def test_reader_gate_refusal_opens_no_inventory(env, tmp_path, monkeypatch):
-    job, stub, prefix = reader_job(env, tmp_path, monkeypatch)
+    # A fresh job whose writer journals stop at launch: the reader's gate
+    # needs the stages through stop, so it refuses. The gate runs read-only
+    # before any journal of this stage is open; _run_stage then opens the
+    # registry journal at index len(prefix), bound to launch, and closes it
+    # FAILED with the gate's code. No inventory is read and no SQL is sent.
+    from test_finalizer_orchestration import build
+    _, stub = env
+    (tmp_path / "reader3").mkdir()
+    job = build(tmp_path / "reader3", monkeypatch, upto="launch")
+    prefix = ["database-create", "database-create-exit", "launch"]
+    # A private inventory sentinel, so a wrong read would be seen by the spy.
+    sentinel = job / ds.INVENTORY_NAME
+    if not sentinel.exists():
+        sentinel.write_text('["sentinel-inventory-' + "s" * 24 + '"]')
+    sentinel.chmod(0o600)
+    (job / "database").mkdir(mode=0o700, exist_ok=True)
+    (job / "secret-key").write_text(SECRET_KEY)
+    (job / "secret-key").chmod(0o600)
     opened = []
     real_open = os.open
 
@@ -1067,16 +1084,23 @@ def test_reader_gate_refusal_opens_no_inventory(env, tmp_path, monkeypatch):
         return real_open(path, *args, **kwargs)
     monkeypatch.setattr(ds.os, "open", spy)
     before = (stub / "received.log").read_bytes() if (stub / "received.log").exists() else b""
-    # A contiguous journal prefix that stops at launch: every named journal
-    # exists, but the writer has not reached the stages the reader needs.
     with pytest.raises(ds.DatabaseStageError, match="gate_stages_invalid"):
-        run_reader(job, stub, ["database-create", "database-create-exit", "launch"])
+        run_reader(job, stub, prefix)
     monkeypatch.undo()
-    assert not any(p.endswith("entrypoint-secrets.json") for p in opened)
+    # The spy saw the gate read the writer journals, and never the inventory.
+    assert any(p.endswith("02-launch.jsonl") for p in opened)
+    assert not any(p.endswith(ds.INVENTORY_NAME) for p in opened)
     after = (stub / "received.log").read_bytes() if (stub / "received.log").exists() else b""
     assert after == before
-    # The gate refuses before the registry journal is opened at all.
-    assert not Path(sj.journal_path(str(job), 7, "registry")).exists()
+    refusal = Path(sj.journal_path(str(job), len(prefix), "registry"))
+    assert refusal.name == "03-registry.jsonl"
+    rows = records(refusal.read_bytes())
+    launch = Path(sj.journal_path(str(job), 2, "launch")).read_bytes()
+    assert rows[0]["kind"] == "stage_begin"
+    assert rows[0]["payload"]["previous_stage"] == {
+        "index": 2, "name": "launch", "sha256": hashlib.sha256(launch).hexdigest()}
+    assert rows[-1]["kind"] == "stage_complete"
+    assert rows[-1]["payload"] == {"result": "FAILED", "code": "gate_stages_invalid"}
 
 
 # --- Q1R44-R1: the held root, bound to the validated core, after the gate ---
