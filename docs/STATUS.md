@@ -1,11 +1,20 @@
 # Status
 
-_Last updated: 2026-10-12T12:45Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-13T00:58Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
 
 **Phase 0 in progress. The gate is open.**
+
+**Owner direction, 2026-10-13 (DECISIONS Y32): alpha first.** The first
+runnable alrust (the server on PostgreSQL 18.6, `docker compose up`) is built
+alongside Phase 0, under the Minimal process (Codex reviews the exact diff,
+then Claude publishes and merges). Phase 0 no longer blocks coding; its gate
+and every NOT_RUN record below are unchanged. PostgreSQL 18.6 replaces 16
+everywhere going forward. The PostgreSQL 16 GHCR mirror run on 2026-10-12/13
+(Stage I run `38300290643`, Stage M run `38326742829`, both qualified and
+closed) is superseded and unused.
 
 | Phase | State | Gate |
 |---|---|---|
