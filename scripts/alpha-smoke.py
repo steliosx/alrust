@@ -344,10 +344,23 @@ code, body = call('PUT', f'/alert/{tid}/attributes', {'attributes': {'new': 'v',
 after = call('GET', f'/alert/{tid}')[1].get('alert', {})
 check('attributes merge, and null removes a key', code == 200 and after.get('attributes', {}).get('new') == 'v'
       and after.get('attributes', {}).get('keep') == 1 and 'drop' not in after.get('attributes', {}), (code, after.get('attributes')))
-for path, bad in (('tag', {}), ('tag', {'tags': []}), ('tag', {'tags': 'x'}), ('untag', {'tags': []}),
-                  ('attributes', {}), ('attributes', {'attributes': {}}), ('attributes', {'attributes': ['x']})):
+for path, bad in (('tag', {}), ('tag', {'tags': []}), ('tag', {'tags': 'x'}), ('tag', {'tags': ['ok', 5]}),
+                  ('untag', {'tags': []}), ('untag', {'tags': [None]}),
+                  ('attributes', {}), ('attributes', {'attributes': {}}), ('attributes', {'attributes': ['x']}),
+                  ('attributes', {'attributes': [['x', 'v']]}), ('attributes', {'attributes': 'x=v'})):
     code, body = call('PUT', f'/alert/{tid}/{path}', bad)
     check(f'{path} with {json.dumps(bad)} is 400', code == 400, (code, body))
+# an update that leaves no attributes is 200 [DECISIONS Y34; the reference answers 500]
+before = call('GET', f'/alert/{tid}')[1].get('alert', {})
+code, body = call('PUT', f'/alert/{tid}/attributes', {'attributes': {'keep': None, 'new': None}})
+after = call('GET', f'/alert/{tid}')[1].get('alert', {})
+check('removing the last attributes is 200 with {} stored', code == 200 and after.get('attributes') == {}, (code, after.get('attributes')))
+code, body = call('PUT', f'/alert/{tid}/attributes', {'attributes': {'missing': None}})
+after2 = call('GET', f'/alert/{tid}')[1].get('alert', {})
+check('nulling a missing key on an empty alert is 200', code == 200 and after2.get('attributes') == {}, (code, after2.get('attributes')))
+check('attribute edits add no history and keep updateTime',
+      len(after2.get('history', [])) == len(before.get('history', [])) and after2.get('updateTime') == before.get('updateTime'),
+      (len(after2.get('history', [])), len(before.get('history', []))))
 code, body = call('PUT', f'/alert/no-such-{RUN}/tag', {'tags': ['x']})
 check('tag on an unknown id is 404', code == 404, (code, body))
 code, body = call('POST', '/alert', alert(resource=f'tagy-{RUN}', customer=Y), key=ax)

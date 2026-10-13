@@ -527,8 +527,13 @@ async fn edit_tags(
 ) -> ApiResult<Json<Value>> {
     let caller = authenticate(st, headers, params).await?;
     caller.require("write:alerts")?;
-    let tags = match body.get("tags") {
-        Some(Value::Array(a)) if !a.is_empty() => str_list(body.get("tags"), "tags")?,
+    // Only a non-empty list of strings: a non-list, an empty list or a
+    // non-string element is 400 (the reference would fail such values in SQL).
+    let tags: Vec<String> = match body.get("tags") {
+        Some(Value::Array(a)) if !a.is_empty() && a.iter().all(Value::is_string) => a
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect(),
         _ => return Err(ApiError::bad("must supply 'tags' as json list")),
     };
     let edit = if untag {
@@ -563,8 +568,11 @@ async fn untag_alert(
 }
 
 /// `PUT /alert/<id>/attributes` (`views/alerts.py:248-272`): a non-empty
-/// `attributes` object is required (400 otherwise); keys are merged into the
-/// stored attributes and a null value removes its key.
+/// `attributes` object is required (400 otherwise, including the list of
+/// pairs the reference's `dict.update` would accept); keys are merged into
+/// the stored attributes and a null value removes its key. A successful
+/// update that leaves no attributes is 200; the reference stores it and then
+/// answers 500 "failed to update attributes" (DECISIONS Y34).
 async fn update_attributes(
     State(st): State<Shared>,
     headers: HeaderMap,
