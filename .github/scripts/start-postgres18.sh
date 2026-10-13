@@ -6,8 +6,11 @@
 #   .github/scripts/start-postgres18.sh <database> [user] [password] [port]
 #
 # The server listens on 127.0.0.1 only and runs as the runner user with its
-# data under $RUNNER_TEMP/pg18-data, which must not already exist. Stop it
-# with .github/scripts/stop-postgres18.sh.
+# data under $RUNNER_TEMP/pg18-data, which must not already exist. Before
+# initdb this job claims ownership with $RUNNER_TEMP/pg18-owner; only a run
+# holding that marker may be stopped and removed by
+# .github/scripts/stop-postgres18.sh. PG_BIN overrides the server binaries
+# (for the script's own tests).
 set -euo pipefail
 
 db=${1:?database name}
@@ -16,9 +19,10 @@ password=${3:-postgres}
 port=${4:-5432}
 version=18.6-1.pgdg24.04+2
 data="${RUNNER_TEMP:?RUNNER_TEMP is required}/pg18-data"
+owner="$RUNNER_TEMP/pg18-owner"
 
-if [[ -e "$data" ]]; then
-  echo "refusing to use existing data directory $data" >&2
+if [[ -e "$data" || -e "$owner" ]]; then
+  echo "refusing: $data or $owner already exists (not created by this run)" >&2
   exit 1
 fi
 if ss -ltnH "sport = :$port" | grep -q .; then
@@ -27,6 +31,7 @@ if ss -ltnH "sport = :$port" | grep -q .; then
   exit 1
 fi
 
+if [[ -z "${PG_BIN:-}" ]]; then
 # The PGDG signing key (fingerprint B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8).
 sudo install -d /usr/share/postgresql-common/pgdg
 sudo curl -fsSL --retry 3 -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
@@ -41,9 +46,14 @@ sudo install -d /etc/postgresql-common/createcluster.d
 echo 'create_main_cluster = false' | sudo tee /etc/postgresql-common/createcluster.d/alrust-ci.conf >/dev/null
 sudo apt-get update -q
 sudo apt-get install -y -q --no-install-recommends "postgresql-18=$version" "postgresql-client-18=$version"
+fi
 
-bin=/usr/lib/postgresql/18/bin
+bin=${PG_BIN:-/usr/lib/postgresql/18/bin}
 "$bin/postgres" -V
+# Claim ownership atomically before creating anything; the marker names the
+# data directory it owns.
+( set -o noclobber; printf '%s\n' "$data" > "$owner" ) \
+  || { echo "refusing: could not create $owner exclusively" >&2; exit 1; }
 pwfile=$(mktemp)
 trap 'rm -f "$pwfile"' EXIT
 printf '%s' "$password" > "$pwfile"
