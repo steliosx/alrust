@@ -373,7 +373,11 @@ def test_child_exit_during_startup(tmp_path):
     job, port = make_job(tmp_path, "exit"), free_port()
     rc, out, err = finish(launch(job, port))
     assert rc == 1 and out == ""
-    assert "supervisor exited" in err or "not healthy" in err
+    # The child exits at once; depending on when the launcher looks, that is
+    # seen as the supervisor's exit, an unhealthy server, or (after the
+    # receipt) a process gone from /proc during the cross-check.
+    assert ("supervisor exited" in err or "not healthy" in err
+            or "a launched process exited during startup" in err), err
     assert '"verdict": "COMPLETE"' in err
     assert tree_gone(job)
 
