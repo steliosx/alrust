@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-13T21:10Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-26T19:53Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -37,11 +37,11 @@ passes 115 of 115 at #147.
 Alerta PostgreSQL schema. Matching that layout is a prerequisite for
 Zabalack and Voalack support; their integration behavior is not yet qualified.
 The design and implementation are on **draft PR #150 (DO NOT MERGE)**, at
-`04970f72`. Status:
+`6cccb023`. Status:
 
 - `0002` rebuilds the alpha `alerts` and `heartbeats` by verified copy in one
   transaction after layout/dependency checks. Full implementation review is
-  pending, including the two source findings below. Reference adoption's
+  pending. Reference adoption's
   `Store::prepare` path only checks the catalog and writes no application
   rows, schema or SQLx baseline. Codex closed the former baseline-write race
   (P2) for that path at `aa2b232a`; this is not a claim that configured admin-key
@@ -61,16 +61,26 @@ The design and implementation are on **draft PR #150 (DO NOT MERGE)**, at
   `_sqlx_migrations`. These results cover the tested cases, not full parity
   or a catalog freeze. **All 19 runtime profiles remain NOT_RUN**; their
   green job is inert preflight only.
-- **Open Codex source findings (at `04970f72`):** ADR5-EDIT-PRESERVE-1,
-  unrelated raw NULL/empty fields are overwritten by display defaults on
-  tag/attribute edits; ADR5-HISTORY-TYPE-1, unsupported non-value history
-  JSON types can stringify during migration. Claude's corrections
-  (per-operation update columns mirroring the reference; a migration
-  refusal for mistyped history fields) are at `6cccb023`, unpublished and
-  awaiting Codex's affected review; their new regressions are NOT_RUN.
-  These do not reopen the scoped no-baseline-write adoption P2 closure.
-- **Before merge:** those corrections, the owner's concrete alert-value
-  and remaining NULL-read choices, any separate approved exact extra-index
+- **Codex source findings, closed at `6cccb023`:** ADR5-EDIT-PRESERVE-1
+  (unrelated raw NULL/empty fields overwritten by display defaults on
+  tag/attribute edits) and ADR5-HISTORY-TYPE-1 (unsupported non-value history
+  JSON types could stringify during migration), both found at `04970f72`,
+  were corrected at `6cccb023` (per-operation update columns mirroring the
+  reference; a migration refusal for mistyped history fields). Codex closed
+  both for that exact source and the affected hosted runtime (`be4e4be7`,
+  2026-10-13): run `38468819974` attempt 1 on tested merge `c44e395c`
+  (parents `596aabf3` + `6cccb023`, tree `64b949f5`) passed all seven jobs;
+  the store suite passed 20 (19 database-dependent, one static embedding
+  check; two generators ignored), and the new regressions
+  `edits_write_only_their_own_columns` and
+  `alpha_upgrade_refusals_change_nothing` executed and passed. This is not
+  full-implementation or parity approval and does not carry over to a rebase
+  or any other composition; no correlation-preservation or intended-edit-value
+  case was added, and an integral JSON `timeout` of `1.0` may still be
+  refused. The scoped no-baseline-write adoption P2 closure is unchanged.
+  **All 19 runtime profiles remain NOT_RUN.**
+- **Before merge:** the owner's concrete alert-value and remaining
+  NULL-read choices, any separate approved exact extra-index
   policy, and Codex's full affected implementation review. The current
   strict index rule is unchanged. Also pending with the owner: hook or port
   for integration plugin layers, who changes their repositories, and the
@@ -282,6 +292,23 @@ After PR #10, `main` was at `bcd60ea3`; its hosted CI run [36859021523](https://
 
 Codex's chain was merged next, in the order Codex proposed and Claude accepted (`5bd706c0`, `69c16b55`); #16 was not merged on its own, so its failed HF9 run stays a recorded failure and only its corrected form (#17) is on `main`. `main` is now at `51721391`, whose tree `5b322354` equals the final tree Codex simulated in advance; `conformance/` is byte-identical to the reviewed #36 head, and the only other change since `bcd60ea3` is the reviewed ADR-0002 wording. Codex independently audited all 16 merges: each second parent is the exact reviewed head and each tree equals its reviewed projection (`b638c8f2`). It then closed the stale draft README PR #11 and the superseded PRs #12, #13, #16, #18–#20, #22 and #23 and #27, keeping branches, reviews and the failed HF9 evidence. Hosted CI on `main` at `51721391`: [run 36862284211](https://github.com/steliosx/alrust/actions/runs/36862284211), all three jobs executed and succeeded (scaffold scope; the intermediate pushes were cancelled and give no credit). PR #14's own hosted run 36861192966 ran before its retarget, on a merge with the old base whose tree equals the approved one (`9eb398d5`). The merged harness and vectors are source and offline results; the shared-VM runs, the pending unknown-webhook reference HTTP run and the full conformance suite remain NOT_RUN.
 
+**Pause and the one scoped merge (2026-10-14 to 2026-10-26).** The owner
+paused the project on 2026-10-14 (23:37Z) with PR #150 a draft at `6cccb023`
+and the value, NULL, index, plugin, writer and local-smoke rulings open, and
+Claude's daily check was stopped. Codex's scheduled task is managed by the
+owner separately: per Codex's record it was paused on 2026-10-15 (00:33Z)
+and resumed on 2026-10-26 (16:36Z) on its existing hourly calendar; Claude's
+own-lane pause and reopen change no Codex schedule. On 2026-10-26 the owner
+reopened Claude's lane for one PR only: **PR #152** (`claude/beautifulrust-lints`,
+head `9cc1884b`) adopts the BeautifulRust lint policy (DECISIONS Y36) and was
+merged under the Minimal process as `931f5694` after Codex approved the exact
+head (`33287c2d`) and pull-request run
+[40370384025](https://github.com/steliosx/alrust/actions/runs/40370384025)
+succeeded (fmt/clippy/test, PG 18.6 alpha smoke, conformance, reference guard;
+hosted profiles inert). Claude's pause otherwise stands: no daily check
+restarted, no other source work, and PR #150's rebase onto `main` now needs the `Alert::body` and
+`ApiKey::body` call-site changes plus lint fixes before an affected review.
+
 ## Work in flight
 
 Each disposition is bound to the exact head listed. A new head needs its own
@@ -289,6 +316,7 @@ review.
 
 | Item | Author | Head | Disposition |
 |---|---|---|---|
+| PR #152 BeautifulRust lint policy (`claude/beautifulrust-lints`; **merged**, `931f5694`, 2026-10-26) | claude | `9cc1884be711ae2a7baac7a69ac31845030ae7d4` | Approved by Codex (`33287c2d`) on the exact head, tree `12656302`, base `ab385dc0`, patch-id `e9ab31dc`; run 40370384025 all six jobs green; merged with `--match-head-commit`. Lint set now enforced by CI (DECISIONS Y36) |
 | PR #100 review findings (`claude/pr100-findings`; **merged as PR #109**, `24f00a3c`, 2026-10-07) | claude | `54cebbb0d603613813c8f5fab2b78dc51208a14d` | The three chatgpt-codex-connector P1 comments on `d9ad6378` (4174199627 endpoint identity, 4174199632 required container evidence, 4174199634 drop-stage attribution) were OPEN on `main`, verified independently by both agents (`990b33fb`, `baa54823`). The fixes: the service container must publish 5432/tcp on the exact SQL port, at 0.0.0.0 or 127.0.0.1, checked before any SQL; the finalizer requires exactly one bounded `database_container` record in `database-create` binding that port; the `database_drop` verdict counts only from `database-drop`. Codex: **APPROVE_SOURCE_OFFLINE** (`d7315e7b`). Offline only: 41 new pure regressions, MP1–MP9 killed. The process suites stay NOT_RUN. Declared residual: a published mapping does not prove the live TCP peer or the cluster's provenance. Merged under window ALRUST-MERGE-CLAUDE-3-W3 (DECISIONS Y19, the specific owner approval): the hosted scaffold push run 37622873593 passed with cleanup verified (Codex `35b19208`); that run has no pytest step, so the fixes remain offline-evidenced |
 | R-EP executor-cleanup stack (`claude/ci-r-ep-combined`; **on `main` via PR #113**, `a8731346`, 2026-10-08) | claude | `20cb9057265cc8d1861882c477acfb79b67bc37c` (combined) | Every component was approved by Codex as source/offline only: P1 `27aafc3d`, P2a `c593b5ea`, P2b `462b8b69`/`ce0ea938`, custody `f3cd8dd4`, P2c `b5a13b22`, P3a `b6c5903e`, P3b `1fe90d7c` (`88bca8f6`); P3c `d98948f7`, the job role bound before the first secret read (`b550d84f`); P3d `ce6a9e8d`, the failure record is not a secret holder, with fixed stage names; core /3 unchanged (`d7315e7b`); the PR #100 forward-port `d8e10cb6` (`be819eff`); P4 `e6bae5ca`, `stop-supervisor.py`, a timeout TERM through a generation-checked pidfd, never a kill (`7f464bea`). The combined head `20cb9057` (parents `83938c0e6b0143ab180f90cd3cc08f1041d55eb7`, then `d8e10cb6`) is byte-equivalent to those approved diffs (`98277102`). Codex: **APPROVE_COMBINED_SOURCE_OFFLINE** for that exact combined identity (`6c63592e`). Offline: 935 named pure tests. Process-classified suites, real signals, SQL, Docker, reference/two-server runs and workflow wiring are NOT_RUN. Process windows are held by F3CD `HOLD_UNPROVEN_CLEANUP`. Publishing it would have broken `ci.yml`'s scaffold boot, which the strict launcher refuses (STACK-SCAFFOLD-R1, found by the advisor); resolved by DECISIONS Y21: `conformance/scaffold-scripts/` holds byte-identical copies of `main` `e3dee31b`'s launcher, supervisor and stop script for that boot only (Codex **APPROVE** `a9b4bbd0`). PR #113's push run booted the scaffold through those copies; the strict launcher's refusal is source-derived, not run |
 | Codex permanent controls (manually selected, not auto-collected; **on `main` via PR #127**, `bd990d2c`, 2026-10-10) | codex | `bc6aac44` (P3c interoperability), `2a440854` (PR #100 on `main`), `fb3e589e` (PR #100 on the stack), `28802756` (P4 pre-signal binding), `df8a6741` (the last two together on the combined head `20cb9057`, byte-identical files); `03226d47` (those four files on `main` `4a9f83f6`); `2125b8e0` (the same four files on `main` `5e66683d`); `183d0766` (on `b9149495`); `cc5e2e5a` (on `6a0aeedc`); `d031f13e` (on `1a37e364`); `d7a7f054` (on `4aa4b882`); `66b8636a` (on `768f0939`, merged) | Claude: **APPROVE_SOURCE_OFFLINE** for each (`e84d0b64`, `d511e01a`, `3bf7e086`, `cd5cfe7f`, `7c7a2716`). These are source reviews; Claude did not execute them. Codex's LOCAL_PASS runs are her evidence. `03226d47` adds only the four `df8a6741` files, byte-identical, as one commit on `main` `4a9f83f6`: Claude **APPROVE_SOURCE_ONLY** (`bd89826b`), after checking that the three dependencies changed since then (`database_stage.py`, `stage_journal.py`, `stop-supervisor.py`) keep every symbol the controls use. Notes PC-N1 to N3: the controls import process-classified test modules (`test_finalizer_orchestration`, `test_stop_supervisor`), so any run needs its own actual-path classification under F3CD. `2125b8e0`, the same delta byte for byte on `main` `5e66683d`, with no dependency changed: Claude **APPROVE_SOURCE_ONLY** (`7b2c327d`); `183d0766` (`ea57d796`) and `cc5e2e5a` (`0d9ad279`), each byte-identical with no dependency changed: Claude **APPROVE_SOURCE_ONLY**; `d031f13e` (`a2e145ae`), the same four files byte-identical on `main` `1a37e364`, with every consumed interface unchanged: Claude **APPROVE_SOURCE_ONLY**. S0's review and admission are complete. The same four files, byte-identical, were projected as `d7a7f054` on `4aa4b882` (`81b7cfdd`) and `66b8636a` on `768f0939` (`42732d1c`): Claude **APPROVE_SOURCE_ONLY** each. `66b8636a` was published as PR #127 (`bd990d2c`) under Codex's plan (`7370b138`). **First local run, 2026-10-11: LOCAL_SYNTHETIC_SELECTED15_PASS.** Before it ran, Claude statically reviewed the selected-path classification (`ce173b38`, with CTL-SP-R1: exactly 15 passed, zero skipped), the environment plan (`e7e5dee7`), and the launcher's parent controller and child guard (`06a38544`, `b0be05d1`). Codex then admitted and ran ALRUST-CONTROLS-SELECTED-LOCAL-W3 herself (`b461d6fe`, pre-action `d9f76f40`). Interval 00:25Z to 00:35Z; actual run 00:25:31Z to 00:25:38Z. PR100 7 and P4 8 passed, with zero skipped, failed, errored or deselected. Exactly two direct pytest children ran, each exiting rc 0 and positively reaped, with no signals, timeouts or reruns (`ceb755f4`). Claude verified all 13 private evidence hashes in place and concurred (`e2818d64`); Codex closed W3 (`20ae4adf`). The earlier proposed W2 expired unstarted. This is a local synthetic pass of these 15 controls only: no reference, hosted, Rust or phase credit, and no global descendant containment proof. The 19 profiles remain NOT_RUN, and F3CD stays held, excluded and unscanned |
