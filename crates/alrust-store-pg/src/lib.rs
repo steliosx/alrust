@@ -108,7 +108,7 @@ pub struct AlertQuery {
     pub groups: Vec<String>,
     pub origins: Vec<String>,
     pub tags: Vec<String>,
-    /// `field!=value` exclusions (`postgres/utils.py` filter_query): the
+    /// `field!=value` exclusions (`postgres/utils.py` `filter_query`): the
     /// alert's column must equal none of the values.
     pub not_ids: Vec<String>,
     pub not_resources: Vec<String>,
@@ -122,6 +122,7 @@ pub struct AlertQuery {
     pub customers: Option<Vec<String>>,
 }
 
+#[derive(Debug)]
 pub struct AlertPage {
     pub alerts: Vec<Alert>,
     pub total: i64,
@@ -130,16 +131,24 @@ pub struct AlertPage {
 }
 
 /// A tags or attributes edit of one alert.
+#[derive(Debug)]
 pub enum AlertEdit {
     Tag(Vec<String>),
     Untag(Vec<String>),
     Attributes(serde_json::Map<String, serde_json::Value>),
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Store {
     pool: PgPool,
     cfg: StoreConfig,
+}
+
+/// Whether `write_alert` inserts a new row or updates the locked one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WriteMode {
+    Insert,
+    Update,
 }
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
@@ -289,10 +298,20 @@ impl Store {
         &self.cfg
     }
 
+    /// Apply the embedded migrations.
+    ///
+    /// # Errors
+    ///
+    /// The sqlx migration error.
     pub async fn migrate(&self) -> Result<(), MigrateError> {
         MIGRATOR.run(&self.pool).await
     }
 
+    /// `SELECT 1`.
+    ///
+    /// # Errors
+    ///
+    /// The database error.
     pub async fn ping(&self) -> Result<(), StoreError> {
         sqlx::query("SELECT 1").execute(&self.pool).await?;
         Ok(())
@@ -306,9 +325,9 @@ impl Store {
     async fn write_alert(
         tx: &mut Transaction<'_, Postgres>,
         a: &Alert,
-        insert: bool,
+        mode: WriteMode,
     ) -> Result<(), sqlx::Error> {
-        let sql = if insert {
+        let sql = if mode == WriteMode::Insert {
             r#"INSERT INTO alerts (id, resource, event, environment, severity, correlate, status, service, "group",
                 value, text, tags, attributes, origin, type, create_time, timeout, raw_data, customer,
                 duplicate_count, repeat, previous_severity, trend_indication, receive_time, last_receive_id,
@@ -368,6 +387,15 @@ impl Store {
     /// lock on the alert identity (environment, resource, customer), which
     /// covers every duplicate and correlation match. Two first-time alerts
     /// for the same identity therefore cannot both miss and insert twice.
+    ///
+    /// # Errors
+    ///
+    /// `StoreError::Transition` when the severity is unknown or the state
+    /// machine refuses the change, otherwise the database error.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the three receive outcomes share one locked transaction, kept in one place"
+    )]
     pub async fn receive(
         &self,
         n: NewAlert,
@@ -413,11 +441,16 @@ impl Store {
                 .unwrap_or_else(|| status::OPEN.to_string());
             let entry = if t.status != current {
                 a.update_time = now;
-                Some(self.receive_entry(&n, &t.status, change_type::STATUS, login))
+                Some(Self::receive_entry(
+                    &n,
+                    &t.status,
+                    change_type::STATUS,
+                    login,
+                ))
             } else if self.cfg.history_on_value_change
                 && Some(&n.value) != info.current_value.as_ref()
             {
-                Some(self.receive_entry(&n, &current, change_type::VALUE, login))
+                Some(Self::receive_entry(&n, &current, change_type::VALUE, login))
             } else {
                 None
             };
@@ -436,7 +469,7 @@ impl Store {
             if let Some(e) = entry {
                 self.push_history(&mut a.history, e);
             }
-            Self::write_alert(&mut tx, &a, false).await?;
+            Self::write_alert(&mut tx, &a, WriteMode::Update).await?;
             tx.commit().await?;
             return Ok((a, ReceiveKind::Duplicate));
         }
@@ -473,7 +506,7 @@ impl Store {
             if t.status != current {
                 a.update_time = now;
             }
-            let entry = self.receive_entry(&n, &t.status, change_type::SEVERITY, login);
+            let entry = Self::receive_entry(&n, &t.status, change_type::SEVERITY, login);
             a.trend_indication = trend(&previous_severity, &n.severity).to_string();
             a.previous_severity = previous_severity;
             a.event = n.event;
@@ -493,7 +526,7 @@ impl Store {
             a.tags = union_tags(&a.tags, &n.tags);
             a.attributes = merge_attributes(&a.attributes, &n.attributes);
             self.push_history(&mut a.history, entry);
-            Self::write_alert(&mut tx, &a, false).await?;
+            Self::write_alert(&mut tx, &a, WriteMode::Update).await?;
             tx.commit().await?;
             return Ok((a, ReceiveKind::Correlated));
         }
@@ -506,7 +539,7 @@ impl Store {
             previous_status: None,
             action: None,
         })?;
-        let entry = self.receive_entry(&n, &t.status, change_type::NEW, login);
+        let entry = Self::receive_entry(&n, &t.status, change_type::NEW, login);
         let mut attributes = n.attributes.clone();
         attributes.retain(|_, v| !v.is_null());
         let a = Alert {
@@ -539,12 +572,12 @@ impl Store {
             raw_data: n.raw_data,
             customer: n.customer,
         };
-        Self::write_alert(&mut tx, &a, true).await?;
+        Self::write_alert(&mut tx, &a, WriteMode::Insert).await?;
         tx.commit().await?;
         Ok((a, ReceiveKind::Created))
     }
 
-    fn receive_entry(&self, n: &NewAlert, status: &str, kind: &str, login: &str) -> HistoryEntry {
+    fn receive_entry(n: &NewAlert, status: &str, kind: &str, login: &str) -> HistoryEntry {
         HistoryEntry {
             id: n.id.clone(),
             event: n.event.clone(),
@@ -578,6 +611,10 @@ impl Store {
     }
 
     /// Look an alert up by id or id prefix, or by `lastReceiveId` (spec C17).
+    ///
+    /// # Errors
+    ///
+    /// `StoreError::NotFound` when nothing matches, otherwise the database error.
     pub async fn get_alert(
         &self,
         id: &str,
@@ -596,6 +633,10 @@ impl Store {
     }
 
     /// `PUT /alert/<id>/status` (spec A1): no state machine, raw timeout stored.
+    ///
+    /// # Errors
+    ///
+    /// `StoreError::NotFound` when nothing matches, otherwise the database error.
     pub async fn set_status(
         &self,
         id: &str,
@@ -629,7 +670,7 @@ impl Store {
         a.timeout = timeout;
         a.attributes.retain(|_, v| !v.is_null());
         self.push_history(&mut a.history, entry);
-        Self::write_alert(&mut tx, &a, false).await?;
+        Self::write_alert(&mut tx, &a, WriteMode::Update).await?;
         tx.commit().await?;
         Ok(a)
     }
@@ -640,6 +681,10 @@ impl Store {
     /// reference's `DISTINCT UNNEST` may reorder); untagging every tag leaves
     /// an empty list. An attribute set to null is removed
     /// (`postgres/base.py:339-349`).
+    ///
+    /// # Errors
+    ///
+    /// `StoreError::NotFound` when nothing matches, otherwise the database error.
     pub async fn edit_alert(
         &self,
         id: &str,
@@ -664,12 +709,18 @@ impl Store {
                 a.attributes.retain(|_, v| !v.is_null());
             }
         }
-        Self::write_alert(&mut tx, &a, false).await?;
+        Self::write_alert(&mut tx, &a, WriteMode::Update).await?;
         tx.commit().await?;
         Ok(a)
     }
 
     /// `PUT /alert/<id>/action` (spec A2-A5), also used by housekeeping.
+    ///
+    /// # Errors
+    ///
+    /// `StoreError::NotFound` when nothing matches, `StoreError::Transition`
+    /// when the action is not allowed in the current status, otherwise the
+    /// database error.
     pub async fn take_action(
         &self,
         id: &str,
@@ -740,10 +791,15 @@ impl Store {
         a.timeout = Some(a.timeout.unwrap_or(self.cfg.alert_timeout));
         a.attributes.retain(|_, v| !v.is_null());
         self.push_history(&mut a.history, entry);
-        Self::write_alert(tx, &a, false).await?;
+        Self::write_alert(tx, &a, WriteMode::Update).await?;
         Ok(a)
     }
 
+    /// `DELETE /alert/<id>`: one alert by id or id prefix, or by `lastReceiveId`.
+    ///
+    /// # Errors
+    ///
+    /// `StoreError::NotFound` when nothing matches, otherwise the database error.
     pub async fn delete_alert(
         &self,
         id: &str,
@@ -813,6 +869,10 @@ impl Store {
     }
 
     /// `GET /alerts`: newest `lastReceiveTime` first.
+    ///
+    /// # Errors
+    ///
+    /// The database error.
     pub async fn find_alerts(
         &self,
         q: &AlertQuery,
@@ -857,7 +917,16 @@ impl Store {
 
     // ---- heartbeats (spec HB0-HB5) ----
 
-    #[allow(clippy::too_many_arguments)]
+    /// `POST /heartbeat`: insert, or refresh the row with the same origin and
+    /// customer.
+    ///
+    /// # Errors
+    ///
+    /// The database error.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one parameter per heartbeat column; a struct would only move the list"
+    )]
     pub async fn upsert_heartbeat(
         &self,
         id: &str,
@@ -892,6 +961,11 @@ impl Store {
         Ok(row_to_heartbeat(&row)?)
     }
 
+    /// One heartbeat by id or id prefix.
+    ///
+    /// # Errors
+    ///
+    /// `StoreError::NotFound` when nothing matches, otherwise the database error.
     pub async fn get_heartbeat(&self, id: &str) -> Result<Heartbeat, StoreError> {
         let row = sqlx::query("SELECT * FROM heartbeats WHERE id LIKE $1 LIMIT 1")
             .bind(like_prefix(id))
@@ -901,6 +975,11 @@ impl Store {
         Ok(row_to_heartbeat(&row)?)
     }
 
+    /// All heartbeats, newest first, optionally limited to some customers.
+    ///
+    /// # Errors
+    ///
+    /// The database error.
     pub async fn list_heartbeats(
         &self,
         customers: Option<&[String]>,
@@ -917,6 +996,11 @@ impl Store {
             .collect::<Result<Vec<_>, _>>()?)
     }
 
+    /// Delete one heartbeat by id or id prefix.
+    ///
+    /// # Errors
+    ///
+    /// `StoreError::NotFound` when nothing matches, otherwise the database error.
     pub async fn delete_heartbeat(&self, id: &str) -> Result<(), StoreError> {
         let r = sqlx::query("DELETE FROM heartbeats WHERE id IN (SELECT id FROM heartbeats WHERE id LIKE $1 LIMIT 1)")
             .bind(like_prefix(id))
@@ -930,6 +1014,11 @@ impl Store {
 
     // ---- API keys ----
 
+    /// Insert a key and return the stored row.
+    ///
+    /// # Errors
+    ///
+    /// The database error, including a duplicate key value.
     pub async fn create_key(&self, k: &ApiKey) -> Result<ApiKey, StoreError> {
         let row = sqlx::query(
             r#"INSERT INTO keys (id, key, "user", scopes, text, expire_time, count, last_used_time, customer)
@@ -948,6 +1037,10 @@ impl Store {
     }
 
     /// Ensure a bootstrap key exists with exactly these scopes.
+    ///
+    /// # Errors
+    ///
+    /// The database error.
     pub async fn ensure_key(&self, k: &ApiKey) -> Result<(), StoreError> {
         sqlx::query(
             r#"INSERT INTO keys (id, key, "user", scopes, text, expire_time, count, last_used_time, customer)
@@ -967,6 +1060,10 @@ impl Store {
     }
 
     /// Look up an active key and record its use.
+    ///
+    /// # Errors
+    ///
+    /// The database error.
     pub async fn use_key(&self, key: &str) -> Result<Option<ApiKey>, StoreError> {
         let row = sqlx::query(
             "UPDATE keys SET count = count + 1, last_used_time = now()
@@ -978,6 +1075,11 @@ impl Store {
         Ok(row.as_ref().map(row_to_key).transpose()?)
     }
 
+    /// All keys, latest expiry first, optionally limited to some customers.
+    ///
+    /// # Errors
+    ///
+    /// The database error.
     pub async fn list_keys(&self, customers: Option<&[String]>) -> Result<Vec<ApiKey>, StoreError> {
         let rows = sqlx::query(
             "SELECT * FROM keys WHERE ($1::text[] IS NULL OR customer = ANY($1)) ORDER BY expire_time DESC",
@@ -988,6 +1090,11 @@ impl Store {
         Ok(rows.iter().map(row_to_key).collect::<Result<Vec<_>, _>>()?)
     }
 
+    /// One user's keys, latest expiry first.
+    ///
+    /// # Errors
+    ///
+    /// The database error.
     pub async fn list_keys_by_user(&self, user: &str) -> Result<Vec<ApiKey>, StoreError> {
         let rows = sqlx::query(r#"SELECT * FROM keys WHERE "user" = $1 ORDER BY expire_time DESC"#)
             .bind(user)
@@ -996,6 +1103,11 @@ impl Store {
         Ok(rows.iter().map(row_to_key).collect::<Result<Vec<_>, _>>()?)
     }
 
+    /// Delete one key by exact id.
+    ///
+    /// # Errors
+    ///
+    /// `StoreError::NotFound` when nothing matches, otherwise the database error.
     pub async fn delete_key(&self, id: &str) -> Result<(), StoreError> {
         let r = sqlx::query("DELETE FROM keys WHERE id = $1")
             .bind(id)
@@ -1011,32 +1123,42 @@ impl Store {
 
     /// Delete old closed/expired and informational alerts, then expire timed-out
     /// alerts. Returns the expired ids.
+    ///
+    /// # Errors
+    ///
+    /// The database error, or `StoreError::Transition` from expiring an alert.
     pub async fn housekeeping(
         &self,
         expired_after_s: i64,
         info_after_s: i64,
     ) -> Result<Vec<String>, StoreError> {
+        // K2.1: elapsed seconds since last_receive_time, compared numerically
+        // with the raw timeout. A NULL timeout never expires (K2.2), 0 never
+        // expires (K2.3), and any stored bigint compares without overflow.
+        const EXPIRED: &str = "status <> 'expired' AND COALESCE(timeout, $1) <> 0
+               AND EXTRACT(EPOCH FROM (now() - last_receive_time)) > timeout";
+        #[expect(
+            clippy::as_conversions,
+            clippy::cast_precision_loss,
+            reason = "make_interval(secs => ...) takes double precision; a retention period near 2^53 s is not a real setting"
+        )]
+        let (expired_secs, info_secs) = (expired_after_s as f64, info_after_s as f64);
         if expired_after_s > 0 {
             sqlx::query(
                 "DELETE FROM alerts WHERE status IN ('closed','expired')
                    AND last_receive_time < now() - make_interval(secs => $1)",
             )
-            .bind(expired_after_s as f64)
+            .bind(expired_secs)
             .execute(&self.pool)
             .await?;
         }
         if info_after_s > 0 {
             sqlx::query("DELETE FROM alerts WHERE severity = $1 AND last_receive_time < now() - make_interval(secs => $2)")
                 .bind(INFORM_SEVERITY)
-                .bind(info_after_s as f64)
+                .bind(info_secs)
                 .execute(&self.pool)
                 .await?;
         }
-        // K2.1: elapsed seconds since last_receive_time, compared numerically
-        // with the raw timeout. A NULL timeout never expires (K2.2), 0 never
-        // expires (K2.3), and any stored bigint compares without overflow.
-        const EXPIRED: &str = "status <> 'expired' AND COALESCE(timeout, $1) <> 0
-               AND EXTRACT(EPOCH FROM (now() - last_receive_time)) > timeout";
         let ids: Vec<String> =
             sqlx::query_scalar(&format!("SELECT id FROM alerts WHERE {EXPIRED}"))
                 .bind(self.cfg.alert_timeout)
