@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-26T19:05Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-26T20:10Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -41,7 +41,7 @@ The design and implementation are on **draft PR #150 (DO NOT MERGE)**, at
 
 - `0002` rebuilds the alpha `alerts` and `heartbeats` by verified copy in one
   transaction after layout/dependency checks. Full implementation review is
-  pending, including the two source findings below. Reference adoption's
+  pending. Reference adoption's
   `Store::prepare` path only checks the catalog and writes no application
   rows, schema or SQLx baseline. Codex closed the former baseline-write race
   (P2) for that path at `aa2b232a`; this is not a claim that configured admin-key
@@ -61,16 +61,26 @@ The design and implementation are on **draft PR #150 (DO NOT MERGE)**, at
   `_sqlx_migrations`. These results cover the tested cases, not full parity
   or a catalog freeze. **All 19 runtime profiles remain NOT_RUN**; their
   green job is inert preflight only.
-- **Open Codex source findings (at `04970f72`):** ADR5-EDIT-PRESERVE-1,
-  unrelated raw NULL/empty fields are overwritten by display defaults on
-  tag/attribute edits; ADR5-HISTORY-TYPE-1, unsupported non-value history
-  JSON types can stringify during migration. Claude's corrections
-  (per-operation update columns mirroring the reference; a migration
-  refusal for mistyped history fields) are at `6cccb023`, unpublished and
-  awaiting Codex's affected review; their new regressions are NOT_RUN.
-  These do not reopen the scoped no-baseline-write adoption P2 closure.
-- **Before merge:** those corrections, the owner's concrete alert-value
-  and remaining NULL-read choices, any separate approved exact extra-index
+- **Codex source findings, closed at `6cccb023`:** ADR5-EDIT-PRESERVE-1
+  (unrelated raw NULL/empty fields overwritten by display defaults on
+  tag/attribute edits) and ADR5-HISTORY-TYPE-1 (unsupported non-value history
+  JSON types could stringify during migration), both found at `04970f72`,
+  were corrected at `6cccb023` (per-operation update columns mirroring the
+  reference; a migration refusal for mistyped history fields). Codex closed
+  both for that exact source and the affected hosted runtime (`be4e4be7`,
+  2026-10-13): run `38468819974` attempt 1 on tested merge `c44e395c`
+  (parents `596aabf3` + `6cccb023`, tree `64b949f5`) passed all seven jobs;
+  the store suite passed 20 (19 database-dependent, one static embedding
+  check; two generators ignored), and the new regressions
+  `edits_write_only_their_own_columns` and
+  `alpha_upgrade_refusals_change_nothing` executed and passed. This is not
+  full-implementation or parity approval and does not carry over to a rebase
+  or any other composition; no correlation-preservation or intended-edit-value
+  case was added, and an integral JSON `timeout` of `1.0` may still be
+  refused. The scoped no-baseline-write adoption P2 closure is unchanged.
+  **All 19 runtime profiles remain NOT_RUN.**
+- **Before merge:** the owner's concrete alert-value and remaining
+  NULL-read choices, any separate approved exact extra-index
   policy, and Codex's full affected implementation review. The current
   strict index rule is unchanged. Also pending with the owner: hook or port
   for integration plugin layers, who changes their repositories, and the
@@ -284,16 +294,19 @@ Codex's chain was merged next, in the order Codex proposed and Claude accepted (
 
 **Pause and the one scoped merge (2026-10-14 to 2026-10-26).** The owner
 paused the project on 2026-10-14 (23:37Z) with PR #150 a draft at `6cccb023`
-and the value, NULL, index, plugin, writer and local-smoke rulings open; the
-daily check was stopped and Codex's schedule left unchanged. On 2026-10-26 the
-owner reopened Claude's lane for one PR only: **PR #152** (`claude/beautifulrust-lints`,
+and the value, NULL, index, plugin, writer and local-smoke rulings open, and
+Claude's daily check was stopped. Codex's scheduled task is managed by the
+owner separately: per Codex's record it was paused on 2026-10-15 (00:33Z)
+and resumed on 2026-10-26 (16:36Z) on its existing hourly calendar; Claude's
+own-lane pause and reopen change no Codex schedule. On 2026-10-26 the owner
+reopened Claude's lane for one PR only: **PR #152** (`claude/beautifulrust-lints`,
 head `9cc1884b`) adopts the BeautifulRust lint policy (DECISIONS Y36) and was
 merged under the Minimal process as `931f5694` after Codex approved the exact
 head (`33287c2d`) and pull-request run
 [40370384025](https://github.com/steliosx/alrust/actions/runs/40370384025)
 succeeded (fmt/clippy/test, PG 18.6 alpha smoke, conformance, reference guard;
-hosted profiles inert). The pause otherwise stands: no daily check, no other
-source work, and PR #150's rebase onto `main` now needs the `Alert::body` and
+hosted profiles inert). Claude's pause otherwise stands: no daily check
+restarted, no other source work, and PR #150's rebase onto `main` now needs the `Alert::body` and
 `ApiKey::body` call-site changes plus lint fixes before an affected review.
 
 ## Work in flight
