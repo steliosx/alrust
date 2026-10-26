@@ -50,17 +50,21 @@ The full plan and its fixed decisions are in the
 
 ## Status
 
-**Reviewed checkpoint: 13 October 2026**, main
-[`ab385dc`](https://github.com/steliosx/alrust/commit/ab385dc0fb97df5a8d8a17d1336058504b0da032).
-Rust implementation now exists. Phase 0 and full compatibility qualification
-remain open; the current process permits reviewed alpha work in parallel.
+**Reviewed checkpoint: 26 October 2026**, main
+[`38096c95`](https://github.com/steliosx/alrust/commit/38096c95f6142ef615bd0100ebc4c39939a8105d).
+The Rust alpha is implemented; Phase 0 and full compatibility qualification
+remain open. The owner paused broader work on 14 October and reopened Claude's
+lane only for the lint-policy change merged as [PR #152](https://github.com/steliosx/alrust/pull/152).
+That scoped change is complete; broader work remains paused. See
+[STATUS](docs/STATUS.md) and decision Y36 for the current scope.
 
 | Area | Current evidence | Remaining limit |
 |---|---|---|
 | Rust API alpha | [PR #138](https://github.com/steliosx/alrust/pull/138), head `17eacd61`, and follow-up fixes are merged. Alert receive/query/status/action/delete, heartbeat and API-key routes execute against native PostgreSQL 18.6. | Early alpha; no release, live acceptance or complete Alerta parity is claimed. |
-| Alpha smoke and ordinary CI | [PR #147](https://github.com/steliosx/alrust/pull/147), head `2686ac98`, merged the exclusion-filter correction. Its [six-job run 38409638287](https://github.com/steliosx/alrust/actions/runs/38409638287) passed; the [smoke log](https://github.com/steliosx/alrust/actions/runs/38409638287/job/115338245533) reports zero failures and zero not-run checks. | This is the Rust/native-database alpha lane, not the complete conformance suite or production qualification. |
+| Alpha smoke and ordinary CI | [Exact-main run 40407850663](https://github.com/steliosx/alrust/actions/runs/40407850663) passed all six jobs at `38096c95`: Rust fmt/clippy/test (19 tests), PostgreSQL 18.6 alpha smoke (115 checks), 3,310 Python conformance-tooling tests, reference bootstrap, the reference guard and inert profile preflight. | The Python reference job is bootstrap/cleanup evidence, not a two-server comparison. All 19 full executing profiles remain `NOT_RUN`. |
+| Rust lint policy | [PR #152](https://github.com/steliosx/alrust/pull/152), exact head `9cc1884b`, merged as `931f5694`; [PR #153](https://github.com/steliosx/alrust/pull/153) records Y36 and the pause. Published STATUS attributes exact-head approval to Codex (`33287c2d`); the private signed record was not inspected for this presentation review. | BeautifulRust-based lints run under CI's `-D warnings`; unsafe code remains forbidden, and `missing_docs` is deferred. This is code-quality work, not new API compatibility or runtime qualification. |
 | Selected two-target conformance | [STATUS](docs/STATUS.md) records the narrow local A3B run at `ff7bc55a`: Python reference 10/10, Rust candidate 9/10. The failed `event!=` case was corrected by #147. | The corrected two-target pairing has not been rerun. All 19 full executing profiles remain `NOT_RUN`; full compatibility is unproved. |
-| Reference-storage compatibility | Draft [PR #150](https://github.com/steliosx/alrust/pull/150), head `6cccb023`, is **unmerged**. [Run 38468819974](https://github.com/steliosx/alrust/actions/runs/38468819974) passed seven jobs on tested merge `c44e395c`. Its real-PostgreSQL storage tests passed 20 cases, with two generation helpers ignored; conformance tooling unit tests passed 3,310 cases. | These results cover the draft, not main. Exact-head peer review, remaining compatibility decisions, complete two-server conformance and Zabalack/Voalack integration are still open. |
+| Reference-storage compatibility | Draft [PR #150](https://github.com/steliosx/alrust/pull/150), head `6cccb023`, is **unmerged**. [Run 38468819974](https://github.com/steliosx/alrust/actions/runs/38468819974) passed seven jobs on tested merge `c44e395c`. Its real-PostgreSQL storage tests passed 20 cases, with two generation helpers ignored; conformance tooling unit tests passed 3,310 cases. | These results cover the draft, not main. STATUS now records ADR5-EDIT-PRESERVE-1 and ADR5-HISTORY-TYPE-1 closed by Codex (`be4e4be7`) for that tested composition only. Full affected review and owner choices remain open. A rebase needs the new enum call sites, lint fixes and fresh validation; prior approval does not transfer. |
 | Open API review findings | Source inspection at this checkpoint confirms the [heartbeat healthcheck overflow finding](https://github.com/steliosx/alrust/pull/138#discussion_r4253845380) and [API-key default-scope finding](https://github.com/steliosx/alrust/pull/138#discussion_r4253845404) remain unresolved on main. | Passing ordinary smoke checks do not close these findings. |
 | Compose and UI delivery | [Alpha guide](docs/alpha.md) contains Compose and native startup instructions; native startup is exercised in the alpha CI lane. | Compose startup itself remains `NOT_RUN` in the current records. Web UI, desktop apps, auth logins and monitoring receivers remain unimplemented. |
 | Specification and execution profiles | Merged specifications, supervisors, finalizers and conformance tooling remain available; see [STATUS](docs/STATUS.md) for their exact historical bindings. | Earlier source/offline or reference-only passes are not retrospectively promoted to Rust conformance. Open specification and oracle review findings remain distinct from alpha runtime evidence. |
@@ -150,9 +154,10 @@ does not claim an additional local startup or test run.
 
 ## Roadmap
 
-The original phase roadmap remains the target. Reviewed Rust alpha work now
-proceeds alongside the still-open Phase 0 qualification under the current
-owner decision Y32; implemented subsets do not close a later phase's gate.
+The original phase roadmap remains the target. Y32 permits reviewed alpha
+work alongside Phase 0; the subsequent owner pause currently limits work to
+explicitly reopened scopes. The 26 October lint change is complete.
+Implemented subsets do not close a later phase's gate.
 The original details are in the
 [kickoff](https://github.com/steliosx/alrust/blob/e839ceaf8cb43d6ed996c8fe12f884d0bb141743/docs/KICKOFF.md).
 

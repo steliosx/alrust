@@ -575,12 +575,18 @@ def supervisor_matches(data, observed):
 
 
 def cross_check(data, pid, observed):
-    """Compare P's self-written receipt with this launcher's observations."""
+    """Compare P's self-written receipt with this launcher's observations.
+    A process that exits between writing the receipt and this check leaves no
+    /proc entry: that is a startup exit, refused as such (the caller's
+    failure path still stops and proves the tree)."""
     claimed, child_pid = parse_receipt(data)
-    if claimed != observed or read_stat(pid)[1] != pid:
-        raise Refused("launch receipt disagrees with the launcher's observation")
-    if type(child_pid) is not int or read_stat(child_pid)[0] != pid:
-        raise Refused("receipt child is not the supervisor's child")
+    try:
+        if claimed != observed or read_stat(pid)[1] != pid:
+            raise Refused("launch receipt disagrees with the launcher's observation")
+        if type(child_pid) is not int or read_stat(child_pid)[0] != pid:
+            raise Refused("receipt child is not the supervisor's child")
+    except FileNotFoundError:
+        raise Refused("a launched process exited during startup") from None
     return child_pid
 
 

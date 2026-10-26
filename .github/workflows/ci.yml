@@ -36,23 +36,13 @@ jobs:
   rust:
     name: fmt / clippy / test
     runs-on: ubuntu-24.04
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: alrust
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     env:
-      DATABASE_URL: postgres://postgres:postgres@localhost:5432/alrust
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/alrust
     steps:
       - uses: actions/checkout@v4
+      - name: PostgreSQL 18.6 (PGDG apt, no container registry)
+        timeout-minutes: 5
+        run: .github/scripts/start-postgres18.sh alrust
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.98.1"
@@ -61,6 +51,10 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - name: Stop PostgreSQL 18.6
+        if: always()
+        timeout-minutes: 2
+        run: .github/scripts/stop-postgres18.sh
 
   hosted-profiles-preflight:
     # Phase 0 hosted conformance, INERT stage (docs/ci-phase0-conformance-plan.md).
@@ -111,23 +105,13 @@ jobs:
     name: conformance vs reference alerta
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: alerta
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: true
+      - name: PostgreSQL 18.6 (PGDG apt, no container registry)
+        timeout-minutes: 5
+        run: .github/scripts/start-postgres18.sh alerta
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -162,7 +146,7 @@ jobs:
           env -i PATH=/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 HOME="$JOB_ROOT/home" \
             JOB_ROOT="$JOB_ROOT" PORT=18081 READY_TIMEOUT=60 \
             REFERENCE_PYTHON="$pythonLocation/bin/python3" SECRET_KEY="$secret" \
-            DATABASE_URL=postgres://postgres:postgres@localhost:5432/alerta \
+            DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/alerta \
             conformance/scripts/run-reference.sh | tee "$JOB_ROOT/boot.out"
           # The launcher's single ready line is the only trusted receipt
           # binding: exactly one matching line, or the step fails.
@@ -212,3 +196,86 @@ jobs:
             exit 1
           fi
           echo "cleanup COMPLETE: the supervisor's whole tree ended (ECHILD) and nothing listens on :18081"
+      - name: Stop PostgreSQL 18.6
+        if: always()
+        timeout-minutes: 2
+        run: .github/scripts/stop-postgres18.sh
+
+  conformance-unit:
+    # The conformance harness's own unit tests, which no job ran before
+    # (CONF-UNIT-ROT-1). No PostgreSQL or upstream reference server; synthetic
+    # subprocesses and loopback HTTP fixtures after locked wheel installation.
+    name: conformance unit tests (Python 3.12)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Locked test environment
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/conformance-venv"
+          "$RUNNER_TEMP/conformance-venv/bin/python" -m pip install -q --require-hashes \
+            --only-binary=:all: -r conformance/requirements.lock
+      - name: Unit tests
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$PWD/conformance:$PWD/conformance/tests/unit" \
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONDONTWRITEBYTECODE=1 \
+            "$RUNNER_TEMP/conformance-venv/bin/python" -m pytest -c conformance/pytest.ini \
+            -p no:cacheprovider -q --basetemp="$RUNNER_TEMP/pytest" conformance/tests/unit
+
+  alpha-smoke:
+    # The alpha server end to end: build the binary, start it on PostgreSQL
+    # 18.6 and run scripts/alpha-smoke.py against it.
+    name: alpha server smoke (PostgreSQL 18.6)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+          persist-credentials: false
+      - name: PostgreSQL 18.6 (PGDG apt, no container registry)
+        timeout-minutes: 5
+        run: .github/scripts/start-postgres18.sh alrust alrust alrust
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --locked --bin alrust
+      - name: Start alrust
+        run: |
+          set -euo pipefail
+          key=$(python3 -c 'import secrets; print(secrets.token_hex(20))')
+          echo "::add-mask::$key"
+          echo "ALPHA_KEY=$key" >> "$GITHUB_ENV"
+          .github/scripts/alpha-server.py start http://127.0.0.1:8080/management/gtg -- \
+            env DATABASE_URL=postgres://alrust:alrust@127.0.0.1:5432/alrust ALRUST_BIND=127.0.0.1:8080 \
+            ALRUST_ADMIN_KEY="$key" target/debug/alrust
+      - name: Smoke test
+        # The job's database and server are created here and discarded after it.
+        run: python3 scripts/alpha-smoke.py http://127.0.0.1:8080 "$ALPHA_KEY" --disposable-target
+      - name: Server log
+        if: always()
+        run: |
+          if [[ -n "${ALRUST_ROOT:-}" ]]; then cat "$ALRUST_ROOT/alrust.log" || true; else echo "no server was started"; fi
+      - name: Stop alrust and PostgreSQL 18.6
+        if: always()
+        timeout-minutes: 2
+        run: |
+          set -uo pipefail
+          fail=0
+          .github/scripts/alpha-server.py stop || fail=1
+          .github/scripts/stop-postgres18.sh || fail=1
+          exit $fail
