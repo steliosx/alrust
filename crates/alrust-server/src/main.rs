@@ -47,6 +47,10 @@ fn env_i64(name: &str, default: i64) -> anyhow::Result<i64> {
 
 /// Strict boolean settings: an unrecognised value stops start-up rather than
 /// silently reading as false (a typo must never disable authentication).
+#[expect(
+    clippy::fn_params_excessive_bools,
+    reason = "the bool is the setting's default value, not a mode switch"
+)]
 fn env_bool(name: &str, default: bool) -> anyhow::Result<bool> {
     match std::env::var(name) {
         Ok(v) if !v.trim().is_empty() => match v.trim().to_lowercase().as_str() {
@@ -87,7 +91,7 @@ async fn shutdown_signal() {
     };
     #[cfg(not(unix))]
     let term = std::future::pending::<()>();
-    tokio::select! { _ = ctrl_c => {}, _ = term => {} }
+    tokio::select! { () = ctrl_c => {}, () = term => {} }
 }
 
 #[tokio::main]
@@ -104,7 +108,8 @@ async fn main() -> anyhow::Result<()> {
         alert_timeout: env_i64("ALRUST_ALERT_TIMEOUT", 86400)?,
         ack_timeout: env_i64("ALRUST_ACK_TIMEOUT", 0)?,
         shelve_timeout: env_i64("ALRUST_SHELVE_TIMEOUT", 7200)?,
-        history_limit: env_i64("ALRUST_HISTORY_LIMIT", 100)?.max(1) as usize,
+        history_limit: usize::try_from(env_i64("ALRUST_HISTORY_LIMIT", 100)?.max(1))
+            .context("ALRUST_HISTORY_LIMIT is too large")?,
         history_on_value_change: env_bool("ALRUST_HISTORY_ON_VALUE_CHANGE", true)?,
     };
     let hostname = std::fs::read_to_string("/etc/hostname")
@@ -157,17 +162,19 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
-    let hk_interval = env_i64("ALRUST_HOUSEKEEPING_INTERVAL", 0)?;
-    if hk_interval > 0 {
+    // A zero or negative interval is off (`try_from` fails only for negatives).
+    if let Ok(hk_secs) = u64::try_from(env_i64("ALRUST_HOUSEKEEPING_INTERVAL", 0)?)
+        && hk_secs > 0
+    {
         let store = store.clone();
         let (expired_s, info_s) = (api_cfg.delete_expired_after_s, api_cfg.delete_info_after_s);
         tokio::spawn(async move {
-            let mut tick = tokio::time::interval(Duration::from_secs(hk_interval as u64));
+            let mut tick = tokio::time::interval(Duration::from_secs(hk_secs));
             loop {
                 tick.tick().await;
                 match store.housekeeping(expired_s, info_s).await {
                     Ok(ids) if !ids.is_empty() => {
-                        tracing::info!(expired = ids.len(), "housekeeping")
+                        tracing::info!(expired = ids.len(), "housekeeping");
                     }
                     Ok(_) => {}
                     Err(e) => tracing::error!(error = %e, "housekeeping failed"),
