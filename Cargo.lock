@@ -78,9 +78,11 @@ dependencies = [
  "alrust-domain",
  "alrust-engine",
  "chrono",
+ "serde",
  "serde_json",
  "sqlx",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]

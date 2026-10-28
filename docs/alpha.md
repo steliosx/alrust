@@ -41,8 +41,25 @@ Stop with `docker compose down`; add `-v` to delete the database volume.
 ### Without Docker
 
 Build with `cargo build --release --bin alrust`, point `DATABASE_URL` at a
-PostgreSQL 18.6 database, and run `target/release/alrust`. Migrations run at
-start-up.
+PostgreSQL 18.6 database, and run `target/release/alrust`.
+
+### The database
+
+alrust uses the reference Alerta's own PostgreSQL schema, exactly
+(ADR-0005), so Alerta integrations that work in the database can attach to
+it. At start-up it decides what it was pointed at:
+
+- **An empty database:** creates the reference schema.
+- **An alrust alpha database** (created before this change): converts it in
+  place, in one transaction, checking every copied value. On any problem it
+  stops with the reason and changes nothing. A database with other objects
+  attached to its tables (views, triggers, foreign keys, grants) is refused.
+- **An existing Alerta 9.1.0 database:** adopts it unchanged if its schema
+  matches the reference exactly, otherwise stops and lists the differences.
+  An older Alerta database must first be upgraded by starting Alerta 9.1.0.
+  API keys there with no expiry or no scopes cannot authenticate until
+  edited.
+- **Anything else:** stops with nothing written.
 
 ## What works
 
@@ -70,8 +87,8 @@ start-up.
 | `ALRUST_BIND` | `0.0.0.0:8080` | Listen address |
 | `ALRUST_BASE_URL` | `http://localhost:8080` | Used in `href` fields |
 | `ALRUST_ALLOWED_ENVIRONMENTS` | `Production,Development` | Exact environment names accepted on receive |
-| `ALRUST_ALERT_TIMEOUT` | `86400` | Seconds |
-| `ALRUST_ACK_TIMEOUT` / `ALRUST_SHELVE_TIMEOUT` | `0` / `7200` | Seconds |
+| `ALRUST_ALERT_TIMEOUT` | `86400` | Seconds, at most 2147483647 (the reference's `integer` columns) |
+| `ALRUST_ACK_TIMEOUT` / `ALRUST_SHELVE_TIMEOUT` | `0` / `7200` | Seconds, at most 2147483647 |
 | `ALRUST_HISTORY_LIMIT` | `100` | History entries kept per alert |
 | `ALRUST_HOUSEKEEPING_INTERVAL` | `0` (off) | Seconds between automatic housekeeping runs. The reference never schedules it; with it on, closed and expired alerts older than 2 h and informational alerts older than 12 h are **deleted**. |
 
@@ -80,8 +97,9 @@ start-up.
 - **History scope (R7.1):** the current and previous status come from the
   matched alert's own history. The reference reads matching entries across
   every alert with the same environment, resource and customer.
-- **Multiple matching rows (R2.3):** alrust locks and updates exactly one
-  row; the reference's UPDATE can touch several.
+- **Timeouts above 2147483647** in alerts, status changes, actions and
+  heartbeats are refused with 400; the database column is a 32-bit
+  `integer`, as in the reference (ADR-0005 decision 6).
 - **Tags:** the de-duplicated union keeps first-seen order; the reference may
   reorder tags.
 - **Dot-segment ids:** an `href` for an id of exactly `.` or `..` is a dot
