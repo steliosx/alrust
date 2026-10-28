@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-28T17:58Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-28T18:56Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -335,8 +335,14 @@ a hook in alrust; Zabalack and Voalack change their own repositories from
 Claude's spec; local smoke runs routine under the 80 °C guard. Relayed
 signed to Codex (`ea4a9bb4`). PR #150 did all of that at `03d43f15`
 and merged as `0cf4ad8c` the same day; the index list stays a proposal.
-The BeautifulRust skills are PR #155 (`claude/beautifulrust-skills`), in
-review with Codex's scope adapter.
+The BeautifulRust skills (Y37) are installed: **PR #155 merged on
+2026-10-28 as `4c6148ef`** (approved head `3fd2e898`, tree `8a4156d5`,
+base `0cf4ad8c`; Codex `2fd61856`, run 40741324266 all seven jobs green),
+with Codex's scope adapter in `.agents/skills/README.md`. A CI follow-up is
+owed: the draft-only store catalog job checks out the PR head rather than
+the merge, so drafts older than PR #150 fail it; Codex asked for a separate
+bounded workflow proposal (merge-ref checkout with explicit provenance,
+unchanged cleanup, permissions and required checks).
 
 ## Work in flight
 
