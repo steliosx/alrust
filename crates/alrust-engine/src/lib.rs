@@ -60,6 +60,10 @@ pub struct Transition {
     pub rule: &'static str,
 }
 
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "pairs with `invalid` so every arm of the transition table returns the same type"
+)]
 fn next(rule: &'static str, severity: &str, status: &str) -> Result<Transition, TransitionError> {
     Ok(Transition {
         severity: severity.to_string(),
@@ -72,6 +76,16 @@ fn invalid(msg: String) -> Result<Transition, TransitionError> {
     Err(TransitionError::InvalidAction(msg))
 }
 
+/// Decide the next severity and status (and the rule that fired).
+///
+/// # Errors
+///
+/// `UnknownSeverity` when a severity is not in `VALID_SEVERITIES`, and
+/// `InvalidAction` when the action is not allowed in the current status.
+#[expect(
+    clippy::too_many_lines,
+    reason = "a line-by-line port of the reference state machine, kept in one place"
+)]
 pub fn transition(i: TransitionInput<'_>) -> Result<Transition, TransitionError> {
     let current_status = i
         .current_status
@@ -185,7 +199,7 @@ pub fn transition(i: TransitionInput<'_>) -> Result<Transition, TransitionError>
     if state == status::CLOSED {
         match action {
             Some(action::OPEN) => return next("CLS-1", previous_severity, status::OPEN),
-            Some(action::ACK) | Some(action::SHELVE) => {
+            Some(action::ACK | action::SHELVE) => {
                 return invalid(format!("invalid action for current {state} status"));
             }
             Some(action::CLOSE) => return invalid(format!("alert is already in {state} status")),
@@ -253,7 +267,7 @@ pub fn hist_info(entries: &[&HistoryEntry], action: Option<&str>) -> HistInfo {
     if let Some(find) = find {
         for pair in h.windows(2) {
             if pair[0].change_type == find {
-                info.previous_status = pair[1].status.clone();
+                info.previous_status.clone_from(&pair[1].status);
                 info.previous_timeout = pair[1].timeout;
                 return info;
             }
@@ -262,7 +276,7 @@ pub fn hist_info(entries: &[&HistoryEntry], action: Option<&str>) -> HistInfo {
         info.previous_status = Some(status::OPEN.to_string());
         return info;
     }
-    info.previous_status = h[1].status.clone();
+    info.previous_status.clone_from(&h[1].status);
     info.previous_timeout = h[1].timeout;
     info
 }

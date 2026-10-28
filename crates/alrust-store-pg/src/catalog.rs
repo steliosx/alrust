@@ -102,6 +102,11 @@ pub struct Catalog {
 }
 
 /// The committed expected catalog.
+///
+/// # Panics
+///
+/// If the embedded `reference-catalog.json` does not parse, which a unit
+/// test rules out.
 pub fn expected() -> Catalog {
     serde_json::from_str(EXPECTED_JSON).expect("reference-catalog.json is valid")
 }
@@ -111,6 +116,14 @@ pub fn expected() -> Catalog {
 /// Runs `SET LOCAL search_path` so that `format_type` and the definition
 /// functions qualify names the same way everywhere; call it inside a
 /// transaction.
+///
+/// # Errors
+///
+/// The database error.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one catalog query per object kind, kept together so the comparison is read in one place"
+)]
 pub async fn read(conn: &mut PgConnection) -> Result<Catalog, sqlx::Error> {
     // The session's own pinned order; pg_catalog stays implicitly first.
     sqlx::query("SET LOCAL search_path TO public, pg_temp")
@@ -151,7 +164,7 @@ pub async fn read(conn: &mut PgConnection) -> Result<Catalog, sqlx::Error> {
         match (relkind.as_str(), relname.as_str()) {
             ("c", HISTORY_TYPE) => cat.history_type.get_or_insert_with(Vec::new).push(col),
             ("r", name) if TABLES.contains(&name) => {
-                cat.tables.entry(relname).or_default().columns.push(col)
+                cat.tables.entry(relname).or_default().columns.push(col);
             }
             _ => {}
         }
@@ -240,6 +253,10 @@ pub async fn read(conn: &mut PgConnection) -> Result<Catalog, sqlx::Error> {
 
 /// Non-internal triggers on the reference tables, as "table: trigger".
 /// They are allowed (integrations attach their own) and only logged.
+///
+/// # Errors
+///
+/// The database error.
 pub async fn triggers(conn: &mut PgConnection) -> Result<Vec<String>, sqlx::Error> {
     sqlx::query_scalar(
         "SELECT c.relname || ': ' || t.tgname

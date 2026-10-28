@@ -12,14 +12,23 @@
 //! where a missing database is a failure. Test sessions use alrust's
 //! pinned search path but are moved to a far-from-UTC time zone after
 //! connecting (`odd_zone_pool`) on purpose: nothing may depend on it.
+#![expect(
+    clippy::unwrap_used,
+    clippy::print_stderr,
+    clippy::too_many_lines,
+    clippy::items_after_statements,
+    reason = "integration test: helpers unwrap, skips are printed, and each scenario stays in one function"
+)]
 
 use alrust_store_pg::catalog;
 use alrust_store_pg::{
-    NewAlert, Outcome, ReceiveKind, StartupError, Store, StoreConfig, StoreError, session_options,
+    AlertQuery, NewAlert, Outcome, ReceiveKind, StartupError, Store, StoreConfig, StoreError,
+    session_options,
 };
 use chrono::{TimeZone, Utc};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{Executor, PgPool, Row};
+use std::fmt::Write as _;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 const SESSION_TIME_ZONE: &str = "Pacific/Chatham";
@@ -146,7 +155,7 @@ fn test_session(base: &PgConnectOptions) -> PgConnectOptions {
 }
 
 /// Pool options whose sessions run `SET TIME ZONE` to the odd zone right
-/// after connecting. A startup option cannot do it: SQLx always sends its
+/// after connecting. A startup option cannot do it: `SQLx` always sends its
 /// own `TimeZone=UTC` startup parameter, which wins (sqlx-postgres 0.8.6
 /// connection/establish.rs; CI runs 38459899496 and 38461412602).
 fn odd_zone_pool(max: u32) -> PgPoolOptions {
@@ -700,7 +709,10 @@ async fn alpha_upgrade_refusals_change_nothing() {
         if let Err(e) = sqlx::raw_sql(setup).execute(&db.pool).await {
             // Schema publications need superuser; CI's role has it.
             if setup.contains("PUBLICATION")
-                && e.as_database_error().and_then(|d| d.code()).as_deref() == Some("42501")
+                && e.as_database_error()
+                    .and_then(sqlx::error::DatabaseError::code)
+                    .as_deref()
+                    == Some("42501")
             {
                 eprintln!("NOT_RUN (needs superuser): {setup}");
                 continue;
@@ -866,10 +878,12 @@ async fn adoption_writes_nothing_and_changes_no_row() {
          BEGIN RAISE EXCEPTION 'adoption wrote to %', TG_TABLE_NAME; END $$;",
     );
     for t in catalog::TABLES {
-        deny.push_str(&format!(
+        write!(
+            deny,
             "CREATE TRIGGER deny_writes BEFORE INSERT OR UPDATE OR DELETE OR TRUNCATE ON {t}
              FOR EACH STATEMENT EXECUTE FUNCTION deny_writes();"
-        ));
+        )
+        .unwrap();
     }
     sqlx::raw_sql(&deny).execute(&db.pool).await.unwrap();
 
@@ -891,7 +905,7 @@ async fn adoption_writes_nothing_and_changes_no_row() {
     assert!(!has_history, "adoption records no baseline");
     let mut allow = String::new();
     for t in catalog::TABLES {
-        allow.push_str(&format!("DROP TRIGGER deny_writes ON {t};"));
+        write!(allow, "DROP TRIGGER deny_writes ON {t};").unwrap();
     }
     sqlx::raw_sql(&allow).execute(&db.pool).await.unwrap();
     assert_eq!(checksum(&db.pool).await, rows_before);
@@ -1000,7 +1014,7 @@ fn new_alert(id: &str, timeout: i64) -> NewAlert {
         value: Some("500".into()),
         text: String::new(),
         tags: vec![],
-        attributes: Default::default(),
+        attributes: serde_json::Map::default(),
         origin: "test".into(),
         event_type: "exceptionAlert".into(),
         create_time: Utc.with_ymd_and_hms(2026, 10, 13, 12, 0, 0).unwrap()
@@ -1106,7 +1120,7 @@ async fn adopted_empty_strings_and_null_metadata_read_like_the_reference() {
     assert_eq!(a.last_receive_id, None);
     assert_eq!(a.last_receive_time, None);
     let page = s
-        .find_alerts(&Default::default(), 1, 100)
+        .find_alerts(&AlertQuery::default(), 1, 100)
         .await
         .expect("listing includes NULL-metadata rows");
     assert!(page.alerts.iter().any(|a| a.id == "r3"));
@@ -1178,7 +1192,7 @@ async fn edits_write_only_their_own_columns() {
             .unwrap();
     assert_eq!(
         raw,
-        ("".into(), "".into(), "".into(), "".into()),
+        (String::new(), String::new(), String::new(), String::new()),
         "stored empties kept"
     );
 
@@ -1330,21 +1344,25 @@ async fn adoption_waits_for_concurrent_ddl_and_then_refuses() {
 }
 
 /// Positive proof of "no DDL": an event trigger rejects every DDL command
-/// while adoption runs, twice. Needs superuser (event triggers); NOT_RUN
+/// while adoption runs, twice. Needs superuser (event triggers); `NOT_RUN`
 /// otherwise, run under CI.
 #[tokio::test]
 async fn adoption_runs_no_ddl() {
     let Some(db) = test_db().await else { return };
     apply_reference_schema(&db.pool).await;
     let setup = sqlx::raw_sql(
-        r#"CREATE FUNCTION deny_ddl() RETURNS event_trigger LANGUAGE plpgsql AS $$
+        r"CREATE FUNCTION deny_ddl() RETURNS event_trigger LANGUAGE plpgsql AS $$
            BEGIN RAISE EXCEPTION 'adoption ran DDL: %', TG_TAG; END $$;
-           CREATE EVENT TRIGGER deny_ddl ON ddl_command_start EXECUTE FUNCTION deny_ddl();"#,
+           CREATE EVENT TRIGGER deny_ddl ON ddl_command_start EXECUTE FUNCTION deny_ddl();",
     )
     .execute(&db.pool)
     .await;
     if let Err(e) = setup {
-        if e.as_database_error().and_then(|d| d.code()).as_deref() == Some("42501") {
+        if e.as_database_error()
+            .and_then(sqlx::error::DatabaseError::code)
+            .as_deref()
+            == Some("42501")
+        {
             eprintln!("NOT_RUN (needs superuser): event-trigger DDL denial");
             return;
         }
@@ -1365,7 +1383,7 @@ async fn adoption_runs_no_ddl() {
         .unwrap();
 }
 
-/// The server's own session options: search path pinned, TimeZone UTC, and
+/// The server's own session options: search path pinned, `TimeZone` UTC, and
 /// start-up accepts them.
 #[tokio::test]
 async fn session_options_pin_the_search_path_and_utc() {
@@ -1453,7 +1471,7 @@ async fn sessions_are_pinned_to_public_and_shadow_keys_never_authenticate() {
 }
 
 /// Injects a copy mismatch into the real migration: 0002 with one
-/// conversion altered runs through SQLx, raises, and the whole transaction
+/// conversion altered runs through `SQLx`, raises, and the whole transaction
 /// rolls back, leaving the alpha catalog, rows and history as they were
 /// (ROLLBACK-1).
 #[tokio::test]
@@ -1526,7 +1544,11 @@ async fn generate_reference_catalog() {
     apply_reference_schema(&db.pool).await;
     let c = catalog_of(&db.pool).await;
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/reference-catalog.json");
-    std::fs::write(path, serde_json::to_string_pretty(&c).unwrap() + "\n").unwrap();
+    std::fs::write(
+        path,
+        format!("{}\n", serde_json::to_string_pretty(&c).unwrap()),
+    )
+    .unwrap();
     eprintln!("wrote {path}");
 }
 
@@ -1547,7 +1569,7 @@ async fn generate_alpha_shape() {
         env!("CARGO_MANIFEST_DIR"),
         "/src/verify/alpha_shape.expected"
     );
-    std::fs::write(path, shape + "\n").unwrap();
+    std::fs::write(path, format!("{shape}\n")).unwrap();
     eprintln!("wrote {path}");
 }
 

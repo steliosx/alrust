@@ -4,6 +4,8 @@
 //! (`alerta/models/alert.py` `serialize`, `history.py`, `heartbeat.py`,
 //! `key.py`), so existing Alerta clients can talk to alrust unchanged.
 
+use std::fmt::Write as _;
+
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Map, Value};
@@ -17,9 +19,10 @@ pub fn path_segment(id: &str) -> String {
     let mut out = String::with_capacity(id.len());
     for b in id.bytes() {
         if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
-            out.push(b as char);
+            out.push(char::from(b));
         } else {
-            out.push_str(&format!("%{b:02X}"));
+            // Writing to a String cannot fail.
+            let _ = write!(out, "%{b:02X}");
         }
     }
     out
@@ -95,7 +98,7 @@ pub mod action {
     ];
 }
 
-/// History change types (`enums.py` ChangeType).
+/// History change types (`enums.py` `ChangeType`).
 pub mod change_type {
     pub const NEW: &str = "new";
     pub const STATUS: &str = "status";
@@ -142,6 +145,10 @@ fn ser_time<S: Serializer>(t: &DateTime<Utc>, s: S) -> Result<S::Ok, S::Error> {
     s.serialize_str(&iso8601(t))
 }
 
+#[expect(
+    clippy::ref_option,
+    reason = "serde's serialize_with passes the field by reference"
+)]
 fn ser_opt_time<S: Serializer>(t: &Option<DateTime<Utc>>, s: S) -> Result<S::Ok, S::Error> {
     match t {
         Some(t) => s.serialize_str(&iso8601(t)),
@@ -265,6 +272,13 @@ pub struct HistoryBody<'a> {
     pub timeout: Option<i64>,
 }
 
+/// Whether a serialized alert carries its history list (`show-history`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistoryOutput {
+    Include,
+    Omit,
+}
+
 impl Alert {
     /// Serialize like `Alert.serialize`: history sorted ascending by
     /// `updateTime`, stable, so equal times keep storage order (spec R7.3b).
@@ -272,9 +286,9 @@ impl Alert {
         &'a self,
         base_url: &str,
         alert_timeout: i64,
-        with_history: bool,
+        history: HistoryOutput,
     ) -> AlertBody<'a> {
-        let history = if with_history {
+        let history = if history == HistoryOutput::Include {
             let mut h: Vec<&HistoryEntry> = self.history.iter().collect();
             h.sort_by_key(|e| e.update_time);
             h.into_iter()
@@ -382,8 +396,7 @@ impl Heartbeat {
         // large timeout reads as not expired instead of overflowing.
         let elapsed_us = elapsed
             .num_microseconds()
-            .map(i128::from)
-            .unwrap_or_else(|| i128::from(elapsed.num_seconds()) * 1_000_000);
+            .map_or_else(|| i128::from(elapsed.num_seconds()) * 1_000_000, i128::from);
         let status = if elapsed_us > i128::from(self.timeout) * 1_000_000 {
             "expired"
         } else if latency > max_latency_ms {
@@ -449,13 +462,20 @@ pub struct ApiKeyBody<'a> {
     pub customer: Option<&'a str>,
 }
 
+/// Whether a serialized key carries its secret: only the creation response does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeySecret {
+    Reveal,
+    Hide,
+}
+
 impl ApiKey {
-    /// Serialize a key. `with_secret` is true only for the creation response.
+    /// Serialize a key.
     pub fn body<'a>(
         &'a self,
         base_url: &str,
         now: DateTime<Utc>,
-        with_secret: bool,
+        secret: KeySecret,
     ) -> ApiKeyBody<'a> {
         let scopes: &[String] = self.scopes.as_deref().unwrap_or(&[]);
         let key_type = if scopes
@@ -468,7 +488,7 @@ impl ApiKey {
         };
         ApiKeyBody {
             id: &self.id,
-            key: with_secret.then_some(self.key.as_str()),
+            key: (secret == KeySecret::Reveal).then_some(self.key.as_str()),
             // A NULL expiry or NULL scopes (rows alrust did not write) can
             // never authenticate: "inactive", an alrust-only status
             // (ADR-0005 decision 7).
@@ -508,7 +528,7 @@ pub fn scope_allows(scopes: &[String], wanted: &str) -> bool {
         };
         let type_ok = matches!(
             (have_type, want_type),
-            ("admin", _) | ("write", "write") | ("write", "read") | ("read", "read")
+            ("admin", _) | ("write", "write" | "read") | ("read", "read")
         );
         let res_ok = match (have_res, want_res) {
             (None, _) => true,
@@ -593,16 +613,16 @@ mod tests {
             last_used_time: None,
             customer: None,
         };
-        let listed = serde_json::to_value(k.body("http://x", t, false)).unwrap();
+        let listed = serde_json::to_value(k.body("http://x", t, KeySecret::Hide)).unwrap();
         assert!(listed.get("key").is_none());
         assert_eq!(listed["href"], "http://x/key/pub-id");
         let odd = ApiKey {
             id: "a/b?c#d%e é".into(),
             ..k.clone()
         };
-        let b = serde_json::to_value(odd.body("http://x", t, false)).unwrap();
+        let b = serde_json::to_value(odd.body("http://x", t, KeySecret::Hide)).unwrap();
         assert_eq!(b["href"], "http://x/key/a%2Fb%3Fc%23d%25e%20%C3%A9");
-        let created = serde_json::to_value(k.body("http://x", t, true)).unwrap();
+        let created = serde_json::to_value(k.body("http://x", t, KeySecret::Reveal)).unwrap();
         assert_eq!(created["key"], "secret");
     }
 
@@ -620,7 +640,7 @@ mod tests {
             last_used_time: None,
             customer: None,
         };
-        let b = serde_json::to_value(k.body("http://x", t, false)).unwrap();
+        let b = serde_json::to_value(k.body("http://x", t, KeySecret::Hide)).unwrap();
         assert_eq!(b["status"], "inactive");
         assert_eq!(b["expireTime"], Value::Null);
         assert_eq!(b["scopes"], serde_json::json!([]));
@@ -630,18 +650,24 @@ mod tests {
             expire_time: Some(future),
             ..k.clone()
         };
-        assert_eq!(no_scopes.body("http://x", t, false).status, "inactive");
+        assert_eq!(
+            no_scopes.body("http://x", t, KeySecret::Hide).status,
+            "inactive"
+        );
         let no_expiry = ApiKey {
             scopes: Some(vec!["read".into()]),
             ..k.clone()
         };
-        assert_eq!(no_expiry.body("http://x", t, false).status, "inactive");
+        assert_eq!(
+            no_expiry.body("http://x", t, KeySecret::Hide).status,
+            "inactive"
+        );
         let active = ApiKey {
             scopes: Some(vec!["read".into()]),
             expire_time: Some(future),
             ..k
         };
-        assert_eq!(active.body("http://x", t, false).status, "active");
+        assert_eq!(active.body("http://x", t, KeySecret::Hide).status, "active");
     }
 
     #[test]

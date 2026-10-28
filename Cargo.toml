@@ -22,8 +22,56 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1", features = ["v4"] }
 
+# Lint policy: BeautifulRust's drop-in set (lints/lints.toml, MIT), minus the
+# unsafe-block lints (unsafe code is forbidden outright) and minus the
+# library-only `missing_docs`. CI runs clippy with `-D warnings`.
 [workspace.lints.rust]
 unsafe_code = "forbid"
+missing_debug_implementations = "warn"   # every public type implements Debug
+missing_docs = "allow"                   # BeautifulRust marks this [lib]; alrust is an application
+unreachable_pub = "warn"                 # pub items that aren't actually exported
+rust_2018_idioms = { level = "warn", priority = -1 }
 
 [workspace.lints.clippy]
+# Groups first, at lower priority so the individual settings below win.
 all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+# Panics: return errors, and give every intentional panic a reason.
+unwrap_used = "warn"                     # use ?, or expect("why this cannot fail")
+expect_used = "allow"                    # expect with a reason is the sanctioned form
+panic_in_result_fn = "warn"              # a fn returning Result shouldn't also panic
+missing_panics_doc = "warn"              # document reachable panics under # Panics
+missing_errors_doc = "warn"              # document failures under # Errors
+
+# Suppressions must explain themselves and expire when no longer needed.
+allow_attributes = "warn"                # prefer #[expect] over #[allow]
+allow_attributes_without_reason = "warn" # every suppression says why
+
+# API shape.
+fn_params_excessive_bools = "warn"       # bool parameters: use an enum or two methods
+struct_excessive_bools = "warn"          # many bool fields: use an enum or bitflags
+clone_on_ref_ptr = "warn"                # write Arc::clone(&x) so cheap clones are visible
+redundant_clone = "warn"                 # a clone whose original is never used again
+rc_buffer = "warn"                       # Rc<String> / Rc<Vec<T>>: use Rc<str> / Rc<[T]>
+
+# Idioms.
+string_add = "warn"                      # build strings with format! or push_str, not +
+wildcard_imports = "warn"                # no glob imports (use super::* in tests is allowed)
+
+# Output and debugging leftovers.
+dbg_macro = "warn"
+todo = "warn"
+print_stdout = "warn"                    # libraries log, they don't print
+print_stderr = "warn"                    # libraries log, they don't print
+
+# Casts that silently lose information.
+as_conversions = "warn"                  # prefer From / TryFrom
+cast_possible_truncation = "warn"
+cast_sign_loss = "warn"
+
+# Pedantic lints that are mostly noise in practice.
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+module_inception = "allow"
+enum_glob_use = "allow"

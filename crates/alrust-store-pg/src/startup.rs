@@ -1,8 +1,8 @@
 //! Start-up: decide the database's state, then migrate, serve an existing
 //! reference database as it is, or refuse (ADR-0005 decision 4).
 //!
-//! Everything runs on one dedicated connection holding SQLx's own migration
-//! lock, so a second alrust (or any SQLx migrator on this database) waits;
+//! Everything runs on one dedicated connection holding `SQLx`'s own migration
+//! lock, so a second alrust (or any `SQLx` migrator on this database) waits;
 //! the migrator itself then runs with locking off on that same connection.
 //! The connection is closed, not returned to the pool, so the session lock
 //! cannot leak.
@@ -81,6 +81,11 @@ async fn detect(conn: &mut PgConnection) -> Result<State, sqlx::Error> {
 }
 
 /// Prepare the database for serving. See the module docs.
+///
+/// # Errors
+///
+/// A refused layout, a failed migration or copy check, or the database
+/// error, as `StartupError` says.
 pub async fn prepare(pool: &PgPool) -> Result<Report, StartupError> {
     let mut conn = pool.acquire().await?;
     conn.close_on_drop();
@@ -209,6 +214,10 @@ fn search_order_is_pinned(creation: Option<&str>, order: &[String]) -> bool {
     creation == Some("public") && fixed && rest_ok
 }
 
+#[expect(
+    clippy::fn_params_excessive_bools,
+    reason = "the bool is a catalog fact being rendered for the log, not a mode switch"
+)]
 fn present(b: bool) -> &'static str {
     if b { "present" } else { "absent" }
 }
@@ -218,7 +227,7 @@ mod tests {
     use super::search_order_is_pinned;
 
     fn v(s: &[&str]) -> Vec<String> {
-        s.iter().map(|x| x.to_string()).collect()
+        s.iter().map(std::string::ToString::to_string).collect()
     }
 
     #[test]

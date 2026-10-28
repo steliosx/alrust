@@ -6,7 +6,9 @@
 
 use std::sync::Arc;
 
-use alrust_domain::{Alert, ApiKey, iso8601, parse_time, scope_allows, truncate_ms};
+use alrust_domain::{
+    Alert, ApiKey, HistoryOutput, KeySecret, iso8601, parse_time, scope_allows, truncate_ms,
+};
 use alrust_store_pg::{AlertEdit, AlertQuery, NewAlert, Store, StoreError};
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -54,6 +56,7 @@ impl Default for ApiConfig {
     }
 }
 
+#[derive(Debug)]
 pub struct AppState {
     pub store: Store,
     pub cfg: ApiConfig,
@@ -303,6 +306,10 @@ fn opt_str(v: Option<&Value>) -> Option<String> {
 }
 
 /// The largest timeout the reference's `integer` columns hold.
+#[expect(
+    clippy::as_conversions,
+    reason = "i32::MAX always fits in i64; `i64::from` is not const-callable here on 1.98"
+)]
 pub const MAX_TIMEOUT: i64 = i32::MAX as i64;
 
 /// `timeout` parsing (spec R0.4): null/absent → default; bool → 1/0;
@@ -408,8 +415,12 @@ fn parse_alert(body: &Value, st: &AppState, alert_timeout: i64) -> ApiResult<New
 }
 
 fn alert_json(st: &AppState, a: &Alert) -> Value {
-    serde_json::to_value(a.body(&st.cfg.base_url, st.store.config().alert_timeout, true))
-        .unwrap_or(Value::Null)
+    serde_json::to_value(a.body(
+        &st.cfg.base_url,
+        st.store.config().alert_timeout,
+        HistoryOutput::Include,
+    ))
+    .unwrap_or(Value::Null)
 }
 
 async fn receive(
@@ -552,7 +563,7 @@ async fn edit_tags(
     params: &[(String, String)],
     id: &str,
     body: &Value,
-    untag: bool,
+    edit: fn(Vec<String>) -> AlertEdit,
 ) -> ApiResult<Json<Value>> {
     let caller = authenticate(st, headers, params).await?;
     caller.require("write:alerts")?;
@@ -567,13 +578,8 @@ async fn edit_tags(
             .collect(),
         _ => return Err(ApiError::bad("must supply 'tags' as json list")),
     };
-    let edit = if untag {
-        AlertEdit::Untag(tags)
-    } else {
-        AlertEdit::Tag(tags)
-    };
     st.store
-        .edit_alert(id, caller.customers().as_deref(), edit)
+        .edit_alert(id, caller.customers().as_deref(), edit(tags))
         .await?;
     Ok(Json(json!({"status": "ok"})))
 }
@@ -585,7 +591,7 @@ async fn tag_alert(
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> ApiResult<Json<Value>> {
-    edit_tags(&st, &headers, &params, &id, &body, false).await
+    edit_tags(&st, &headers, &params, &id, &body, AlertEdit::Tag).await
 }
 
 async fn untag_alert(
@@ -595,7 +601,7 @@ async fn untag_alert(
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> ApiResult<Json<Value>> {
-    edit_tags(&st, &headers, &params, &id, &body, true).await
+    edit_tags(&st, &headers, &params, &id, &body, AlertEdit::Untag).await
 }
 
 /// `PUT /alert/<id>/attributes` (`views/alerts.py:248-272`): a non-empty
@@ -665,7 +671,7 @@ struct Search {
     q: AlertQuery,
     page: i64,
     page_size: i64,
-    show_history: bool,
+    show_history: HistoryOutput,
 }
 
 fn parse_search(st: &AppState, caller: &Caller, params: &[(String, String)]) -> ApiResult<Search> {
@@ -675,7 +681,7 @@ fn parse_search(st: &AppState, caller: &Caller, params: &[(String, String)]) -> 
     };
     let mut page = 1i64;
     let mut page_size = st.cfg.default_page_size;
-    let mut show_history = false;
+    let mut show_history = HistoryOutput::Omit;
     for (k, v) in params {
         match k.as_str() {
             "id" => q.ids.push(v.clone()),
@@ -699,18 +705,22 @@ fn parse_search(st: &AppState, caller: &Caller, params: &[(String, String)]) -> 
             "page" => {
                 page = v
                     .parse()
-                    .map_err(|_| ApiError::bad("page must be an integer"))?
+                    .map_err(|_| ApiError::bad("page must be an integer"))?;
             }
             "page-size" => {
                 page_size = v
                     .parse()
-                    .map_err(|_| ApiError::bad("page-size must be an integer"))?
+                    .map_err(|_| ApiError::bad("page-size must be an integer"))?;
             }
             "show-history" => {
-                show_history = matches!(
+                show_history = if matches!(
                     v.to_lowercase().as_str(),
                     "true" | "t" | "1" | "yes" | "y" | "on"
-                )
+                ) {
+                    HistoryOutput::Include
+                } else {
+                    HistoryOutput::Omit
+                };
             }
             _ => {}
         }
@@ -918,7 +928,7 @@ async fn delete_heartbeat(
 /// qualified.
 fn supplied(obj: &serde_json::Map<String, Value>, field: &str) -> Result<Option<String>, ApiError> {
     match obj.get(field) {
-        None | Some(Value::Null) | Some(Value::Bool(false)) => Ok(None),
+        None | Some(Value::Null | Value::Bool(false)) => Ok(None),
         Some(Value::Number(n)) if n.as_f64() == Some(0.0) => Ok(None),
         Some(Value::String(s)) if s.is_empty() => Ok(None),
         Some(Value::Array(a)) if a.is_empty() => Ok(None),
@@ -995,8 +1005,8 @@ async fn create_key(
     };
     let k = st.store.create_key(&key).await?;
     // The secret is shown once, here (owner decision Y6, SF-KEYS S1).
-    let data =
-        serde_json::to_value(k.body(&st.cfg.base_url, Utc::now(), true)).unwrap_or(Value::Null);
+    let data = serde_json::to_value(k.body(&st.cfg.base_url, Utc::now(), KeySecret::Reveal))
+        .unwrap_or(Value::Null);
     Ok((
         StatusCode::CREATED,
         Json(json!({"status": "ok", "key": k.key, "data": data})),
@@ -1029,7 +1039,10 @@ async fn list_keys(
     };
     let keys: Vec<Value> = rows
         .iter()
-        .map(|k| serde_json::to_value(k.body(&st.cfg.base_url, now, false)).unwrap_or(Value::Null))
+        .map(|k| {
+            serde_json::to_value(k.body(&st.cfg.base_url, now, KeySecret::Hide))
+                .unwrap_or(Value::Null)
+        })
         .collect();
     let total = keys.len();
     Ok(Json(json!({"status": "ok", "keys": keys, "total": total})))
@@ -1057,9 +1070,8 @@ async fn gtg() -> &'static str {
 /// `GET /management/healthcheck` (spec HB5). Reproduces the reference's use
 /// of the seconds *component* of the heartbeat age (HB5.2).
 async fn healthcheck(State(st): State<Shared>) -> Response {
-    let hbs = match st.store.list_heartbeats(None).await {
-        Ok(h) => h,
-        Err(_) => return (StatusCode::SERVICE_UNAVAILABLE, "HEALTH_CHECK_FAILED").into_response(),
+    let Ok(hbs) = st.store.list_heartbeats(None).await else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "HEALTH_CHECK_FAILED").into_response();
     };
     let now = Utc::now();
     for h in hbs {
@@ -1090,12 +1102,10 @@ async fn housekeeping(
     };
     let expired_s = hours("expired")
         .filter(|h| *h != 0)
-        .map(|h| h * 3600)
-        .unwrap_or(st.cfg.delete_expired_after_s);
+        .map_or(st.cfg.delete_expired_after_s, |h| h * 3600);
     let info_s = hours("info")
         .filter(|h| *h != 0)
-        .map(|h| h * 3600)
-        .unwrap_or(st.cfg.delete_info_after_s);
+        .map_or(st.cfg.delete_info_after_s, |h| h * 3600);
     let expired = st.store.housekeeping(expired_s, info_s).await?;
     let count = expired.len();
     Ok(Json(
