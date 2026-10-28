@@ -581,27 +581,67 @@ def test_docker_output_over_limit_refuses(tmp_path):
 
 # --- DBA2-R2: stdin is fed under the same deadline ------------------------------
 
-def test_stdin_feed_obeys_call_deadline(tmp_path):
+def test_stdin_feed_obeys_call_deadline(tmp_path, monkeypatch):
     # Codex's control from f44f8e40: a child that never reads its stdin.
     directory = tmp_path / "database"
     directory.mkdir(mode=0o700)
-    pidfile = tmp_path / "stub.pid"
     stub = tmp_path / "psql-never-reads"
-    stub.write_text("#!" + sys.executable + "\nimport os,time\n"
-                    + "open(" + repr(str(pidfile)) + ", 'w').write(str(os.getpid()))\n"
-                    + "time.sleep(2)\n")
+    stub.write_text("#!" + sys.executable + "\nimport time\ntime.sleep(2)\n")
     stub.chmod(0o755)
+    import signal
     import time as _time
+    # Passfile fsync is setup, outside the short per-call budget being tested.
     client = ds.Psql(str(stub), port=5432, user="postgres",
                      password="SYNTHETIC-public-password", database_dir=str(directory),
-                     deadline_ns=_time.monotonic_ns() + 200_000_000)
+                     deadline_ns=_time.monotonic_ns() + 60_000_000_000)
+    monkeypatch.setattr(ds, "CALL_TIMEOUT_S", 0.2)
+    # Observe the real owned process from the parent: the child may be killed
+    # before its interpreter can write a PID file on a loaded runner.
+    spawned = []
+    popen = ds.subprocess.Popen
+
+    def track_child(*args, **kwargs):
+        proc = popen(*args, **kwargs)
+        spawned.append(proc)
+        return proc
+
+    monkeypatch.setattr(ds.subprocess, "Popen", track_child)
     start = _time.monotonic()
-    with pytest.raises(ds.DatabaseStageError, match="psql_timeout"):
+    with pytest.raises(ds.DatabaseStageError, match="^psql_timeout$"):
         client.query("-- SYNTHETIC\n" + " " * (128 * 1024), "postgres")
     elapsed = _time.monotonic() - start
-    pid = int(pidfile.read_text())
-    assert not os.path.exists("/proc/%d" % pid), "owned child not reaped"
+    [proc] = spawned
+    assert proc.returncode == -signal.SIGKILL, "owned child not killed and waited"
+    assert not os.path.exists("/proc/%d" % proc.pid), "owned child not reaped"
     assert elapsed < 1.0, "stdin feeding escaped the call deadline"
+
+
+def test_expired_psql_stage_refuses_before_spawning(tmp_path, monkeypatch):
+    _, client = raw_psql(tmp_path, "print('{}')")
+    monkeypatch.setattr(client, "_deadline", 0)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("expired stage spawned a child")
+
+    monkeypatch.setattr(ds, "_bounded_run", forbidden)
+    with pytest.raises(ds.DatabaseStageError, match="^stage_deadline_expired$"):
+        client.query("-- SYNTHETIC\nSELECT 1;", "postgres")
+
+
+def test_psql_call_cannot_outlive_remaining_stage(tmp_path, monkeypatch):
+    _, client = raw_psql(tmp_path, "print('{}')")
+    now = client._deadline - 50_000_000
+    monkeypatch.setattr(ds.time, "monotonic_ns", lambda: now)
+    monkeypatch.setattr(ds, "CALL_TIMEOUT_S", 0.2)
+    timeouts = []
+
+    def observe_budget(argv, stdin, env, timeout_s, limit):
+        timeouts.append(timeout_s)
+        return None, 0, b"", b""
+
+    monkeypatch.setattr(ds, "_bounded_run", observe_budget)
+    assert client.query("-- SYNTHETIC\nSELECT 1;", "postgres") == b""
+    assert timeouts == [0.05]
 
 
 def test_large_stdin_reaches_a_reading_child(tmp_path):
