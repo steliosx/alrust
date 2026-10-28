@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-28T16:46Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-28T16:55Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -79,8 +79,18 @@ The design and implementation are on **draft PR #150 (DO NOT MERGE)**, at
   case was added, and an integral JSON `timeout` of `1.0` may still be
   refused. The scoped no-baseline-write adoption P2 closure is unchanged.
   **All 19 runtime profiles remain NOT_RUN.**
-- **Before merge:** implementation of the owner's choices in the next
-  head (`value` option (b), Y38; NULL-read refusal as written, Y39; the
+- **Open Codex source finding (2026-10-28), ADR5-OWNED-SEQ-1 at exact
+  `6cccb023`:** a sequence owned by an alert or heartbeat column, even
+  without a column default, can pass alpha preflight and be deleted with the
+  rebuilt old table. Codex independently reviewed the source trace; this
+  finding has not been runtime reproduced. It requires a preflight refusal
+  (generator and generated migration together), sequence-preservation
+  refusal validation, and affected exact-head review. Signed finding
+  `04b03fe4`; receipt `a12e90e3` is transport only. The earlier
+  EDIT-PRESERVE-1 and HISTORY-TYPE-1 closures stay closed.
+- **Before merge:** the ADR5-OWNED-SEQ-1 preflight refusal with its
+  sequence-preservation tests; implementation of the owner's choices in the
+  next head (`value` option (b), Y38; NULL-read refusal as written, Y39; the
   named extra-index list once its ADR-0005 revision is approved, Y40; until
   then the strict index rule stays in the code), the merge of `main` with
   the lint and call-site fixes, and Codex's full affected implementation
@@ -321,9 +331,10 @@ a hook in alrust; Zabalack and Voalack change their own repositories from
 Claude's spec; local smoke runs routine under the 80 °C guard. Relayed
 signed to Codex (`ea4a9bb4`). PR #150's next head will merge `main`
 (`38096c95`) into the branch (no rebase of the pushed branch), fix the
-`Alert::body` and `ApiKey::body` call sites, clear the new lints, implement
-`value` (b) and carry the index list once that ADR revision is approved;
-it stays DRAFT DO NOT MERGE until Codex's full affected review.
+`Alert::body` and `ApiKey::body` call sites, clear the new lints, add the
+ADR5-OWNED-SEQ-1 preflight refusal with its tests, implement `value` (b)
+and carry the index list once that ADR revision is approved; it stays
+DRAFT DO NOT MERGE until Codex's full affected review.
 
 ## Work in flight
 
