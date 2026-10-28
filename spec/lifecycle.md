@@ -54,7 +54,11 @@ Statuses: `open`, `assign`, `ack`, `shelved`, `blackout`, `closed`,
 - **R0.2 [V]** Attribute keys containing `.` or `$` give 400 (`:32-34`).
 - **R0.3 [V]** An integer `value` is stored as a string (`:35-36`). Python's
   `bool` is a subclass of `int`, so JSON `true`/`false` in `value` are stored
-  as the strings `"True"`/`"False"`. Floats and other types are not converted.
+  as the strings `"True"`/`"False"`. The reference passes floats, arrays and
+  objects to its database adapter unconverted, with unqualified results.
+  **alrust diverges (ADR-0005 decision 8, DECISIONS Y38):** a float, array or
+  object is stored as PostgreSQL's `jsonb` text form and returned as that
+  string (`1.5` → `"1.5"`, `[1,2]` → `"[1, 2]"`, `{"a":1}` → `"{\"a\": 1}"`).
 - **R0.4 [V]** `timeout`:
   - a null or absent value becomes `ALERT_TIMEOUT` (`:41`);
   - a negative value gives 400 (`:46-47`);

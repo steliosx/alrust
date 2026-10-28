@@ -1,6 +1,6 @@
 //! The alrust server: reads its configuration from the environment, connects
-//! to PostgreSQL, applies migrations, ensures the bootstrap API key, and
-//! serves the HTTP API.
+//! to PostgreSQL, migrates or adopts the database (ADR-0005 decision 4),
+//! ensures the bootstrap API key, and serves the HTTP API.
 //!
 //! Environment:
 //! - `DATABASE_URL` (required), e.g. `postgres://alrust:alrust@db:5432/alrust`
@@ -12,7 +12,8 @@
 //! - `ALRUST_ADMIN_KEY`: if set, an admin API key with this value is ensured
 //! - `ALRUST_ALLOWED_ENVIRONMENTS` (default `Production,Development`)
 //! - `ALRUST_ALERT_TIMEOUT` (default 86400), `ALRUST_ACK_TIMEOUT` (0),
-//!   `ALRUST_SHELVE_TIMEOUT` (7200), `ALRUST_HISTORY_LIMIT` (100)
+//!   `ALRUST_SHELVE_TIMEOUT` (7200), `ALRUST_HISTORY_LIMIT` (100); each
+//!   timeout at most 2147483647, the reference's `integer` columns
 //! - `ALRUST_HOUSEKEEPING_INTERVAL` seconds (default 0 = off; the reference
 //!   relies on an external cron calling `/management/housekeeping`)
 //! - `RUST_LOG` (default `info`)
@@ -21,11 +22,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use alrust_api::{ApiConfig, AppState, router};
+use alrust_api::{ApiConfig, AppState, MAX_TIMEOUT, router};
 use alrust_domain::ApiKey;
-use alrust_store_pg::{Store, StoreConfig};
+use alrust_store_pg::{Outcome, Store, StoreConfig};
 use anyhow::Context;
-use sqlx::postgres::PgPoolOptions;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
@@ -63,9 +64,19 @@ fn env_bool(name: &str, default: bool) -> anyhow::Result<bool> {
 }
 
 async fn connect(url: &str) -> anyhow::Result<sqlx::PgPool> {
+    // Pin search_path to the reference objects and TimeZone to UTC on every
+    // session (ADR-0005 decisions 4 and 5).
+    let opts = alrust_store_pg::session_options(
+        url.parse::<PgConnectOptions>()
+            .context("DATABASE_URL is not a valid PostgreSQL URL")?,
+    );
     let mut delay = Duration::from_millis(500);
     for attempt in 1..=30 {
-        match PgPoolOptions::new().max_connections(16).connect(url).await {
+        match PgPoolOptions::new()
+            .max_connections(16)
+            .connect_with(opts.clone())
+            .await
+        {
             Ok(pool) => return Ok(pool),
             Err(e) if attempt < 30 => {
                 tracing::warn!(attempt, error = %e, "database not ready; retrying");
@@ -95,6 +106,10 @@ async fn shutdown_signal() {
 }
 
 #[tokio::main]
+#[expect(
+    clippy::too_many_lines,
+    reason = "settings, store preparation and the server are read top to bottom in one place"
+)]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -112,6 +127,15 @@ async fn main() -> anyhow::Result<()> {
             .context("ALRUST_HISTORY_LIMIT is too large")?,
         history_on_value_change: env_bool("ALRUST_HISTORY_ON_VALUE_CHANGE", true)?,
     };
+    for (name, v) in [
+        ("ALRUST_ALERT_TIMEOUT", store_cfg.alert_timeout),
+        ("ALRUST_ACK_TIMEOUT", store_cfg.ack_timeout),
+        ("ALRUST_SHELVE_TIMEOUT", store_cfg.shelve_timeout),
+    ] {
+        if !(0..=MAX_TIMEOUT).contains(&v) {
+            anyhow::bail!("{name} must be between 0 and {MAX_TIMEOUT}, not {v}");
+        }
+    }
     let hostname = std::fs::read_to_string("/etc/hostname")
         .map(|h| h.trim().to_string())
         .unwrap_or_default();
@@ -135,8 +159,21 @@ async fn main() -> anyhow::Result<()> {
 
     let pool = connect(&database_url).await?;
     let store = Store::new(pool, store_cfg);
-    store.migrate().await.context("database migration failed")?;
-    tracing::info!("database ready");
+    let report = store.prepare().await.context("database start-up refused")?;
+    match report.outcome {
+        Outcome::Fresh => tracing::info!("database initialised with the reference schema"),
+        Outcome::Migrated => tracing::info!("database migrations up to date"),
+        Outcome::Adopted => tracing::info!("existing reference database adopted"),
+    }
+    for t in &report.triggers {
+        tracing::info!(trigger = %t, "trigger on a reference table");
+    }
+    if report.inactive_keys > 0 {
+        tracing::warn!(
+            count = report.inactive_keys,
+            "API keys with no expiry or no scopes; they cannot authenticate until edited"
+        );
+    }
 
     if let Ok(key) = std::env::var("ALRUST_ADMIN_KEY") {
         if !key.is_empty() {
@@ -145,9 +182,9 @@ async fn main() -> anyhow::Result<()> {
                     id: uuid::Uuid::new_v4().to_string(),
                     key,
                     user: "admin".into(),
-                    scopes: vec!["admin".into(), "read".into(), "write".into()],
+                    scopes: Some(vec!["admin".into(), "read".into(), "write".into()]),
                     text: "Bootstrap admin key (ALRUST_ADMIN_KEY)".into(),
-                    expire_time: chrono::Utc::now() + chrono::Duration::days(3650),
+                    expire_time: Some(chrono::Utc::now() + chrono::Duration::days(3650)),
                     count: 0,
                     last_used_time: None,
                     customer: None,
