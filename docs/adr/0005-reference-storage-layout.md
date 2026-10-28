@@ -122,6 +122,12 @@ reason. `0001` is never edited, so its applied checksum stays valid.
        (`pg_depend`/`pg_rewrite`); a non-internal trigger; row-level
        security enabled or a policy; publication membership; inheritance or
        partitioning; extended statistics;
+     - for `alerts` or `heartbeats`: a sequence owned by one of their
+       columns (`pg_depend` deptype `a` or `i`), with or without a column
+       default. PostgreSQL drops an owned sequence, and its state, together
+       with the old table, and the row copy checks cannot see that
+       (ADR5-OWNED-SEQ-1, Codex 2026-10-28). An unowned sequence in
+       `public` is untouched and survives;
      - a table or column ACL other than the default (`relacl`/`attacl` not
        NULL);
      - an owner other than the migrating role.

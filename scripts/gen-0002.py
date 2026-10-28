@@ -68,6 +68,14 @@ BEGIN
         SELECT format('trigger %s on %s', t.tgname, t.tgrelid::regclass)
           FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgrelid IN {TABLES}
         UNION
+        SELECT format('owned sequence %s depends on %s.%I', s.oid::regclass, d.refobjid::regclass, a.attname)
+          FROM pg_depend d
+          JOIN pg_class s ON s.oid = d.objid AND s.relkind = 'S'
+          JOIN pg_attribute a ON a.attrelid = d.refobjid AND a.attnum = d.refobjsubid
+         WHERE d.classid = 'pg_class'::regclass AND d.refclassid = 'pg_class'::regclass
+           AND d.objsubid = 0 AND d.refobjsubid > 0 AND d.deptype IN ('a', 'i')
+           AND d.refobjid IN ('public.alerts'::regclass, 'public.heartbeats'::regclass)
+        UNION
         SELECT format('row-level security on %s', c.oid::regclass)
           FROM pg_class c WHERE c.oid IN {TABLES} AND (c.relrowsecurity OR c.relforcerowsecurity)
         UNION

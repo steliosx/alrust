@@ -737,6 +737,155 @@ async fn alpha_upgrade_refusals_change_nothing() {
     }
 }
 
+/// Everything PostgreSQL knows about one sequence, read without advancing
+/// it: identity, owning column, parameters and state.
+#[derive(Debug, PartialEq, sqlx::FromRow)]
+struct SequenceFacts {
+    oid: i64,
+    owner: Option<String>,
+    deptype: Option<String>,
+    start: i64,
+    increment: i64,
+    max: i64,
+    min: i64,
+    cache: i64,
+    cycle: bool,
+    last_value: i64,
+    is_called: bool,
+}
+
+async fn sequence_facts(pool: &PgPool, name: &str) -> Option<SequenceFacts> {
+    let exists: bool = sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
+        .bind(format!("public.{name}"))
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    if !exists {
+        return None;
+    }
+    Some(
+        sqlx::query_as(&format!(
+            "SELECT c.oid::bigint AS oid,
+                    (SELECT d.refobjid::regclass::text || '.' || a.attname
+                       FROM pg_depend d
+                       JOIN pg_attribute a ON a.attrelid = d.refobjid AND a.attnum = d.refobjsubid
+                      WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid
+                        AND d.refclassid = 'pg_class'::regclass AND d.refobjsubid > 0) AS owner,
+                    (SELECT d.deptype::text FROM pg_depend d
+                      WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid
+                        AND d.refclassid = 'pg_class'::regclass AND d.refobjsubid > 0) AS deptype,
+                    s.seqstart AS start, s.seqincrement AS increment, s.seqmax AS max,
+                    s.seqmin AS min, s.seqcache AS cache, s.seqcycle AS cycle,
+                    v.last_value, v.is_called
+               FROM pg_class c
+               JOIN pg_sequence s ON s.seqrelid = c.oid
+               CROSS JOIN public.{name} v
+              WHERE c.oid = 'public.{name}'::regclass"
+        ))
+        .fetch_one(pool)
+        .await
+        .unwrap(),
+    )
+}
+
+/// ADR5-OWNED-SEQ-1: a sequence owned by an alert or heartbeat column, with
+/// no column default, would be dropped with the old table. The preflight
+/// refuses it and leaves the sequence, the catalog, the rows and the
+/// migration versions exactly as they were. An unowned sequence in `public`
+/// is not alrust's business: the upgrade proceeds and leaves it untouched.
+#[tokio::test]
+async fn owned_sequences_are_refused_and_unowned_ones_survive() {
+    for (table, column) in [("alerts", "timeout"), ("heartbeats", "timeout")] {
+        let Some(db) = alpha_db_with_rows().await else {
+            return;
+        };
+        sqlx::raw_sql(&format!(
+            "CREATE SEQUENCE public.alpha_counter INCREMENT 3 MINVALUE 2 MAXVALUE 900 START 5 CACHE 4 CYCLE
+                 OWNED BY public.{table}.{column};
+             SELECT setval('public.alpha_counter', 123, true)"
+        ))
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let seq_before = sequence_facts(&db.pool, "alpha_counter").await;
+        assert_eq!(
+            seq_before.as_ref().map(|f| (
+                f.owner.as_deref(),
+                f.deptype.as_deref(),
+                f.last_value,
+                f.is_called
+            )),
+            Some((
+                Some(format!("{table}.{column}").as_str()),
+                Some("a"),
+                123,
+                true
+            )),
+            "{table}: fixture"
+        );
+        let catalog_before = catalog_of(&db.pool).await;
+        let rows_before = checksum(&db.pool).await;
+        let err = store(&db.pool).prepare().await.expect_err(table);
+        let expected = format!("owned sequence alpha_counter depends on {table}.{column}");
+        assert!(
+            matches!(err, StartupError::Migrate(_)) && err.to_string().contains(&expected),
+            "{table}: {err}"
+        );
+        assert_eq!(
+            sequence_facts(&db.pool, "alpha_counter").await,
+            seq_before,
+            "{table}: sequence"
+        );
+        assert_eq!(
+            catalog_of(&db.pool).await,
+            catalog_before,
+            "{table}: catalog"
+        );
+        assert_eq!(checksum(&db.pool).await, rows_before, "{table}: rows");
+        let versions: Vec<i64> = applied_versions(&db.pool)
+            .await
+            .into_iter()
+            .map(|v| v.0)
+            .collect();
+        assert_eq!(versions, [1], "{table}: versions");
+    }
+
+    // Control: an unowned sequence is preserved through a successful upgrade.
+    let Some(db) = alpha_db_with_rows().await else {
+        return;
+    };
+    sqlx::raw_sql(
+        "CREATE SEQUENCE public.free_counter INCREMENT 2 START 7;
+         SELECT setval('public.free_counter', 777, false)",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    let seq_before = sequence_facts(&db.pool, "free_counter").await;
+    assert_eq!(
+        seq_before
+            .as_ref()
+            .map(|f| (f.owner.clone(), f.last_value, f.is_called)),
+        Some((None, 777, false))
+    );
+    let r = store(&db.pool)
+        .prepare()
+        .await
+        .expect("upgrade with an unowned sequence");
+    assert_eq!(r.outcome, Outcome::Migrated);
+    assert_eq!(
+        sequence_facts(&db.pool, "free_counter").await,
+        seq_before,
+        "unowned sequence"
+    );
+    let versions: Vec<i64> = applied_versions(&db.pool)
+        .await
+        .into_iter()
+        .map(|v| v.0)
+        .collect();
+    assert_eq!(versions, [1, 2]);
+}
+
 /// Runs 0002's conversion statements (taken from the migration file itself)
 /// in a transaction, then shows that the verification queries count a
 /// changed field and a swapped history ordinal.
