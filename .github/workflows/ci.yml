@@ -298,21 +298,34 @@ jobs:
       contents: read
     env:
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      MERGE_SHA: ${{ github.sha }}
     steps:
-      # The pull request's head commit itself, not the synthetic merge commit.
+      # The pull request's merge commit (refs/pull/N/merge), which is what
+      # this workflow definition came from, so a draft whose branch predates
+      # the store crate's generator tests still builds them against the base
+      # it would merge into. The PR head and base are verified as the merge
+      # commit's parents and recorded, with the merge commit and its tree, in
+      # the manifest: the generated files bind to that exact composition, not
+      # to the head alone.
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.sha }}
+          # Two commits deep, so the merge commit's parents are present for
+          # the check below (a depth of 1 would leave HEAD without parents).
+          fetch-depth: 2
           submodules: true
           persist-credentials: false
-      - name: Checked-out source is the pull request head
+      - name: Checked-out source is the pull request's merge of head into base
         timeout-minutes: 1
         run: |
           set -euo pipefail
           actual=$(git rev-parse HEAD)
-          [ "$actual" = "$HEAD_SHA" ] || { echo "HEAD $actual is not the PR head $HEAD_SHA"; exit 1; }
+          [ "$actual" = "$MERGE_SHA" ] || { echo "HEAD $actual is not the merge commit $MERGE_SHA"; exit 1; }
+          parents=$(git rev-list --parents -n 1 HEAD | cut -d' ' -f2-)
+          [ "$parents" = "$BASE_SHA $HEAD_SHA" ] || { echo "parents '$parents' are not base $BASE_SHA + head $HEAD_SHA"; exit 1; }
           [ -z "$(git status --porcelain --untracked-files=all)" ] || { echo "the checkout is not clean"; exit 1; }
-          echo "HEAD $actual tree $(git rev-parse 'HEAD^{tree}') reference $(git -C reference/alerta rev-parse HEAD)"
+          echo "merge $actual parents base $BASE_SHA head $HEAD_SHA tree $(git rev-parse 'HEAD^{tree}') reference $(git -C reference/alerta rev-parse HEAD)"
       - name: PostgreSQL 18.6 (PGDG apt, no container registry)
         timeout-minutes: 5
         run: .github/scripts/start-postgres18.sh alrust
@@ -356,10 +369,11 @@ jobs:
           mkdir -p "$out"
           files="crates/alrust-store-pg/reference-catalog.json crates/alrust-store-pg/src/verify/alpha_shape.expected crates/alrust-store-pg/migrations/0002_reference_layout.sql"
           {
-            echo "head $(git rev-parse HEAD)"
+            echo "merge $(git rev-parse HEAD)"
+            echo "parents base $BASE_SHA head $HEAD_SHA"
             echo "tree $(git rev-parse 'HEAD^{tree}')"
             echo "reference $(git -C reference/alerta rev-parse HEAD)"
-            echo "run ${{ github.run_id }} attempt ${{ github.run_attempt }}"
+            echo "pull_request ${{ github.event.pull_request.number }} run ${{ github.run_id }} attempt ${{ github.run_attempt }}"
             for f in $files; do
               echo "$(sha256sum < "$f" | cut -c1-64) $(wc -c < "$f") $f"
             done
