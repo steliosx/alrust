@@ -5,4 +5,6 @@ Read, in order: `docs/STATUS.md`, `docs/KICKOFF.md`, `docs/COLLABORATION.md`,
 and is not relitigated.
 
 Rust work follows the skills under `.agents/skills/` (BeautifulRust, MIT;
-DECISIONS Y37). `.claude/skills/` links to them for Claude Code.
+DECISIONS Y37), read together with the Alrust scope adapter in
+`.agents/skills/README.md`, which the skills do not override.
+`.claude/skills/` links to the skills for Claude Code.
