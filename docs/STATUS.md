@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-28T16:55Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-28T17:58Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -36,8 +36,10 @@ passes 115 of 115 at #147.
 2026-10-13).** alrust's store is being moved onto the pinned reference
 Alerta PostgreSQL schema. Matching that layout is a prerequisite for
 Zabalack and Voalack support; their integration behavior is not yet qualified.
-The design and implementation are on **draft PR #150 (DO NOT MERGE)**, at
-`6cccb023`. Status:
+The implementation was **PR #150, merged on 2026-10-28 as `0cf4ad8c`**
+(approved head `03d43f15`, tree `5d27a66f`, base `38096c95`; Codex
+`f274d1fa`, run 40733434721 all seven jobs green including the store
+database tests and the PG 18.6 alpha smoke). History of the review:
 
 - `0002` rebuilds the alpha `alerts` and `heartbeats` by verified copy in one
   transaction after layout/dependency checks. Full implementation review is
@@ -88,14 +90,16 @@ The design and implementation are on **draft PR #150 (DO NOT MERGE)**, at
   refusal validation, and affected exact-head review. Signed finding
   `04b03fe4`; receipt `a12e90e3` is transport only. The earlier
   EDIT-PRESERVE-1 and HISTORY-TYPE-1 closures stay closed.
-- **Before merge:** the ADR5-OWNED-SEQ-1 preflight refusal with its
-  sequence-preservation tests; implementation of the owner's choices in the
-  next head (`value` option (b), Y38; NULL-read refusal as written, Y39; the
-  named extra-index list once its ADR-0005 revision is approved, Y40; until
-  then the strict index rule stays in the code), the merge of `main` with
-  the lint and call-site fixes, and Codex's full affected implementation
-  review. The plugin hook, repository ownership and local-smoke questions
-  are decided (Y41) and are follow-up work, not merge gates.
+- **Closed at merge (2026-10-28):** ADR5-OWNED-SEQ-1 closed for source
+  and affected runtime at `03d43f15` (preflight refusal, generator and
+  migration together, with the sequence-preservation test); `value` option
+  (b) implemented (Y38) with one expression shared by the migration and the
+  API; NULL-read refusal as written (Y39); `main` merged in with the lint
+  and call-site fixes. **Not approved:** the extra-index list in ADR-0005
+  decision 9 (Y40) is a proposal only; Codex asks for exact DDL, dependency
+  and validity behaviour and the four-way comparison as a separate affected
+  change. The strict rule stays in the code and the catalog check. All 19
+  runtime profiles remain NOT_RUN.
 
 **First broader conformance run (A3B, 2026-10-13).** Codex ran ten selected
 cases against each of two local targets that Claude stood up, captured once
@@ -329,12 +333,10 @@ text; NULL reads in reference-written columns refuse the row; named extra
 indexes allowed, list to come in an ADR-0005 revision; plugin layers through
 a hook in alrust; Zabalack and Voalack change their own repositories from
 Claude's spec; local smoke runs routine under the 80 °C guard. Relayed
-signed to Codex (`ea4a9bb4`). PR #150's next head will merge `main`
-(`38096c95`) into the branch (no rebase of the pushed branch), fix the
-`Alert::body` and `ApiKey::body` call sites, clear the new lints, add the
-ADR5-OWNED-SEQ-1 preflight refusal with its tests, implement `value` (b)
-and carry the index list once that ADR revision is approved; it stays
-DRAFT DO NOT MERGE until Codex's full affected review.
+signed to Codex (`ea4a9bb4`). PR #150 did all of that at `03d43f15`
+and merged as `0cf4ad8c` the same day; the index list stays a proposal.
+The BeautifulRust skills are PR #155 (`claude/beautifulrust-skills`), in
+review with Codex's scope adapter.
 
 ## Work in flight
 
