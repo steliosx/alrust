@@ -442,32 +442,52 @@ shows the reference layout without it is too slow for a realistic data set
 | `alerts_last_receive_time_idx` | `CREATE INDEX alerts_last_receive_time_idx ON public.alerts USING btree (last_receive_time DESC)` | the default list order `ORDER BY last_receive_time DESC, id` and housekeeping's `last_receive_time <` range deletes |
 | `alerts_status_idx` | `CREATE INDEX alerts_status_idx ON public.alerts USING btree (status)` | status filters and the severity-by-status counts |
 
-**Comparison behaviour, if a candidate is adopted:**
-- `reference-catalog.json` keeps describing the reference exactly. A
-  second committed file, `allowed-extra-indexes.json`, lists each adopted
-  index by schema-qualified name, its full `pg_get_indexdef` text and the
-  required `indisvalid`, `indisready` and `indislive` all true.
-- The four-way CI comparison (decision 2, databases A to D) and the
-  start-up check accept a live catalog only if it equals the reference
-  catalog **plus exactly** the allowed list: an extra index not in the list,
-  a listed index with a different definition, or a listed index that is
-  missing, invalid, not ready or not live is a mismatch, reported by name.
-  Databases A and D (the reference schema, and an adopted reference
-  database) have none of the extra indexes and must still match, so the
-  list is "allowed", not "required", on adopted databases; `0002` creates
-  the adopted indexes on alrust-migrated databases (B and C) only.
-- Zabalack's and Voalack's installers and triggers read tables and the
-  `history` type, not alrust's indexes; an extra index changes no row,
-  column, constraint or trigger. Their catalog checks, if any, are confirmed
-  against the list in the hook-contract spec before adoption.
-- `CREATE INDEX` runs inside `0002`'s transaction (not `CONCURRENTLY`,
-  which cannot run in a transaction), under the same lock, so a failed
-  creation rolls the whole migration back as every other step does.
+**Migration history, if a candidate is adopted (INDEX-PROPOSAL-MIGRATION-1):**
+`0002` is applied on managed databases and is immutable: its bytes and its
+stored SQLx checksum never change (the generator's own header says so, and
+SQLx 0.8.6 refuses a managed database whose applied migration no longer
+matches its checksum). Each adopted index therefore arrives as its own new
+transactional migration, `0003` onwards, one per index, containing only
+that `CREATE INDEX` (not `CONCURRENTLY`, which cannot run in a
+transaction) under `SET LOCAL lock_timeout` as `0002` does, so a failure
+rolls that migration back on its own. Its tests add an upgrade fixture
+that starts from a database with exactly the current `0002` applied and
+proves the new migration applies, the prior history and checksums are
+unchanged, and the catalog then matches mode B/C below; the fresh path,
+the `0001` upgrade path, the rollback and lock tests, and adoption without
+DDL (decision 4) are kept as they are.
+
+**Presence rules by database mode (INDEX-PROPOSAL-PRESENCE-1):**
+`reference-catalog.json` keeps describing the reference exactly. A second
+committed file, `allowed-extra-indexes.json`, lists each adopted index by
+schema-qualified name, its full `pg_get_indexdef` text, and the required
+`indisvalid`, `indisready` and `indislive` (all true).
+
+| Mode | Extra indexes |
+|---|---|
+| A, reference catalog generation (the pinned `schema.sql` applied to an empty database) | none; the exact pinned reference |
+| B and C, managed databases after alrust's migrations (fresh, or `0001` then `0002` then `0003`+) | every adopted extra is **required**: a missing one is a mismatch |
+| D, an adopted reference database at start-up (decision 4) | zero, or any subset of the allowed list; **no DDL is ever written** on adoption, so the absence of an optional extra is accepted |
+
+In every mode, every extra index that is present must match its canonical
+definition and flags exactly; an index that is unknown, differs from the
+list, or is invalid, not ready or not live is refused, reported by name;
+and the core reference objects remain exact. Said plainly: absence of an
+adopted extra is accepted on an adopted database (D) and refused on a
+managed one (B, C).
+
+Zabalack's and Voalack's installers and triggers read tables and the
+`history` type, not alrust's indexes; an extra index changes no row,
+column, constraint or trigger. Their catalog checks, if any, are confirmed
+against the list in the hook-contract spec before adoption.
 
 **Order of work:** Codex review of this decision; the measurement on a
-generated data set under the routine smoke rules (Y41) with the numbers
-recorded here; then one affected change per adopted index (`0002`, the
-allowed list, the catalog check, its tests), reviewed on its exact head.
+generated data set within the routine smoke rules (Y41) or its own
+applicable gate, never a blanket heavy-job approval, with the numbers
+recorded here; then one affected change per adopted index (its `0003`+
+migration, the allowed list, the catalog check, the upgrade fixture and
+tests), reviewed on its exact head. Neither this document's approval nor
+the measurement plan authorizes creating an index.
 
 ## Open questions
 
