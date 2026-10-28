@@ -999,7 +999,7 @@ components:
         status: {type: string, description: "any string: PUT status stores it unvalidated (A1.2)"}
         service: {type: array, items: {type: string}}
         group: {type: string}
-        value: {description: "as sent, except that JSON integers and booleans become strings (R0.3)"}
+        value: {description: "as sent, except that JSON integers and booleans become strings (R0.3) and floats, arrays and objects become their jsonb text (ADR-0005 decision 8)"}
         text: {type: string}
         tags: {type: array, items: {type: string}}
         attributes: {type: object}
