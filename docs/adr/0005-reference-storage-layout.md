@@ -411,22 +411,63 @@ write, so duplicate and correlation checks and the history entry all see
 the stored text (a repeated `1.5` is a duplicate, not a value change). The
 former "decision 8 pending" refusal in the `0002` preflight is gone.
 
-### 9. Extra indexes: proposed list (DECISIONS Y40; awaiting Codex review)
+### 9. Extra indexes: exact proposal (DECISIONS Y40; awaiting Codex review)
 
 The owner allows named performance indexes on the adopted tables (Y40).
-Proposed, as a separate change after this one, each checked by the four-way
-catalog comparison in decision 2:
+Codex's review of the first draft (`f274d1fa`) asked for exact,
+schema-qualified definitions and the comparison behaviour, and noted that
+column lists alone differ from the dropped alpha definitions. This is that
+proposal. **Nothing here is implemented: the strict rule (no index beyond
+the reference's) stays in the code, in `0002` and in the catalog check
+until Codex has reviewed this decision and a separate affected change
+carries it.**
 
-| Index | Definition | Why |
+**Withdrawn, redundant with the reference's own unique indexes** (`0001`
+definitions shown as dropped by `0002`):
+- `CREATE INDEX alerts_identity_idx ON alerts (environment, resource,
+  COALESCE(customer, ''))`: the reference's `env_res_evt_cust_key` on
+  `(environment, resource, event, (COALESCE(customer, ''::text)))` serves
+  every lookup on the `(environment, resource)` prefix, including the
+  receive path's duplicate and correlation queries.
+- `CREATE UNIQUE INDEX heartbeats_origin_customer_idx ON heartbeats
+  (origin, COALESCE(customer, ''))`: the same key as the reference's
+  `org_cust_key`.
+
+**Candidates, exact DDL, each to be added only with a measurement that
+shows the reference layout without it is too slow for a realistic data set
+(the pinned reference runs without either):**
+
+| Name | Exact definition | Serves |
 |---|---|---|
-| `alerts_identity_idx` | `(environment, resource, event, severity, customer)` | the receive path's duplicate lookup |
-| `alerts_last_receive_time_idx` | `(last_receive_time)` | housekeeping and default ordering |
-| `alerts_status_idx` | `(status)` | status filters and counts |
-| `heartbeats_origin_customer_idx` | `(origin, customer)` | heartbeat upserts |
+| `alerts_last_receive_time_idx` | `CREATE INDEX alerts_last_receive_time_idx ON public.alerts USING btree (last_receive_time DESC)` | the default list order `ORDER BY last_receive_time DESC, id` and housekeeping's `last_receive_time <` range deletes |
+| `alerts_status_idx` | `CREATE INDEX alerts_status_idx ON public.alerts USING btree (status)` | status filters and the severity-by-status counts |
 
-These are the four alpha-only indexes `0002` drops today. **Until Codex has
-reviewed this list, the strict rule (no index beyond the reference's)
-stays in force in the code, in `0002` and in the catalog check.**
+**Comparison behaviour, if a candidate is adopted:**
+- `reference-catalog.json` keeps describing the reference exactly. A
+  second committed file, `allowed-extra-indexes.json`, lists each adopted
+  index by schema-qualified name, its full `pg_get_indexdef` text and the
+  required `indisvalid`, `indisready` and `indislive` all true.
+- The four-way CI comparison (decision 2, databases A to D) and the
+  start-up check accept a live catalog only if it equals the reference
+  catalog **plus exactly** the allowed list: an extra index not in the list,
+  a listed index with a different definition, or a listed index that is
+  missing, invalid, not ready or not live is a mismatch, reported by name.
+  Databases A and D (the reference schema, and an adopted reference
+  database) have none of the extra indexes and must still match, so the
+  list is "allowed", not "required", on adopted databases; `0002` creates
+  the adopted indexes on alrust-migrated databases (B and C) only.
+- Zabalack's and Voalack's installers and triggers read tables and the
+  `history` type, not alrust's indexes; an extra index changes no row,
+  column, constraint or trigger. Their catalog checks, if any, are confirmed
+  against the list in the hook-contract spec before adoption.
+- `CREATE INDEX` runs inside `0002`'s transaction (not `CONCURRENTLY`,
+  which cannot run in a transaction), under the same lock, so a failed
+  creation rolls the whole migration back as every other step does.
+
+**Order of work:** Codex review of this decision; the measurement on a
+generated data set under the routine smoke rules (Y41) with the numbers
+recorded here; then one affected change per adopted index (`0002`, the
+allowed list, the catalog check, its tests), reviewed on its exact head.
 
 ## Open questions
 
