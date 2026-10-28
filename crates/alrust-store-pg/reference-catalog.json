@@ -1,0 +1,1599 @@
+{
+  "history_type": [
+    {
+      "name": "id",
+      "type": "text",
+      "not_null": false,
+      "collation": "\"default\"",
+      "default": null,
+      "identity": "",
+      "generated": ""
+    },
+    {
+      "name": "event",
+      "type": "text",
+      "not_null": false,
+      "collation": "\"default\"",
+      "default": null,
+      "identity": "",
+      "generated": ""
+    },
+    {
+      "name": "severity",
+      "type": "text",
+      "not_null": false,
+      "collation": "\"default\"",
+      "default": null,
+      "identity": "",
+      "generated": ""
+    },
+    {
+      "name": "status",
+      "type": "text",
+      "not_null": false,
+      "collation": "\"default\"",
+      "default": null,
+      "identity": "",
+      "generated": ""
+    },
+    {
+      "name": "value",
+      "type": "text",
+      "not_null": false,
+      "collation": "\"default\"",
+      "default": null,
+      "identity": "",
+      "generated": ""
+    },
+    {
+      "name": "text",
+      "type": "text",
+      "not_null": false,
+      "collation": "\"default\"",
+      "default": null,
+      "identity": "",
+      "generated": ""
+    },
+    {
+      "name": "type",
+      "type": "text",
+      "not_null": false,
+      "collation": "\"default\"",
+      "default": null,
+      "identity": "",
+      "generated": ""
+    },
+    {
+      "name": "update_time",
+      "type": "timestamp without time zone",
+      "not_null": false,
+      "collation": null,
+      "default": null,
+      "identity": "",
+      "generated": ""
+    },
+    {
+      "name": "user",
+      "type": "text",
+      "not_null": false,
+      "collation": "\"default\"",
+      "default": null,
+      "identity": "",
+      "generated": ""
+    },
+    {
+      "name": "timeout",
+      "type": "integer",
+      "not_null": false,
+      "collation": null,
+      "default": null,
+      "identity": "",
+      "generated": ""
+    }
+  ],
+  "tables": {
+    "alerts": {
+      "state": {
+        "persistence": "p",
+        "row_security": false,
+        "force_row_security": false,
+        "options": null,
+        "tablespace": null,
+        "replica_identity": "d",
+        "is_partition": false,
+        "policies": [],
+        "rules": [],
+        "parents": [],
+        "children": []
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "not_null": true,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "resource",
+          "type": "text",
+          "not_null": true,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "event",
+          "type": "text",
+          "not_null": true,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "environment",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "severity",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "correlate",
+          "type": "text[]",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "service",
+          "type": "text[]",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "group",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "value",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "text",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "tags",
+          "type": "text[]",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "attributes",
+          "type": "jsonb",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "origin",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "type",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "create_time",
+          "type": "timestamp without time zone",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "timeout",
+          "type": "integer",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "raw_data",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "customer",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "duplicate_count",
+          "type": "integer",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "repeat",
+          "type": "boolean",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "previous_severity",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "trend_indication",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "receive_time",
+          "type": "timestamp without time zone",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "last_receive_id",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "last_receive_time",
+          "type": "timestamp without time zone",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "history",
+          "type": "history[]",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "update_time",
+          "type": "timestamp without time zone",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        }
+      ],
+      "constraints": [
+        {
+          "name": "alerts_event_not_null",
+          "kind": "n",
+          "definition": "NOT NULL event"
+        },
+        {
+          "name": "alerts_id_not_null",
+          "kind": "n",
+          "definition": "NOT NULL id"
+        },
+        {
+          "name": "alerts_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "alerts_resource_not_null",
+          "kind": "n",
+          "definition": "NOT NULL resource"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "alerts_pkey",
+          "definition": "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+          "valid": true,
+          "ready": true,
+          "live": true
+        },
+        {
+          "name": "env_res_evt_cust_key",
+          "definition": "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))",
+          "valid": true,
+          "ready": true,
+          "live": true
+        }
+      ]
+    },
+    "blackouts": {
+      "state": {
+        "persistence": "p",
+        "row_security": false,
+        "force_row_security": false,
+        "options": null,
+        "tablespace": null,
+        "replica_identity": "d",
+        "is_partition": false,
+        "policies": [],
+        "rules": [],
+        "parents": [],
+        "children": []
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "not_null": true,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "priority",
+          "type": "integer",
+          "not_null": true,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "environment",
+          "type": "text",
+          "not_null": true,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "service",
+          "type": "text[]",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "resource",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "event",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "group",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "tags",
+          "type": "text[]",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "customer",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "start_time",
+          "type": "timestamp without time zone",
+          "not_null": true,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "end_time",
+          "type": "timestamp without time zone",
+          "not_null": true,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "duration",
+          "type": "integer",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "user",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "create_time",
+          "type": "timestamp without time zone",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "text",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "origin",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        }
+      ],
+      "constraints": [
+        {
+          "name": "blackouts_end_time_not_null",
+          "kind": "n",
+          "definition": "NOT NULL end_time"
+        },
+        {
+          "name": "blackouts_environment_not_null",
+          "kind": "n",
+          "definition": "NOT NULL environment"
+        },
+        {
+          "name": "blackouts_id_not_null",
+          "kind": "n",
+          "definition": "NOT NULL id"
+        },
+        {
+          "name": "blackouts_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "blackouts_priority_not_null",
+          "kind": "n",
+          "definition": "NOT NULL priority"
+        },
+        {
+          "name": "blackouts_start_time_not_null",
+          "kind": "n",
+          "definition": "NOT NULL start_time"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "blackouts_pkey",
+          "definition": "CREATE UNIQUE INDEX blackouts_pkey ON public.blackouts USING btree (id)",
+          "valid": true,
+          "ready": true,
+          "live": true
+        }
+      ]
+    },
+    "customers": {
+      "state": {
+        "persistence": "p",
+        "row_security": false,
+        "force_row_security": false,
+        "options": null,
+        "tablespace": null,
+        "replica_identity": "d",
+        "is_partition": false,
+        "policies": [],
+        "rules": [],
+        "parents": [],
+        "children": []
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "not_null": true,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "match",
+          "type": "text",
+          "not_null": true,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "customer",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        }
+      ],
+      "constraints": [
+        {
+          "name": "customers_id_not_null",
+          "kind": "n",
+          "definition": "NOT NULL id"
+        },
+        {
+          "name": "customers_match_not_null",
+          "kind": "n",
+          "definition": "NOT NULL match"
+        },
+        {
+          "name": "customers_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "customers_pkey",
+          "definition": "CREATE UNIQUE INDEX customers_pkey ON public.customers USING btree (id)",
+          "valid": true,
+          "ready": true,
+          "live": true
+        }
+      ]
+    },
+    "groups": {
+      "state": {
+        "persistence": "p",
+        "row_security": false,
+        "force_row_security": false,
+        "options": null,
+        "tablespace": null,
+        "replica_identity": "d",
+        "is_partition": false,
+        "policies": [],
+        "rules": [],
+        "parents": [],
+        "children": []
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "not_null": true,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "not_null": true,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "users",
+          "type": "text[]",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "text",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "tags",
+          "type": "text[]",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "attributes",
+          "type": "jsonb",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "update_time",
+          "type": "timestamp without time zone",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        }
+      ],
+      "constraints": [
+        {
+          "name": "groups_id_not_null",
+          "kind": "n",
+          "definition": "NOT NULL id"
+        },
+        {
+          "name": "groups_name_key",
+          "kind": "u",
+          "definition": "UNIQUE (name)"
+        },
+        {
+          "name": "groups_name_not_null",
+          "kind": "n",
+          "definition": "NOT NULL name"
+        },
+        {
+          "name": "groups_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "groups_name_key",
+          "definition": "CREATE UNIQUE INDEX groups_name_key ON public.groups USING btree (name)",
+          "valid": true,
+          "ready": true,
+          "live": true
+        },
+        {
+          "name": "groups_pkey",
+          "definition": "CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id)",
+          "valid": true,
+          "ready": true,
+          "live": true
+        }
+      ]
+    },
+    "heartbeats": {
+      "state": {
+        "persistence": "p",
+        "row_security": false,
+        "force_row_security": false,
+        "options": null,
+        "tablespace": null,
+        "replica_identity": "d",
+        "is_partition": false,
+        "policies": [],
+        "rules": [],
+        "parents": [],
+        "children": []
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "not_null": true,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "origin",
+          "type": "text",
+          "not_null": true,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "tags",
+          "type": "text[]",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "type",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "create_time",
+          "type": "timestamp without time zone",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "timeout",
+          "type": "integer",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "receive_time",
+          "type": "timestamp without time zone",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "customer",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "attributes",
+          "type": "jsonb",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        }
+      ],
+      "constraints": [
+        {
+          "name": "heartbeats_id_not_null",
+          "kind": "n",
+          "definition": "NOT NULL id"
+        },
+        {
+          "name": "heartbeats_origin_not_null",
+          "kind": "n",
+          "definition": "NOT NULL origin"
+        },
+        {
+          "name": "heartbeats_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "heartbeats_pkey",
+          "definition": "CREATE UNIQUE INDEX heartbeats_pkey ON public.heartbeats USING btree (id)",
+          "valid": true,
+          "ready": true,
+          "live": true
+        },
+        {
+          "name": "org_cust_key",
+          "definition": "CREATE UNIQUE INDEX org_cust_key ON public.heartbeats USING btree (origin, COALESCE(customer, ''::text))",
+          "valid": true,
+          "ready": true,
+          "live": true
+        }
+      ]
+    },
+    "keys": {
+      "state": {
+        "persistence": "p",
+        "row_security": false,
+        "force_row_security": false,
+        "options": null,
+        "tablespace": null,
+        "replica_identity": "d",
+        "is_partition": false,
+        "policies": [],
+        "rules": [],
+        "parents": [],
+        "children": []
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "not_null": true,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "key",
+          "type": "text",
+          "not_null": true,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "user",
+          "type": "text",
+          "not_null": true,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "scopes",
+          "type": "text[]",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "text",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "expire_time",
+          "type": "timestamp without time zone",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "count",
+          "type": "bigint",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "last_used_time",
+          "type": "timestamp without time zone",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "customer",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        }
+      ],
+      "constraints": [
+        {
+          "name": "keys_id_not_null",
+          "kind": "n",
+          "definition": "NOT NULL id"
+        },
+        {
+          "name": "keys_key_key",
+          "kind": "u",
+          "definition": "UNIQUE (key)"
+        },
+        {
+          "name": "keys_key_not_null",
+          "kind": "n",
+          "definition": "NOT NULL key"
+        },
+        {
+          "name": "keys_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "keys_user_not_null",
+          "kind": "n",
+          "definition": "NOT NULL \"user\""
+        }
+      ],
+      "indexes": [
+        {
+          "name": "keys_key_key",
+          "definition": "CREATE UNIQUE INDEX keys_key_key ON public.keys USING btree (key)",
+          "valid": true,
+          "ready": true,
+          "live": true
+        },
+        {
+          "name": "keys_pkey",
+          "definition": "CREATE UNIQUE INDEX keys_pkey ON public.keys USING btree (id)",
+          "valid": true,
+          "ready": true,
+          "live": true
+        }
+      ]
+    },
+    "metrics": {
+      "state": {
+        "persistence": "p",
+        "row_security": false,
+        "force_row_security": false,
+        "options": null,
+        "tablespace": null,
+        "replica_identity": "d",
+        "is_partition": false,
+        "policies": [],
+        "rules": [],
+        "parents": [],
+        "children": []
+      },
+      "columns": [
+        {
+          "name": "group",
+          "type": "text",
+          "not_null": true,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "not_null": true,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "title",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "value",
+          "type": "integer",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "count",
+          "type": "bigint",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "total_time",
+          "type": "bigint",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "type",
+          "type": "text",
+          "not_null": true,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        }
+      ],
+      "constraints": [
+        {
+          "name": "metrics_group_not_null",
+          "kind": "n",
+          "definition": "NOT NULL \"group\""
+        },
+        {
+          "name": "metrics_name_not_null",
+          "kind": "n",
+          "definition": "NOT NULL name"
+        },
+        {
+          "name": "metrics_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (\"group\", name, type)"
+        },
+        {
+          "name": "metrics_type_not_null",
+          "kind": "n",
+          "definition": "NOT NULL type"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "metrics_pkey",
+          "definition": "CREATE UNIQUE INDEX metrics_pkey ON public.metrics USING btree (\"group\", name, type)",
+          "valid": true,
+          "ready": true,
+          "live": true
+        }
+      ]
+    },
+    "notes": {
+      "state": {
+        "persistence": "p",
+        "row_security": false,
+        "force_row_security": false,
+        "options": null,
+        "tablespace": null,
+        "replica_identity": "d",
+        "is_partition": false,
+        "policies": [],
+        "rules": [],
+        "parents": [],
+        "children": []
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "not_null": true,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "text",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "user",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "attributes",
+          "type": "jsonb",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "type",
+          "type": "text",
+          "not_null": true,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "create_time",
+          "type": "timestamp without time zone",
+          "not_null": true,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "update_time",
+          "type": "timestamp without time zone",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "alert",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "customer",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        }
+      ],
+      "constraints": [
+        {
+          "name": "notes_create_time_not_null",
+          "kind": "n",
+          "definition": "NOT NULL create_time"
+        },
+        {
+          "name": "notes_id_not_null",
+          "kind": "n",
+          "definition": "NOT NULL id"
+        },
+        {
+          "name": "notes_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "notes_type_not_null",
+          "kind": "n",
+          "definition": "NOT NULL type"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "notes_pkey",
+          "definition": "CREATE UNIQUE INDEX notes_pkey ON public.notes USING btree (id)",
+          "valid": true,
+          "ready": true,
+          "live": true
+        }
+      ]
+    },
+    "perms": {
+      "state": {
+        "persistence": "p",
+        "row_security": false,
+        "force_row_security": false,
+        "options": null,
+        "tablespace": null,
+        "replica_identity": "d",
+        "is_partition": false,
+        "policies": [],
+        "rules": [],
+        "parents": [],
+        "children": []
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "not_null": true,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "match",
+          "type": "text",
+          "not_null": true,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "scopes",
+          "type": "text[]",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        }
+      ],
+      "constraints": [
+        {
+          "name": "perms_id_not_null",
+          "kind": "n",
+          "definition": "NOT NULL id"
+        },
+        {
+          "name": "perms_match_key",
+          "kind": "u",
+          "definition": "UNIQUE (match)"
+        },
+        {
+          "name": "perms_match_not_null",
+          "kind": "n",
+          "definition": "NOT NULL match"
+        },
+        {
+          "name": "perms_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "perms_match_key",
+          "definition": "CREATE UNIQUE INDEX perms_match_key ON public.perms USING btree (match)",
+          "valid": true,
+          "ready": true,
+          "live": true
+        },
+        {
+          "name": "perms_pkey",
+          "definition": "CREATE UNIQUE INDEX perms_pkey ON public.perms USING btree (id)",
+          "valid": true,
+          "ready": true,
+          "live": true
+        }
+      ]
+    },
+    "users": {
+      "state": {
+        "persistence": "p",
+        "row_security": false,
+        "force_row_security": false,
+        "options": null,
+        "tablespace": null,
+        "replica_identity": "d",
+        "is_partition": false,
+        "policies": [],
+        "rules": [],
+        "parents": [],
+        "children": []
+      },
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "not_null": true,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "password",
+          "type": "text",
+          "not_null": true,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "roles",
+          "type": "text[]",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "attributes",
+          "type": "jsonb",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "create_time",
+          "type": "timestamp without time zone",
+          "not_null": true,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "last_login",
+          "type": "timestamp without time zone",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "text",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "update_time",
+          "type": "timestamp without time zone",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "email_verified",
+          "type": "boolean",
+          "not_null": false,
+          "collation": null,
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "hash",
+          "type": "text",
+          "not_null": false,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        },
+        {
+          "name": "login",
+          "type": "text",
+          "not_null": true,
+          "collation": "\"default\"",
+          "default": null,
+          "identity": "",
+          "generated": ""
+        }
+      ],
+      "constraints": [
+        {
+          "name": "users_create_time_not_null",
+          "kind": "n",
+          "definition": "NOT NULL create_time"
+        },
+        {
+          "name": "users_email_key",
+          "kind": "u",
+          "definition": "UNIQUE (email)"
+        },
+        {
+          "name": "users_id_not_null",
+          "kind": "n",
+          "definition": "NOT NULL id"
+        },
+        {
+          "name": "users_login_key",
+          "kind": "u",
+          "definition": "UNIQUE (login)"
+        },
+        {
+          "name": "users_login_not_null",
+          "kind": "n",
+          "definition": "NOT NULL login"
+        },
+        {
+          "name": "users_password_not_null",
+          "kind": "n",
+          "definition": "NOT NULL password"
+        },
+        {
+          "name": "users_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "users_email_key",
+          "definition": "CREATE UNIQUE INDEX users_email_key ON public.users USING btree (email)",
+          "valid": true,
+          "ready": true,
+          "live": true
+        },
+        {
+          "name": "users_login_key",
+          "definition": "CREATE UNIQUE INDEX users_login_key ON public.users USING btree (login)",
+          "valid": true,
+          "ready": true,
+          "live": true
+        },
+        {
+          "name": "users_pkey",
+          "definition": "CREATE UNIQUE INDEX users_pkey ON public.users USING btree (id)",
+          "valid": true,
+          "ready": true,
+          "live": true
+        }
+      ]
+    }
+  }
+}
