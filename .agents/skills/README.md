@@ -18,9 +18,9 @@ folders again and recording the new commit here, as a reviewed PR.
 ## Alrust scope adapter (read before applying a skill)
 
 The skills are engineering guidance, subordinate to the owner's charter, the
-owner's current direct decisions, the maintained communication protocol
-(`docs/COLLABORATION.md`), the project specs and ADRs, and the assigned lane
-ownership. They grant no execution, publication, access or timer authority.
+owner's current direct decisions, the maintained communication protocol for
+the assigned lane (see `docs/COLLABORATION.md` for the charter and protocol
+pointers), the project specs and ADRs, and the assigned lane ownership. They grant no execution, publication, access or timer authority.
 
 - A reviewer stays read-only unless separately assigned authorized writes.
   Run `cargo fmt`, builds and tests only within the applicable authority and
