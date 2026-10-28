@@ -1687,8 +1687,8 @@ async fn sessions_are_pinned_to_public_and_shadow_keys_never_authenticate() {
 async fn an_injected_copy_mismatch_rolls_the_real_migration_back() {
     let cases: [(&str, &str, &str); 4] = [
         (
-            "a.value::text END, a.text, a.tags,",
-            "a.value::text END, a.text || 'x', a.tags,",
+            "(a.value)::text END, a.text, a.tags,",
+            "(a.value)::text END, a.text || 'x', a.tags,",
             "alert rows differ after the copy",
         ),
         (

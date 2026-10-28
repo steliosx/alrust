@@ -379,11 +379,11 @@ INSERT INTO alerts (id, resource, event, environment, severity, correlate, statu
         duplicate_count, repeat, previous_severity, trend_indication, receive_time, last_receive_id,
         last_receive_time, history, update_time)
 SELECT a.id, a.resource, a.event, a.environment, a.severity, a.correlate, a.status, a.service, a."group",
-       CASE jsonb_typeof(a.value) WHEN 'string' THEN a.value #>> '{}' WHEN 'null' THEN NULL ELSE a.value::text END, a.text, a.tags, a.attributes, a.origin, a.type,
+       CASE jsonb_typeof(a.value) WHEN 'string' THEN (a.value) #>> '{}' WHEN 'null' THEN NULL ELSE (a.value)::text END, a.text, a.tags, a.attributes, a.origin, a.type,
        a.create_time AT TIME ZONE 'UTC', a.timeout::integer, a.raw_data, a.customer,
        a.duplicate_count::integer, a.repeat, a.previous_severity, a.trend_indication,
        a.receive_time AT TIME ZONE 'UTC', a.last_receive_id, a.last_receive_time AT TIME ZONE 'UTC',
-       ARRAY(SELECT ROW(e->>'id', e->>'event', e->>'severity', e->>'status', CASE jsonb_typeof(e->'value') WHEN 'string' THEN e->'value' #>> '{}' WHEN 'null' THEN NULL ELSE e->'value'::text END,
+       ARRAY(SELECT ROW(e->>'id', e->>'event', e->>'severity', e->>'status', CASE jsonb_typeof(e->'value') WHEN 'string' THEN (e->'value') #>> '{}' WHEN 'null' THEN NULL ELSE (e->'value')::text END,
                         e->>'text', e->>'type', (e->>'updateTime')::timestamptz AT TIME ZONE 'UTC',
                         e->>'user', (e->>'timeout')::integer)::history
                FROM jsonb_array_elements(a.history) WITH ORDINALITY AS h(e, n) ORDER BY h.n),

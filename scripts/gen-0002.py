@@ -39,7 +39,7 @@ assert "$shape$" not in ALPHA_SHAPE
 
 # ADR-0005 decision 8 (b), DECISIONS Y38: the same expression as
 # alrust_store_pg::VALUE_TEXT; the static test checks 0002 embeds both uses.
-VALUE_TEXT = "CASE jsonb_typeof({v}) WHEN 'string' THEN {v} #>> '{{}}' WHEN 'null' THEN NULL ELSE {v}::text END"
+VALUE_TEXT = "CASE jsonb_typeof({v}) WHEN 'string' THEN ({v}) #>> '{{}}' WHEN 'null' THEN NULL ELSE ({v})::text END"
 TABLES = "('public.alerts'::regclass, 'public.heartbeats'::regclass, 'public.keys'::regclass)"
 I32 = "BETWEEN -2147483648 AND 2147483647"
 

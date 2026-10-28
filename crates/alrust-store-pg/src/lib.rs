@@ -93,7 +93,7 @@ impl StoreConfig {
 /// (ADR-0005 decision 8, option (b), DECISIONS Y38). `0002` applies the
 /// same text to alpha rows and history values; a test checks the migration
 /// embeds it verbatim, so the stored text is the same however it got there.
-pub const VALUE_TEXT: &str = "CASE jsonb_typeof({v}) WHEN 'string' THEN {v} #>> '{}' WHEN 'null' THEN NULL ELSE {v}::text END";
+pub const VALUE_TEXT: &str = "CASE jsonb_typeof({v}) WHEN 'string' THEN ({v}) #>> '{}' WHEN 'null' THEN NULL ELSE ({v})::text END";
 
 /// [`VALUE_TEXT`] applied to one SQL operand.
 #[must_use]
