@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-26T19:53Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-28T16:46Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -79,12 +79,13 @@ The design and implementation are on **draft PR #150 (DO NOT MERGE)**, at
   case was added, and an integral JSON `timeout` of `1.0` may still be
   refused. The scoped no-baseline-write adoption P2 closure is unchanged.
   **All 19 runtime profiles remain NOT_RUN.**
-- **Before merge:** the owner's concrete alert-value and remaining
-  NULL-read choices, any separate approved exact extra-index
-  policy, and Codex's full affected implementation review. The current
-  strict index rule is unchanged. Also pending with the owner: hook or port
-  for integration plugin layers, who changes their repositories, and the
-  local developer-smoke process.
+- **Before merge:** implementation of the owner's choices in the next
+  head (`value` option (b), Y38; NULL-read refusal as written, Y39; the
+  named extra-index list once its ADR-0005 revision is approved, Y40; until
+  then the strict index rule stays in the code), the merge of `main` with
+  the lint and call-site fixes, and Codex's full affected implementation
+  review. The plugin hook, repository ownership and local-smoke questions
+  are decided (Y41) and are follow-up work, not merge gates.
 
 **First broader conformance run (A3B, 2026-10-13).** Codex ran ten selected
 cases against each of two local targets that Claude stood up, captured once
@@ -308,6 +309,21 @@ succeeded (fmt/clippy/test, PG 18.6 alpha smoke, conformance, reference guard;
 hosted profiles inert). Claude's pause otherwise stands: no daily check
 restarted, no other source work, and PR #150's rebase onto `main` now needs the `Alert::body` and
 `ApiKey::body` call-site changes plus lint fixes before an affected review.
+
+**Resumed (2026-10-28).** The owner resumed the project in Claude's
+session and answered the nine open questions as multiple-choice items
+(DECISIONS Y37 to Y41): project resumed with the daily check restarted;
+BeautifulRust's agent skills to be installed by a reviewed PR; the owner
+answers Codex's tmux-identity question directly; `value` option (b) JSON
+text; NULL reads in reference-written columns refuse the row; named extra
+indexes allowed, list to come in an ADR-0005 revision; plugin layers through
+a hook in alrust; Zabalack and Voalack change their own repositories from
+Claude's spec; local smoke runs routine under the 80 °C guard. Relayed
+signed to Codex (`ea4a9bb4`). PR #150's next head will merge `main`
+(`38096c95`) into the branch (no rebase of the pushed branch), fix the
+`Alert::body` and `ApiKey::body` call sites, clear the new lints, implement
+`value` (b) and carry the index list once that ADR revision is approved;
+it stays DRAFT DO NOT MERGE until Codex's full affected review.
 
 ## Work in flight
 
