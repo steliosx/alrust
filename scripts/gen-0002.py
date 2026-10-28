@@ -37,6 +37,9 @@ V = {name: open(verify_dir + name + ".sql").read().strip()
 ALPHA_SHAPE = open(verify_dir + "alpha_shape.expected").read().rstrip("\n")
 assert "$shape$" not in ALPHA_SHAPE
 
+# ADR-0005 decision 8 (b), DECISIONS Y38: the same expression as
+# alrust_store_pg::VALUE_TEXT; the static test checks 0002 embeds both uses.
+VALUE_TEXT = "CASE jsonb_typeof({v}) WHEN 'string' THEN {v} #>> '{{}}' WHEN 'null' THEN NULL ELSE {v}::text END"
 TABLES = "('public.alerts'::regclass, 'public.heartbeats'::regclass, 'public.keys'::regclass)"
 I32 = "BETWEEN -2147483648 AND 2147483647"
 
@@ -202,16 +205,6 @@ BEGIN
     IF bad IS NOT NULL THEN
         RAISE EXCEPTION 'alrust 0002: alerts sharing (environment, resource, event, customer); nothing was changed: %', bad;
     END IF;
-    -- ADR-0005 decision 8 is PENDING THE OWNER. Until it is decided, a value
-    -- that is not a JSON string or null is refused here rather than
-    -- converted. (Integers and booleans are already stored as strings, R0.3.)
-    SELECT string_agg(id, ', ' ORDER BY id) INTO bad FROM alerts a
-     WHERE jsonb_typeof(a.value) NOT IN ('string', 'null')
-        OR EXISTS (SELECT 1 FROM jsonb_array_elements(a.history) e
-                    WHERE jsonb_typeof(e->'value') NOT IN ('string', 'null'));
-    IF bad IS NOT NULL THEN
-        RAISE EXCEPTION 'alrust 0002: alerts whose value or a history value is not a string (ADR-0005 decision 8 pending); nothing was changed: %', bad;
-    END IF;
 END
 $alrust$;
 
@@ -245,11 +238,11 @@ INSERT INTO alerts (id, resource, event, environment, severity, correlate, statu
         duplicate_count, repeat, previous_severity, trend_indication, receive_time, last_receive_id,
         last_receive_time, history, update_time)
 SELECT a.id, a.resource, a.event, a.environment, a.severity, a.correlate, a.status, a.service, a."group",
-       a.value #>> '{{}}', a.text, a.tags, a.attributes, a.origin, a.type,
+       {VALUE_TEXT.format(v='a.value')}, a.text, a.tags, a.attributes, a.origin, a.type,
        a.create_time AT TIME ZONE 'UTC', a.timeout::integer, a.raw_data, a.customer,
        a.duplicate_count::integer, a.repeat, a.previous_severity, a.trend_indication,
        a.receive_time AT TIME ZONE 'UTC', a.last_receive_id, a.last_receive_time AT TIME ZONE 'UTC',
-       ARRAY(SELECT ROW(e->>'id', e->>'event', e->>'severity', e->>'status', e->'value' #>> '{{}}',
+       ARRAY(SELECT ROW(e->>'id', e->>'event', e->>'severity', e->>'status', {VALUE_TEXT.format(v="e->'value'")},
                         e->>'text', e->>'type', (e->>'updateTime')::timestamptz AT TIME ZONE 'UTC',
                         e->>'user', (e->>'timeout')::integer)::history
                FROM jsonb_array_elements(a.history) WITH ORDINALITY AS h(e, n) ORDER BY h.n),

@@ -1,9 +1,11 @@
 # ADR-0005: alrust's store adopts the reference PostgreSQL layout
 
-- Status: **Proposed** (design only; no code). Direction set by the owner on
-  2026-10-13 (to be recorded as DECISIONS Y35): "1) yes. Alrust needs to
-  fully support zabalack and voalack." **One part is pending an owner
-  decision: the `value` rule (decision 8).**
+- Status: **Accepted in design; implementation under review (PR #150).**
+  Direction set by the owner on 2026-10-13 (DECISIONS Y35): "1) yes. Alrust
+  needs to fully support zabalack and voalack." The `value` rule (decision
+  8) was decided on 2026-10-28: option (b), DECISIONS Y38. Named extra
+  indexes are allowed in principle (Y40); the list is proposed in decision 9
+  and the strict rule stays in force until Codex has reviewed it.
 - Date: 2026-10-13
 - Revision 5. It answers Codex's design prerequisites (afaeaa46), findings
   ADR5-CAT-1, ADR5-ADOPT-1, ADR5-VALUE-1 and ADR5-RANGE-1 (e06bdc32),
@@ -364,7 +366,7 @@ by column:
 - Heartbeat upserts keep their current semantics under `org_cust_key`.
 - The alpha limitation "multiple matching rows (R2.3)" goes away.
 
-### 8. `value`: OWNER DECISION PENDING (ADR5-VALUE-1)
+### 8. `value`: option (b), JSON text (ADR5-VALUE-1; DECISIONS Y38)
 
 The reference column, and the composite's `value` field, are `text`. alrust
 already follows the reference for strings, integers, booleans and null
@@ -396,17 +398,39 @@ to its database adapter unconverted, and what it then stores or answers is
   sends today.
 - (b) accepts everything and keeps the content, but turns those types into
   strings on read.
-- **Recommended: (b).** A monitoring server should not drop alerts over the
-  shape of an informational field, and integrations reading
-  `history[1].value` see text either way.
+- **Decided: (b)** (owner, 2026-10-28, Y38). A monitoring server should not
+  drop alerts over the shape of an informational field, and integrations
+  reading `history[1].value` see text either way.
 
-**Implementation of `value` waits for the owner's choice.** The decisions
-above do not depend on it, except its use in the `0002` preflight and the
-conversion.
+**Implementation.** The expression is `alrust_store_pg::VALUE_TEXT`; the
+generator embeds the same text in `0002` for `alerts.value` and for every
+history element's `value`, and the static migration test checks both. On
+the API path the store converts a non-string `value` with one
+`SELECT <expression>` on the receive transaction before any comparison or
+write, so duplicate and correlation checks and the history entry all see
+the stored text (a repeated `1.5` is a duplicate, not a value change). The
+former "decision 8 pending" refusal in the `0002` preflight is gone.
+
+### 9. Extra indexes: proposed list (DECISIONS Y40; awaiting Codex review)
+
+The owner allows named performance indexes on the adopted tables (Y40).
+Proposed, as a separate change after this one, each checked by the four-way
+catalog comparison in decision 2:
+
+| Index | Definition | Why |
+|---|---|---|
+| `alerts_identity_idx` | `(environment, resource, event, severity, customer)` | the receive path's duplicate lookup |
+| `alerts_last_receive_time_idx` | `(last_receive_time)` | housekeeping and default ordering |
+| `alerts_status_idx` | `(status)` | status filters and counts |
+| `heartbeats_origin_customer_idx` | `(origin, customer)` | heartbeat upserts |
+
+These are the four alpha-only indexes `0002` drops today. **Until Codex has
+reviewed this list, the strict rule (no index beyond the reference's)
+stays in force in the code, in `0002` and in the catalog check.**
 
 ## Open questions
 
-1. The `value` rule (decision 8): **owner**.
+1. The `value` rule (decision 8): decided, (b).
 2. Ownership and roles for the integrations (Voalack requires a runtime
    login distinct from its roles and owning none of their objects,
    `boundary.py:851-866`): a later deployment ADR.

@@ -87,6 +87,39 @@ impl StoreConfig {
 }
 
 /// A parsed, validated incoming alert (spec R0), before matching.
+/// The one SQL expression that turns a JSON `value` into the reference's
+/// `text` column: strings as they are, JSON null as SQL NULL, and any other
+/// JSON (a float, array or object) as PostgreSQL's `jsonb` text form
+/// (ADR-0005 decision 8, option (b), DECISIONS Y38). `0002` applies the
+/// same text to alpha rows and history values; a test checks the migration
+/// embeds it verbatim, so the stored text is the same however it got there.
+pub const VALUE_TEXT: &str = "CASE jsonb_typeof({v}) WHEN 'string' THEN {v} #>> '{}' WHEN 'null' THEN NULL ELSE {v}::text END";
+
+/// [`VALUE_TEXT`] applied to one SQL operand.
+#[must_use]
+pub fn value_text(operand: &str) -> String {
+    VALUE_TEXT.replace("{v}", operand)
+}
+
+/// The text to store for a received `value`: strings and null need no
+/// query; anything else goes through [`VALUE_TEXT`] on the same connection,
+/// so the API path and `0002` produce identical text.
+async fn value_to_text(
+    tx: &mut Transaction<'_, Postgres>,
+    v: Option<Value>,
+) -> Result<Option<String>, StoreError> {
+    match v {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s)),
+        Some(other) => Ok(
+            sqlx::query_scalar(&format!("SELECT {}", value_text("$1::jsonb")))
+                .bind(other)
+                .fetch_one(&mut **tx)
+                .await?,
+        ),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct NewAlert {
     pub id: String,
@@ -98,7 +131,10 @@ pub struct NewAlert {
     pub status: String,
     pub service: Vec<String>,
     pub group: String,
-    pub value: Option<String>,
+    /// As sent, after spec R0.3 (integers and booleans are already strings).
+    /// A float, array or object is converted to its `jsonb` text form by
+    /// [`VALUE_TEXT`] before it is written (ADR-0005 decision 8, Y38).
+    pub value: Option<Value>,
     pub text: String,
     pub tags: Vec<String>,
     pub attributes: Map<String, Value>,
@@ -693,6 +729,8 @@ impl Store {
         login: &str,
     ) -> Result<(Alert, ReceiveKind), StoreError> {
         let mut tx = self.pool.begin().await?;
+        let mut n = n;
+        let value = value_to_text(&mut tx, n.value.take()).await?;
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
             .bind(identity_lock_key(
                 &n.environment,
@@ -734,20 +772,27 @@ impl Store {
                 a.update_time = Some(now);
                 Some(Self::receive_entry(
                     &n,
+                    value.as_deref(),
                     &t.status,
                     change_type::STATUS,
                     login,
                 ))
             } else if self.cfg.history_on_value_change
-                && Some(&n.value) != info.current_value.as_ref()
+                && Some(&value) != info.current_value.as_ref()
             {
-                Some(Self::receive_entry(&n, &current, change_type::VALUE, login))
+                Some(Self::receive_entry(
+                    &n,
+                    value.as_deref(),
+                    &current,
+                    change_type::VALUE,
+                    login,
+                ))
             } else {
                 None
             };
             a.status = t.status;
             a.service = n.service;
-            a.value = n.value;
+            a.value = value;
             a.text = n.text;
             a.timeout = Some(n.timeout);
             a.raw_data = n.raw_data;
@@ -798,14 +843,20 @@ impl Store {
             if t.status != current {
                 a.update_time = Some(now);
             }
-            let entry = Self::receive_entry(&n, &t.status, change_type::SEVERITY, login);
+            let entry = Self::receive_entry(
+                &n,
+                value.as_deref(),
+                &t.status,
+                change_type::SEVERITY,
+                login,
+            );
             a.trend_indication = Some(trend(&previous_severity, &n.severity).to_string());
             a.previous_severity = Some(previous_severity);
             a.event = n.event;
             a.severity = n.severity;
             a.status = t.status;
             a.service = n.service;
-            a.value = n.value;
+            a.value = value;
             a.text = n.text;
             a.timeout = Some(n.timeout);
             a.raw_data = n.raw_data;
@@ -831,7 +882,7 @@ impl Store {
             previous_status: None,
             action: None,
         })?;
-        let entry = Self::receive_entry(&n, &t.status, change_type::NEW, login);
+        let entry = Self::receive_entry(&n, value.as_deref(), &t.status, change_type::NEW, login);
         let mut attributes = n.attributes.clone();
         attributes.retain(|_, v| !v.is_null());
         let a = Alert {
@@ -853,7 +904,7 @@ impl Store {
             correlate: n.correlate,
             service: n.service,
             group: n.group,
-            value: n.value,
+            value,
             text: n.text,
             tags: union_tags(&[], &n.tags),
             attributes,
@@ -869,13 +920,19 @@ impl Store {
         Ok((a, ReceiveKind::Created))
     }
 
-    fn receive_entry(n: &NewAlert, status: &str, kind: &str, login: &str) -> HistoryEntry {
+    fn receive_entry(
+        n: &NewAlert,
+        value: Option<&str>,
+        status: &str,
+        kind: &str,
+        login: &str,
+    ) -> HistoryEntry {
         HistoryEntry {
             id: n.id.clone(),
             event: n.event.clone(),
             severity: Some(n.severity.clone()),
             status: Some(status.to_string()),
-            value: n.value.clone(),
+            value: value.map(str::to_string),
             text: Some(n.text.clone()),
             change_type: kind.to_string(),
             // Receive entries carry the client's createTime (spec R4.2, R5.4, R6.4).

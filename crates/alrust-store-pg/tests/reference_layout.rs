@@ -23,7 +23,7 @@
 use alrust_store_pg::catalog;
 use alrust_store_pg::{
     AlertQuery, NewAlert, Outcome, ReceiveKind, StartupError, Store, StoreConfig, StoreError,
-    session_options,
+    session_options, value_text,
 };
 use chrono::{TimeZone, Utc};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
@@ -318,6 +318,13 @@ fn migration_0002_embeds_the_reference_and_verification_sql_verbatim() {
         );
     }
     assert!(MIGRATION_0002.contains(&format!("actual := ({});", ALPHA_SHAPE.trim())));
+    // ADR-0005 decision 8 (b): the API's value expression, applied to the
+    // alert value and to every history value.
+    assert!(MIGRATION_0002.contains(&format!(
+        "       {}, a.text, a.tags,",
+        value_text("a.value")
+    )));
+    assert!(MIGRATION_0002.contains(&format!("{},", value_text("e->'value'"))));
     assert!(MIGRATION_0002.contains(&format!(
         "IS DISTINCT FROM $shape${}$shape$",
         ALPHA_SHAPE_EXPECTED.trim_end_matches('\n')
@@ -610,14 +617,6 @@ async fn alpha_upgrade_refusals_change_nothing() {
             "notes already exists",
         ),
         (
-            "UPDATE alerts SET value = '1.5' WHERE id = 'a1'",
-            "decision 8 pending",
-        ),
-        (
-            "UPDATE alerts SET history = jsonb_set(history, '{1,value}', '[1, 2]') WHERE id = 'a1'",
-            "decision 8 pending",
-        ),
-        (
             "ALTER TABLE alerts ADD COLUMN extra text; UPDATE alerts SET extra = 'kept data'",
             "the alpha tables differ from what 0001 created",
         ),
@@ -884,6 +883,67 @@ async fn owned_sequences_are_refused_and_unowned_ones_survive() {
         .map(|v| v.0)
         .collect();
     assert_eq!(versions, [1, 2]);
+}
+
+/// ADR-0005 decision 8 (b): a float, array or object `value` becomes its
+/// `jsonb` text, both for alpha rows and history values converted by 0002
+/// and for an alert received through the store, and the two agree.
+#[tokio::test]
+async fn non_string_values_become_jsonb_text_the_same_way_everywhere() {
+    let Some(db) = alpha_db_with_rows().await else {
+        return;
+    };
+    sqlx::raw_sql(
+        "UPDATE alerts SET value = '1.50' WHERE id = 'a1';
+         UPDATE alerts SET history = jsonb_set(history, '{1,value}', '[1, 2]') WHERE id = 'a1';
+         UPDATE alerts SET value = '{\"b\": 1, \"a\": [true, null, 2.5]}' WHERE id = 'a2'",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    let report = store(&db.pool).prepare().await.expect("upgrade");
+    assert_eq!(report.outcome, Outcome::Migrated);
+    let a1: Option<String> = sqlx::query_scalar("SELECT value FROM alerts WHERE id = 'a1'")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(a1.as_deref(), Some("1.50"));
+    let history_value: Option<String> =
+        sqlx::query_scalar("SELECT (history[2]).value FROM alerts WHERE id = 'a1'")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(history_value.as_deref(), Some("[1, 2]"));
+    let a2: Option<String> = sqlx::query_scalar("SELECT value FROM alerts WHERE id = 'a2'")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(a2.as_deref(), Some("{\"a\": [true, null, 2.5], \"b\": 1}"));
+
+    // The API path: the same expression, on the receive transaction.
+    let st = store(&db.pool);
+    let mut object_alert = new_alert("v1", 300);
+    object_alert.resource = "value-host".into();
+    object_alert.value = Some(serde_json::json!({"b": 1, "a": [true, null, 2.5]}));
+    let (alert, kind) = st.receive(object_alert.clone(), "alice").await.unwrap();
+    assert_eq!(kind, ReceiveKind::Created);
+    assert_eq!(
+        alert.value.as_deref(),
+        Some("{\"a\": [true, null, 2.5], \"b\": 1}")
+    );
+    assert_eq!(
+        alert.history[0].value.as_deref(),
+        Some("{\"a\": [true, null, 2.5], \"b\": 1}")
+    );
+    // Repeating it is a duplicate with an unchanged value, not a value change.
+    let (alert, kind) = st.receive(object_alert, "alice").await.unwrap();
+    assert_eq!(kind, ReceiveKind::Duplicate);
+    assert_eq!(alert.history.len(), 1, "{:?}", alert.history);
+    let mut float_alert = new_alert("v2", 300);
+    float_alert.resource = "value-host".into();
+    float_alert.value = Some(serde_json::json!(1.5));
+    let (alert, _) = st.receive(float_alert, "alice").await.unwrap();
+    assert_eq!(alert.value.as_deref(), Some("1.5"));
 }
 
 /// Runs 0002's conversion statements (taken from the migration file itself)
@@ -1627,8 +1687,8 @@ async fn sessions_are_pinned_to_public_and_shadow_keys_never_authenticate() {
 async fn an_injected_copy_mismatch_rolls_the_real_migration_back() {
     let cases: [(&str, &str, &str); 4] = [
         (
-            "a.value #>> '{}', a.text, a.tags,",
-            "a.value #>> '{}', a.text || 'x', a.tags,",
+            "a.value::text END, a.text, a.tags,",
+            "a.value::text END, a.text || 'x', a.tags,",
             "alert rows differ after the copy",
         ),
         (

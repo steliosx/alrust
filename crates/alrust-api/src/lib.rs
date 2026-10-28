@@ -308,7 +308,7 @@ fn opt_str(v: Option<&Value>) -> Option<String> {
 /// The largest timeout the reference's `integer` columns hold.
 #[expect(
     clippy::as_conversions,
-    reason = "i32::MAX always fits in i64; `i64::from` is not const-callable here on 1.98"
+    reason = "widening i32::MAX to i64 loses nothing"
 )]
 pub const MAX_TIMEOUT: i64 = i32::MAX as i64;
 
@@ -366,19 +366,14 @@ fn parse_alert(body: &Value, st: &AppState, alert_timeout: i64) -> ApiResult<New
         correlate.push(event.clone());
     }
     // An integer value is stored as a string; JSON booleans as "True"/"False"
-    // (spec R0.3). The column is text, as in the reference.
+    // (spec R0.3). A float, array or object is kept as JSON here and the
+    // store writes its jsonb text form (ADR-0005 decision 8 (b), Y38).
     let value = match obj.get("value") {
         None | Some(Value::Null) => None,
-        Some(Value::String(s)) => Some(s.clone()),
-        Some(Value::Bool(b)) => Some(if *b { "True" } else { "False" }.to_string()),
-        Some(Value::Number(n)) if n.is_i64() || n.is_u64() => Some(n.to_string()),
-        // ADR-0005 decision 8 is PENDING THE OWNER: until it is decided, a
-        // float, array or object is refused rather than converted.
-        Some(_) => {
-            return Err(ApiError::bad(
-                "value must be a string, an integer, a boolean or null",
-            ));
-        }
+        Some(Value::String(s)) => Some(Value::String(s.clone())),
+        Some(Value::Bool(b)) => Some(Value::String(if *b { "True" } else { "False" }.to_string())),
+        Some(Value::Number(n)) if n.is_i64() || n.is_u64() => Some(Value::String(n.to_string())),
+        Some(other) => Some(other.clone()),
     };
     let create_time = match obj.get("createTime") {
         Some(Value::String(s)) => truncate_ms(parse_time(s).ok_or_else(|| {
