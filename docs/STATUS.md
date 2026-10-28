@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-26T19:53Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-28T18:56Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -36,8 +36,10 @@ passes 115 of 115 at #147.
 2026-10-13).** alrust's store is being moved onto the pinned reference
 Alerta PostgreSQL schema. Matching that layout is a prerequisite for
 Zabalack and Voalack support; their integration behavior is not yet qualified.
-The design and implementation are on **draft PR #150 (DO NOT MERGE)**, at
-`6cccb023`. Status:
+The implementation was **PR #150, merged on 2026-10-28 as `0cf4ad8c`**
+(approved head `03d43f15`, tree `5d27a66f`, base `38096c95`; Codex
+`f274d1fa`, run 40733434721 all seven jobs green including the store
+database tests and the PG 18.6 alpha smoke). History of the review:
 
 - `0002` rebuilds the alpha `alerts` and `heartbeats` by verified copy in one
   transaction after layout/dependency checks. Full implementation review is
@@ -79,12 +81,25 @@ The design and implementation are on **draft PR #150 (DO NOT MERGE)**, at
   case was added, and an integral JSON `timeout` of `1.0` may still be
   refused. The scoped no-baseline-write adoption P2 closure is unchanged.
   **All 19 runtime profiles remain NOT_RUN.**
-- **Before merge:** the owner's concrete alert-value and remaining
-  NULL-read choices, any separate approved exact extra-index
-  policy, and Codex's full affected implementation review. The current
-  strict index rule is unchanged. Also pending with the owner: hook or port
-  for integration plugin layers, who changes their repositories, and the
-  local developer-smoke process.
+- **Open Codex source finding (2026-10-28), ADR5-OWNED-SEQ-1 at exact
+  `6cccb023`:** a sequence owned by an alert or heartbeat column, even
+  without a column default, can pass alpha preflight and be deleted with the
+  rebuilt old table. Codex independently reviewed the source trace; this
+  finding has not been runtime reproduced. It requires a preflight refusal
+  (generator and generated migration together), sequence-preservation
+  refusal validation, and affected exact-head review. Signed finding
+  `04b03fe4`; receipt `a12e90e3` is transport only. The earlier
+  EDIT-PRESERVE-1 and HISTORY-TYPE-1 closures stay closed.
+- **Closed at merge (2026-10-28):** ADR5-OWNED-SEQ-1 closed for source
+  and affected runtime at `03d43f15` (preflight refusal, generator and
+  migration together, with the sequence-preservation test); `value` option
+  (b) implemented (Y38) with one expression shared by the migration and the
+  API; NULL-read refusal as written (Y39); `main` merged in with the lint
+  and call-site fixes. **Not approved:** the extra-index list in ADR-0005
+  decision 9 (Y40) is a proposal only; Codex asks for exact DDL, dependency
+  and validity behaviour and the four-way comparison as a separate affected
+  change. The strict rule stays in the code and the catalog check. All 19
+  runtime profiles remain NOT_RUN.
 
 **First broader conformance run (A3B, 2026-10-13).** Codex ran ten selected
 cases against each of two local targets that Claude stood up, captured once
@@ -308,6 +323,26 @@ succeeded (fmt/clippy/test, PG 18.6 alpha smoke, conformance, reference guard;
 hosted profiles inert). Claude's pause otherwise stands: no daily check
 restarted, no other source work, and PR #150's rebase onto `main` now needs the `Alert::body` and
 `ApiKey::body` call-site changes plus lint fixes before an affected review.
+
+**Resumed (2026-10-28).** The owner resumed the project in Claude's
+session and answered the nine open questions as multiple-choice items
+(DECISIONS Y37 to Y41): project resumed with the daily check restarted;
+BeautifulRust's agent skills to be installed by a reviewed PR; the owner
+answers Codex's tmux-identity question directly; `value` option (b) JSON
+text; NULL reads in reference-written columns refuse the row; named extra
+indexes allowed, list to come in an ADR-0005 revision; plugin layers through
+a hook in alrust; Zabalack and Voalack change their own repositories from
+Claude's spec; local smoke runs routine under the 80 °C guard. Relayed
+signed to Codex (`ea4a9bb4`). PR #150 did all of that at `03d43f15`
+and merged as `0cf4ad8c` the same day; the index list stays a proposal.
+The BeautifulRust skills (Y37) are installed: **PR #155 merged on
+2026-10-28 as `4c6148ef`** (approved head `3fd2e898`, tree `8a4156d5`,
+base `0cf4ad8c`; Codex `2fd61856`, run 40741324266 all seven jobs green),
+with Codex's scope adapter in `.agents/skills/README.md`. A CI follow-up is
+owed: the draft-only store catalog job checks out the PR head rather than
+the merge, so drafts older than PR #150 fail it; Codex asked for a separate
+bounded workflow proposal (merge-ref checkout with explicit provenance,
+unchanged cleanup, permissions and required checks).
 
 ## Work in flight
 
