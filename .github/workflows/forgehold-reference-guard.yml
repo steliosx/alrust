@@ -28,7 +28,7 @@ jobs:
     runs-on: [self-hosted, Linux, X64, forgehold]
     timeout-minutes: 6
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (pinned; the v4 tag points here at 2026-10-29)
         with:
           fetch-depth: 0
           submodules: false
