@@ -50,7 +50,7 @@ The full plan and its fixed decisions are in the
 
 ## Status
 
-**Reviewed checkpoint: 28 October 2026**, main
+**Reviewed checkpoint: 29 October 2026**, main
 [`812eb125`](https://github.com/steliosx/alrust/commit/812eb125f277eff0ce111b79b72ee4de000f1645).
 The owner resumed the project (Y37), and the reference-storage implementation
 is now merged. Phase 0, full compatibility and live integration qualification
@@ -68,20 +68,51 @@ The hook and downstream adapters are not implemented or qualified by these decis
 | Earlier API review findings | The [heartbeat-healthcheck](https://github.com/steliosx/alrust/pull/138#discussion_r4253845380) and [API-key scope](https://github.com/steliosx/alrust/pull/138#discussion_r4253845404) comments remain historical review records. Reference-layout adoption changes the affected storage paths. | Their affected disposition needs re-triage against this main; ordinary smoke success alone is not closure. |
 | Compose and UI delivery | [Alpha guide](docs/alpha.md) contains Compose and native startup instructions; native startup is exercised in the alpha CI lane. | Compose startup itself remains `NOT_RUN` in the current records. Web UI, desktop apps, auth logins and monitoring receivers remain unimplemented. |
 | Specification and execution profiles | Merged specifications, supervisors, finalizers and conformance tooling remain available; see [STATUS](docs/STATUS.md) for their exact historical bindings. | Earlier source/offline or reference-only passes are not retrospectively promoted to Rust conformance. Open specification and oracle review findings remain distinct from alpha runtime evidence. |
-| Security and acceptance | Ordinary CI is executing. | This presentation review did not obtain a current separate whole-repository/Codex Security report and does not claim one clean. Independent acceptance and owner release decisions remain open. |
+| Security and acceptance | Main retains its earlier executed CI; new follow-up checks are not executing. | This presentation review did not obtain a current separate whole-repository/Codex Security report and does not claim one clean. Independent acceptance and owner release decisions remain open. |
 
 Unmerged follow-ups: [#157](https://github.com/steliosx/alrust/pull/157) at
 `61ec7fc4` binds draft catalog output to the exact merge composition; its run
 failed a stdin deadline control. Codex-authored [#159](https://github.com/steliosx/alrust/pull/159)
 at `7ffd1c5e` adjusts that test without changing production deadlines.
 Claude's published review is separate from hosted qualification: run
-40756258263 failed all seven checks without job steps or logs available in
-this review. The underlying runner/admission reason was not established.
+40756258263 failed all seven checks without executed job steps.
+The unmerged Y42 record in [#160](https://github.com/steliosx/alrust/pull/160)
+now reports billing/spending-limit refusal. That is a recorded admission blocker,
+not a code-test failure or a pass; its original annotations were not independently
+retrieved in this presentation review.
 Neither PR is merged; #158 was closed unmerged and its green run does not
 qualify #159's exact commit.
 
-The cost policy is **no paid CI**: free hosted allowance and the authorised
-self-hosted x64 path, subject to its own qualification.
+New unmerged work, inspected on **29 October**:
+
+- [#160](https://github.com/steliosx/alrust/pull/160) at `67c30b57` records
+  Y42/Y43 owner relays: a Forgehold disposable-microVM lane, one job/profile
+  at a time, and exact-input credit only for covered checks. A plain persistent
+  self-hosted runner was withdrawn. These records are proposed documentation,
+  not merged runtime implementation.
+- [#161](https://github.com/steliosx/alrust/pull/161) at `17c21100` proposes
+  a transactional ACK-hook contract. It covers ownership, authorisation,
+  staging, privacy and commit-outcome handling against pinned integration
+  sources. It is not an adapter implementation or coexistence qualification.
+  Its Voalack coexistence discussion uses the older `e50b2885` branch;
+  newer restore work needs a separate affected review. Human-login support
+  remains a prerequisite, and exact signing-key custody is an owner decision.
+- The no-PR [phase-1 work branch](https://github.com/steliosx/alrust/tree/feacc8342dedb084e70f620b8a46eb8bf969e0e3)
+  at `feacc834` contains an exact-commit binder, stage controls and a
+  pins-only reference-guard workflow. Published STATUS relays source acceptance,
+  but reports **no admitted execution** under the lane's thermal limit.
+  A source-accepted input packet is not a successful job, evidence-custody
+  readback or proven VM cleanup. Its pins-only guard would not cover the hosted
+  base-diff guard or every CI job.
+
+The new hosted runs for [#160](https://github.com/steliosx/alrust/actions/runs/40908385914)
+and [#161](https://github.com/steliosx/alrust/actions/runs/40966567134) each
+failed seven checks without usable executed steps. No qualifying exact-head
+guard is established for either PR. All 19 full executing profiles remain
+`NOT_RUN`; source approval and another branch's partial lane cannot close them.
+
+The cost policy is **no paid CI**. The proposed Forgehold path remains subject
+to its own admission, access, custody and cleanup requirements.
 See [DECISIONS](docs/DECISIONS.md) for current policy and merge authority.
 Signed private peer records are not reproduced here; published summaries
 are evidence of recorded dispositions, not an independently inspected mailbox.
