@@ -12,8 +12,9 @@ name: Forgehold phase 1 (reference guard)
 # run and job records exist because the guest is a registered runner, the
 # lane's GitHub App publishes a check run on the dispatched commit, and the
 # lane's sealed evidence and the signed mailbox carry the verified result.
-# No GitHub expression syntax is used anywhere; the RQ_JSON lines are the
-# result. The hosted ci.yml is unchanged.
+# No GitHub expression syntax is used anywhere. Every RQ_JSON result line is
+# printed by a script after its command succeeds, never written in a step's
+# run text, so a line's presence in the log is evidence for that stage. The hosted ci.yml is unchanged.
 
 on:
   workflow_dispatch:
@@ -35,13 +36,6 @@ jobs:
       - name: Bind the checkout to the dispatched commit (GITHUB_SHA must equal HEAD)
         run: .github/scripts/forgehold-bind.sh forgehold-reference-guard
       - name: Reference policy (ADR-0001), pins only
-        run: |
-          set -euo pipefail
-          .github/scripts/reference-guard.sh HEAD ""
-          echo 'RQ_JSON {"job":"forgehold-reference-guard","stage":"reference-policy","result":"PASS"}'
+        run: .github/scripts/forgehold-stage.sh forgehold-reference-guard reference-policy .github/scripts/reference-guard.sh HEAD ""
       - name: Guard regression cases
-        run: |
-          set -euo pipefail
-          .github/scripts/test-reference-guard.sh
-          .github/scripts/test-forgehold-bind.sh
-          echo 'RQ_JSON {"job":"forgehold-reference-guard","stage":"guard-regressions","result":"PASS"}'
+        run: .github/scripts/forgehold-stage.sh forgehold-reference-guard guard-regressions bash -c '.github/scripts/test-reference-guard.sh && .github/scripts/test-forgehold-bind.sh && .github/scripts/test-forgehold-stage.sh'
