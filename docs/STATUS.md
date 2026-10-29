@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-28T18:56Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-29T16:01Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -343,6 +343,35 @@ owed: the draft-only store catalog job checks out the PR head rather than
 the merge, so drafts older than PR #150 fail it; Codex asked for a separate
 bounded workflow proposal (merge-ref checkout with explicit provenance,
 unchanged cleanup, permissions and required checks).
+
+**Hosted CI refused; Forgehold lane chosen (2026-10-28, from about
+19:39Z).** GitHub stopped starting hosted jobs on the account (billing or
+spending-limit annotation on every job of PR #159's run 40756258263; the
+identical tree had passed on PR #158 four minutes earlier). Codex classified
+that run NOT_RUN. Held until a covering result: PR #159 (Codex's test-only
+fix for the `test_stdin_feed_obeys_call_deadline` race, source approved at
+`7ffd1c5e`) and PR #157 (the draft catalog job checking out the merge
+commit, catalog job qualified at `61ec7fc4`, overall red from that race).
+The owner chose a plain self-hosted runner, then withdrew it the same
+evening for Forgehold's micro-VM lane (DECISIONS Y42; nothing of the runner
+path was activated), and ruled that a Codex-verified Forgehold result bound
+to the exact commit is the merge gate for the jobs it covers, uncovered
+jobs stated NOT_RUN (Y43). Phase 1 (the `reference/` guard only) is
+`claude/forgehold-phase1` at `feacc834`, pushed without a PR, Codex approved
+(`9dd9ac96`) and publication verified (`01849ff9`); the branch is frozen
+while the lane's request is open. The Forgehold session reports its Codex
+accepted the signed input (`c5b3c4d9`, expiry 2026-10-30T00:10:56Z) as
+source and data on 2026-10-29 at 14:54Z, with no attempt admitted yet; the
+laptop's temperature has been above the lane's 75 °C limit. Merged the same
+day before the refusal: PR #156 (`812eb125`, ADR-0005 decision 9 exact index
+proposal, design text only; no index adopted). PR #158 was closed unmerged
+(superseded by #159).
+
+**Open question (owner, after Codex reviews this head): docs-only merges
+with no Forgehold coverage.** Phase 1's workflow is not on `main`, so a
+docs-only branch such as this one has no covered job at all. Claude reads
+Y43 as holding such merges until phase 1 lands; whether a head with no code
+path may merge with every job stated NOT_RUN is the owner's call.
 
 ## Work in flight
 
