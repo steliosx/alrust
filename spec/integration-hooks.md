@@ -44,10 +44,20 @@ composite `history` type:
 - Voalack `voalack_capture_ack`
   (`voalack@4d70e69:packages/voalack/src/voalack/sql/schema.sql:169-176`) fires
   when the newest entry changed, its type is `ack` and `NEW.status = 'ack'`.
-  `voalack.capture_ack()` (`schema.sql:140-167`) looks for an intent staged
-  **in the same transaction** (`txid = txid_current()`), and refuses the
-  update unless `(NEW.history[1])."user"` equals the staged actor login and
+  `voalack.capture_ack()` (`schema.sql:140-167`) looks for an uncaptured
+  intent staged **in the same transaction** (`txid = txid_current()`). If
+  there is none it returns `NULL` without raising (`schema.sql:146-151`);
+  because the trigger is `AFTER UPDATE`, PostgreSQL ignores that return
+  value, so the alert update stands and nothing is captured. Only when an
+  intent is found does it refuse the update unless
+  `(NEW.history[1])."user"` equals the staged actor login and
   `NEW.customer` matches the staged customer and an active binding.
+
+Neither trigger is a fallback refusal for a missing stage. The SQL side
+ignores acknowledgements it has no staged intent or marker for, and refuses
+only mismatched staged captures. Refusing an acknowledgement that must not
+proceed unstaged, such as one of a bound alert whose source has drifted, is
+the application gate's job (sections 3 and 5).
 
 Since PR #150 (ADR-0005) alrust stores alerts in the reference layout, with the
 `history` composite array newest first. Its acknowledgement path
@@ -129,12 +139,17 @@ Other prerequisites, not owner-gated:
    and the request id.
 2. **Transaction shape.** The acknowledgement runs in one transaction at
    `READ COMMITTED` (Voalack checks this, `boundary.py:156-173`), with the
-   alert locked before any hook call and the single history `UPDATE` after
-   the stage phase. Hook calls use the same connection and transaction.
+   alert locked before every hook call except `pre_lookup`, which by
+   definition runs before the lookup and the lock (so that A3 option (a)'s
+   refusal stays uniform), and the single history `UPDATE` after the stage
+   phase. Hook calls use the same connection and transaction.
 3. **Route.** Both integrations act only on `PUT /alert/<id>/action` with
    `action = "ack"` (Zabalack `plugins.py:284-288`, Voalack `boundary.py:88-96`).
-   `PUT /alert/<id>/status` calls no hook, as in Alerta; the triggers then find
-   no staged intent or marker.
+   `PUT /alert/<id>/status` calls no hook and so creates no hook-generated
+   marker or staged intent, as in Alerta. Caller text on that route can
+   contain marker-like bytes, but its history entry has type `status`, which
+   keeps it out of both acknowledgement triggers (each requires
+   `(NEW.history[1]).type = 'ack'`).
 
 ## 3. The hook contract (alrust side)
 
@@ -144,7 +159,7 @@ acknowledgement. Each registered integration implements:
 | Phase | When, inside the acknowledgement transaction | Purpose |
 |---|---|---|
 | `pre_lookup(caller)` | before the alert is looked up | Refusals that must not depend on the alert (A3 option (a)). |
-| `claims(alert)` | after the alert row is locked | Ownership on pinned `main`: Zabalack claims `attributes.source_system = 'zabbix'` (`plugins.py:411`); Voalack claims `event = 'VeeamOneAlarm'` with a `veeamone:` resource (`schema.sql:64-65`, `intent.py:72`). |
+| `claims(alert)` | after the alert row is locked | Ownership on pinned `main`. Zabalack claims an alert with `attributes.source_system = 'zabbix'` (`plugins.py:411`). Voalack claims an alert when the protected registry `voalack.bindings` has an active row for its id, **whatever its current event or resource** (`boundary.py:99-109`, `158-165`); an error querying the registry refuses 503 "ACK not processed: capture registry unavailable" (`159-162`), and under the lock the binding is re-read through `voalack.lock_binding` (`185-198`), a binding gone by then leaving the alert unclaimed. Source drift of a bound alert is refused in `gate`, not treated as unclaimed. |
 | `gate(alert, caller)` | after `claims`, before the history entry is built | Policy and health checks and integration locks; may decline (no capture, a recorded skip) or refuse (the request fails and everything rolls back). |
 | `stage(alert, caller, text)` | after `gate` | Calls the integration's staging SQL; may return replacement text for the history entry. |
 | `pre_commit(alert, entry)` | after alrust's `UPDATE` (so after the trigger ran), immediately before `COMMIT` | Final checks and the integration's completing call; any failure rolls back before commit. |
@@ -152,8 +167,10 @@ acknowledgement. Each registered integration implements:
 
 Rules:
 
-- **At most one owner.** If more than one integration claims an alert, alrust
-  refuses the acknowledgement (503) and changes nothing. This takes the place
+- **At most one owner.** If more than one integration claims an alert (for
+  example an alert with an active Voalack binding whose attributes also say
+  `source_system = 'zabbix'`), alrust refuses the acknowledgement (503) and
+  changes nothing. This takes the place
   of Zabalack's "exactly one status-change receiver, signer last" checks
   (`plugins.py:291-295`, `372-390`), which exist because Alerta's plugin chain
   could reorder or append plugins; alrust's order is fixed in code.
@@ -170,7 +187,10 @@ Rules:
   separate workers.
 - **Secrets and restricted data** follow section 4.2's privacy rules, which
   apply on every read path, not only here.
-- **Unclaimed alerts** run exactly as today, subject to A3.
+- **Unclaimed alerts** run exactly as today, subject to A3. An alert is
+  unclaimed by Voalack only when it has no active binding; a bound alert
+  whose event, resource or other source facts have drifted stays claimed and
+  is refused in `gate` (section 5).
 
 ## 4. Zabalack adapter (pinned `main`)
 
@@ -246,7 +266,7 @@ receive-time hook with the same reserved list and mapping.
 | Version gate: `alerta.version.__version__ != "9.1.0"` raises at install | `boundary.py:75`, `800-803` | Voalack's session replaces it with an identity check that also accepts alrust (Z3). |
 | App wrapping: replaces `Alert.find_by_id`, wraps the action view, `finalize_request` and the session interface, adds before, after and teardown handlers, and defers Alerta's commits, to keep the acknowledgement in one transaction that commits only at the request boundary | `boundary.py:166-167`, `729-735`, `811-812`, `898-917`; `txn.py:11-29` | Not needed for the transaction itself: alrust's acknowledgement is already one transaction. The commit-time checks and the commit outcome it implemented are carried below. |
 | API-key refusal before lookup (uniform 403, B2) | `boundary.py:141-149` | `pre_lookup` or `gate`, per the owner's A3 choice. |
-| Gate: customer-filtered load; `READ COMMITTED`; `voalack.lock_binding(alert_id)` and the alert `FOR UPDATE`; refusal of unreviewed response callbacks and foreign `request_finished` receivers; verified auth type; `voalack.lock_grant(...)`; frozen gate facts | `boundary.py:102`, `148-253`; `intent.py:307-324` | `gate`, with A1 and A2's caller facts. The customer is the locked row's `customer`, not a caller value (`boundary.py:205`). Flask-only refusals: V2. |
+| Gate: customer-filtered load; the protected binding lookup (section 3, `claims`); `READ COMMITTED`; the alert `FOR UPDATE`, then `voalack.lock_binding(alert_id)`, and a complete reload under the lock; the reloaded alert checked against the binding revision by `source_mismatch` (resource, event, environment and origin; the Veeam ONE class; customer; combination and capture ids; active state and severity; snapshot digest), else 503 "ACK not processed: the alert no longer matches its approved binding"; refusal of unreviewed response callbacks and foreign `request_finished` receivers; verified auth type; `voalack.lock_grant(...)`; frozen gate facts | `boundary.py:99-109`, `148-253` (source check at `217-220`); `intent.py:67-89`, `307-324` | `gate`, with A1 and A2's caller facts. The customer is the locked row's `customer`, not a caller value (`boundary.py:205`). Flask-only refusals: V2. |
 | Staging: `voalack.stage_intent(action_id, alert_id, request_id, actor_login, payload, customer, binding_id, binding_revision, issued_at, capture_expires_at, execution_expires_at)`, timestamps as the exact signed ISO strings | `plugin.py:22-54`; SQL `schema.sql:225` | `stage`, same call. The history entry's `user` must equal `actor_login`, or the trigger refuses. |
 | Finalisation after the update: joins the staged intent, its capture and the final history head; builds and signs the version 2 `human_ack_intent` envelope (domain `alerta-ack-core\0intent\0v2\0`, sorted compact UTF-8 JSON, HMAC-SHA256 under `VOALACK_ACTIVE_KID`); `voalack.approve_intent(action_id, canonical, sha256, kid, mac, final)` | `boundary.py:358-433`, `498-526`; `envelope.py:20-22`, `307-344`; `alerta_ack_core` `profiles.py:47-60`, `canonical.py:16-24`; SQL `schema.sql:255-282` | `pre_commit`, first part. |
 | **Commit-time verification, immediately before `COMMIT`**, reached through `_matches_final_history(require_finalized_note=True)`: the stored canonical bytes hash to the stored digest, which equals the capture's; the MAC verifies under the frozen kid; the alert reloaded in this transaction still matches the binding revision (`_source_holds`); the envelope rebuilt from the frozen gate facts, the current revision, the generation and the final note equals the signed one, byte for byte; `voalack.lock_grant` returns the frozen policy revision; and `issued_at <= clock_timestamp() < capture_expires_at` on the database clock (exclusive expiry). Any failure rolls back before commit and the response becomes an error ("ACK not saved: response or history changed before commit") | `boundary.py:436-495`, `591-621` (check at `602`) | `pre_commit`, second part: every one of these invariants, after `approve_intent` and immediately before alrust's `COMMIT`. `approve_intent` checks only digest syntax and linkage and stores the proof (`schema.sql:255-282`); it does not enforce the authorisation or the deadline. Example the checks catch: staging inside the window, a stall past `capture_expires_at`, then signing and approval; pinned `main` refuses this, and so must alrust. |
