@@ -50,7 +50,7 @@ The full plan and its fixed decisions are in the
 
 ## Status
 
-**Reviewed checkpoint: 29 October 2026**, main
+**Reviewed checkpoint: 30 October 2026**, main
 [`812eb125`](https://github.com/steliosx/alrust/commit/812eb125f277eff0ce111b79b72ee4de000f1645).
 The owner resumed the project (Y37), and the reference-storage implementation
 is now merged. Phase 0, full compatibility and live integration qualification
@@ -100,7 +100,7 @@ New unmerged work, inspected on **29 October**:
 - The no-PR [phase-1 work branch](https://github.com/steliosx/alrust/tree/feacc8342dedb084e70f620b8a46eb8bf969e0e3)
   at `feacc834` contains an exact-commit binder, stage controls and a
   pins-only reference-guard workflow. Published STATUS relays source acceptance,
-  but reports **no admitted execution** under the lane's thermal limit.
+  at the earlier 29 October input checkpoint reports **no admitted execution** under the thermal limit; later attempts are distinguished below.
   A source-accepted input packet is not a successful job, evidence-custody
   readback or proven VM cleanup. Its pins-only guard would not cover the hosted
   base-diff guard or every CI job.
@@ -116,6 +116,38 @@ to its own admission, access, custody and cleanup requirements.
 See [DECISIONS](docs/DECISIONS.md) for current policy and merge authority.
 Signed private peer records are not reproduced here; published summaries
 are evidence of recorded dispositions, not an independently inspected mailbox.
+
+### Unmerged lane and policy follow-up — 30 October 2026
+
+Main is unchanged. [#163](https://github.com/steliosx/alrust/pull/163) at
+`ab2de19b` records owner answers: OIDC operator identity, hook-only customer
+claims, uniform pre-lookup API-key refusal with Voalack enabled, and Rust
+signing under file-based custody. Exact key placement still needs affected
+review. The one-time bootstrap merge exception was withdrawn unused.
+
+[#165](https://github.com/steliosx/alrust/pull/165) at `74f26317` records
+the smoke-specific gate, audited signed-attestation route, time-slot agreement
+and the owner's proceed-within-existing-gates rule. These are unmerged records;
+none supplies a general runtime, merge or release approval.
+
+For [#164](https://github.com/steliosx/alrust/pull/164), exact head `88363e31`,
+[App check 124308310170](https://github.com/steliosx/alrust/runs/124308310170)
+reports smoke success. Independent verification of the exact execution through
+the lane reviewer's sanitized signed attestation remains pending. It is not a
+Rust build, reference guard or conformance result. Earlier text above describes
+the preceding input checkpoint; a later attempted dispatch did occur and ran no
+job because credentials were unavailable. Its operational stop and uncertain
+cleanup remain separately recorded; a new smoke does not release that hold.
+
+The original phase-1 guard at `feacc834` failed during checkout: its guard
+and regression stages were skipped. [#162](https://github.com/steliosx/alrust/pull/162)
+now advances to `0472045b` with a newer pinned checkout action.
+[#166](https://github.com/steliosx/alrust/pull/166) at `6778b2b1` similarly
+updates hosted checkout/setup-python pins. These are inspected source changes,
+not successful replacement executions. Hosted checks still show seven
+unexecuted failures under the reported billing refusal.
+All 19 full executing profiles remain NOT_RUN; #157/#159 and other PRs still
+need results covering their own exact source and applicable checks.
 
 <details>
 <summary>Historical checkpoint — 29 September 2026</summary>
