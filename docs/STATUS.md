@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-30T21:56Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-30T22:00Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -428,14 +428,15 @@ keys stay valid and nothing is deleted. Codex records the restoration
 as reported, not verified. As the lane reports, its queue has been active
 since 20:41:07Z.
 Its first run, a zab-al-ack job, passed at 20:49:20Z (as reported).
-The alrust smoke on PR #164 (DECISIONS Y46) ran next, at the frozen
-approved head `88363e31` (workflow v2 `1628a3ef`): request
+The Forgehold lane reports that the alrust smoke on PR #164 (DECISIONS
+Y46) ran next, at the frozen approved head `88363e31` (workflow v2 `1628a3ef`): request
 `20261030T205001Z-smoke-alrust`, engine run `0e30403b`, launched 20:55:36Z,
 done 20:56:23Z. The lane reports both `FH_SMOKE` PASS markers and verified
 cleanup. **Verified independently by alrust and Codex (`b252415b`) on
 GitHub:** App 5257079's check run `124308310170` `smoke` on `88363e31` is
-completed/success (20:56:14Z to 20:56:16Z), and every step in its summary
-succeeded, including the checkout post-step. **Still pending:** proof that
+completed/success (20:56:14Z to 20:56:16Z), and its App-published summary
+marks each step successful, including the checkout post-step. That summary
+does not prove the exact execution. **Still pending:** proof that
 this App-published result came from an actual run of the exact input,
 source, workflow and job. The proof is an audited, sanitized, signed
 attestation from the lane's Codex reviewer, whose key the owner designated
