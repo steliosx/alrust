@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-30T01:14Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-30T01:17Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -404,13 +404,18 @@ decision 58. Its single dispatch was refused with HTTP 404 because the
 engine had no GitHub credential for alrust, so every job is NOT_RUN and
 nothing in the branch failed. The hold is SEALED and the input is spent,
 with no retry. The summary records cleanup verification as failed
-(`cleanup 20`: a POST without an ownership-verified run id) and an open
-operational uncertainty held by the lane's Codex. The cause, as the lane
-reports it: GitHub App 5257079's private key is missing from the engine.
+(`cleanup 20`: a POST without an ownership-verified run id), and the
+lane's Codex keeps a shared operational stop: engine-local persisted-run
+state UNKNOWN and GitHub-side absence UNKNOWN, pending disposition. The
+cause, as the lane reports it: GitHub App 5257079's private key is missing
+from the engine, most likely lost in the 2026-10-26 reboot (a hypothesis).
 Owner actions are pending (DECISIONS Y45). A one-time merge of the
 workflow with every job NOT_RUN (PR #162) was granted and then withdrawn
-unused once the lane showed its engine reads the workflow at the branch
-itself. PR #162 stays a draft and merges normally after a verified result.
+unused once the lane reported that its engine reads the workflow at the
+branch itself (not verified by alrust). PR #162 stays a draft and merges normally after a verified result.
+Restoring the key alone is neither full release nor authority to retry the
+spent input; a later attempt stays behind the Forgehold lane's actor,
+reviewer and owner gates, including that stop.
 
 ## Work in flight
 
