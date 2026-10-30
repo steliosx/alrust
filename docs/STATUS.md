@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-29T16:06Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-30T01:14Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -383,6 +383,34 @@ reach this branch as it stands. Remaining requirement, stated exactly: a
 qualifying `reference/` guard result for PR #160's exact head, hosted or
 Forgehold, with every other job stated NOT_RUN under Y43. PR #160 stays
 draft until then.
+
+**Integration hook spec and owner answers (2026-10-29).** PR #161 adds
+`spec/integration-hooks.md`, the hook contract through which alrust runs
+Zabalack's and Voalack's acknowledgement capture (Y41). Codex approved the
+source at `17c21100` (`8180b3ba`) after three rounds. The owner settled its
+four questions the same evening (DECISIONS Y44): OIDC operators are the
+capture path, operator customers come from the OIDC token for the hooks
+only, API-key acknowledgements get Voalack's uniform 403 when its adapter
+is enabled, and the adapters sign in Rust under file-based key custody,
+with placement still to be reviewed. Like PR #160, PR #161 needs a
+qualifying `reference/` guard result on its exact head before it merges.
+
+**First Forgehold attempt: NOT_PASS, no job ran (2026-10-29).** Relayed by
+the Forgehold session; alrust has its derived summary
+(`DERIVED-RESULT-20261029T231706Z.json`, 2582 bytes, sha256 `47a9bc90`),
+not the original evidence. The attempt on `feacc834` (INPUT `c5b3c4d9`,
+token `20261029T231706Z`) launched at about 23:17Z under the lane's owner
+decision 58. Its single dispatch was refused with HTTP 404 because the
+engine had no GitHub credential for alrust, so every job is NOT_RUN and
+nothing in the branch failed. The hold is SEALED and the input is spent,
+with no retry. The summary records cleanup verification as failed
+(`cleanup 20`: a POST without an ownership-verified run id) and an open
+operational uncertainty held by the lane's Codex. The cause, as the lane
+reports it: GitHub App 5257079's private key is missing from the engine.
+Owner actions are pending (DECISIONS Y45). A one-time merge of the
+workflow with every job NOT_RUN (PR #162) was granted and then withdrawn
+unused once the lane showed its engine reads the workflow at the branch
+itself. PR #162 stays a draft and merges normally after a verified result.
 
 ## Work in flight
 
