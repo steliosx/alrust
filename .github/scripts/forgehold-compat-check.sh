@@ -28,7 +28,15 @@ if [[ "$subs" == yes ]]; then
 else
   ! grep -q '^[ +U]' <<<"$status" || fail "a submodule is initialised"
 fi
-hdr=$(git -C "$path" config --local --name-only --get-regexp '^http\..*\.extraheader$' || true)
+# git config exits 0 with the matching key names, 1 when nothing matches;
+# any other status is a failed read and must not count as "absent".
+if hdr=$(git -C "$path" config --local --name-only --get-regexp '^http\..*\.extraheader$'); then
+  [[ -n "$hdr" ]] || fail "git config returned no key names"
+else
+  rc=$?
+  [[ $rc -eq 1 ]] || fail "git config failed (exit $rc)"
+  hdr=
+fi
 if [[ "$persist" == yes ]]; then
   [[ -n "$hdr" ]] || fail "no persisted credential header"
 else
