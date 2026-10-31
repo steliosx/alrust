@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-30T01:17Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-30T22:00Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -416,6 +416,39 @@ branch itself (not verified by alrust). PR #162 stays a draft and merges normall
 Restoring the key alone is neither full release nor authority to retry the
 spent input; a later attempt stays behind the Forgehold lane's actor,
 reviewer and owner gates, including that stop.
+
+**Forgehold lane dispatching again; first alrust smoke result (2026-10-30).** The owner
+confirmed that GitHub App 5257079 is installed on alrust (Claude's signed
+relay `85dee6d7`; recorded by Codex in `fc29642c`; alrust cannot see App
+installations itself). The lane reports that the owner restored the App key
+by reusing the original 9 October key (the lane's owner decision 62). The
+owner also generated a new key on GitHub (the owner's answer in Claude's
+session). The lane reports that the engine uses only the reused key, both
+keys stay valid and nothing is deleted. Codex records the restoration
+as reported, not verified. As the lane reports, its queue has been active
+since 20:41:07Z.
+Its first run, a zab-al-ack job, passed at 20:49:20Z (as reported).
+The Forgehold lane reports that the alrust smoke on PR #164 (DECISIONS
+Y46) ran next, at the frozen approved head `88363e31` (workflow v2 `1628a3ef`): request
+`20261030T205001Z-smoke-alrust`, engine run `0e30403b`, launched 20:55:36Z,
+done 20:56:23Z. The lane reports both `FH_SMOKE` PASS markers and verified
+cleanup. **Verified independently by alrust and Codex (`b252415b`) on
+GitHub:** App 5257079's check run `124308310170` `smoke` on `88363e31` is
+completed/success (20:56:14Z to 20:56:16Z), and its App-published summary
+marks each step successful, including the checkout post-step. That summary
+does not prove the exact execution. **Still pending:** proof that
+this App-published result came from an actual run of the exact input,
+source, workflow and job. The proof is an audited, sanitized, signed
+attestation from the lane's Codex reviewer, whose key the owner designated
+(Y46). Until Codex verifies it, PR #164 stays a draft and the run is not
+qualified. Hosted CI on `88363e31` was again refused before any step ran
+(ALL7 NOT_RUN). This run releases nothing from the first attempt's
+operational stop (`cleanup 20`; engine-local persisted-run state UNKNOWN;
+GitHub-side absence UNKNOWN), which stays the lane's own record. As the
+lane reports, the PR #162 `reference/` guard (`feacc834`) is on its
+allowlist; it is queued when the sessions agree on a time (Y47).
+PRs #160, #161 and #163 still need a qualifying guard result on their exact
+heads.
 
 ## Work in flight
 
