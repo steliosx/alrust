@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-31T15:53Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-31T15:54Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -495,7 +495,7 @@ the daemon is untested. So the conformance unit tests may fit inside
 the 6-minute limit. Cold Rust builds and tests probably do not, and the
 PostgreSQL jobs (store tests, alpha smoke) cannot run in the lane as it is.
 
-**Two more merges; no open PRs except the held ones (2026-10-31).** On
+**Two more merges (2026-10-31).** On
 the same Y43 basis as above (one Forgehold job each, qualified from the App
 check and the designated reviewer's audited attestation, Codex `45e3d927`;
 every other job NOT_RUN):
@@ -514,8 +514,9 @@ every other job NOT_RUN):
 The Forgehold lane reports that the owner approved (the lane's decision
 70) one prefix entry for the guard: any `claude/*` ref can run
 `forgehold-reference-guard.yml` (`a4af9617`) without a new allowlist
-entry, once its Codex accepts the packaging. Open PRs: only #159 and #157,
-both held.
+entry, once its Codex accepts the packaging. Open PRs besides this STATUS
+update: #159 and #157 (held), and the older #136, #124, #71 and #70, which
+keep their existing dispositions; nothing here changes them.
 
 ## Work in flight
 
