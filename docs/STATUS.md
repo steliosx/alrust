@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-30T22:00Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-31T13:03Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -449,6 +449,51 @@ lane reports, the PR #162 `reference/` guard (`feacc834`) is on its
 allowlist; it is queued when the sessions agree on a time (Y47).
 PRs #160, #161 and #163 still need a qualifying guard result on their exact
 heads.
+
+**Six PRs merged on Forgehold evidence (2026-10-31).** Each merge used
+`--match-head-commit` on its exact Codex-approved head. Its applicable CI
+(Y43) was one Forgehold job, qualified by Codex from the App 5257079 check
+run plus a sanitized, signed attestation. The attestation comes from the
+Forgehold lane's Codex reviewer, whose key the owner designated (Y46), and
+says the reviewer audited the run's records in place, including the native
+record of the checkout post-step. Every other job is NOT_RUN: hosted CI is
+still refused before any step for billing, and no runtime is qualified.
+Branches are kept. In order:
+- PR #164, the smoke workflow: `6b870d27` (05:39:16Z), smoke check
+  `124308310170` at `88363e31`.
+- PR #162, the `reference/` guard workflow: `966f11df` (05:39:40Z), guard
+  check `124382912223` at `0472045b`. The first guard run, on `feacc834`,
+  failed in setup: `actions/checkout` v4.4.0 runs on Node.js 20, which
+  GitHub removed for JavaScript actions on 2026-09-23. The successor pins
+  v5.1.0 (Node.js 24). The failure stays on record.
+- PRs #160, #161, #163 and #165, each with `main` merged in first and an
+  affected Codex review (`e7d8ce2f`): `fe0481da`, `f3290f60`, `42e9570e`
+  and `9ac8cbf0` (07:39:13Z to 07:39:50Z). Guard checks `124468418610`,
+  `124469720102`, `124471012104` and `124472360202`. #163 and #165 were
+  retargeted to `main` after their parents merged. Each merge's tree
+  matched the one Codex computed in advance (`b0a11254`).
+
+The STATUS paragraphs above with earlier stamps describe these PRs as
+drafts, as of those stamps. The owner approved, in the Forgehold lane's
+Codex thread, a standing sanitized export of these attestations (the lane's
+decision 65, reported), so later runs need no per-payload owner step. Short
+runs now have a standing time agreement (DECISIONS Y49). Still open:
+PR #166 moves `ci.yml` and `executing.yml` off the Node.js 20 actions
+(checkout v5.1.0; setup-python v6.3.0). Its source is approved
+(`1633fce2`), and it needs a focused action-compatibility result before it
+merges. PRs #159 and #157 stay held.
+
+**What the Forgehold VM offers for phase 2 (lane probe, 2026-10-31,
+reported).** One vCPU, about 3 GiB of memory and 19.6 GB of disk. Network
+connections reach GitHub, PyPI, crates.io, static.rust-lang.org, the
+Ubuntu archive, Docker Hub, GHCR and npm. Python 3.12.3 is installed. The
+tool cache is empty, so `setup-python` downloads on every run. rustup
+1.29.0 is present, but a job needs its own writable `RUSTUP_HOME` and
+`CARGO_HOME` and downloads the toolchain on every run. There is no sudo or
+apt, and no service containers (no PostgreSQL). The Docker CLI is there;
+the daemon is untested. So the conformance unit tests may fit inside
+the 6-minute limit. Cold Rust builds and tests probably do not, and the
+PostgreSQL jobs (store tests, alpha smoke) cannot run in the lane as it is.
 
 ## Work in flight
 
