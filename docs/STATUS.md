@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-31T13:03Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-31T15:54Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -494,6 +494,29 @@ apt, and no service containers (no PostgreSQL). The Docker CLI is there;
 the daemon is untested. So the conformance unit tests may fit inside
 the 6-minute limit. Cold Rust builds and tests probably do not, and the
 PostgreSQL jobs (store tests, alpha smoke) cannot run in the lane as it is.
+
+**Two more merges (2026-10-31).** On
+the same Y43 basis as above (one Forgehold job each, qualified from the App
+check and the designated reviewer's audited attestation, Codex `45e3d927`;
+every other job NOT_RUN):
+- PR #167 (DECISIONS Y49 and the STATUS above): `95a6228a` (14:06:33Z),
+  guard check `124553023286` at `7684bc97`.
+- PR #166 (Node.js 24 action pins in `ci.yml` and `executing.yml`):
+  `20cd8ba4` (14:06:47Z), action-compatibility check `124554568668` at
+  `f889c968`. The job, `forgehold-actions-compat.yml`, runs checkout
+  v5.1.0 in the four `with:` shapes those workflows use (shallow or full
+  history, with or without the `reference/` submodules, credentials
+  persisted or not, an explicit ref) and setup-python v6.3.0 with 3.12.
+  Codex found one defect in its first version (a failed credential read
+  counted as "absent") before it ran. It covers action compatibility
+  only, not the Rust, PostgreSQL or conformance steps after setup.
+
+The Forgehold lane reports that the owner approved (the lane's decision
+70) one prefix entry for the guard: any `claude/*` ref can run
+`forgehold-reference-guard.yml` (`a4af9617`) without a new allowlist
+entry, once its Codex accepts the packaging. Open PRs besides this STATUS
+update: #159 and #157 (held), and the older #136, #124, #71 and #70, which
+keep their existing dispositions; nothing here changes them.
 
 ## Work in flight
 
