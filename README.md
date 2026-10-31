@@ -50,8 +50,8 @@ The full plan and its fixed decisions are in the
 
 ## Status
 
-**Reviewed checkpoint: 30 October 2026**, main
-[`812eb125`](https://github.com/steliosx/alrust/commit/812eb125f277eff0ce111b79b72ee4de000f1645).
+**Reviewed checkpoint: 31 October 2026**, main
+[`33b5ce02`](https://github.com/steliosx/alrust/commit/33b5ce0211af990421563bc931cd56e6ad3abc85).
 The owner resumed the project (Y37), and the reference-storage implementation
 is now merged. Phase 0, full compatibility and live integration qualification
 remain open. Decisions Y38–Y41 settle value conversion, NULL-read refusals,
@@ -61,7 +61,7 @@ The hook and downstream adapters are not implemented or qualified by these decis
 | Area | Current evidence | Remaining limit |
 |---|---|---|
 | Rust API alpha | [PR #138](https://github.com/steliosx/alrust/pull/138), head `17eacd61`, and follow-up fixes are merged. Alert receive/query/status/action/delete, heartbeat and API-key routes execute against native PostgreSQL 18.6. | Early alpha; no release, live acceptance or complete Alerta parity is claimed. |
-| Alpha smoke and ordinary CI | [Exact-main run 40754792921](https://github.com/steliosx/alrust/actions/runs/40754792921) passed six executed jobs at `812eb125`, including the PostgreSQL 18.6 alpha smoke and 22 store tests (two generators ignored). The draft-only catalog-generation job was skipped. | Python reference bootstrap is not two-server conformance. All 19 full executing profiles remain `NOT_RUN`; skips receive no execution credit. |
+| Earlier alpha smoke and ordinary CI | [Exact-main run 40754792921](https://github.com/steliosx/alrust/actions/runs/40754792921) passed six executed jobs at `812eb125`, including the PostgreSQL 18.6 alpha smoke and 22 store tests (two generators ignored). The draft-only catalog-generation job was skipped. | Python reference bootstrap is not two-server conformance. All 19 full executing profiles remain `NOT_RUN`; skips receive no execution credit. |
 | Rust lint policy and agent guidance | [PR #152](https://github.com/steliosx/alrust/pull/152) introduced the lint policy. [PR #155](https://github.com/steliosx/alrust/pull/155) adds the three BeautifulRust skills with an Alrust scope adapter; Y37 supersedes the earlier pause. | CI's exact `-D warnings` command and project contracts remain controlling. Skills do not grant runtime or publication authority. |
 | Selected two-target conformance | [STATUS](docs/STATUS.md) records the narrow local A3B run at `ff7bc55a`: Python reference 10/10, Rust candidate 9/10. The failed `event!=` case was corrected by #147. | The corrected two-target pairing has not been rerun. All 19 full executing profiles remain `NOT_RUN`; full compatibility is unproved. |
 | Reference-storage compatibility | [PR #150](https://github.com/steliosx/alrust/pull/150), approved head `03d43f15`, merged as `0cf4ad8c`. [Run 40733434721](https://github.com/steliosx/alrust/actions/runs/40733434721) passed all seven jobs and 22 storage tests, including owned-sequence refusal/preservation and consistent non-string value conversion. Published STATUS records Codex approval `f274d1fa`. | Source and tests support the scoped migration correction; the private signed record was not inspected. This does not qualify Zabalack/Voalack integration or full API parity. Extra-index DDL remains a proposal; the strict catalog rule is still implemented. |
@@ -117,7 +117,45 @@ See [DECISIONS](docs/DECISIONS.md) for current policy and merge authority.
 Signed private peer records are not reproduced here; published summaries
 are evidence of recorded dispositions, not an independently inspected mailbox.
 
-### Unmerged lane and policy follow-up — 30 October 2026
+### Current lane and integration checkpoint — 31 October 2026
+
+The previously unmerged hook contract, owner-decision records and lane workflows
+are now on main: #164 `88363e31`, #162 `0472045b`, #160 `5e4b075b`,
+#161 `0ffbf542`, #163 `21887406` and #165 `135fd253`.
+[STATUS](docs/STATUS.md) records Codex's exact-head and merge-tree checks, and
+qualification from the App checks plus the designated lane reviewer's signed,
+audited attestations. This presentation review inspected the published records
+and App results, not the original private signed packets.
+
+The [fixed guard check](https://github.com/steliosx/alrust/runs/124382912223)
+succeeded at `0472045b`. It covers the pins-only reference policy and its
+regression controls, not a Rust build, PostgreSQL test or two-server profile.
+The earlier `feacc834` checkout failure remains historical evidence.
+
+[PR #166](https://github.com/steliosx/alrust/pull/166), approved head
+`f889c968`, merges the action-pin repairs and a bounded action-compatibility
+workflow. Source inspection confirms that failed credential-header reads now
+refuse instead of counting as absence.
+[Check 124554568668](https://github.com/steliosx/alrust/runs/124554568668)
+reports success for four checkout variants and Python setup. That qualifies
+setup compatibility only; the Rust, database and conformance stages remain
+unexecuted in this lane.
+
+[#167](https://github.com/steliosx/alrust/pull/167), head `7684bc97`, and
+[#168](https://github.com/steliosx/alrust/pull/168), head `52b6f1b7`, merge the
+current records. The latter has an [exact-head guard pass](https://github.com/steliosx/alrust/runs/124587574336).
+Y49's short-run time agreement is not run admission or result acceptance.
+
+[Current-main hosted run 41220348866](https://github.com/steliosx/alrust/actions/runs/41220348866)
+has six failures without executed steps and one skipped draft-only catalog job.
+The reported billing refusal remains separate from code correctness.
+All 19 full executing profiles remain NOT_RUN; #157/#159 remain held.
+The reported lane guest has no PostgreSQL service or sudo/apt, and cold Rust
+setup may exceed its six-minute budget. Broader CI needs separately reviewed
+profiles and execution evidence. Merged hook design does not implement OIDC
+or either integration adapter.
+
+### Historical unmerged lane checkpoint — 30 October 2026
 
 Main is unchanged. [#163](https://github.com/steliosx/alrust/pull/163) at
 `ab2de19b` records owner answers: OIDC operator identity, hook-only customer

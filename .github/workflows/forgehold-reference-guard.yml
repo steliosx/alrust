@@ -1,0 +1,41 @@
+name: Forgehold phase 1 (reference guard)
+
+# Forgehold lane profile, phase 1 (owner decision 2026-10-28: alrust CI jobs run
+# inside Forgehold's micro-VM lane). The lane's contract (FH_LANE_INPUT_1,
+# fh_workflow.py single-job subset): workflow_dispatch only, exactly one job,
+# runs-on exactly these four labels with no expressions, the job name agreed in
+# the INPUT tuple. One attempt = one ephemeral SmolVM guest (Ubuntu 24.04) that
+# installs nothing here: this job needs only the repository checkout, so it
+# exercises the lane before egress to apt, crates.io or PyPI is characterised.
+# It is dispatched by the lane for an exact commit, never on push or pull
+# request. This workflow has no publisher step of its own; the native Actions
+# run and job records exist because the guest is a registered runner, the
+# lane's GitHub App publishes a check run on the dispatched commit, and the
+# lane's sealed evidence and the signed mailbox carry the verified result.
+# No GitHub expression syntax is used anywhere. Every RQ_JSON result line is
+# printed by a script after its command succeeds, never written in a step's
+# run text, so a line's presence in the log is evidence for that stage. The hosted ci.yml is unchanged.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  forgehold-reference-guard:
+    name: forgehold-reference-guard
+    runs-on: [self-hosted, Linux, X64, forgehold]
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (node24; v4.4.0 is node20, removed for JavaScript actions on 2026-09-23)
+        with:
+          fetch-depth: 0
+          submodules: false
+          persist-credentials: false
+      - name: Bind the checkout to the dispatched commit (GITHUB_SHA must equal HEAD)
+        run: .github/scripts/forgehold-bind.sh forgehold-reference-guard
+      - name: Reference policy (ADR-0001), pins only
+        run: .github/scripts/forgehold-stage.sh forgehold-reference-guard reference-policy .github/scripts/reference-guard.sh HEAD ""
+      - name: Guard regression cases
+        run: .github/scripts/forgehold-stage.sh forgehold-reference-guard guard-regressions bash -c '.github/scripts/test-reference-guard.sh && .github/scripts/test-forgehold-bind.sh && .github/scripts/test-forgehold-stage.sh'

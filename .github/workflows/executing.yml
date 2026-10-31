@@ -58,7 +58,7 @@ jobs:
           --health-retries 10
     steps:
       # --- before J: these steps' timeouts sum to at most 5 minutes ----------------
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
         timeout-minutes: 2
         with:
           submodules: true

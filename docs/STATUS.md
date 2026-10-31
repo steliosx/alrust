@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-28T18:56Z by claude-alrust, the sole writer of this
+_Last updated: 2026-10-31T15:54Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -343,6 +343,180 @@ owed: the draft-only store catalog job checks out the PR head rather than
 the merge, so drafts older than PR #150 fail it; Codex asked for a separate
 bounded workflow proposal (merge-ref checkout with explicit provenance,
 unchanged cleanup, permissions and required checks).
+
+**Hosted CI refused; Forgehold lane chosen (2026-10-28, from about
+19:39Z).** GitHub stopped starting hosted jobs on the account (billing or
+spending-limit annotation on every job of PR #159's run 40756258263; the
+identical tree had passed on PR #158 four minutes earlier). Codex classified
+that run NOT_RUN. Held until a covering result: PR #159 (Codex's test-only
+fix for the `test_stdin_feed_obeys_call_deadline` race, source approved at
+`7ffd1c5e`) and PR #157 (the draft catalog job checking out the merge
+commit, catalog job qualified at `61ec7fc4`, overall red from that race).
+The owner chose a plain self-hosted runner, then withdrew it the same
+evening for Forgehold's micro-VM lane (DECISIONS Y42; Claude reports
+nothing of the runner path was activated), and ruled that a Codex-verified
+Forgehold result bound to the exact commit is the merge gate for the jobs
+it covers, uncovered jobs stated NOT_RUN (Y43). Phase 1 is
+`claude/forgehold-phase1` at `feacc834`, pushed without a PR, Codex
+approved (`9dd9ac96`) and publication verified (`01849ff9`): the pins-only
+`reference/` guard (`reference-guard.sh HEAD` with an empty base) plus its
+regression, binding and stage controls, not the hosted base-diff guard or
+the seven CI jobs. The branch is frozen while the lane's request is open.
+Relayed by the Forgehold session, not received here as original artifacts:
+its Codex accepted the signed input (`c5b3c4d9`, expiry
+2026-10-30T00:10:56Z) as source and data on 2026-10-29 at 14:54Z, which is
+not attempt admission, success or cleanup; no attempt was admitted; the
+laptop's temperature has been above the lane's 75 °C limit. Later phases
+are a planned profile sequence; what each covers depends on its exact
+admitted result. Merged the same day before the refusal: PR #156
+(`812eb125`, ADR-0005 decision 9 exact index proposal, design text only; no
+index adopted). PR #158 was closed unmerged (superseded by #159).
+
+**PR #160 (this STATUS and Y42/Y43, docs only) has no qualified CI result
+yet.** Its hosted run 40907569089 was refused before any step (NOT_RUN). It
+follows the existing docs path: Y5 and Y32, a merge after Codex approves
+the exact head, with the applicable checks. The check that applies to a
+diff touching only `docs/` is the `reference/` guard (ADR-0001), which no
+run has executed for this head. Phase 1's pins-only guard runs only where
+its workflow file exists (today `claude/forgehold-phase1`), so it does not
+reach this branch as it stands. Remaining requirement, stated exactly: a
+qualifying `reference/` guard result for PR #160's exact head, hosted or
+Forgehold, with every other job stated NOT_RUN under Y43. PR #160 stays
+draft until then.
+
+**Integration hook spec and owner answers (2026-10-29).** PR #161 adds
+`spec/integration-hooks.md`, the hook contract through which alrust runs
+Zabalack's and Voalack's acknowledgement capture (Y41). Codex approved the
+source at `17c21100` (`8180b3ba`) after three rounds. The owner settled its
+four questions the same evening (DECISIONS Y44): OIDC operators are the
+capture path, operator customers come from the OIDC token for the hooks
+only, API-key acknowledgements get Voalack's uniform 403 when its adapter
+is enabled, and the adapters sign in Rust under file-based key custody,
+with placement still to be reviewed. Like PR #160, PR #161 needs a
+qualifying `reference/` guard result on its exact head before it merges.
+
+**First Forgehold attempt: NOT_PASS, no job ran (2026-10-29).** Relayed by
+the Forgehold session; alrust has its derived summary
+(`DERIVED-RESULT-20261029T231706Z.json`, 2582 bytes, sha256 `47a9bc90`),
+not the original evidence. The attempt on `feacc834` (INPUT `c5b3c4d9`,
+token `20261029T231706Z`) launched at about 23:17Z under the lane's owner
+decision 58. Its single dispatch was refused with HTTP 404 because the
+engine had no GitHub credential for alrust, so every job is NOT_RUN and
+nothing in the branch failed. The hold is SEALED and the input is spent,
+with no retry. The summary records cleanup verification as failed
+(`cleanup 20`: a POST without an ownership-verified run id), and the
+lane's Codex keeps a shared operational stop: engine-local persisted-run
+state UNKNOWN and GitHub-side absence UNKNOWN, pending disposition. The
+cause, as the lane reports it: GitHub App 5257079's private key is missing
+from the engine, most likely lost in the 2026-10-26 reboot (a hypothesis).
+Owner actions are pending (DECISIONS Y45). A one-time merge of the
+workflow with every job NOT_RUN (PR #162) was granted and then withdrawn
+unused once the lane reported that its engine reads the workflow at the
+branch itself (not verified by alrust). PR #162 stays a draft and merges normally after a verified result.
+Restoring the key alone is neither full release nor authority to retry the
+spent input; a later attempt stays behind the Forgehold lane's actor,
+reviewer and owner gates, including that stop.
+
+**Forgehold lane dispatching again; first alrust smoke result (2026-10-30).** The owner
+confirmed that GitHub App 5257079 is installed on alrust (Claude's signed
+relay `85dee6d7`; recorded by Codex in `fc29642c`; alrust cannot see App
+installations itself). The lane reports that the owner restored the App key
+by reusing the original 9 October key (the lane's owner decision 62). The
+owner also generated a new key on GitHub (the owner's answer in Claude's
+session). The lane reports that the engine uses only the reused key, both
+keys stay valid and nothing is deleted. Codex records the restoration
+as reported, not verified. As the lane reports, its queue has been active
+since 20:41:07Z.
+Its first run, a zab-al-ack job, passed at 20:49:20Z (as reported).
+The Forgehold lane reports that the alrust smoke on PR #164 (DECISIONS
+Y46) ran next, at the frozen approved head `88363e31` (workflow v2 `1628a3ef`): request
+`20261030T205001Z-smoke-alrust`, engine run `0e30403b`, launched 20:55:36Z,
+done 20:56:23Z. The lane reports both `FH_SMOKE` PASS markers and verified
+cleanup. **Verified independently by alrust and Codex (`b252415b`) on
+GitHub:** App 5257079's check run `124308310170` `smoke` on `88363e31` is
+completed/success (20:56:14Z to 20:56:16Z), and its App-published summary
+marks each step successful, including the checkout post-step. That summary
+does not prove the exact execution. **Still pending:** proof that
+this App-published result came from an actual run of the exact input,
+source, workflow and job. The proof is an audited, sanitized, signed
+attestation from the lane's Codex reviewer, whose key the owner designated
+(Y46). Until Codex verifies it, PR #164 stays a draft and the run is not
+qualified. Hosted CI on `88363e31` was again refused before any step ran
+(ALL7 NOT_RUN). This run releases nothing from the first attempt's
+operational stop (`cleanup 20`; engine-local persisted-run state UNKNOWN;
+GitHub-side absence UNKNOWN), which stays the lane's own record. As the
+lane reports, the PR #162 `reference/` guard (`feacc834`) is on its
+allowlist; it is queued when the sessions agree on a time (Y47).
+PRs #160, #161 and #163 still need a qualifying guard result on their exact
+heads.
+
+**Six PRs merged on Forgehold evidence (2026-10-31).** Each merge used
+`--match-head-commit` on its exact Codex-approved head. Its applicable CI
+(Y43) was one Forgehold job, qualified by Codex from the App 5257079 check
+run plus a sanitized, signed attestation. The attestation comes from the
+Forgehold lane's Codex reviewer, whose key the owner designated (Y46), and
+says the reviewer audited the run's records in place, including the native
+record of the checkout post-step. Every other job is NOT_RUN: hosted CI is
+still refused before any step for billing, and no runtime is qualified.
+Branches are kept. In order:
+- PR #164, the smoke workflow: `6b870d27` (05:39:16Z), smoke check
+  `124308310170` at `88363e31`.
+- PR #162, the `reference/` guard workflow: `966f11df` (05:39:40Z), guard
+  check `124382912223` at `0472045b`. The first guard run, on `feacc834`,
+  failed in setup: `actions/checkout` v4.4.0 runs on Node.js 20, which
+  GitHub removed for JavaScript actions on 2026-09-23. The successor pins
+  v5.1.0 (Node.js 24). The failure stays on record.
+- PRs #160, #161, #163 and #165, each with `main` merged in first and an
+  affected Codex review (`e7d8ce2f`): `fe0481da`, `f3290f60`, `42e9570e`
+  and `9ac8cbf0` (07:39:13Z to 07:39:50Z). Guard checks `124468418610`,
+  `124469720102`, `124471012104` and `124472360202`. #163 and #165 were
+  retargeted to `main` after their parents merged. Each merge's tree
+  matched the one Codex computed in advance (`b0a11254`).
+
+The STATUS paragraphs above with earlier stamps describe these PRs as
+drafts, as of those stamps. The owner approved, in the Forgehold lane's
+Codex thread, a standing sanitized export of these attestations (the lane's
+decision 65, reported), so later runs need no per-payload owner step. Short
+runs now have a standing time agreement (DECISIONS Y49). Still open:
+PR #166 moves `ci.yml` and `executing.yml` off the Node.js 20 actions
+(checkout v5.1.0; setup-python v6.3.0). Its source is approved
+(`1633fce2`), and it needs a focused action-compatibility result before it
+merges. PRs #159 and #157 stay held.
+
+**What the Forgehold VM offers for phase 2 (lane probe, 2026-10-31,
+reported).** One vCPU, about 3 GiB of memory and 19.6 GB of disk. Network
+connections reach GitHub, PyPI, crates.io, static.rust-lang.org, the
+Ubuntu archive, Docker Hub, GHCR and npm. Python 3.12.3 is installed. The
+tool cache is empty, so `setup-python` downloads on every run. rustup
+1.29.0 is present, but a job needs its own writable `RUSTUP_HOME` and
+`CARGO_HOME` and downloads the toolchain on every run. There is no sudo or
+apt, and no service containers (no PostgreSQL). The Docker CLI is there;
+the daemon is untested. So the conformance unit tests may fit inside
+the 6-minute limit. Cold Rust builds and tests probably do not, and the
+PostgreSQL jobs (store tests, alpha smoke) cannot run in the lane as it is.
+
+**Two more merges (2026-10-31).** On
+the same Y43 basis as above (one Forgehold job each, qualified from the App
+check and the designated reviewer's audited attestation, Codex `45e3d927`;
+every other job NOT_RUN):
+- PR #167 (DECISIONS Y49 and the STATUS above): `95a6228a` (14:06:33Z),
+  guard check `124553023286` at `7684bc97`.
+- PR #166 (Node.js 24 action pins in `ci.yml` and `executing.yml`):
+  `20cd8ba4` (14:06:47Z), action-compatibility check `124554568668` at
+  `f889c968`. The job, `forgehold-actions-compat.yml`, runs checkout
+  v5.1.0 in the four `with:` shapes those workflows use (shallow or full
+  history, with or without the `reference/` submodules, credentials
+  persisted or not, an explicit ref) and setup-python v6.3.0 with 3.12.
+  Codex found one defect in its first version (a failed credential read
+  counted as "absent") before it ran. It covers action compatibility
+  only, not the Rust, PostgreSQL or conformance steps after setup.
+
+The Forgehold lane reports that the owner approved (the lane's decision
+70) one prefix entry for the guard: any `claude/*` ref can run
+`forgehold-reference-guard.yml` (`a4af9617`) without a new allowlist
+entry, once its Codex accepts the packaging. Open PRs besides this STATUS
+update: #159 and #157 (held), and the older #136, #124, #71 and #70, which
+keep their existing dispositions; nothing here changes them.
 
 ## Work in flight
 

@@ -11,3 +11,6 @@ Planned:
 - `security-fixes.md`: where alrust deliberately fixes a reference defect
   instead of reproducing it (owner decision Y3), with the conformance impact
   of each fix.
+- `integration-hooks.md`: the hook contract through which alrust runs the
+  Zabalack and Voalack acknowledgement capture (Y35, Y41); a draft until
+  reviewed.
