@@ -15,12 +15,17 @@
 # Filesystem mode for `test` (CU_TMP): many tests create and fsync files, which
 # costs far more on a disk than on a tmpfs (rest-fz locally: 167 s with pytest's
 # basetemp on disk, 13 s on tmpfs). CU_TMP=tmpfs, the default, puts basetemp in
-# a fresh private directory on /dev/shm and refuses (exit 2) unless /dev/shm is
-# a writable tmpfs; the directory is removed on exit. CU_TMP=disk keeps it under
-# $RUNNER_TEMP. tmpfs mode is a speed mode: fsync there is not disk durability,
-# so it is not disk-backed evidence. ci.yml's hosted job remains the
-# disk-backed run of the same tests. The mode and filesystem are printed. The
-# full suite writes about 170 MB of temporary files. The venv lives under
+# a fresh private directory on the first of /dev/shm and /tmp that is a
+# writable tmpfs where files can be executed (some tests run scripts they write
+# to tmp_path, so a noexec mount such as the lane guest's /dev/shm does not
+# qualify); it refuses (exit 2) if neither does. The directory is removed on
+# exit. CU_TMP=disk keeps basetemp under $RUNNER_TEMP. tmpfs mode is a speed
+# mode: fsync there is not disk durability, so it is not disk-backed evidence.
+# ci.yml's hosted job remains the disk-backed run of the same tests. The mode,
+# the chosen directory, its filesystem and its size are printed. The full suite writes about 170 MB of temporary files, more than the
+# lane guest's tmpfs holds, so tmpfs mode also loads the cu_tmp_reaper
+# plugin (next to this script), which removes each test's tmp_path after its
+# teardown; peak use is then about one test's files. The venv lives under
 # $RUNNER_TEMP.
 #
 # The pip install and each pytest run have a hard wall-clock bound (timeout(1):
@@ -53,8 +58,22 @@ select_shard() {
 }
 
 pytest_env() {
-  PYTHONPATH="$PWD/conformance:$PWD/$unit" \
+  PYTHONPATH="$PWD/conformance:$PWD/$unit${extra_path:+:$extra_path}" \
   PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONDONTWRITEBYTECODE=1 "$@"
+}
+
+# Prints the first of /dev/shm and /tmp that is a writable tmpfs on which a
+# file can be executed; fails if there is none.
+exec_tmpfs() {
+  local dir probe
+  for dir in /dev/shm /tmp; do
+    [[ -d "$dir" && -w "$dir" && "$(stat -f -c %T "$dir")" == tmpfs ]] || continue
+    probe=$(mktemp "$dir/alrust-cu-probe-XXXXXX") || continue
+    printf '#!/bin/sh\nexit 0\n' > "$probe" && chmod 700 "$probe"
+    if "$probe" 2>/dev/null; then rm -f "$probe"; echo "$dir"; return 0; fi
+    rm -f "$probe"
+  done
+  return 1
 }
 
 # Node IDs pytest collects for the given arguments, one per line. Any
@@ -76,19 +95,23 @@ case "${1:-}" in
     ;;
   test)
     select_shard "${2:-}"
+    plugin=() extra_path=""
     case "${CU_TMP:-tmpfs}" in
       tmpfs)
-        if [[ ! -d /dev/shm || ! -w /dev/shm || "$(stat -f -c %T /dev/shm)" != tmpfs ]]; then
-          echo "conformance-unit.sh: CU_TMP=tmpfs but /dev/shm is not a writable tmpfs" >&2; exit 2
+        if ! dir=$(exec_tmpfs); then
+          echo "conformance-unit.sh: CU_TMP=tmpfs but neither /dev/shm nor /tmp is a writable, executable tmpfs" >&2; exit 2
         fi
-        base=$(mktemp -d /dev/shm/alrust-cu-XXXXXX)  # private (0700), unique
-        trap 'chmod -R u+w "$base" 2>/dev/null; rm -rf "$base"' EXIT ;;
+        base=$(mktemp -d "$dir/alrust-cu-XXXXXX")  # private (0700), unique
+        trap 'chmod -R u+w "$base" 2>/dev/null; rm -rf "$base"' EXIT
+        echo "conformance-unit.sh: $dir $(df -k --output=size,avail "$dir" | tail -1 | awk '{print "size " $1 " KiB, available " $2 " KiB"}')"
+        extra_path="$PWD/.github/scripts"
+        plugin=(-p cu_tmp_reaper) ;;
       disk) base="$RUNNER_TEMP" ;;
       *) echo "conformance-unit.sh: CU_TMP must be tmpfs or disk" >&2; exit 2 ;;
     esac
     echo "conformance-unit.sh: CU_TMP=${CU_TMP:-tmpfs}, basetemp $base/pytest ($(stat -f -c %T "$base"))"
     pytest_env timeout -s INT -k 10 240 "$venv/bin/python" -m pytest -c conformance/pytest.ini \
-      -p no:cacheprovider -q --durations=25 --basetemp="$base/pytest" "${select[@]}"
+      -p no:cacheprovider "${plugin[@]}" -q --durations=25 --basetemp="$base/pytest" "${select[@]}"
     ;;
   check-shards)
     whole=$(collected "$unit" | sort)
