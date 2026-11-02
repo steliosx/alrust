@@ -57,10 +57,15 @@ pytest_env() {
   PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONDONTWRITEBYTECODE=1 "$@"
 }
 
-# Node IDs pytest collects for the given arguments, one per line.
+# Node IDs pytest collects for the given arguments, one per line. Any
+# collection error (pytest's exit status) fails; only lines that are node IDs
+# of the suite's test files are kept, so diagnostics are never counted.
 collected() {
-  pytest_env "$venv/bin/python" -m pytest -c conformance/pytest.ini \
-    -p no:cacheprovider -q --collect-only "$@" | grep '::' || true
+  local out rc=0
+  out=$(pytest_env "$venv/bin/python" -m pytest -c conformance/pytest.ini \
+    -p no:cacheprovider -q --collect-only "$@") || rc=$?
+  [[ $rc -eq 0 ]] || { echo "conformance-unit.sh: collection failed (pytest exit $rc)" >&2; exit 1; }
+  grep -E '^tests/unit/test_[A-Za-z0-9_]+\.py::' <<<"$out" || true
 }
 
 case "${1:-}" in
