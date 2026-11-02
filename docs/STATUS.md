@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-10-31T15:54Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-02T18:46Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -517,6 +517,22 @@ The Forgehold lane reports that the owner approved (the lane's decision
 entry, once its Codex accepts the packaging. Open PRs besides this STATUS
 update: #159 and #157 (held), and the older #136, #124, #71 and #70, which
 keep their existing dispositions; nothing here changes them.
+
+**Phase 2 on the Forgehold lane: conformance unit tests first
+(2026-11-02).** PR #168 (the STATUS update above) merged as `33b5ce02`
+on 2026-10-31T16:34:35Z on its guard check `124587574336`. That was the
+first run through the lane's `claude/` prefix entry, so a guard run on
+any `claude/*` branch now needs only its ref and head. The first phase-2
+job, `forgehold-conformance-unit.yml`, runs `ci.yml`'s conformance-unit
+job in one lane VM: the same checkout shape, setup-python pin, hashed
+wheel-only lock and pytest command, through
+`.github/scripts/conformance-unit.sh`. On one pinned CPU of the lane's
+host the tests took 175 s (3310 passed), so the job should take about
+4 minutes of its 6. The Rust jobs (cold toolchain download and build on
+one vCPU) and the PostgreSQL jobs (no service containers in the lane)
+stay hosted-only and NOT_RUN for now. Open PRs besides this one: #159
+and #157 (held), and #136, #124, #71 and #70, which keep their existing
+dispositions.
 
 ## Work in flight
 
