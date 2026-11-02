@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-02T19:59Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-02T23:54Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -549,6 +549,55 @@ and the PostgreSQL jobs (no service containers in the lane) stay
 hosted-only and NOT_RUN for now. Open PRs besides this one: #159 and #157
 (held), and #136, #124, #71 and #70, which keep their existing
 dispositions.
+
+**Hosted CI runs again; conformance unit tests on the lane paused at 3 of
+6 shards (2026-11-02).** GitHub-hosted CI has executed alrust's runs again
+since 2026-11-02. The owner confirmed the account's spending limit is
+still $0, so these runs use only free included minutes. With all seven
+hosted jobs green on each exact head and Codex's clearance, five PRs
+merged by the ordinary Minimal route:
+- #169: the lane shard workflows (`efc12a46`).
+- #170: tmpfs mode and the `check-shards` self-check (`bca09eb2`).
+- #171: the per-test tmp_path reaper (`158197b6`).
+- #172: a fixed filesystem per shard and the new `db-stage` shard
+  (`98da51fc`).
+- #173: export-evidence listing its staging directory through a fresh
+  descriptor (`ba5ce669`), a btrfs portability fix found on the way.
+
+`ci.yml`'s conformance-unit job now also proves, by node ID, that the
+lane shards cover exactly the suite, and runs the reaper's regression
+cases. The suite now has 3311 tests.
+
+Each lane attempt was stopped by a different property of the guest; each
+of the first three is fixed. The facts below are as the lane reports
+them. The first three attempts' records have signed attestations from the
+lane's reviewer; the fourth attempt's are still due:
+- Disk: the guest's disk is slow for this suite's create-and-fsync tests
+  (rest-fz stalled at d57ba20e). Its disk-mode basetemp is on overlayfs.
+- Tmpfs size: the guest's /dev/shm is a 64 MiB tmpfs and filled up
+  (ENOSPC at 3c95b371). Fixed by removing each test's tmp_path after the
+  test.
+- noexec: /dev/shm is noexec, and the job sees no executable tmpfs
+  (refusal by design at 2bc05afd). Three files execute scripts in
+  tmp_path, so they run on disk.
+
+The fourth attempt, at `ac1543b9` (the six-shard design), passed three
+shards:
+- rest-fz: tmpfs, 2344 passed, 15.4 s, check `125624724216`.
+- db-stage: disk, 93 passed, 54.1 s, check `125626380543`.
+- rest-ae: tmpfs, 684 passed, 3.5 s, check `125628254650`.
+
+ref-supervisor then failed one of its 60 tests (check `125629761850`).
+The stop helper returned `pidfd_open_failed` where the test expected
+`no_terminal_receipt`, so the guest appears to refuse `pidfd_open`. That
+is an environment capability difference, not a timing or storage
+problem. entry-supervisor and ref-launcher did not run.
+
+As planned before this attempt, lane work on the conformance unit tests
+is now paused at 3 of 6 shards. Hosted CI remains the full run of these
+tests, so no merge depends on the lane. Picking it up again needs a
+decision on the pidfd_open difference: a guest capability change on the
+lane's side, or a test that accepts the refusal.
 
 ## Work in flight
 
