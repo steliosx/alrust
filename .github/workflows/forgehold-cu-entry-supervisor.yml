@@ -1,6 +1,6 @@
 name: Forgehold conformance unit tests, shard entry-supervisor (Python 3.12)
 
-# Forgehold lane profile, phase 2 (FH-ALRUST-CONF-UNIT-1): one of five shards
+# Forgehold lane profile, phase 2 (FH-ALRUST-CONF-UNIT-1): one of the shards
 # of ci.yml's conformance-unit job, run inside one Forgehold micro-VM. Same
 # checkout shape, setup-python pin, hashed wheel-only lock and pytest command
 # as ci.yml, through .github/scripts/conformance-unit.sh, which defines the
