@@ -235,6 +235,31 @@ def test_a_staged_file_that_reads_back_different_is_unknown(tmp_path, capsys, mo
     assert (code, lines) == (3, [{"result": "UNKNOWN", "code": "staging_verify_failed"}])
 
 
+def test_the_staging_listing_does_not_trust_the_writing_descriptor(tmp_path, capsys, monkeypatch):
+    # On btrfs, listing the directory descriptor through which the entries
+    # were just created can return no names. Model that: a descriptor used as
+    # dir_fd for an O_CREAT open lists as empty afterwards. The re-check must
+    # still see every staged file.
+    job, out, staging = tree(tmp_path)
+    real_open, real_listdir, stale = os.open, os.listdir, set()
+
+    def tracking_open(path, flags, mode=0o777, *, dir_fd=None):
+        if dir_fd is not None and flags & os.O_CREAT:
+            stale.add(dir_fd)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    def stale_listdir(path="."):
+        if isinstance(path, int) and path in stale:
+            return []
+        return real_listdir(path)
+    monkeypatch.setattr(ex.os, "open", tracking_open)
+    monkeypatch.setattr(ex.os, "listdir", stale_listdir)
+    code, lines = run(capsys, [str(job), str(out), str(staging)])
+    monkeypatch.undo()
+    assert stale, "the export no longer creates files through a directory descriptor"
+    assert (code, lines[-1]["result"], lines[-1]["state"]) == (0, "STAGED", "HOLDER_PROVEN")
+
+
 def test_output_never_carries_content_or_absolute_paths(tmp_path, capsys):
     job, out, staging = tree(tmp_path)
     ex.main([str(job), str(out), str(staging)])
