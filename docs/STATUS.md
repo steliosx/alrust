@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-02T18:46Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-02T18:50Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -520,9 +520,12 @@ keep their existing dispositions; nothing here changes them.
 
 **Phase 2 on the Forgehold lane: conformance unit tests first
 (2026-11-02).** PR #168 (the STATUS update above) merged as `33b5ce02`
-on 2026-10-31T16:34:35Z on its guard check `124587574336`. That was the
-first run through the lane's `claude/` prefix entry, so a guard run on
-any `claude/*` branch now needs only its ref and head. The first phase-2
+on 2026-10-31T16:34:35Z on its guard check `124587574336`. That audited
+guard run used the lane's `claude/` prefix entry. The lane reports the
+entry accepts further `claude/*` refs for the unchanged
+`forgehold-reference-guard.yml` (`a4af9617`), with the exact ref and head
+supplied and the lane's existing packaging, actor, admission and result
+gates retained. The first phase-2
 job, `forgehold-conformance-unit.yml`, runs `ci.yml`'s conformance-unit
 job in one lane VM: the same checkout shape, setup-python pin, hashed
 wheel-only lock and pytest command, through
