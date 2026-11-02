@@ -4,18 +4,24 @@
 #
 #   conformance-unit.sh install          locked, hash-checked, wheel-only venv
 #   conformance-unit.sh test <shard>     pytest on one shard of conformance/tests/unit
-#   conformance-unit.sh check-shards     the shards' collections must add up to the suite
+#   conformance-unit.sh check-shards     the shards' collections must be exactly the suite
 #
 # The lane runs the suite as five shards, one workflow each. The shards together
 # are exactly the test_*.py files of conformance/tests/unit: three named files,
-# then every other file split by first letter (a-e, f-z); check-shards proves
-# that against pytest's own collection.
+# then every other file split by first letter (a-e, f-z). check-shards proves
+# that against pytest's own collection: the shards' node IDs, taken together,
+# must equal the suite's node IDs, with none missing, extra or duplicated.
 #
-# Many tests create and fsync files, which costs far more on a disk than on a
-# tmpfs (rest-fz locally: 167 s on disk, 13 s on tmpfs). pytest's basetemp
-# therefore goes on /dev/shm when that is a writable tmpfs, else under
-# $RUNNER_TEMP; the choice is printed. The full suite writes about 170 MB
-# there. The venv lives under $RUNNER_TEMP.
+# Filesystem mode for `test` (CU_TMP): many tests create and fsync files, which
+# costs far more on a disk than on a tmpfs (rest-fz locally: 167 s with pytest's
+# basetemp on disk, 13 s on tmpfs). CU_TMP=tmpfs, the default, puts basetemp in
+# a fresh private directory on /dev/shm and refuses (exit 2) unless /dev/shm is
+# a writable tmpfs; the directory is removed on exit. CU_TMP=disk keeps it under
+# $RUNNER_TEMP. tmpfs mode is a speed mode: fsync there is not disk durability,
+# so it is not disk-backed evidence. ci.yml's hosted job remains the
+# disk-backed run of the same tests. The mode and filesystem are printed. The
+# full suite writes about 170 MB of temporary files. The venv lives under
+# $RUNNER_TEMP.
 #
 # The pip install and each pytest run have a hard wall-clock bound (timeout(1):
 # 90 s and 240 s). pytest gets SIGINT first and KILL 10 s later; printing its
@@ -51,10 +57,10 @@ pytest_env() {
   PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONDONTWRITEBYTECODE=1 "$@"
 }
 
-# Number of tests pytest collects for the given arguments.
+# Node IDs pytest collects for the given arguments, one per line.
 collected() {
   pytest_env "$venv/bin/python" -m pytest -c conformance/pytest.ini \
-    -p no:cacheprovider -q --collect-only "$@" | grep -c '::'
+    -p no:cacheprovider -q --collect-only "$@" | grep '::' || true
 }
 
 case "${1:-}" in
@@ -65,26 +71,39 @@ case "${1:-}" in
     ;;
   test)
     select_shard "${2:-}"
-    base="$RUNNER_TEMP"
-    if [[ -d /dev/shm && -w /dev/shm && "$(stat -f -c %T /dev/shm)" == tmpfs ]]; then
-      base=$(mktemp -d /dev/shm/alrust-cu-XXXXXX)
-      trap 'chmod -R u+w "$base" 2>/dev/null; rm -rf "$base"' EXIT
-    fi
-    echo "conformance-unit.sh: basetemp $base/pytest ($(stat -f -c %T "$base"))"
+    case "${CU_TMP:-tmpfs}" in
+      tmpfs)
+        if [[ ! -d /dev/shm || ! -w /dev/shm || "$(stat -f -c %T /dev/shm)" != tmpfs ]]; then
+          echo "conformance-unit.sh: CU_TMP=tmpfs but /dev/shm is not a writable tmpfs" >&2; exit 2
+        fi
+        base=$(mktemp -d /dev/shm/alrust-cu-XXXXXX)  # private (0700), unique
+        trap 'chmod -R u+w "$base" 2>/dev/null; rm -rf "$base"' EXIT ;;
+      disk) base="$RUNNER_TEMP" ;;
+      *) echo "conformance-unit.sh: CU_TMP must be tmpfs or disk" >&2; exit 2 ;;
+    esac
+    echo "conformance-unit.sh: CU_TMP=${CU_TMP:-tmpfs}, basetemp $base/pytest ($(stat -f -c %T "$base"))"
     pytest_env timeout -s INT -k 10 240 "$venv/bin/python" -m pytest -c conformance/pytest.ini \
       -p no:cacheprovider -q --durations=25 --basetemp="$base/pytest" "${select[@]}"
     ;;
   check-shards)
-    whole=$(collected "$unit")
-    sum=0
+    whole=$(collected "$unit" | sort)
+    parts=""
     for s in "${shards[@]}"; do
       select_shard "$s"
-      n=$(collected "${select[@]}")
-      echo "conformance-unit.sh: shard $s collects $n"
-      sum=$((sum + n))
+      ids=$(collected "${select[@]}")
+      echo "conformance-unit.sh: shard $s collects $(grep -c . <<<"$ids")"
+      parts+="$ids"$'\n'
     done
-    echo "conformance-unit.sh: shards $sum, suite $whole"
-    [[ "$sum" -eq "$whole" && "$whole" -gt 0 ]]
+    parts=$(grep . <<<"$parts" | sort)
+    dups=$(uniq -d <<<"$parts")
+    echo "conformance-unit.sh: shards $(grep -c . <<<"$parts"), suite $(grep -c . <<<"$whole")"
+    [[ -n "$whole" ]] || { echo "conformance-unit.sh: the suite collected nothing" >&2; exit 1; }
+    [[ -z "$dups" ]] || { echo "conformance-unit.sh: node IDs in more than one shard:" >&2; echo "$dups" >&2; exit 1; }
+    if [[ "$parts" != "$whole" ]]; then
+      echo "conformance-unit.sh: shard node IDs differ from the suite's:" >&2
+      diff <(echo "$whole") <(echo "$parts") >&2 || true
+      exit 1
+    fi
     ;;
   *) echo "usage: conformance-unit.sh install|test <shard>|check-shards" >&2; exit 2 ;;
 esac
