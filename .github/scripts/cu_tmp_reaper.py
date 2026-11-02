@@ -9,10 +9,13 @@ fixtures are left alone, so peak use is not strictly one test's files.
 
 It never changes a test, a fixture value or an outcome; it only deletes a
 directory pytest created for a test that has finished, and only inside the
---basetemp the script passes (it does nothing without one). Symlinks are
-removed as links and never followed: permissions are repaired only on real
-directories inside that tmp_path. A tmp_path that is already gone is a no-op;
-any other removal failure propagates as a teardown error.
+--basetemp the script passes (it does nothing without one). The tmp_path must
+be a real directory strictly below the real basetemp with no symlink anywhere
+in its own path; otherwise it is left alone. Before removal every real
+directory inside it is made owner-writable, top-down and never through a
+symlink (symlinks are removed as links, their targets untouched). A tmp_path
+that is already gone is a no-op; any other failure propagates as a teardown
+error.
 """
 
 import os
@@ -24,46 +27,47 @@ from pathlib import Path
 import pytest
 
 
-def _inside(path, root):
+def _owned(tmp, base):
+    """The test's tmp_path as a real path, if it is a strict descendant of the
+    real basetemp and no component of it is a symlink; else None."""
+    lexical = os.path.abspath(tmp)
+    real = os.path.realpath(tmp)
+    root = os.path.realpath(base)
+    if lexical != real or real == root:
+        return None
     try:
-        Path(os.path.abspath(path)).relative_to(root)
+        Path(real).relative_to(root)
     except ValueError:
-        return False
-    return True
+        return None
+    return real
 
 
-def _repair(path, root):
-    # Owner rwx on a real directory inside root; never through a symlink.
-    if _inside(path, root) and os.path.isdir(path) and not os.path.islink(path):
-        os.chmod(path, stat.S_IRWXU)
-        return True
-    return False
+def _open_up(path):
+    """Give every real directory in the tree owner rwx, top-down, never
+    through a symlink, so that the removal below cannot be refused."""
+    os.chmod(path, stat.S_IRWXU)
+    with os.scandir(path) as entries:
+        subdirs = [e.path for e in entries if e.is_dir(follow_symlinks=False)]
+    for sub in subdirs:
+        _open_up(sub)
 
 
 def remove_tmp_path(tmp, base):
-    """Remove tmp (a test's tmp_path) if it lies inside base. Returns whether
-    anything was removed."""
-    root = Path(os.path.abspath(tmp))
-    if not _inside(root, Path(os.path.abspath(base))) or os.path.islink(root):
+    """Remove tmp (a test's tmp_path) if it is a real directory owned inside
+    base. Returns whether anything was removed."""
+    root = _owned(tmp, base)
+    if root is None or not os.path.isdir(root):
         return False
-    if not os.path.lexists(root):
-        return False
-    _repair(root, root)
 
-    def on_error(func, path, exc):
-        if isinstance(exc, FileNotFoundError):
-            return
-        target = os.path.dirname(path) if func in (os.unlink, os.rmdir) else path
-        if func in (os.open, os.scandir, os.listdir):
-            target = path
-        if not _repair(target, root):
+    def missing_ok(func, path, exc):
+        if not isinstance(exc, FileNotFoundError):
             raise exc
-        func(path)
 
+    _open_up(root)
     if sys.version_info >= (3, 12):
-        shutil.rmtree(root, onexc=on_error)
+        shutil.rmtree(root, onexc=missing_ok)
     else:  # pragma: no cover - the lane and CI pin Python 3.12
-        shutil.rmtree(root, onerror=lambda f, p, ei: on_error(f, p, ei[1]))
+        shutil.rmtree(root, onerror=lambda f, p, ei: missing_ok(f, p, ei[1]))
     return True
 
 

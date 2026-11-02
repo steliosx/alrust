@@ -82,6 +82,32 @@ def main():
                     and t.is_symlink() and (outside / "keep").exists() and mode(outside) == 0o500)
         t.unlink()
 
+        # 6b. A tmp_path reached through a symlinked ancestor is not touched,
+        #     nor is anything at the link's target.
+        (outside_victim := top / "outside2" / "victim").mkdir(parents=True)
+        (outside_victim / "data").write_text("keep")
+        outside_victim.chmod(0o500)
+        (base / "anc").symlink_to(top / "outside2")
+        t = base / "anc" / "victim"
+        ok &= check("tmp_path under a symlinked ancestor untouched",
+                    reaper.remove_tmp_path(t, base) is False
+                    and (outside_victim / "data").read_text() == "keep"
+                    and mode(outside_victim) == 0o500)
+        (base / "anc").unlink()
+        outside_victim.chmod(0o700)
+
+        # 6c. basetemp itself is never removed.
+        ok &= check("basetemp itself untouched", reaper.remove_tmp_path(base, base) is False and base.exists())
+
+        # 6d. Nested directories with mode 0000 (and a 0000 root) are removed.
+        t = base / "t6d"
+        (t / "a" / "b").mkdir(parents=True)
+        (t / "a" / "b" / "f").write_text("x")
+        (t / "a" / "b").chmod(0o000)
+        (t / "a").chmod(0o000)
+        t.chmod(0o000)
+        ok &= check("nested 0000 directories removed", reaper.remove_tmp_path(t, base) and not t.exists())
+
         # 7. The hook removes a finished test's tmp_path and ignores tests
         #    without one or runs without --basetemp.
         t = base / "t7"
