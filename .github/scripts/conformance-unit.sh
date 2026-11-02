@@ -5,20 +5,23 @@
 #   conformance-unit.sh install   locked, hash-checked, wheel-only venv
 #   conformance-unit.sh test      pytest on conformance/tests/unit
 #
-# The venv and pytest's temporary files live under $RUNNER_TEMP.
+# The venv and pytest's temporary files live under $RUNNER_TEMP. Each command
+# has a hard wall-clock bound (timeout(1), TERM then KILL after 10 s) so the
+# job ends inside the Forgehold lane's episode budget even if the runner does
+# not enforce the job's timeout-minutes.
 set -euo pipefail
 : "${RUNNER_TEMP:?RUNNER_TEMP is not set}"
 venv="$RUNNER_TEMP/conformance-venv"
 case "${1:-}" in
   install)
     python -m venv "$venv"
-    "$venv/bin/python" -m pip install -q --require-hashes \
+    timeout -k 10 90 "$venv/bin/python" -m pip install -q --require-hashes \
       --only-binary=:all: -r conformance/requirements.lock
     ;;
   test)
     PYTHONPATH="$PWD/conformance:$PWD/conformance/tests/unit" \
     PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONDONTWRITEBYTECODE=1 \
-      "$venv/bin/python" -m pytest -c conformance/pytest.ini \
+      timeout -k 10 240 "$venv/bin/python" -m pytest -c conformance/pytest.ini \
       -p no:cacheprovider -q --basetemp="$RUNNER_TEMP/pytest" conformance/tests/unit
     ;;
   *) echo "usage: conformance-unit.sh install|test" >&2; exit 2 ;;
