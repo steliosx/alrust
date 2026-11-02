@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-02T19:03Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-02T19:59Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -525,19 +525,29 @@ guard run used the lane's `claude/` prefix entry. The lane reports the
 entry accepts further `claude/*` refs for the unchanged
 `forgehold-reference-guard.yml` (`a4af9617`), with the exact ref and head
 supplied and the lane's existing packaging, actor, admission and result
-gates retained. The first phase-2
-job, `forgehold-conformance-unit.yml`, runs `ci.yml`'s conformance-unit
-job in one lane VM: the same checkout shape, setup-python pin, hashed
-wheel-only lock and pytest command, through
-`.github/scripts/conformance-unit.sh`. On one pinned CPU of the lane's
-host the tests took 175 s (3310 passed), so the job should take about
-4 minutes of its 5. The script bounds the pip install (90 s) and the
-tests (240 s); setup and the job as a whole have no extra bound, and
-whether the job fits the lane's episode budget is for the lane to
-qualify. The Rust
-jobs (cold toolchain download and build on one vCPU) and the PostgreSQL
-jobs (no service containers in the lane) stay hosted-only and NOT_RUN for now. Open PRs besides this one: #159
-and #157 (held), and #136, #124, #71 and #70, which keep their existing
+gates retained.
+
+The first phase-2 work runs `ci.yml`'s conformance unit tests on the
+lane, with the same checkout shape, setup-python pin, hashed wheel-only
+lock and pytest command, through `.github/scripts/conformance-unit.sh`.
+The first attempt, one job at `94e95be8` (check `125505199839`), ended
+NOT_PASS by design: the script's 240 s pytest bound stopped it about 29%
+through the 3310 tests (as the lane reports; clean record, no queue
+suspension). On one pinned CPU of the lane's host the whole suite takes
+175 s, so a lane VM runs it several times slower. The suite now runs as
+five shards, one workflow each (`forgehold-cu-ref-supervisor`,
+`-entry-supervisor`, `-ref-launcher`, `-rest-ae`, `-rest-fz`). Together
+they are exactly the suite: 60 + 30 + 99 + 777 + 2344 = 3310 tests. On
+the host they take 54, 47, 42, 19 and 13 s. Each job keeps the 5-minute
+timeout and the script's bounds (pip 90 s, pytest 240 s, pytest
+interrupted first so an overrun still prints its slowest tests). Every
+run also prints its 25 slowest tests, so the lane's own timings can
+rebalance the shards. Setup and each job as a whole have no extra bound,
+and whether a job fits the lane's episode budget is for the lane to
+qualify. The Rust jobs (cold toolchain download and build on one vCPU)
+and the PostgreSQL jobs (no service containers in the lane) stay
+hosted-only and NOT_RUN for now. Open PRs besides this one: #159 and #157
+(held), and #136, #124, #71 and #70, which keep their existing
 dispositions.
 
 ## Work in flight
