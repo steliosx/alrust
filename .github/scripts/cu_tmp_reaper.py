@@ -2,44 +2,75 @@
 
 conformance-unit.sh loads it with `-p cu_tmp_reaper` only when CU_TMP=tmpfs.
 After each test's teardown it removes that test's own tmp_path directory, so
-the shard's peak use of /dev/shm is about one test's files rather than the
-whole shard's (rest-fz: about 74 MB kept, while the lane guest's /dev/shm ran
-out). It never changes a test, a fixture value or an outcome; it only deletes
-a directory pytest created for a test that has finished, and only inside
-the --basetemp the script passes (it does nothing without one). Directories
-from tmp_path_factory are left alone.
+the shard's peak use of /dev/shm stays near the largest single test's files
+rather than the whole shard's (rest-fz keeps about 74 MB; the lane guest's
+/dev/shm ran out). Directories made through tmp_path_factory or shared by
+fixtures are left alone, so peak use is not strictly one test's files.
+
+It never changes a test, a fixture value or an outcome; it only deletes a
+directory pytest created for a test that has finished, and only inside the
+--basetemp the script passes (it does nothing without one). Symlinks are
+removed as links and never followed: permissions are repaired only on real
+directories inside that tmp_path. A tmp_path that is already gone is a no-op;
+any other removal failure propagates as a teardown error.
 """
 
 import os
 import shutil
 import stat
+import sys
 from pathlib import Path
 
 import pytest
 
 
-def _writable(func, path, _exc):
-    os.chmod(path, stat.S_IRWXU)
-    func(path)
+def _inside(path, root):
+    try:
+        Path(os.path.abspath(path)).relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _repair(path, root):
+    # Owner rwx on a real directory inside root; never through a symlink.
+    if _inside(path, root) and os.path.isdir(path) and not os.path.islink(path):
+        os.chmod(path, stat.S_IRWXU)
+        return True
+    return False
+
+
+def remove_tmp_path(tmp, base):
+    """Remove tmp (a test's tmp_path) if it lies inside base. Returns whether
+    anything was removed."""
+    root = Path(os.path.abspath(tmp))
+    if not _inside(root, Path(os.path.abspath(base))) or os.path.islink(root):
+        return False
+    if not os.path.lexists(root):
+        return False
+    _repair(root, root)
+
+    def on_error(func, path, exc):
+        if isinstance(exc, FileNotFoundError):
+            return
+        target = os.path.dirname(path) if func in (os.unlink, os.rmdir) else path
+        if func in (os.open, os.scandir, os.listdir):
+            target = path
+        if not _repair(target, root):
+            raise exc
+        func(path)
+
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(root, onexc=on_error)
+    else:  # pragma: no cover - the lane and CI pin Python 3.12
+        shutil.rmtree(root, onerror=lambda f, p, ei: on_error(f, p, ei[1]))
+    return True
 
 
 @pytest.hookimpl(trylast=True)
 def pytest_runtest_teardown(item):
     tmp = getattr(item, "funcargs", {}).get("tmp_path")
-    if tmp is None:
-        return
     base = item.config.option.basetemp
-    if not base:
+    if tmp is None or not base:
         return
-    base = Path(base)
-    try:
-        tmp.resolve().relative_to(base.resolve())
-    except ValueError:
-        return
-    for root, dirs, _files in os.walk(tmp):
-        for d in dirs:
-            try:
-                os.chmod(os.path.join(root, d), stat.S_IRWXU)
-            except OSError:
-                pass
-    shutil.rmtree(tmp, onerror=_writable)
+    remove_tmp_path(tmp, base)
