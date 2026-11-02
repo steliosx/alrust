@@ -6,9 +6,10 @@ name: Forgehold conformance unit tests (Python 3.12)
 # ci.yml; no PostgreSQL, no reference server, no build. Each stage's RQ_JSON
 # line comes from forgehold-stage.sh after the command succeeds. Measured on
 # one pinned CPU of the lane's host: lock install about 30 s, tests about
-# 175 s. The job timeout is 5 minutes and conformance-unit.sh bounds the
-# install (90 s) and the tests (240 s) itself, so the run stays inside the
-# lane's episode budget even if the runner does not enforce timeout-minutes.
+# 175 s. The job timeout is 5 minutes; conformance-unit.sh bounds the pip
+# install (90 s) and the tests (240 s). Checkout, setup-python and venv
+# creation have no extra bound, and whether the whole job fits the lane's
+# episode budget is for that lane to qualify.
 
 on:
   workflow_dispatch:

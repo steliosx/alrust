@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-02T18:59Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-02T19:03Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -531,8 +531,10 @@ job in one lane VM: the same checkout shape, setup-python pin, hashed
 wheel-only lock and pytest command, through
 `.github/scripts/conformance-unit.sh`. On one pinned CPU of the lane's
 host the tests took 175 s (3310 passed), so the job should take about
-4 minutes of its 5; the script also bounds the install and the tests
-itself, so a slow run cannot outlast the lane's episode budget. The Rust
+4 minutes of its 5. The script bounds the pip install (90 s) and the
+tests (240 s); setup and the job as a whole have no extra bound, and
+whether the job fits the lane's episode budget is for the lane to
+qualify. The Rust
 jobs (cold toolchain download and build on one vCPU) and the PostgreSQL
 jobs (no service containers in the lane) stay hosted-only and NOT_RUN for now. Open PRs besides this one: #159
 and #157 (held), and #136, #124, #71 and #70, which keep their existing
