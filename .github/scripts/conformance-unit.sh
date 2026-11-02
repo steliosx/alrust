@@ -19,8 +19,11 @@
 # a writable tmpfs; the directory is removed on exit. CU_TMP=disk keeps it under
 # $RUNNER_TEMP. tmpfs mode is a speed mode: fsync there is not disk durability,
 # so it is not disk-backed evidence. ci.yml's hosted job remains the
-# disk-backed run of the same tests. The mode and filesystem are printed. The
-# full suite writes about 170 MB of temporary files. The venv lives under
+# disk-backed run of the same tests. The mode, filesystem and /dev/shm size are
+# printed. The full suite writes about 170 MB of temporary files, more than the
+# lane guest's /dev/shm holds, so tmpfs mode also loads the cu_tmp_reaper
+# plugin (next to this script), which removes each test's tmp_path after its
+# teardown; peak use is then about one test's files. The venv lives under
 # $RUNNER_TEMP.
 #
 # The pip install and each pytest run have a hard wall-clock bound (timeout(1):
@@ -53,7 +56,7 @@ select_shard() {
 }
 
 pytest_env() {
-  PYTHONPATH="$PWD/conformance:$PWD/$unit" \
+  PYTHONPATH="$PWD/conformance:$PWD/$unit${extra_path:+:$extra_path}" \
   PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONDONTWRITEBYTECODE=1 "$@"
 }
 
@@ -76,19 +79,23 @@ case "${1:-}" in
     ;;
   test)
     select_shard "${2:-}"
+    plugin=() extra_path=""
     case "${CU_TMP:-tmpfs}" in
       tmpfs)
         if [[ ! -d /dev/shm || ! -w /dev/shm || "$(stat -f -c %T /dev/shm)" != tmpfs ]]; then
           echo "conformance-unit.sh: CU_TMP=tmpfs but /dev/shm is not a writable tmpfs" >&2; exit 2
         fi
         base=$(mktemp -d /dev/shm/alrust-cu-XXXXXX)  # private (0700), unique
-        trap 'chmod -R u+w "$base" 2>/dev/null; rm -rf "$base"' EXIT ;;
+        trap 'chmod -R u+w "$base" 2>/dev/null; rm -rf "$base"' EXIT
+        echo "conformance-unit.sh: /dev/shm $(df -k --output=size,avail /dev/shm | tail -1 | awk '{print "size " $1 " KiB, available " $2 " KiB"}')"
+        extra_path="$PWD/.github/scripts"
+        plugin=(-p cu_tmp_reaper) ;;
       disk) base="$RUNNER_TEMP" ;;
       *) echo "conformance-unit.sh: CU_TMP must be tmpfs or disk" >&2; exit 2 ;;
     esac
     echo "conformance-unit.sh: CU_TMP=${CU_TMP:-tmpfs}, basetemp $base/pytest ($(stat -f -c %T "$base"))"
     pytest_env timeout -s INT -k 10 240 "$venv/bin/python" -m pytest -c conformance/pytest.ini \
-      -p no:cacheprovider -q --durations=25 --basetemp="$base/pytest" "${select[@]}"
+      -p no:cacheprovider "${plugin[@]}" -q --durations=25 --basetemp="$base/pytest" "${select[@]}"
     ;;
   check-shards)
     whole=$(collected "$unit" | sort)
