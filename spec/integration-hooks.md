@@ -8,7 +8,8 @@ and error bodies and log records that may carry restricted evidence are
 redacted. Section 3: the hook interface and its phase order inside the
 acknowledgement transaction (`crates/alrust-store-pg/src/hooks.rs`,
 `take_action_with`), and the receive-time `pre_receive` phase of 4.3
-(`receive_with`), tested with synthetic integrations only. No adapter is
+(`receive_with`), tested with synthetic integrations only. The Zabalack
+receive policy of 4.3.1 is implemented as a pure function. No adapter is
 implemented or registered, so no request calls a hook yet.
 Nothing here is a qualification or a deployment result. Decisions behind it: DECISIONS
 Y35 (alrust must fully support Zabalack and Voalack; exact reference storage
@@ -319,10 +320,13 @@ receive hook, in Alerta or here.
 
 ### 4.3.1 Receive policy port: proposal
 
-Status: **proposal for review**, before any code. It ports
-`normalizer.py:57-100` at `eaf2acf` as one pure function, which the
-Zabalack adapter's `pre_receive` will call once that adapter exists. Nothing
-is registered by this proposal or by its code.
+Status: the proposal was reviewed and merged (PR #180); it is implemented as
+`hooks::zabalack::pre_receive` and `ReceivePolicy`
+(`crates/alrust-store-pg/src/hooks/zabalack.rs`), with unit tests for the
+cases listed below. It ports `normalizer.py:57-100` at `eaf2acf` as one pure
+function, which the Zabalack adapter's `pre_receive` will call once that
+adapter exists. Nothing is registered. `CallerFacts.from_request` is set by
+the API for both routes and consulted only here.
 
 Inputs, and nothing else: the incoming alert, the caller's `CallerFacts`,
 an injected `ReceivePolicy`, and an injected current time (`now`, UTC), used

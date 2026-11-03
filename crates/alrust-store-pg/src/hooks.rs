@@ -81,6 +81,10 @@ pub struct CallerFacts {
     pub customers: Option<Vec<String>>,
     pub auth_required: bool,
     pub request_id: Option<String>,
+    /// True only when the API built these facts from the request it is
+    /// serving; false for every other caller of the store (spec 4.3.1,
+    /// step 3a).
+    pub from_request: bool,
 }
 
 /// The gate's decision for the owning integration.
@@ -228,76 +232,7 @@ pub(crate) async fn settle_commit(
 /// installed; registration is not Zabalack's `settings.enabled` (capture
 /// enablement). A registered adapter strips every incoming alert, before it
 /// looks at `source_system` or `settings.enabled` (`normalizer.py:58-63`).
-pub mod zabalack {
-    use serde_json::{Map, Value};
-
-    /// Case-sensitive key prefixes (`normalizer.py:16`); `zabbix_ack_sync`
-    /// has no trailing underscore.
-    pub const RESERVED_PREFIXES: &[&str] = &["zabbix_ack_sync", "zabalack_", "ackline_"];
-
-    /// Exact keys (`normalizer.py:17`).
-    pub const RESERVED_FIELDS: &[&str] = &[
-        "zabbix_ack_intent",
-        "zabbix_ack_proof",
-        "ack_intent",
-        "ack_proof",
-    ];
-
-    /// Removes reserved top-level keys; other keys and every value,
-    /// including nested ones, are unchanged (`strip_reserved`,
-    /// `normalizer.py:34-36`).
-    pub fn strip_reserved(attributes: &mut Map<String, Value>) {
-        attributes.retain(|k, _| {
-            !RESERVED_FIELDS.contains(&k.as_str())
-                && !RESERVED_PREFIXES.iter().any(|p| k.starts_with(p))
-        });
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use serde_json::json;
-
-        fn stripped(v: Value) -> Value {
-            let Value::Object(mut m) = v else {
-                panic!("an object")
-            };
-            strip_reserved(&mut m);
-            Value::Object(m)
-        }
-
-        // Codex's prepared cases (44d0cef0) for the pinned normaliser.
-        #[test]
-        fn reserved_keys_go_and_everything_else_stays() {
-            assert_eq!(
-                stripped(
-                    json!({"zabbix_ack_syncfoo": 1, "zabalack_any": 2, "ackline_legacy": 3,
-                                 "ack_intent": 4, "safe": {"keep": 1}})
-                ),
-                json!({"safe": {"keep": 1}})
-            );
-            // Case variants, near lookalikes, suffixed exact fields and
-            // nested keys are not reserved.
-            let kept = json!({"ZABBIX_ACK_SYNC_intent": 1, "Zabalack_x": 2, "zabalack": 3,
-                              "ackline": 4, "zabbix_ack_proofsuffix": 5,
-                              "ordinary": {"ack_intent": 6}});
-            assert_eq!(stripped(kept.clone()), kept);
-            assert_eq!(
-                stripped(json!({"source_system": "other", "ackline_legacy": "x",
-                                 "safe": [1, null, {"zabalack_nested": 2}]})),
-                json!({"source_system": "other", "safe": [1, null, {"zabalack_nested": 2}]})
-            );
-            // Every exact field and every prefix.
-            assert_eq!(
-                stripped(
-                    json!({"zabbix_ack_intent": 1, "zabbix_ack_proof": 2, "ack_proof": 3,
-                                 "zabbix_ack_sync": 4, "zabbix_ack_sync_intent": 5, "z": 6})
-                ),
-                json!({"z": 6})
-            );
-        }
-    }
-}
+pub mod zabalack;
 
 /// Applies attribute writes: a null value removes the key.
 pub(crate) fn apply_writes(attributes: &mut Map<String, Value>, writes: &Map<String, Value>) {
