@@ -438,6 +438,64 @@ code, body = call('GET', '/heartbeats')
 check('heartbeat list with a max-integer timeout still renders', code == 200, code)
 call('DELETE', f'/heartbeat/{hmax}')
 
+# --- restricted attribute [spec/integration-hooks.md 4.2]: never in a response,
+# on every alert read path; selectors on it refused for every caller
+RK = 'zabbix_ack_sync_intent'
+RSECRET = f'intent-{RUN}'
+RRES = f'restricted-{RUN}'
+MARKER = f'done\n[zabalack:v1 action={RUN} kid=k mac=00]'
+REFUSAL = 'Query selector is not permitted on restricted attributes'
+SHOWN = {'zabbix_ack_sync': 'pending', 'zabbix_ack_sync_reason': 'awaiting_capture', 'region': 'eu'}
+
+
+def hides(attrs):
+    return isinstance(attrs, dict) and RK not in attrs and all(attrs.get(k) == v for k, v in SHOWN.items())
+
+
+code, body = call('POST', '/alert', alert(resource=RRES, attributes={RK: {'secret': RSECRET}, **SHOWN}))
+ra = body.get('alert', {}) if isinstance(body, dict) else {}
+rid = ra.get('id', '')
+check('POST /alert reply hides the restricted attribute, keeps the others',
+      code == 201 and hides(ra.get('attributes')) and RSECRET not in json.dumps(body), (code, ra.get('attributes')))
+code, body = call('PUT', f'/alert/{rid}/action', {'action': 'ack', 'text': MARKER})
+check('ack with a marker-bearing text', code == 200, (code, body))
+code, body = call('GET', f'/alert/{rid}')
+ga = body.get('alert', {}) if isinstance(body, dict) else {}
+check('GET /alert/<id> hides the restricted attribute, keeps the others',
+      code == 200 and hides(ga.get('attributes')) and RSECRET not in json.dumps(body), (code, ga.get('attributes')))
+check('GET /alert/<id> keeps the marker in history text',
+      any(h.get('text') == MARKER and h.get('type') == 'ack' for h in ga.get('history', [])), ga.get('history'))
+for show in ('true', 'false'):
+    code, body = call('GET', f'/alerts?resource={RRES}&show-history={show}')
+    la = body.get('alerts', []) if isinstance(body, dict) else []
+    check(f'GET /alerts (show-history={show}) hides the restricted attribute, keeps the others',
+          code == 200 and len(la) == 1 and hides(la[0].get('attributes')) and RSECRET not in json.dumps(body),
+          (code, [x.get('attributes') for x in la]))
+    if show == 'true':
+        check('GET /alerts with history keeps the marker in history text',
+              la and any(h.get('text') == MARKER for h in la[0].get('history', [])), la and la[0].get('history'))
+code, rkey, rkey_id = mint(['read:alerts'])
+check('a read-only key for the restricted-selector checks', code == 201 and rkey, code)
+SELECTORS = [
+    (f'attributes.{RK}', RSECRET),
+    (f'attributes.{RK}!', RSECRET),
+    ('sort-by', f'-attributes.{RK}'),
+    ('group-by', 'attributes'),
+    ('q', f'_exists_:attributes.{RK}'),
+]
+for who, k_ in (('admin', KEY), ('read-only', rkey)):
+    for path in ('/alerts', '/alerts/count'):
+        for name, value in SELECTORS:
+            qs = urllib.parse.urlencode({'resource': RRES, name: value})
+            code, body = call('GET', f'{path}?{qs}', key=k_)
+            check(f'{path} refuses {name} for the {who} caller with a content-free 400',
+                  code == 400 and isinstance(body, dict) and body.get('message') == REFUSAL
+                  and RSECRET not in json.dumps(body), (code, body))
+code, body = call('GET', f"/alerts/count?{urllib.parse.urlencode({'resource': RRES, 'attributes.region': 'eu'})}", key=rkey)
+check('an ordinary attribute parameter is not refused', code == 200, (code, body))
+call('DELETE', f'/key/{rkey_id}')
+call('DELETE', f'/alert/{rid}')
+
 # --- housekeeping expiry [K2.1-K2.3, A2V3-STORE-N1]: global, so disposable targets only
 HK_CASES = 6
 if not DISPOSABLE:

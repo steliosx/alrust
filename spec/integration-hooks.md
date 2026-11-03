@@ -3,8 +3,9 @@
 Status: **draft for review**. alrust code implements only part of section
 4.2 so far: the restricted attribute is left out of every alert response,
 and search parameters that could select, sort or group by it are refused
-(`crates/alrust-domain/src/lib.rs`, `crates/alrust-api/src/lib.rs`). Nothing
-here is a qualification or a deployment result. Decisions behind it: DECISIONS
+(`crates/alrust-domain/src/lib.rs`, `crates/alrust-api/src/lib.rs`). The
+diagnostics rule of 4.2 is **not implemented**; see 4.2. Nothing here is a
+qualification or a deployment result. Decisions behind it: DECISIONS
 Y35 (alrust must fully support Zabalack and Voalack; exact reference storage
 first) and Y41 (option A: a hook in alrust calls each integration's existing
 SQL inside the acknowledgement's own transaction; their own sessions change
@@ -227,9 +228,9 @@ the acknowledgement adapter is enabled:
 
 - **Serialisation.** The restricted key is removed from serialised alert
   attributes in every response (alert, list, history), and nothing else is
-  removed (`plugins.py:60-114`). alrust today emits `attributes` and history
-  `text` verbatim (`crates/alrust-domain/src/lib.rs:302`, `326`); the
-  attribute filter is a required alrust change.
+  removed (`plugins.py:60-114`). alrust's alert serialiser leaves the
+  restricted key out of `attributes` and emits history `text` verbatim
+  (`AlertBody` in `crates/alrust-domain/src/lib.rs`).
 - **The committed proof stays visible.** The signed marker in the
   acknowledgement's history `text` is the committed history proof, which
   Zabalack deliberately keeps in successful history responses (A1 on their
@@ -254,6 +255,14 @@ the acknowledgement adapter is enabled:
   `140-146`). The marker is never written to attributes, the alert's own
   `text`, logs or request JSON (`plugins.py:546`); its only home is the
   history entry's `text`.
+  **Not implemented in alrust yet, and a prerequisite, independent of any
+  adapter, before alrust serves a database that may already hold
+  intents.** Today some error bodies reflect caller-supplied strings (for
+  example an invalid API key or customer value), and a database error is
+  logged with the driver's full message (`crates/alrust-api/src/lib.rs`,
+  `ApiError` and its `StoreError::Db` mapping). No test shows these carry
+  an intent or a marker, and none shows they cannot. Tracked as hook
+  follow-up HOOK-DIAG-1.
 
 ### 4.3 Receive path
 
