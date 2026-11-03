@@ -7,20 +7,26 @@
 //! README ("Alpha limitations").
 
 pub mod catalog;
+pub mod hooks;
 pub mod startup;
+
+use std::sync::Arc;
 
 use alrust_domain::{
     Alert, ApiKey, DEFAULT_PREVIOUS_SEVERITY, Heartbeat, HistoryEntry, INFORM_SEVERITY,
     NORMAL_SEVERITY, change_type, status, trend, truncate_ms,
 };
 use alrust_engine::{
-    HistInfo, Timeouts, TransitionError, TransitionInput, action_timeout, hist_info, transition,
+    HistInfo, Timeouts, Transition, TransitionError, TransitionInput, action_timeout, hist_info,
+    transition,
 };
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde_json::{Map, Value};
 use sqlx::postgres::{PgConnectOptions, PgPool, PgRow};
 use sqlx::{Postgres, QueryBuilder, Row, Transaction};
 
+pub use hooks::{AckIntegration, CallerFacts, HookError};
+use hooks::{Gate, MULTIPLE_OWNERS, apply_writes, settle_commit};
 pub use startup::{Outcome, Report as StartupReport, StartupError};
 
 /// The search path every alrust session uses. PostgreSQL searches
@@ -52,6 +58,16 @@ pub enum StoreError {
     /// refuses such input first; this guards the store boundary.
     #[error("{0} is outside the integer range of the reference schema")]
     OutOfRange(&'static str),
+    /// An acknowledgement hook refused before `COMMIT`
+    /// (spec/integration-hooks.md section 3): nothing was committed.
+    #[error("{0}")]
+    Hook(HookError),
+    /// `COMMIT` failed with no server verdict and the owning integration's
+    /// reconciliation (`commit_outcome`) failed too: the acknowledgement
+    /// may or may not have been saved. Unknown, never "not saved", and
+    /// never retried (section 5, commit outcome).
+    #[error("{0}")]
+    OutcomeUnknown(HookError),
 }
 
 /// Behaviour knobs, defaulting to the reference settings.
@@ -202,6 +218,16 @@ pub enum AlertEdit {
 pub struct Store {
     pool: PgPool,
     cfg: StoreConfig,
+    /// Acknowledgement integrations, in call order; empty unless registered.
+    hooks: Vec<Arc<dyn AckIntegration>>,
+}
+
+/// An action's decisions, made before anything is written.
+struct ActionPlan {
+    now: DateTime<Utc>,
+    t: Transition,
+    hist_timeout: i64,
+    kind: String,
 }
 
 fn union_tags(stored: &[String], incoming: &[String]) -> Vec<String> {
@@ -569,7 +595,19 @@ fn identity_history<'a>(alert: &'a Alert, event: &str) -> Vec<&'a HistoryEntry> 
 
 impl Store {
     pub fn new(pool: PgPool, cfg: StoreConfig) -> Self {
-        Store { pool, cfg }
+        Store {
+            pool,
+            cfg,
+            hooks: Vec::new(),
+        }
+    }
+
+    /// This store with these acknowledgement integrations, called in this
+    /// order (spec/integration-hooks.md section 3).
+    #[must_use]
+    pub fn with_integrations(mut self, hooks: Vec<Arc<dyn AckIntegration>>) -> Self {
+        self.hooks = hooks;
+        self
     }
 
     pub fn config(&self) -> &StoreConfig {
@@ -1084,26 +1122,139 @@ impl Store {
         timeout: Option<i64>,
         login: &str,
     ) -> Result<Alert, StoreError> {
+        let caller = CallerFacts {
+            login: user_of(login),
+            customers: customers.map(<[String]>::to_vec),
+            ..CallerFacts::default()
+        };
+        self.take_action_with(id, act, text, timeout, &caller).await
+    }
+
+    /// `take_action` with the caller's facts, which the acknowledgement
+    /// hooks receive (spec/integration-hooks.md sections 2 and 3). Without a
+    /// registered integration, or for any action but `ack`, this is exactly
+    /// the unhooked path.
+    ///
+    /// # Errors
+    ///
+    /// As `take_action`; `StoreError::Hook` when a hook refuses before
+    /// `COMMIT` (then nothing is committed); and, when `COMMIT` fails with
+    /// no server verdict, whatever the owner's `commit_outcome` settles:
+    /// success, the original database error, or `StoreError::OutcomeUnknown`.
+    /// A database error from such a `COMMIT` leaves the outcome unknown, as
+    /// it always has.
+    pub async fn take_action_with(
+        &self,
+        id: &str,
+        act: &str,
+        text: &str,
+        timeout: Option<i64>,
+        caller: &CallerFacts,
+    ) -> Result<Alert, StoreError> {
+        let login = caller.login.as_deref().unwrap_or("");
+        let customers = caller.customers.as_deref();
         let mut tx = self.pool.begin().await?;
-        let a = Self::lock_alert(&mut tx, id, customers).await?;
-        let a = self
-            .apply_action(&mut tx, a, act, text, timeout, login)
+        if act != "ack" || self.hooks.is_empty() {
+            let a = Self::lock_alert(&mut tx, id, customers).await?;
+            let a = self
+                .apply_action(&mut tx, a, act, text, timeout, login)
+                .await?;
+            tx.commit().await?;
+            return Ok(a);
+        }
+        // Section 2, prerequisite 2: one READ COMMITTED transaction, the
+        // alert locked before every hook call but pre_lookup.
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+            .execute(&mut *tx)
             .await?;
-        tx.commit().await?;
-        Ok(a)
+        for h in &self.hooks {
+            h.pre_lookup(&mut tx, caller)
+                .await
+                .map_err(StoreError::Hook)?;
+        }
+        let a = Self::lock_alert(&mut tx, id, customers).await?;
+        let mut owner: Option<&Arc<dyn AckIntegration>> = None;
+        for h in &self.hooks {
+            if h.claims(&mut tx, &a).await.map_err(StoreError::Hook)? {
+                if owner.is_some() {
+                    return Err(StoreError::Hook(HookError::new(503, MULTIPLE_OWNERS)));
+                }
+                owner = Some(h);
+            }
+        }
+        let Some(owner) = owner else {
+            // Unclaimed: exactly as without hooks.
+            let a = self
+                .apply_action(&mut tx, a, act, text, timeout, login)
+                .await?;
+            tx.commit().await?;
+            return Ok(a);
+        };
+        let plan = self.plan_action(&a, act, timeout)?;
+        let mut a = a;
+        let mut text = text.to_owned();
+        match owner
+            .gate(&mut tx, &a, caller, &plan.t)
+            .await
+            .map_err(StoreError::Hook)?
+        {
+            Gate::Skip { attributes } => apply_writes(&mut a.attributes, &attributes),
+            Gate::Proceed => {
+                let staged = owner
+                    .stage(&mut tx, &a, caller, &text)
+                    .await
+                    .map_err(StoreError::Hook)?;
+                // Staging SQL may itself have changed the row's attributes:
+                // start from the locked row's, not the in-memory copy.
+                a.attributes = Self::locked_attributes(&mut tx, &a.id).await?;
+                apply_writes(&mut a.attributes, &staged.attributes);
+                if let Some(replacement) = staged.text {
+                    text = replacement;
+                }
+            }
+        }
+        let (a, entry) = self.finish_action(&mut tx, a, plan, &text, login).await?;
+        owner
+            .pre_commit(&mut tx, &a, &entry)
+            .await
+            .map_err(StoreError::Hook)?;
+        let commit = tx.commit().await;
+        settle_commit(commit, &**owner, &self.pool, a, &entry).await
+    }
+
+    /// The locked row's attributes, read again inside the transaction.
+    async fn locked_attributes(
+        tx: &mut Transaction<'_, Postgres>,
+        id: &str,
+    ) -> Result<Map<String, Value>, StoreError> {
+        let row = sqlx::query("SELECT attributes FROM alerts WHERE id = $1")
+            .bind(id)
+            .fetch_one(&mut **tx)
+            .await?;
+        Ok(object(&row, "attributes")?)
     }
 
     async fn apply_action(
         &self,
         tx: &mut Transaction<'_, Postgres>,
-        mut a: Alert,
+        a: Alert,
         act: &str,
         text: &str,
         timeout: Option<i64>,
         login: &str,
     ) -> Result<Alert, StoreError> {
+        let plan = self.plan_action(&a, act, timeout)?;
+        Ok(self.finish_action(tx, a, plan, text, login).await?.0)
+    }
+
+    fn plan_action(
+        &self,
+        a: &Alert,
+        act: &str,
+        timeout: Option<i64>,
+    ) -> Result<ActionPlan, StoreError> {
         let now = truncate_ms(Utc::now());
-        let info: HistInfo = hist_info(&identity_history(&a, &a.event), Some(act));
+        let info: HistInfo = hist_info(&identity_history(a, &a.event), Some(act));
         let t = transition(TransitionInput {
             severity: &a.severity,
             alert_status: &a.status,
@@ -1125,6 +1276,29 @@ impl Store {
         } else {
             change_type::ACTION
         };
+        Ok(ActionPlan {
+            now,
+            t,
+            hist_timeout,
+            kind: kind.to_string(),
+        })
+    }
+
+    /// Writes the planned action: one history entry and one `UPDATE`.
+    async fn finish_action(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        mut a: Alert,
+        plan: ActionPlan,
+        text: &str,
+        login: &str,
+    ) -> Result<(Alert, HistoryEntry), StoreError> {
+        let ActionPlan {
+            now,
+            t,
+            hist_timeout,
+            kind,
+        } = plan;
         let entry = HistoryEntry {
             id: a.id.clone(),
             event: a.event.clone(),
@@ -1132,7 +1306,7 @@ impl Store {
             status: Some(t.status.clone()),
             value: a.value.clone(),
             text: Some(text.to_string()),
-            change_type: kind.to_string(),
+            change_type: kind,
             update_time: now,
             user: user_of(login),
             timeout: Some(hist_timeout),
@@ -1145,9 +1319,9 @@ impl Store {
         // The row keeps the hydrated model timeout: NULL becomes ALERT_TIMEOUT (spec A4.1).
         a.timeout = Some(a.timeout.unwrap_or(self.cfg.alert_timeout));
         a.attributes.retain(|_, v| !v.is_null());
-        self.push_history(&mut a.history, entry);
+        self.push_history(&mut a.history, entry.clone());
         Self::update_alert(tx, &a, ACTION_COLS).await?;
-        Ok(a)
+        Ok((a, entry))
     }
 
     /// `DELETE /alert/<id>`: one alert by id or id prefix, or by `lastReceiveId`.
