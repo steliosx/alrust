@@ -495,6 +495,16 @@ code, body = call('GET', f"/alerts/count?{urllib.parse.urlencode({'resource': RR
 check('an ordinary attribute parameter is not refused', code == 200, (code, body))
 call('DELETE', f'/key/{rkey_id}')
 call('DELETE', f'/alert/{rid}')
+# Error bodies never carry restricted evidence [4.2 diagnostics, HOOK-DIAG-1]
+REDACTED = 'zabalack_restricted_error_redacted'
+for bad in (f'[zabalack:v1 action={RUN} kid=k mac=00]', f'[ACKLINE:{RUN}]', f'{RK.upper()}-{RUN}'):
+    code, body = call('GET', '/alerts', key=bad)
+    check(f'an invalid key carrying evidence ({bad[:10]}...) gets 401 with a redacted message',
+          code == 401 and isinstance(body, dict) and body.get('message') == REDACTED
+          and RUN not in json.dumps(body), (code, body))
+code, body = call('GET', '/alerts', key=f'plain-{RUN}')
+check('an ordinary invalid key is still named in the 401 message',
+      code == 401 and isinstance(body, dict) and f'plain-{RUN}' in body.get('message', ''), (code, body))
 
 # --- housekeeping expiry [K2.1-K2.3, A2V3-STORE-N1]: global, so disposable targets only
 HK_CASES = 6

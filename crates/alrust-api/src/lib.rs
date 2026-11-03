@@ -7,8 +7,9 @@
 use std::sync::Arc;
 
 use alrust_domain::{
-    Alert, ApiKey, HistoryOutput, KeySecret, RESTRICTED_ATTRIBUTES, is_restricted_attribute,
-    iso8601, parse_time, scope_allows, truncate_ms,
+    Alert, ApiKey, HistoryOutput, KeySecret, REDACTED_ERROR, RESTRICTED_ATTRIBUTES,
+    contains_evidence, is_restricted_attribute, iso8601, parse_time, redact_diagnostic,
+    scope_allows, truncate_ms,
 };
 use alrust_store_pg::{AlertEdit, AlertQuery, NewAlert, Store, StoreError};
 use axum::extract::{Path, Query, State};
@@ -85,8 +86,16 @@ impl ApiError {
 }
 
 impl IntoResponse for ApiError {
+    /// The message is the only caller- or database-derived string in an
+    /// error body; one that may carry restricted evidence becomes
+    /// `REDACTED_ERROR` (hook spec section 4.2), the status code unchanged.
     fn into_response(self) -> Response {
-        let body = json!({"status": "error", "message": self.message, "code": self.code.as_u16(), "errors": null});
+        let message = if contains_evidence(&self.message) {
+            REDACTED_ERROR.to_owned()
+        } else {
+            self.message
+        };
+        let body = json!({"status": "error", "message": message, "code": self.code.as_u16(), "errors": null});
         (self.code, Json(body)).into_response()
     }
 }
@@ -102,7 +111,7 @@ impl From<StoreError> for ApiError {
                 ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, t.to_string())
             }
             StoreError::Db(e) => {
-                tracing::error!(error = %e, "database error");
+                tracing::error!(error = %redact_diagnostic(e.to_string()), "database error");
                 ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error")
             }
             // Input ranges are refused with 400 before the store; this is a
@@ -1186,6 +1195,39 @@ mod tests {
         );
         assert!(refuse_restricted_selectors(&params("attributes.region", "eu")).is_ok());
         assert!(refuse_restricted_selectors(&[]).is_ok());
+    }
+
+    #[test]
+    fn an_error_message_carrying_evidence_is_redacted() {
+        let body = |e: ApiError| {
+            let r = e.into_response();
+            let code = r.status();
+            let bytes = futures_body(r);
+            (code, serde_json::from_slice::<Value>(&bytes).unwrap())
+        };
+        let (code, v) = body(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "API key parameter '[zabalack:v1 action=a kid=k mac=00]' is invalid",
+        ));
+        assert_eq!(code, StatusCode::UNAUTHORIZED);
+        assert_eq!(v["message"], REDACTED_ERROR);
+        assert_eq!(v["code"], 401);
+        assert!(!v.to_string().contains("mac=00"));
+        let (code, v) = body(ApiError::bad("not allowed to set customer to 'x'"));
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert_eq!(v["message"], "not allowed to set customer to 'x'");
+    }
+
+    /// The response body's bytes, without an async runtime: `Full` bodies
+    /// are ready on the first poll.
+    fn futures_body(r: Response) -> Vec<u8> {
+        use std::pin::pin;
+        use std::task::{Context, Poll, Waker};
+        let mut fut = pin!(axum::body::to_bytes(r.into_body(), usize::MAX));
+        match fut.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+            Poll::Ready(b) => b.unwrap().to_vec(),
+            Poll::Pending => panic!("body not ready"),
+        }
     }
 
     #[test]
