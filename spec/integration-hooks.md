@@ -311,6 +311,65 @@ customer; the actor's customers sorted and de-duplicated; the exact skip
 writes; and the constructor refusing an empty `admin_exceptions` entry
 (`admin_exception_invalid`).
 
+### 4.1.2 Source and cohort prechecks port: proposal
+
+Status: **proposal for review**, before any code. It ports the
+acknowledgement gate's source and cohort prechecks (`plugins.py:438-451`
+at `eaf2acf`) as one pure function the Zabalack adapter's `gate` will call
+just before 4.1.1's actor checks. It is the step that selects the cohort
+4.1.1 takes. Nothing is registered.
+
+**Scope, delimited.** The gate's checks before it (`plugins.py:410-437`:
+the entry conditions, capture disabled, capture bypass, the route, the
+reference version, privacy readiness, routing order, and `AUTH_REQUIRED`
+with `CUSTOMER_VIEWS`) and after it (the actor checks of 4.1.1, then the
+transition, health and staging from `plugins.py:452`) are not in this
+slice and keep their pinned order.
+
+**Inputs, and nothing else:** the alert as stored (its id, customer and
+attributes), the injected `Policy`, and an injected `now` for the skip
+record. No file, environment variable, key, clock or database.
+
+Order, as pinned:
+
+1. **Canonical id and source contract** (`plugins.py:438-444`). The alert
+   id must already be a canonical UUID string: Python's
+   `str(UUID(id)) == id` holds only for 32 lowercase hexadecimal digits
+   grouped 8-4-4-4-12 with hyphens. Upper case, the compact form, braces,
+   `urn:uuid:` and anything `UUID` refuses all fail. Then `validate_source`
+   (`policy.py:49-61`, as in 4.3.1 step 9: all seven contract keys present,
+   `source_system` `zabbix`, version `"1"`, instance and ids valid,
+   nullable cause and recovery ids, recovery not the event id). Any
+   failure: skip `legacy_missing_mapping`.
+2. **Cohort** (`plugins.py:445-447`): `Policy::select_cohort` with the
+   alert's customer (absent or empty selects nothing) and the source's
+   instance and trigger. None: skip `skipped_cohort_policy`.
+3. **Ambiguity** (`plugins.py:448-451`): the cohort is not one-to-one, or
+   any of `zabbix_event_ids`, `zabbix_trigger_ids`, `source_members` is
+   present as a key, whatever its value (null and empty count). Skip
+   `skipped_ambiguous_source`.
+4. Otherwise the alert is eligible: the function returns the source
+   snapshot (instance, event id, trigger id) and the selected cohort, for
+   4.1.1's `actor_gate`.
+
+**Unlike the receive path (4.3.1), nothing is written back** when the
+alert passes. The validated cause and recovery values are not stored, and
+the alert's attributes stay exactly as they were. A skip is the same
+`project_skip` writes as in 4.1.1 (the intent removed by a null, and the
+four record keys with the injected `now`), carried as `Gate::Skip`; the
+acknowledgement proceeds without capture. None of these outcomes is a
+refusal.
+
+Tests the code will carry, with synthetic alerts, policies and a fixed
+`now`: the canonical id against upper-case, compact, braced, `urn:uuid:`,
+short and non-UUID ids; each source-contract failure, including missing
+keys and id bounds; present nullable sentinels accepted with the
+attributes left unchanged; an empty, unmatched and disabled-cohort
+customer; a non-one-to-one cohort and each ambiguity key with a null and
+an empty value; competing failures, which prove the order source, then
+cohort, then ambiguity; the exact skip writes; and an eligible alert's
+snapshot and cohort, passed on to `actor_gate`.
+
 ### 4.2 Privacy on every read path
 
 Zabalack treats one attribute, `zabbix_ack_sync_intent`
