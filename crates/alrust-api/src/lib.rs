@@ -7,7 +7,8 @@
 use std::sync::Arc;
 
 use alrust_domain::{
-    Alert, ApiKey, HistoryOutput, KeySecret, iso8601, parse_time, scope_allows, truncate_ms,
+    Alert, ApiKey, HistoryOutput, KeySecret, RESTRICTED_ATTRIBUTES, is_restricted_attribute,
+    iso8601, parse_time, scope_allows, truncate_ms,
 };
 use alrust_store_pg::{AlertEdit, AlertQuery, NewAlert, Store, StoreError};
 use axum::extract::{Path, Query, State};
@@ -669,7 +670,45 @@ struct Search {
     show_history: HistoryOutput,
 }
 
+/// Whether `attributes.<key>` names a restricted attribute.
+fn restricted_path(path: &str) -> bool {
+    path.strip_prefix("attributes.")
+        .is_some_and(is_restricted_attribute)
+}
+
+/// A query parameter that could select, sort or group by a restricted
+/// attribute (hook spec section 4.2, after Zabalack's query guard,
+/// `zab-al-ack@eaf2acf:src/zabalack/query_guard.py:1-50`): a direct
+/// `attributes.<key>` filter, negated or not; `sort-by` on it, either
+/// direction; `group-by` the whole `attributes` object; `q.df` defaulting to
+/// `attributes` or to the key; and any `q` that mentions the key. alrust
+/// parses none of `q`, `q.df`, `sort-by`, `group-by` or `attributes.*` filters
+/// yet (they are ignored like other unknown parameters), so today this only
+/// refuses; it is in place before any of them is supported.
+fn restricted_selector(key: &str, value: &str) -> bool {
+    match key {
+        "sort-by" => restricted_path(value.strip_prefix('-').unwrap_or(value)),
+        "group-by" => value == "attributes",
+        "q.df" => value == "attributes" || restricted_path(value),
+        "q" => RESTRICTED_ATTRIBUTES.iter().any(|r| value.contains(r)),
+        _ => restricted_path(key.strip_suffix('!').unwrap_or(key)),
+    }
+}
+
+/// Refuses a search that has any restricted selector, for every caller,
+/// with a stable, content-free 400.
+fn refuse_restricted_selectors(params: &[(String, String)]) -> ApiResult<()> {
+    if params.iter().any(|(k, v)| restricted_selector(k, v)) {
+        return Err(ApiError::bad(
+            "Query selector is not permitted on restricted attributes",
+        ));
+    }
+    Ok(())
+}
+
 fn parse_search(st: &AppState, caller: &Caller, params: &[(String, String)]) -> ApiResult<Search> {
+    // Before anything else is parsed.
+    refuse_restricted_selectors(params)?;
     let mut q = AlertQuery {
         customers: caller.customers(),
         ..AlertQuery::default()
@@ -1106,4 +1145,67 @@ async fn housekeeping(
     Ok(Json(
         json!({"status": "ok", "expired": expired, "unshelve": [], "unack": [], "count": count}),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restricted_selectors_are_refused() {
+        let refused = [
+            ("attributes.zabbix_ack_sync_intent", "x"),
+            ("attributes.zabbix_ack_sync_intent!", "x"),
+            ("sort-by", "attributes.zabbix_ack_sync_intent"),
+            ("sort-by", "-attributes.zabbix_ack_sync_intent"),
+            ("group-by", "attributes"),
+            ("q.df", "attributes"),
+            ("q.df", "attributes.zabbix_ack_sync_intent"),
+            ("q", "_exists_:attributes.zabbix_ack_sync_intent"),
+            ("q", "attributes.zabbix_ack_sync_intent:*"),
+        ];
+        for (k, v) in refused {
+            assert!(restricted_selector(k, v), "{k}={v}");
+        }
+    }
+
+    #[test]
+    fn a_search_with_a_restricted_selector_is_refused_without_content() {
+        let params = |k: &str, v: &str| {
+            vec![
+                ("status".to_owned(), "open".to_owned()),
+                (k.to_owned(), v.to_owned()),
+            ]
+        };
+        let e = refuse_restricted_selectors(&params("attributes.zabbix_ack_sync_intent", "s3cr3t"))
+            .unwrap_err();
+        assert_eq!(e.code, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            e.message,
+            "Query selector is not permitted on restricted attributes"
+        );
+        assert!(refuse_restricted_selectors(&params("attributes.region", "eu")).is_ok());
+        assert!(refuse_restricted_selectors(&[]).is_ok());
+    }
+
+    #[test]
+    fn other_selectors_are_not_refused() {
+        let allowed = [
+            ("attributes.zabbix_ack_sync", "pending"),
+            ("attributes.zabbix_ack_sync_reason!", "x"),
+            ("attributes.source_system", "zabbix"),
+            ("sort-by", "attributes.zabbix_ack_sync"),
+            ("sort-by", "lastReceiveTime"),
+            ("group-by", "attributes.region"),
+            ("group-by", "environment"),
+            ("q.df", "text"),
+            ("q", "attributes.zabbix_ack_sync:pending"),
+            ("status", "zabbix_ack_sync_intent"),
+            ("resource", "attributes.zabbix_ack_sync_intent"),
+            ("attributes.Zabbix_ack_sync_intent", "x"),
+        ];
+        for (k, v) in allowed {
+            assert!(!restricted_selector(k, v), "{k}={v}");
+        }
+    }
 }

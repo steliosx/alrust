@@ -141,6 +141,39 @@ pub fn truncate_ms(t: DateTime<Utc>) -> DateTime<Utc> {
     DateTime::from_timestamp_millis(t.timestamp_millis()).unwrap_or(t)
 }
 
+/// Alert attribute keys that are restricted staging data of an integration and
+/// never appear in a response, on any read path, for any caller
+/// (`spec/integration-hooks.md` section 4.2; Zabalack's `zabbix_ack_sync_intent`,
+/// `zab-al-ack@eaf2acf:src/zabalack/crypto.py:42`). Only these exact keys are
+/// restricted: Zabalack's other `zabbix_ack_sync*` attributes stay visible.
+pub const RESTRICTED_ATTRIBUTES: &[&str] = &["zabbix_ack_sync_intent"];
+
+/// Whether `key` is a restricted attribute key.
+pub fn is_restricted_attribute(key: &str) -> bool {
+    RESTRICTED_ATTRIBUTES.contains(&key)
+}
+
+/// An alert's attributes as a response shows them: every key except the
+/// restricted ones, values unchanged.
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's serialize_with passes the field by reference"
+)]
+fn ser_public_attributes<S: Serializer>(
+    attributes: &&Map<String, Value>,
+    s: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeMap as _;
+    let shown = attributes
+        .iter()
+        .filter(|(k, _)| !is_restricted_attribute(k));
+    let mut map = s.serialize_map(None)?;
+    for (k, v) in shown {
+        map.serialize_entry(k, v)?;
+    }
+    map.end()
+}
+
 fn ser_time<S: Serializer>(t: &DateTime<Utc>, s: S) -> Result<S::Ok, S::Error> {
     s.serialize_str(&iso8601(t))
 }
@@ -231,6 +264,8 @@ pub struct AlertBody<'a> {
     pub value: Option<&'a str>,
     pub text: &'a str,
     pub tags: &'a [String],
+    /// Without the restricted keys (section 4.2 of the hook spec).
+    #[serde(serialize_with = "ser_public_attributes")]
     pub attributes: &'a Map<String, Value>,
     pub origin: &'a str,
     #[serde(rename = "type")]
@@ -555,6 +590,104 @@ mod tests {
     fn iso8601_has_millis_and_z() {
         let t = parse_time("2026-10-13T01:02:03.456Z").unwrap();
         assert_eq!(iso8601(&t), "2026-10-13T01:02:03.456Z");
+    }
+
+    fn alert_with(attributes: Map<String, Value>, history_text: &str) -> Alert {
+        let t = parse_time("2026-10-13T01:00:00.000Z").unwrap();
+        Alert {
+            id: "a".into(),
+            resource: "r".into(),
+            event: "e".into(),
+            environment: "Production".into(),
+            severity: "major".into(),
+            correlate: vec![],
+            status: "ack".into(),
+            service: vec![],
+            group: "Misc".into(),
+            value: None,
+            text: "t".into(),
+            tags: vec![],
+            attributes,
+            origin: "o".into(),
+            event_type: "exceptionAlert".into(),
+            create_time: t,
+            timeout: Some(86_400),
+            raw_data: None,
+            customer: None,
+            duplicate_count: Some(0),
+            repeat: Some(false),
+            previous_severity: None,
+            trend_indication: None,
+            receive_time: t,
+            last_receive_id: None,
+            last_receive_time: None,
+            update_time: Some(t),
+            history: vec![HistoryEntry {
+                id: "a".into(),
+                event: "e".into(),
+                severity: None,
+                status: Some("ack".into()),
+                value: None,
+                text: Some(history_text.into()),
+                change_type: "ack".into(),
+                update_time: t,
+                user: Some("op".into()),
+                timeout: None,
+            }],
+        }
+    }
+
+    // Hook spec section 4.2: the restricted key never appears in a response
+    // (every alert response is built from AlertBody); every other key,
+    // including Zabalack's other sync attributes, is shown unchanged; the
+    // signed marker in history text stays visible.
+    #[test]
+    fn restricted_attribute_is_never_serialized() {
+        let attributes: Map<String, Value> = serde_json::from_value(serde_json::json!({
+            "zabbix_ack_sync_intent": {"v": 1, "action_id": "x"},
+            "zabbix_ack_sync": "pending",
+            "zabbix_ack_sync_reason": "awaiting_capture",
+            "zabbix_ack_sync_action_id": "x",
+            "zabbix_ack_sync_intent_other": 1,
+            "Zabbix_ack_sync_intent": 2,
+            "source_system": "zabbix",
+        }))
+        .unwrap();
+        let marker = "done\n[zabalack:v1 action=x kid=k mac=00]";
+        let a = alert_with(attributes, marker);
+        for output in [HistoryOutput::Include, HistoryOutput::Omit] {
+            let v = serde_json::to_value(a.body("http://x", 86_400, output)).unwrap();
+            let shown = v["attributes"].as_object().unwrap();
+            assert!(!shown.contains_key("zabbix_ack_sync_intent"));
+            let mut keys: Vec<&str> = shown.keys().map(String::as_str).collect();
+            keys.sort_unstable();
+            assert_eq!(
+                keys,
+                [
+                    "Zabbix_ack_sync_intent",
+                    "source_system",
+                    "zabbix_ack_sync",
+                    "zabbix_ack_sync_action_id",
+                    "zabbix_ack_sync_intent_other",
+                    "zabbix_ack_sync_reason",
+                ]
+            );
+            assert_eq!(shown["zabbix_ack_sync"], "pending");
+            assert!(!v.to_string().contains("\"action_id\":\"x\""));
+        }
+        let v = serde_json::to_value(a.body("http://x", 86_400, HistoryOutput::Include)).unwrap();
+        assert_eq!(v["history"][0]["text"], marker);
+        // The stored alert is unchanged: only the response omits the key.
+        assert!(a.attributes.contains_key("zabbix_ack_sync_intent"));
+    }
+
+    #[test]
+    fn restricted_attribute_alone_serializes_as_empty_object() {
+        let attributes: Map<String, Value> =
+            serde_json::from_value(serde_json::json!({"zabbix_ack_sync_intent": "s"})).unwrap();
+        let a = alert_with(attributes, "t");
+        let v = serde_json::to_value(a.body("http://x", 86_400, HistoryOutput::Omit)).unwrap();
+        assert_eq!(v["attributes"], serde_json::json!({}));
     }
 
     #[test]
