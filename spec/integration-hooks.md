@@ -304,13 +304,100 @@ keys are removed; values, nested keys and every other key are unchanged.
 Nothing registers it yet. The rest of the normaliser (`normalizer.py:57-100`:
 the settings file, ingestion mappings, `AUTH_REQUIRED` and `CUSTOMER_VIEWS`,
 the identity policy, the customer, instance and cohort checks, and the skip
-records) is adapter work and is deferred. A rejection there maps to the
-reference's 403 for `RejectException` (`reference/alerta/alerta/views/alerts.py:57-60`).
+records) is adapter work and is deferred; 4.3.1 proposes its port. A
+rejection there maps to the reference's 403 for `RejectException`
+(`reference/alerta/alerta/views/alerts.py:57-60`). Registration (the adapter
+is present) is not Zabalack's `settings.enabled` (capture enablement): a
+registered adapter strips every incoming alert, Zabbix or not and with
+capture on or off, because the normaliser strips before it looks at
+`source_system` or `settings.enabled` (`normalizer.py:58-63`).
 In alrust the `pre_receive` call comes after the API's own environment and
 service policy and its Heartbeat conversion (the store is called only after
 those). In 9.1.0 the plugin order decides whether the normaliser sees a
 Heartbeat event. `PUT /alert/<id>/attributes` and the tag routes have no
 receive hook, in Alerta or here.
+
+### 4.3.1 Receive policy port: proposal
+
+Status: **proposal for review**, before any code. It ports
+`normalizer.py:57-100` at `eaf2acf` as one pure function, which the
+Zabalack adapter's `pre_receive` will call once that adapter exists. Nothing
+is registered by this proposal or by its code.
+
+Inputs, and nothing else: the incoming alert, the caller's `CallerFacts`,
+and an injected `ReceivePolicy`. The function reads no file, environment
+variable, key or database, and performs no I/O. `ReceivePolicy` holds only
+the settings fields this path uses (`config.py:15-62`): `enabled`,
+`capture_bypass`, `bypass_change_ref`, `config_revision`,
+`ingestion_mappings` (login to `{customer, instance}`) and `cohorts`. It is
+built only through a constructor that applies the pinned checks for those
+fields: each mapping has exactly `customer` and `instance`, both non-empty
+strings (`config.py:153-157`); each cohort passes `validate_cohort`
+(`policy.py:63-85`) and no two share (customer, instance, trigger)
+(`config.py:162-168`); `capture_bypass` needs a change reference
+(`config.py:145-146`). An invalid policy is refused when it is built, not per
+request. Where the policy comes from (a configuration file, its path, its
+permissions) belongs to registration and is deferred.
+
+Order, as pinned (`normalizer.py:57-100`):
+
+1. Strip reserved keys (4.3), for every alert.
+2. `source_system` not `zabbix`: done, alert unchanged otherwise.
+3. Capture disabled (`enabled` false): skip `skipped_disabled`.
+4. Tenant gate (`normalizer.py:68-70`): Zabalack requires Alerta's
+   `AUTH_REQUIRED` and `CUSTOMER_VIEWS`. Proposed mapping:
+   `AUTH_REQUIRED` is `CallerFacts.auth_required`. `CUSTOMER_VIEWS` has no
+   alrust switch: alrust binds a customer to each API key and always scopes
+   that key to it (no global customer views, no per-customer RBAC; KICKOFF,
+   DECISIONS Y44 A2). So the `CUSTOMER_VIEWS` half is treated as satisfied
+   by that binding, and step 6 enforces it. Refusal: 403
+   `zabbix_ingestion_tenant_gate` when `auth_required` is false. This adds
+   no customer views and changes no authentication; it evaluates existing
+   caller facts. It sits next to the owner's auth-contract gate, so the
+   mapping is stated here for review rather than assumed.
+5. Identity policy (`normalizer.py:66-67`, `71-73`): the caller's login must
+   have an ingestion mapping, `user_id` must be absent (an API key, not a
+   human), and the scopes must contain neither `admin` nor `admin:alerts`.
+   Otherwise 403 `zabbix_ingestion_identity_policy`.
+6. Customer (`normalizer.py:74-77`): the alert's customer must be
+   non-empty, equal the mapping's customer, and be in the caller's customer
+   list; a caller with no customer binding (`customers` absent, meaning
+   every customer in alrust) fails this. Otherwise 403
+   `zabbix_ingestion_customer_mismatch`.
+7. Any of `source_contract_version`, `zabbix_instance`, `zabbix_event_id`,
+   `zabbix_trigger_id` missing or falsy: skip `legacy_missing_mapping`.
+8. `zabbix_instance` not the mapping's instance: 403
+   `zabbix_ingestion_instance_mismatch`.
+9. `validate_source` (`policy.py:49-61`) fails for any reason: skip
+   `legacy_missing_mapping`. Otherwise its normalised values are written
+   back, including null for an absent cause or recovery event id, as
+   pinned.
+10. No enabled cohort for (customer, instance, trigger)
+    (`policy.py:87-94`): skip `skipped_cohort_policy`.
+11. The cohort is not one-to-one, or any of `zabbix_event_ids`,
+    `zabbix_trigger_ids`, `source_members` is present: skip
+    `skipped_ambiguous_source`.
+12. `capture_bypass`: skip `skipped_capture_bypass` and set
+    `zabbix_ack_sync_change_reference` to the change reference. Otherwise
+    the alert passes unchanged.
+
+A skip is Zabalack's `project_skip` (`normalizer.py:39-47`), and the
+receive proceeds: remove `zabbix_ack_sync_intent`, then set
+`zabbix_ack_sync = skipped`, `zabbix_ack_sync_reason`,
+`zabbix_ack_sync_config_revision` and `zabbix_ack_sync_local_at` (the
+current UTC time, ISO 8601 with microseconds and `+00:00`, as Python's
+`isoformat(timespec="microseconds")` writes it). A refusal is a
+`HookError` with status 403 and the reason string as its message, and
+nothing is stored. Zabalack's other two refusals do not apply:
+`zabbix_ingestion_requires_authenticated_context`, because alrust calls the
+hook only from a request, and `zabalack_configuration_invalid` (503),
+because an invalid policy is refused when built.
+
+Tests the code will carry, with synthetic policies and caller facts only:
+a non-Zabbix alert (stripped, otherwise unchanged); capture disabled (strip
+and `skipped_disabled`); each refusal above; each skip; a passing alert
+with normalised source values; capture bypass; and stripping of reserved
+keys a producer supplied, also when the alert is then skipped.
 
 ## 5. Voalack adapter (pinned `main`)
 
