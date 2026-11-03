@@ -7,8 +7,9 @@ refused (`crates/alrust-domain/src/lib.rs`, `crates/alrust-api/src/lib.rs`),
 and error bodies and log records that may carry restricted evidence are
 redacted. Section 3: the hook interface and its phase order inside the
 acknowledgement transaction (`crates/alrust-store-pg/src/hooks.rs`,
-`take_action_with`), tested with synthetic integrations only. No adapter
-is implemented or registered, so no acknowledgement calls a hook yet.
+`take_action_with`), and the receive-time `pre_receive` phase of 4.3
+(`receive_with`), tested with synthetic integrations only. No adapter is
+implemented or registered, so no request calls a hook yet.
 Nothing here is a qualification or a deployment result. Decisions behind it: DECISIONS
 Y35 (alrust must fully support Zabalack and Voalack; exact reference storage
 first) and Y41 (option A: a hook in alrust calls each integration's existing
@@ -166,6 +167,7 @@ acknowledgement. Each registered integration implements:
 
 | Phase | When, inside the acknowledgement transaction | Purpose |
 |---|---|---|
+| `pre_receive(caller, incoming)` | on `POST /alert` only, in the receive transaction, for every registered integration, before anything is looked up or written | Section 4.3: change the incoming alert (strip reserved keys) or refuse it. Never called by an action. |
 | `pre_lookup(caller)` | before the alert is looked up | Refusals that must not depend on the alert (A3 option (a)). |
 | `claims(alert)` | after the alert row is locked | Ownership on pinned `main`. Zabalack claims an alert with `attributes.source_system = 'zabbix'` (`plugins.py:411`). Voalack claims an alert when the protected registry `voalack.bindings` has an active row for its id, **whatever its current event or resource** (`boundary.py:99-109`, `158-165`); an error querying the registry refuses 503 "ACK not processed: capture registry unavailable" (`159-162`), and under the lock the binding is re-read through `voalack.lock_binding` (`185-198`), a binding gone by then leaving the alert unclaimed. Source drift of a bound alert is refused in `gate`, not treated as unclaimed. |
 | `gate(alert, caller)` | after `claims`, before the history entry is built | Policy and health checks and integration locks; may decline (no capture, a recorded skip) or refuse (the request fails and everything rolls back). |
@@ -289,6 +291,26 @@ The normaliser strips reserved attribute keys and prefixes on receive and
 validates Zabbix source and ingestion identity (ingestion is a mapped API-key
 login with no user id) (`normalizer.py:16-36`, `57-100`). alrust needs a
 receive-time hook with the same reserved list and mapping.
+
+In alrust the hook is `pre_receive` (section 3). Like the normaliser, which
+runs only where Zabalack is installed, it runs only when an integration is
+registered; with none, attributes are stored as received (and the
+restricted key stays hidden on read by 4.2). The reserved list is ported as
+`hooks::zabalack::strip_reserved` for the adapter to call: the exact keys
+`zabbix_ack_intent`, `zabbix_ack_proof`, `ack_intent` and `ack_proof`, and
+the case-sensitive key prefixes `zabbix_ack_sync` (no trailing underscore),
+`zabalack_` and `ackline_` (`normalizer.py:16-17`, `34-36`). Only top-level
+keys are removed; values, nested keys and every other key are unchanged.
+Nothing registers it yet. The rest of the normaliser (`normalizer.py:57-100`:
+the settings file, ingestion mappings, `AUTH_REQUIRED` and `CUSTOMER_VIEWS`,
+the identity policy, the customer, instance and cohort checks, and the skip
+records) is adapter work and is deferred. A rejection there maps to the
+reference's 403 for `RejectException` (`reference/alerta/alerta/views/alerts.py:57-60`).
+In alrust the `pre_receive` call comes after the API's own environment and
+service policy and its Heartbeat conversion (the store is called only after
+those). In 9.1.0 the plugin order decides whether the normaliser sees a
+Heartbeat event. `PUT /alert/<id>/attributes` and the tag routes have no
+receive hook, in Alerta or here.
 
 ## 5. Voalack adapter (pinned `main`)
 

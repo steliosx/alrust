@@ -161,6 +161,20 @@ impl Caller {
         }
     }
 
+    /// The facts the integration hooks receive. API keys carry no user id
+    /// and no verified auth type; human operators are not implemented yet.
+    fn facts(&self, st: &AppState) -> CallerFacts {
+        CallerFacts {
+            login: self.login.clone(),
+            user_id: None,
+            auth_type: None,
+            scopes: self.scopes.clone(),
+            customers: self.customers(),
+            auth_required: st.cfg.auth_required,
+            request_id: None,
+        }
+    }
+
     /// `g.customers`: the key's customer, if any.
     fn customers(&self) -> Option<Vec<String>> {
         self.customer.as_ref().map(|c| vec![c.clone()])
@@ -523,7 +537,7 @@ async fn receive(
         }
     }
 
-    let (alert, _kind) = st.store.receive(n, caller.login()).await?;
+    let (alert, _kind) = st.store.receive_with(n, &caller.facts(&st)).await?;
     Ok((
         StatusCode::CREATED,
         Json(json!({"status": "ok", "id": alert.id, "alert": alert_json(&st, &alert)})),
@@ -691,19 +705,8 @@ async fn take_action(
         None | Some(Value::Null) => None,
         v => Some(parse_timeout(v, 0)?),
     };
-    // The facts the acknowledgement hooks receive. API keys carry no user id
-    // and no verified auth type; human operators are not implemented yet.
-    let facts = CallerFacts {
-        login: caller.login.clone(),
-        user_id: None,
-        auth_type: None,
-        scopes: caller.scopes.clone(),
-        customers: caller.customers(),
-        auth_required: st.cfg.auth_required,
-        request_id: None,
-    };
     st.store
-        .take_action_with(&id, &action, text, timeout, &facts)
+        .take_action_with(&id, &action, text, timeout, &caller.facts(&st))
         .await?;
     Ok(Json(json!({"status": "ok"})))
 }
