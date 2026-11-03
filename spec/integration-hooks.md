@@ -9,8 +9,8 @@ redacted. Section 3: the hook interface and its phase order inside the
 acknowledgement transaction (`crates/alrust-store-pg/src/hooks.rs`,
 `take_action_with`), and the receive-time `pre_receive` phase of 4.3
 (`receive_with`), tested with synthetic integrations only. The Zabalack
-receive policy of 4.3.1 and the actor policy of 4.1.1 are implemented as
-pure functions. No adapter is
+receive policy of 4.3.1, the actor policy of 4.1.1 and the source and
+cohort prechecks of 4.1.2 are implemented as pure functions. No adapter is
 implemented or registered, so no request calls a hook yet.
 Nothing here is a qualification or a deployment result. Decisions behind it: DECISIONS
 Y35 (alrust must fully support Zabalack and Voalack; exact reference storage
@@ -313,7 +313,11 @@ writes; and the constructor refusing an empty `admin_exceptions` entry
 
 ### 4.1.2 Source and cohort prechecks port: proposal
 
-Status: **proposal for review**, before any code. It ports the
+Status: the proposal was reviewed and merged (PR #186); it is implemented as
+`hooks::zabalack::ack_prechecks`, returning `Precheck` (eligible with a
+`SourceSnapshot` and the cohort, or a skip), with unit tests for the cases
+listed below. It takes the stored alert by shared reference, so nothing can
+be written back. Nothing is registered. It ports the
 acknowledgement gate's source and cohort prechecks (`plugins.py:438-451`
 at `eaf2acf`) as one pure function the Zabalack adapter's `gate` will call
 just before 4.1.1's actor checks. It is the step that selects the cohort
