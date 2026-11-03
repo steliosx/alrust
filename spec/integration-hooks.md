@@ -325,32 +325,50 @@ Zabalack adapter's `pre_receive` will call once that adapter exists. Nothing
 is registered by this proposal or by its code.
 
 Inputs, and nothing else: the incoming alert, the caller's `CallerFacts`,
-and an injected `ReceivePolicy`. The function reads no file, environment
-variable, key or database, and performs no I/O. `ReceivePolicy` holds only
+an injected `ReceivePolicy`, and an injected current time (`now`, UTC), used
+only for the skip record's timestamp, so that evaluation is deterministic.
+The function reads no file, environment variable, key, clock or database,
+and performs no I/O. `ReceivePolicy` holds only
 the settings fields this path uses (`config.py:15-62`): `enabled`,
 `capture_bypass`, `bypass_change_ref`, `config_revision`,
 `ingestion_mappings` (login to `{customer, instance}`) and `cohorts`. It is
 built only through a constructor that applies the pinned checks for those
-fields: each mapping has exactly `customer` and `instance`, both non-empty
-strings (`config.py:153-157`); each cohort passes `validate_cohort`
+fields: each mapping's login is a non-empty string and the mapping has
+exactly `customer` and `instance`, both non-empty strings
+(`config.py:153-157`); each cohort passes `validate_cohort`
 (`policy.py:63-85`) and no two share (customer, instance, trigger)
 (`config.py:162-168`); `capture_bypass` needs a change reference
-(`config.py:145-146`). An invalid policy is refused when it is built, not per
-request. Where the policy comes from (a configuration file, its path, its
-permissions) belongs to registration and is deferred.
+(`config.py:145-146`). The flags are typed booleans and the revision and
+change reference typed strings, so the pinned boolean check
+(`config.py:121-123`) holds by construction. This is the subset of
+`validate_settings` these fields need, not full deployment or configuration
+validation, and an injected policy has not passed Zabalack's own loader.
+An invalid policy is refused when it is built, not per request. Where the
+policy comes from (a configuration file, its path, its permissions), and the
+errors a future loader can raise, belong to registration and are deferred.
 
 Order, as pinned (`normalizer.py:57-100`):
 
 1. Strip reserved keys (4.3), for every alert.
 2. `source_system` not `zabbix`: done, alert unchanged otherwise.
 3. Capture disabled (`enabled` false): skip `skipped_disabled`.
+3a. Request context (`normalizer.py:64-65`): `Store::receive` and
+   `receive_with` are public and can be called outside HTTP, so the hook
+   cannot assume a request. `CallerFacts` gains `from_request`, true only
+   when the API builds the facts from the request it is serving (the same
+   facts it authenticated); every other caller, including the legacy
+   `Store::receive`, gets false. False refuses with 403
+   `zabbix_ingestion_requires_authenticated_context`. No identity or
+   context is inferred from other fields.
 4. Tenant gate (`normalizer.py:68-70`): Zabalack requires Alerta's
    `AUTH_REQUIRED` and `CUSTOMER_VIEWS`. Proposed mapping:
    `AUTH_REQUIRED` is `CallerFacts.auth_required`. `CUSTOMER_VIEWS` has no
-   alrust switch: alrust binds a customer to each API key and always scopes
-   that key to it (no global customer views, no per-customer RBAC; KICKOFF,
-   DECISIONS Y44 A2). So the `CUSTOMER_VIEWS` half is treated as satisfied
-   by that binding, and step 6 enforces it. Refusal: 403
+   alrust switch: alrust can bind a customer to an API key and then always
+   scopes that key to it; binding is optional today (no global customer
+   views, no per-customer RBAC; KICKOFF, DECISIONS Y44 A2). So the
+   `CUSTOMER_VIEWS` half is treated as satisfied only by a customer-bound
+   API key, which step 6 enforces (an unbound key is refused there).
+   Refusal: 403
    `zabbix_ingestion_tenant_gate` when `auth_required` is false. This adds
    no customer views and changes no authentication; it evaluates existing
    caller facts. It sits next to the owner's auth-contract gate, so the
@@ -369,9 +387,18 @@ Order, as pinned (`normalizer.py:57-100`):
 8. `zabbix_instance` not the mapping's instance: 403
    `zabbix_ingestion_instance_mismatch`.
 9. `validate_source` (`policy.py:49-61`) fails for any reason: skip
-   `legacy_missing_mapping`. Otherwise its normalised values are written
-   back, including null for an absent cause or recovery event id, as
-   pinned.
+   `legacy_missing_mapping`. It needs all seven source-contract keys
+   present (`policy.py:26`, `50-51`): `source_system`, `zabbix_instance`,
+   `zabbix_event_id`, `zabbix_trigger_id`, `zabbix_cause_event_id`,
+   `zabbix_recovery_event_id` and `source_contract_version`, so a **missing**
+   cause or recovery key is a skip, not a null. A **present** cause or
+   recovery value that is one of Python's zero sentinels becomes null
+   (`policy.py:33-35`): null, `""`, `"0"`, and, because Python compares them
+   equal to `0`, any JSON number equal to zero (`0`, `0.0`, `-0.0`) and the
+   JSON `false` (but not `true`, `"0.0"` or `" 0"`). alrust keeps that exact
+   parity. Any other value must be a decimal id string
+   (`policy.py:36-37`), else the skip. On success the normalised values are
+   written back.
 10. No enabled cohort for (customer, instance, trigger)
     (`policy.py:87-94`): skip `skipped_cohort_policy`.
 11. The cohort is not one-to-one, or any of `zabbix_event_ids`,
@@ -385,19 +412,25 @@ A skip is Zabalack's `project_skip` (`normalizer.py:39-47`), and the
 receive proceeds: remove `zabbix_ack_sync_intent`, then set
 `zabbix_ack_sync = skipped`, `zabbix_ack_sync_reason`,
 `zabbix_ack_sync_config_revision` and `zabbix_ack_sync_local_at` (the
-current UTC time, ISO 8601 with microseconds and `+00:00`, as Python's
+injected `now`, ISO 8601 with microseconds and `+00:00`, as Python's
 `isoformat(timespec="microseconds")` writes it). A refusal is a
 `HookError` with status 403 and the reason string as its message, and
-nothing is stored. Zabalack's other two refusals do not apply:
-`zabbix_ingestion_requires_authenticated_context`, because alrust calls the
-hook only from a request, and `zabalack_configuration_invalid` (503),
-because an invalid policy is refused when built.
+nothing is stored. Zabalack's `zabalack_configuration_invalid` (503) does not arise per
+request here, because the injected policy is validated when built; a future
+configuration loader's own errors belong to registration. Refusals (403),
+that configuration error (503) and skips (the receive proceeds, with the
+skip record) stay distinct.
 
-Tests the code will carry, with synthetic policies and caller facts only:
-a non-Zabbix alert (stripped, otherwise unchanged); capture disabled (strip
-and `skipped_disabled`); each refusal above; each skip; a passing alert
-with normalised source values; capture bypass; and stripping of reserved
-keys a producer supplied, also when the alert is then skipped.
+Tests the code will carry, with synthetic policies, caller facts and a
+fixed `now` only: a non-Zabbix alert (stripped, otherwise unchanged);
+capture disabled (strip and `skipped_disabled`); facts not from a request;
+each refusal above; each skip; a missing cause or recovery key (skip)
+against a present null, `""`, `"0"`, `0`, `0.0`, `-0.0` or `false` (null)
+and `true` or `"0.0"` (skip); a
+passing alert with normalised source values; capture bypass; constructor
+refusals (empty login, extra mapping key, bad cohort, duplicate cohort,
+bypass without a change reference); and stripping of reserved keys a
+producer supplied, also when the alert is then skipped.
 
 ## 5. Voalack adapter (pinned `main`)
 
