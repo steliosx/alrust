@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-03T02:30Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-03T02:57Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -647,12 +647,27 @@ jobs green:
 - #184 (`0521eb83`): that port, as pure functions, with a cohort selector
   shared with the receive path. Today every caller is an API key, so every
   acknowledgement reaching it would be skipped; it verifies no credential.
+- #186 (`8ed36201`): the reviewed proposal (spec 4.1.2) for porting the
+  acknowledgement gate's source and cohort prechecks: canonical alert id
+  and source contract, then the cohort, then ambiguity.
+- #187 (`5b255b00`): that port, as a pure function that only reads the
+  stored alert and returns the source and cohort for the actor checks.
 
 No adapter is implemented or registered, so no request calls a hook
 yet. The adapters stay gated on their named inputs: Zabalack's in-transaction
-staging review (Z1), synthetic signing vectors from both integrations, and
-the review of the signing-key placement (X1). This is source work, not a
+staging review (Z1), synthetic signing vectors from both integrations, the
+review of the signing-key placement (X1), and a reachable Voalack pin. This is source work, not a
 runtime, adoption or integration qualification.
+
+**Voalack pin unreachable; Voalack slices held (2026-11-03).** The spec's
+section 5 pin, `voalack@4d70e69c`, is no longer on GitHub: the public
+repository returns no such commit. On Voalack's current `main`,
+`boundary.py`, `intent.py` and `sql/schema.sql` differ from the pinned
+blobs; `envelope.py`, `plugin.py`, `txn.py` and `projector.py` are the same.
+Per Codex (`a7553564`), Voalack source slices, starting with the A3(a)
+refusal before lookup, are held, and no new pin is adopted. A separate
+Voalack source and provenance transfer that Codex requested awaits the
+owner's explicit approval; it is Codex's request, not alrust's.
 
 ## Work in flight
 
