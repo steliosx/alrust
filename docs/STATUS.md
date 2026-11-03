@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-02T19:59Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-02T23:57Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -549,6 +549,61 @@ and the PostgreSQL jobs (no service containers in the lane) stay
 hosted-only and NOT_RUN for now. Open PRs besides this one: #159 and #157
 (held), and #136, #124, #71 and #70, which keep their existing
 dispositions.
+
+**Hosted CI runs again; conformance unit tests on the lane paused at 3 of
+6 shards (2026-11-02).** GitHub-hosted CI has executed alrust's runs again
+since 2026-11-02. The owner reconfirmed the $0 spending limit: no paid
+usage is authorized. With all seven hosted jobs green on each exact head
+and Codex's clearance, five PRs merged by the ordinary Minimal route:
+- #169: the lane shard workflows (`efc12a46`).
+- #170: tmpfs mode and the `check-shards` self-check (`bca09eb2`).
+- #171: the per-test tmp_path reaper (`158197b6`).
+- #172: a fixed filesystem per shard and the new `db-stage` shard
+  (`98da51fc`).
+- #173: export-evidence listing its staging directory through a fresh
+  descriptor (`ba5ce669`), a btrfs portability fix found on the way.
+
+`ci.yml`'s conformance-unit job now also proves, by node ID, that the
+lane shards cover exactly the suite, and runs the reaper's regression
+cases. The suite now has 3311 tests.
+
+Three earlier lane attempts ended NOT_PASS. Their signed records hold
+what was observed. The diagnoses below are the lane's and mine and stay
+unproven; each has a source mitigation merged, but that mitigation is not
+yet qualified on the lane:
+- `d57ba20e`: rest-fz did not finish within pytest's bound. Diagnosis:
+  slow disk for the many create-and-fsync tests. Mitigation: those
+  shards run on a tmpfs.
+- `3c95b371`: ENOSPC on the tmpfs. Diagnosis: the guest's /dev/shm is
+  small (reported as 64 MiB). Mitigation: each test's tmp_path is
+  removed after the test.
+- `2bc05afd`: the script refused, finding no executable tmpfs. Diagnosis:
+  /dev/shm is noexec. Mitigation: the shards whose tests execute scripts
+  in tmp_path run on disk.
+
+The fourth attempt ran at `ac1543b9` (the six-shard design). As the lane
+reports, three shards passed: rest-fz (tmpfs, 2344 tests, 15.4 s),
+db-stage (disk on overlayfs, 93 tests, 54.1 s) and rest-ae (tmpfs, 684
+tests, 3.5 s). ref-supervisor then failed one of its 60 tests. The lane
+reports that the stop helper returned `pidfd_open_failed` where the test
+expected `no_terminal_receipt`; entry-supervisor and ref-launcher did not
+run. The four published check results are verified on GitHub at
+`ac1543b9`: three successes (`125624724216`, `125626380543`,
+`125628254650`) and one failure (`125629761850`). The signed attestations
+for this attempt are still due. Lane-qualified passes: 0 of 6.
+
+The stop helper reports `pidfd_open_failed` when `os.pidfd_open` raises
+any error other than "no such process", and it then signals nothing. If
+that is what happened, the helper behaved as designed. A plausible,
+unverified hypothesis is that the guest refuses `pidfd_open`; which error
+occurred, and why, is not yet known.
+
+As planned before this attempt, lane work on the conformance unit tests
+is now paused at 3 of 6 reported shards. The ordinary source merges
+above depended only on their hosted CI. The pause waives no other gate:
+covered-job, shared-CI qualification, cutover and held-scope gates are
+unchanged. No guest capability change and no test change is approved;
+any later proposal keeps the tests' safety checks.
 
 ## Work in flight
 
