@@ -1,12 +1,15 @@
 # Integration hook contract (Zabalack and Voalack)
 
-Status: **draft for review**. alrust code implements only part of section
-4.2 so far: the restricted attribute is left out of every alert response,
-and search parameters that could select, sort or group by it are refused
-(`crates/alrust-domain/src/lib.rs`, `crates/alrust-api/src/lib.rs`), and
-error bodies and log records that may carry restricted evidence are
-redacted (4.2, diagnostics). Nothing here is a qualification or a
-deployment result. Decisions behind it: DECISIONS
+Status: **draft for review**. alrust code implements part of this page so
+far. Section 4.2: the restricted attribute is left out of every alert
+response, search parameters that could select, sort or group by it are
+refused (`crates/alrust-domain/src/lib.rs`, `crates/alrust-api/src/lib.rs`),
+and error bodies and log records that may carry restricted evidence are
+redacted. Section 3: the hook interface and its phase order inside the
+acknowledgement transaction (`crates/alrust-store-pg/src/hooks.rs`,
+`take_action_with`), tested with synthetic integrations only. No adapter
+is implemented or registered, so no acknowledgement calls a hook yet.
+Nothing here is a qualification or a deployment result. Decisions behind it: DECISIONS
 Y35 (alrust must fully support Zabalack and Voalack; exact reference storage
 first) and Y41 (option A: a hook in alrust calls each integration's existing
 SQL inside the acknowledgement's own transaction; their own sessions change

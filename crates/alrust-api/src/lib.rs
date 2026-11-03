@@ -11,7 +11,7 @@ use alrust_domain::{
     contains_evidence, is_restricted_attribute, iso8601, parse_time, redact_diagnostic,
     scope_allows, truncate_ms,
 };
-use alrust_store_pg::{AlertEdit, AlertQuery, NewAlert, Store, StoreError};
+use alrust_store_pg::{AlertEdit, AlertQuery, CallerFacts, NewAlert, Store, StoreError};
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -117,6 +117,12 @@ impl From<StoreError> for ApiError {
             // Input ranges are refused with 400 before the store; this is a
             // stored value that cannot be written back, such as a duplicate
             // count at the integer maximum. Nothing was written.
+            // A hook's own status and message (spec/integration-hooks.md
+            // section 3); the response layer still redacts evidence.
+            StoreError::Hook(h) => ApiError::new(
+                StatusCode::from_u16(h.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                h.message,
+            ),
             StoreError::OutOfRange(what) => {
                 tracing::error!(field = what, "value outside the reference integer range");
                 ApiError::new(
@@ -684,15 +690,19 @@ async fn take_action(
         None | Some(Value::Null) => None,
         v => Some(parse_timeout(v, 0)?),
     };
+    // The facts the acknowledgement hooks receive. API keys carry no user id
+    // and no verified auth type; human operators are not implemented yet.
+    let facts = CallerFacts {
+        login: caller.login.clone(),
+        user_id: None,
+        auth_type: None,
+        scopes: caller.scopes.clone(),
+        customers: caller.customers(),
+        auth_required: st.cfg.auth_required,
+        request_id: None,
+    };
     st.store
-        .take_action(
-            &id,
-            caller.customers().as_deref(),
-            &action,
-            text,
-            timeout,
-            caller.login(),
-        )
+        .take_action_with(&id, &action, text, timeout, &facts)
         .await?;
     Ok(Json(json!({"status": "ok"})))
 }
