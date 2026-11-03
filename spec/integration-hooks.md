@@ -225,6 +225,84 @@ Rules:
 `pre_commit` and `commit_outcome` have nothing to do for Zabalack: its
 trigger completes the record inside the same `UPDATE`.
 
+### 4.1.1 Actor policy port: proposal
+
+Status: **proposal for review**, before any code. It ports only the last
+two checks of Zabalack's acknowledgement gate, human-actor extraction and
+actor authorisation (`plugins.py:452-454`, using `_human_actor` at
+`plugins.py:269-281` and `authorize_actor` at `policy.py:96-101`, at
+`eaf2acf`), as pure functions the Zabalack adapter's `gate` will call.
+Nothing is registered.
+
+**Scope, delimited.** The gate's earlier checks are not in this slice and
+keep their pinned order and outcomes when the adapter's `gate` is written
+(`plugins.py:410-451`): the entry conditions, capture disabled, capture
+bypass, the route, the reference-version check, privacy readiness (503
+`zabalack_privacy_adapter_required`), routing order, `AUTH_REQUIRED` and
+`CUSTOMER_VIEWS`, the canonical alert id and source, the cohort, and
+ambiguity. This slice assumes the caller has already selected the cohort
+(as `select_cohort` does at `plugins.py:445`) and passes it in. The
+transition decision, the health probe and staging that follow
+(`plugins.py:460` onwards) are also out of scope.
+
+**Inputs, and nothing else:** `CallerFacts`; the alert's customer; the
+selected cohort; an injected policy; and an injected `now` for the skip
+record. No file, environment variable, key, clock or database. The policy
+gains `admin_exceptions`, a list of non-empty strings, checked when it is
+built (refusal `admin_exception_invalid`, `config.py:158-159`), and each
+cohort keeps `allow_admin`. The policy type is renamed from `ReceivePolicy`
+to `Policy` (with `PolicyInput`), since it is Zabalack's settings subset for
+both paths. The rename touches only `hooks::zabalack` and the names in 4.3.1;
+nothing registers the policy, and no other crate uses it.
+
+**Human-actor extraction** (`plugins.py:269-281`), from `CallerFacts` only:
+
+1. `from_request` must be true, and `user_id` and `login` must be present
+   and non-empty. Otherwise there is no actor.
+2. A login that has an ingestion mapping is not a human actor.
+3. `admin` is true when any one scope is exactly the string `admin` or
+   exactly `admin:alerts`; the caller's other scopes are irrelevant, and
+   there is no prefix or case-insensitive match (`plugins.py:275-276`). An
+   admin whose login is not in `admin_exceptions` is not an actor.
+4. The caller's customer list must be present (`customers` is `Some`); an
+   empty list is allowed. `None`, which in alrust means every customer, is
+   not a list and gives no actor.
+5. The actor is the login, the customer list sorted and de-duplicated, the
+   admin flag, and the auth type `user`.
+
+**Authorisation** (`policy.py:96-101`): the alert's customer must be
+non-empty and the actor's login non-empty. An admin actor is authorised
+exactly when the cohort's `allow_admin` is true, whatever its customer
+list (no membership check is added). A non-admin actor is authorised
+exactly when the alert's customer is in its customer list. An admin
+exception lets an admin be an actor; it does not by itself authorise.
+
+**Outcome.** No actor, or an actor not authorised, is the skip
+`skipped_actor_policy`: the adapter's `gate` returns `Gate::Skip` with
+`project_skip`'s writes (the intent removed by a null; `zabbix_ack_sync`,
+`_reason`, `_config_revision`, `_local_at` with the injected `now`), and the
+acknowledgement proceeds without capture. It is never a refusal and never a
+new 403. An authorised actor is returned for the later staging intent.
+
+**Identity, stated plainly.** These are the facts the hooks will receive
+for a verified human operator once OIDC exists (A1, A2; DECISIONS Y44).
+Today the API sets `user_id` and `auth_type` to none for every caller
+(API keys only), so every acknowledgement would get `skipped_actor_policy`.
+This slice evaluates facts; it does not verify a credential, does not turn
+an API key into a human, and adds no customer views, RBAC or OIDC mapping.
+
+Tests the code will carry, with synthetic facts, cohorts, policy and a
+fixed `now`: facts not from a request; a missing or empty `user_id` or
+`login`; an ingestion-mapped login; each admin scope and near lookalikes
+(`admin:alert`, `Admin`, `admin:alerts:x`); an admin with and without an
+exception; an admin under `allow_admin` true (authorised even with an empty
+customer list) and false (skipped even with the customer listed); an
+ordinary actor in and not in the customer list; an empty customer list
+(extracted, then skipped); `customers` absent (no actor); an empty alert
+customer; the actor's customers sorted and de-duplicated; the exact skip
+writes; and the constructor refusing an empty `admin_exceptions` entry
+(`admin_exception_invalid`).
+
 ### 4.2 Privacy on every read path
 
 Zabalack treats one attribute, `zabbix_ack_sync_intent`
