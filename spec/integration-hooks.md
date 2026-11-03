@@ -425,6 +425,14 @@ configuration loader's own errors belong to registration. Refusals (403),
 that configuration error (503) and skips (the receive proceeds, with the
 skip record) stay distinct.
 
+Malformed-policy parity, disclosed rather than claimed: in a cohort's
+`host_ids` or `group_ids`, Python's `len(set(values))` raises `TypeError` for
+an unhashable member (a crash, not a `PolicyError`), and treats `1`, `true`
+and `1.0` as one value, so `[1, true]` or `[1, 1.0]` is
+`cohort_host_group_bound`. The port de-duplicates by JSON text and then
+refuses any non-string member as `invalid_source_id`. Both refuse every such
+policy, and valid string-id lists agree.
+
 Tests the code will carry, with synthetic policies, caller facts and a
 fixed `now` only: a non-Zabbix alert (stripped, otherwise unchanged);
 capture disabled (strip and `skipped_disabled`); facts not from a request;

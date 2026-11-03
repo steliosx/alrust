@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-03T01:26Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-03T02:07Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -611,7 +611,7 @@ covered-job, shared-CI qualification, cutover and held-scope gates are
 unchanged. No guest capability change and no test change is approved;
 any later proposal keeps the tests' safety checks.
 
-**Integration hooks: first three source slices on `main` (2026-11-03).**
+**Integration hooks: source slices on `main` (2026-11-03).**
 Implementing `spec/integration-hooks.md` (Y35, Y41, Y44) started with the
 parts that need no adapter, key or owner input. Each merged by the ordinary
 Minimal route, after Codex's approval of the exact head and all seven hosted
@@ -631,8 +631,18 @@ jobs green:
   inside the acknowledgement transaction, with an unknown commit outcome
   kept separate from a refusal. It is tested on PostgreSQL with synthetic
   integrations only.
+- #179 (`838c52ff`): the receive-time `pre_receive` phase of section 4.3,
+  and Zabalack's reserved-key list ported as a pure filter. With no
+  integration registered, attributes are stored as received; a test proves
+  it.
+- #180 (`dfec9836`): the reviewed proposal (spec 4.3.1) for porting
+  Zabalack's receive normaliser, including how its `CUSTOMER_VIEWS`
+  requirement maps onto a customer-bound API key.
+- #181 (`7ed5a77c`): that port, as a pure function over the incoming alert,
+  the caller's facts, an injected policy and an injected time, with unit
+  tests that run without a database.
 
-No adapter is implemented or registered, so no acknowledgement calls a hook
+No adapter is implemented or registered, so no request calls a hook
 yet. The adapters stay gated on their named inputs: Zabalack's in-transaction
 staging review (Z1), synthetic signing vectors from both integrations, and
 the review of the signing-key placement (X1). This is source work, not a
