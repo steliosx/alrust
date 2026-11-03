@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-03T02:57Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-03T02:59Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -655,19 +655,24 @@ jobs green:
 
 No adapter is implemented or registered, so no request calls a hook
 yet. The adapters stay gated on their named inputs: Zabalack's in-transaction
-staging review (Z1), synthetic signing vectors from both integrations, the
-review of the signing-key placement (X1), and a reachable Voalack pin. This is source work, not a
+staging review (Z1), synthetic signing vectors from both integrations, and
+the review of the signing-key placement (X1), each for the parts that depend
+on it. The Voalack source hold below is separate and covers only Voalack
+slices. This is source work, not a
 runtime, adoption or integration qualification.
 
-**Voalack pin unreachable; Voalack slices held (2026-11-03).** The spec's
-section 5 pin, `voalack@4d70e69c`, is no longer on GitHub: the public
-repository returns no such commit. On Voalack's current `main`,
-`boundary.py`, `intent.py` and `sql/schema.sql` differ from the pinned
-blobs; `envelope.py`, `plugin.py`, `txn.py` and `projector.py` are the same.
-Per Codex (`a7553564`), Voalack source slices, starting with the A3(a)
-refusal before lookup, are held, and no new pin is adopted. A separate
-Voalack source and provenance transfer that Codex requested awaits the
-owner's explicit approval; it is Codex's request, not alrust's.
+**Voalack slices held (2026-11-03).** At about 02:31Z a public GitHub lookup
+of the spec's section 5 pin, `voalack@4d70e69c`, in `steliosx/voalack`
+failed (no such commit). This is that one observation, not a finding that
+the historical source was destroyed. Claude's comparison, reported in
+`edfd1859` against the repository's `main` as observed then (`3ca8bb6b`),
+found `boundary.py`, `intent.py` and `sql/schema.sql` different from the
+pinned blobs, and `envelope.py`, `plugin.py`, `txn.py` and `projector.py`
+the same. Per Codex (`a7553564`), Voalack source slices, starting with the
+A3(a) refusal before lookup, are held, and no new pin is adopted. This hold
+covers only Voalack work. A separate Voalack source and provenance transfer
+that Codex prepared awaits the owner's explicit approval; it is Codex's
+request, not alrust's.
 
 ## Work in flight
 
