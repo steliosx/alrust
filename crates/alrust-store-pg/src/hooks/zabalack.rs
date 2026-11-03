@@ -8,6 +8,8 @@ use std::collections::HashSet;
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 
+use alrust_domain::Alert;
+
 use super::{CallerFacts, HookError};
 use crate::NewAlert;
 
@@ -514,6 +516,71 @@ pub fn authorize_actor(actor: &Actor, customer: &str, cohort: &Cohort) -> bool {
     } else {
         actor.customers.iter().any(|c| c == customer)
     }
+}
+
+/// The source identity an eligible alert carries (`make_snapshot`,
+/// `policy.py:40-47`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceSnapshot {
+    pub instance: String,
+    pub event_id: String,
+    pub trigger_id: String,
+}
+
+/// The source and cohort prechecks' outcome (spec 4.1.2).
+#[derive(Debug, Clone)]
+pub enum Precheck<'p> {
+    /// Eligible: the snapshot and the selected cohort, for `actor_gate`.
+    Eligible {
+        source: SourceSnapshot,
+        cohort: &'p Cohort,
+    },
+    /// Skipped: these attribute writes, carried as `Gate::Skip`.
+    Skip(Map<String, Value>),
+}
+
+/// Python's `str(UUID(id)) == id` (`plugins.py:439-440`): 32 lowercase
+/// hexadecimal digits grouped 8-4-4-4-12 with hyphens.
+fn canonical_uuid(id: &str) -> bool {
+    let b = id.as_bytes();
+    b.len() == 36
+        && b.iter().enumerate().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => *c == b'-',
+            _ => c.is_ascii_digit() || (b'a'..=b'f').contains(c),
+        })
+}
+
+/// The acknowledgement gate's source and cohort prechecks
+/// (`plugins.py:438-451`, spec 4.1.2), in order: canonical id and source
+/// contract, cohort, ambiguity. Reads the stored alert only; writes nothing
+/// back on success. Every failure is a skip, never a refusal.
+pub fn ack_prechecks<'p>(policy: &'p Policy, alert: &Alert, now: DateTime<Utc>) -> Precheck<'p> {
+    let a = &alert.attributes;
+    if !canonical_uuid(&alert.id) || validate_source(a).is_none() {
+        return Precheck::Skip(skip_writes("legacy_missing_mapping", policy, now));
+    }
+    let text = |k: &str| {
+        a.get(k)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let source = SourceSnapshot {
+        instance: text("zabbix_instance"),
+        event_id: text("zabbix_event_id"),
+        trigger_id: text("zabbix_trigger_id"),
+    };
+    let customer = alert.customer.as_deref().unwrap_or("");
+    let Some(cohort) = policy.select_cohort(customer, &source.instance, &source.trigger_id) else {
+        return Precheck::Skip(skip_writes("skipped_cohort_policy", policy, now));
+    };
+    let ambiguous = ["zabbix_event_ids", "zabbix_trigger_ids", "source_members"]
+        .iter()
+        .any(|k| a.contains_key(*k));
+    if !cohort.one_to_one || ambiguous {
+        return Precheck::Skip(skip_writes("skipped_ambiguous_source", policy, now));
+    }
+    Precheck::Eligible { source, cohort }
 }
 
 /// The actor checks' outcome for the adapter's `gate` (`plugins.py:452-454`).
@@ -1298,6 +1365,250 @@ mod policy_tests {
         assert_eq!(
             Policy::new(i).unwrap_err(),
             PolicyBuildError("admin_exception_invalid")
+        );
+    }
+
+    // ---- acknowledgement source and cohort prechecks (spec 4.1.2)
+
+    const UUID: &str = "0f8fad5b-d9cb-469f-a165-70867728950e";
+
+    fn stored(
+        id: &str,
+        customer: Option<&str>,
+        attributes: Map<String, Value>,
+    ) -> alrust_domain::Alert {
+        alrust_domain::Alert {
+            id: id.into(),
+            resource: "r".into(),
+            event: "e".into(),
+            environment: "Production".into(),
+            severity: "major".into(),
+            correlate: vec![],
+            status: "open".into(),
+            service: vec![],
+            group: "Misc".into(),
+            value: None,
+            text: String::new(),
+            tags: vec![],
+            attributes,
+            origin: "zbx".into(),
+            event_type: "exceptionAlert".into(),
+            create_time: now(),
+            timeout: Some(86_400),
+            raw_data: None,
+            customer: customer.map(str::to_owned),
+            duplicate_count: Some(0),
+            repeat: Some(false),
+            previous_severity: None,
+            trend_indication: None,
+            receive_time: now(),
+            last_receive_id: None,
+            last_receive_time: None,
+            update_time: Some(now()),
+            history: vec![],
+        }
+    }
+
+    fn pre(p: &Policy, a: &alrust_domain::Alert) -> Option<String> {
+        match ack_prechecks(p, a, now()) {
+            Precheck::Eligible { .. } => None,
+            Precheck::Skip(m) => {
+                assert_eq!(m.len(), 5, "{m:?}");
+                assert_eq!(m["zabbix_ack_sync_intent"], Value::Null);
+                assert_eq!(m["zabbix_ack_sync"], "skipped");
+                assert_eq!(m["zabbix_ack_sync_config_revision"], "cfg-7");
+                assert_eq!(m["zabbix_ack_sync_local_at"], LOCAL_AT);
+                Some(m["zabbix_ack_sync_reason"].as_str().unwrap().to_owned())
+            }
+        }
+    }
+
+    fn reason(
+        p: &Policy,
+        id: &str,
+        customer: Option<&str>,
+        attributes: Map<String, Value>,
+    ) -> Option<String> {
+        pre(p, &stored(id, customer, attributes))
+    }
+
+    #[test]
+    fn an_eligible_alert_yields_its_snapshot_and_cohort_and_is_not_changed() {
+        let p = policy();
+        let a = stored(UUID, Some("acme"), source());
+        let before = a.attributes.clone();
+        match ack_prechecks(&p, &a, now()) {
+            Precheck::Eligible { source, cohort } => {
+                assert_eq!(
+                    source,
+                    SourceSnapshot {
+                        instance: "zbx-1".into(),
+                        event_id: "1001".into(),
+                        trigger_id: "77".into()
+                    }
+                );
+                // The selected cohort is the one actor_gate takes.
+                let actor = CallerFacts {
+                    login: Some("op".into()),
+                    user_id: Some("u".into()),
+                    customers: Some(vec!["acme".into()]),
+                    from_request: true,
+                    ..CallerFacts::default()
+                };
+                assert!(matches!(
+                    actor_gate(&p, &actor, "acme", cohort, now()),
+                    ActorOutcome::Authorized(_)
+                ));
+            }
+            Precheck::Skip(m) => panic!("skipped: {m:?}"),
+        }
+        // Nothing written back: the sentinels "" and "0" stay as they were.
+        assert_eq!(a.attributes, before);
+        assert_eq!(a.attributes["zabbix_cause_event_id"], "");
+        assert_eq!(a.attributes["zabbix_recovery_event_id"], "0");
+    }
+
+    #[test]
+    fn a_non_canonical_id_is_a_legacy_skip() {
+        let p = policy();
+        for id in [
+            "0F8FAD5B-D9CB-469F-A165-70867728950E",
+            "0f8fad5bd9cb469fa16570867728950e",
+            "{0f8fad5b-d9cb-469f-a165-70867728950e}",
+            "urn:uuid:0f8fad5b-d9cb-469f-a165-70867728950e",
+            "0f8fad5b-d9cb-469f-a165-70867728950",
+            "0f8fad5b-d9cb-469f-a165-70867728950e0",
+            "0f8fad5b-d9cb-469f-a165_70867728950e",
+            "0g8fad5b-d9cb-469f-a165-70867728950e",
+            "not-a-uuid",
+            "",
+        ] {
+            assert_eq!(
+                reason(&p, id, Some("acme"), source()).as_deref(),
+                Some("legacy_missing_mapping"),
+                "{id}"
+            );
+        }
+        assert_eq!(reason(&p, UUID, Some("acme"), source()), None);
+    }
+
+    #[test]
+    fn a_source_contract_failure_is_a_legacy_skip() {
+        let p = policy();
+        for m in [
+            without(source(), "zabbix_cause_event_id"),
+            without(source(), "source_system"),
+            with(source(), "source_system", json!("nagios")),
+            with(source(), "source_contract_version", json!(1)),
+            with(source(), "zabbix_instance", json!("-bad")),
+            with(source(), "zabbix_event_id", json!("18446744073709551616")),
+            with(source(), "zabbix_trigger_id", json!("0")),
+            with(source(), "zabbix_recovery_event_id", json!("1001")),
+            with(source(), "zabbix_cause_event_id", json!(true)),
+        ] {
+            assert_eq!(
+                reason(&p, UUID, Some("acme"), m.clone()).as_deref(),
+                Some("legacy_missing_mapping"),
+                "{m:?}"
+            );
+        }
+        for v in [
+            Value::Null,
+            json!(""),
+            json!("0"),
+            json!(0),
+            json!(0.0),
+            json!(false),
+            json!("5"),
+        ] {
+            assert_eq!(
+                reason(
+                    &p,
+                    UUID,
+                    Some("acme"),
+                    with(source(), "zabbix_cause_event_id", v.clone())
+                ),
+                None,
+                "{v}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_enabled_matching_cohort_is_a_cohort_skip() {
+        let p = policy();
+        for (customer, m) in [
+            (None, source()),
+            (Some(""), source()),
+            (Some("other"), source()),
+            (
+                Some("acme"),
+                with(source(), "zabbix_trigger_id", json!("78")),
+            ),
+        ] {
+            assert_eq!(
+                reason(&p, UUID, customer, m).as_deref(),
+                Some("skipped_cohort_policy"),
+                "{customer:?}"
+            );
+        }
+        let mut i = input();
+        i.cohorts = vec![with_v(cohort(), "enabled", json!(false))];
+        assert_eq!(
+            reason(&Policy::new(i).unwrap(), UUID, Some("acme"), source()).as_deref(),
+            Some("skipped_cohort_policy")
+        );
+    }
+
+    #[test]
+    fn ambiguity_is_a_skip_whatever_the_key_holds() {
+        let p = policy();
+        for k in ["zabbix_event_ids", "zabbix_trigger_ids", "source_members"] {
+            for v in [Value::Null, json!([]), json!(""), json!(["1"])] {
+                assert_eq!(
+                    reason(&p, UUID, Some("acme"), with(source(), k, v.clone())).as_deref(),
+                    Some("skipped_ambiguous_source"),
+                    "{k}={v}"
+                );
+            }
+        }
+        let mut i = input();
+        i.cohorts = vec![with_v(cohort(), "one_to_one", json!(false))];
+        assert_eq!(
+            reason(&Policy::new(i).unwrap(), UUID, Some("acme"), source()).as_deref(),
+            Some("skipped_ambiguous_source")
+        );
+    }
+
+    #[test]
+    fn competing_failures_resolve_source_then_cohort_then_ambiguity() {
+        let p = policy();
+        let ambiguous = with(source(), "source_members", json!([]));
+        // Bad id + no cohort + ambiguous: the source check wins.
+        assert_eq!(
+            reason(&p, "BAD", Some("other"), ambiguous.clone()).as_deref(),
+            Some("legacy_missing_mapping")
+        );
+        // Bad source + no cohort: source.
+        assert_eq!(
+            reason(
+                &p,
+                UUID,
+                Some("other"),
+                with(ambiguous.clone(), "source_contract_version", json!("2"))
+            )
+            .as_deref(),
+            Some("legacy_missing_mapping")
+        );
+        // No cohort + ambiguous: cohort.
+        assert_eq!(
+            reason(&p, UUID, Some("other"), ambiguous.clone()).as_deref(),
+            Some("skipped_cohort_policy")
+        );
+        // Cohort found + ambiguous: ambiguity.
+        assert_eq!(
+            reason(&p, UUID, Some("acme"), ambiguous).as_deref(),
+            Some("skipped_ambiguous_source")
         );
     }
 
