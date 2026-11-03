@@ -57,6 +57,19 @@ def call(method, path, body=None, key=KEY, headers=None):
         return code, raw.decode(errors='replace')
 
 
+def call_raw(method, path, data, key=KEY):
+    """Like call, with a raw request body sent as application/json."""
+    req = urllib.request.Request(BASE + path, data=data, method=method)
+    req.add_header('Content-Type', 'application/json')
+    if key:
+        req.add_header('Authorization', f'Key {key}')
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status, r.read().decode(errors='replace')
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode(errors='replace')
+
+
 def check(name, cond, detail=''):
     global failures
     if cond:
@@ -505,6 +518,18 @@ for bad in (f'[zabalack:v1 action={RUN} kid=k mac=00]', f'[ACKLINE:{RUN}]', f'{R
 code, body = call('GET', '/alerts', key=f'plain-{RUN}')
 check('an ordinary invalid key is still named in the 401 message',
       code == 401 and isinstance(body, dict) and f'plain-{RUN}' in body.get('message', ''), (code, body))
+# axum's own rejection of a malformed JSON body quotes the key path, outside ApiError
+code, plain = call_raw('POST', '/alert', f'{{"plain-{RUN}": invalid}}'.encode())
+check('malformed JSON is refused by the framework (4xx)', 400 <= code < 500, (code, plain))
+for mk in (f'[zabalack:v1 action={RUN} kid=k mac=00]', f'[ZaBaLaCk:v1 {RUN}]', f'[AckLine:{RUN}]'):
+    c2, text = call_raw('POST', '/alert', f'{{"{mk}": invalid}}'.encode())
+    try:
+        msg = json.loads(text).get('message')
+    except ValueError:
+        msg = None
+    check(f'malformed JSON with a key carrying evidence ({mk[:10]}...): same status, redacted message',
+          c2 == code and msg == REDACTED and RUN not in text and '[zabalack:' not in text.lower()
+          and '[ackline:' not in text.lower(), (c2, text))
 
 # --- housekeeping expiry [K2.1-K2.3, A2V3-STORE-N1]: global, so disposable targets only
 HK_CASES = 6

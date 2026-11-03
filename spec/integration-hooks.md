@@ -258,17 +258,24 @@ the acknowledgement adapter is enabled:
   history entry's `text`.
   In alrust (HOOK-DIAG-1), with Zabalack's test: text carries evidence
   when, ignoring case, it contains `[zabalack:`, `[ackline:` or the
-  restricted key's name (`plugins.py:26-27`). An error body whose message
-  carries evidence says `zabalack_restricted_error_redacted` instead, with
-  the same status code; the message is the only caller- or
-  database-derived string in alrust's error body. The database-error,
-  connection-retry, housekeeping and fatal start-up log records say
-  `zabalack_restricted_diagnostic_redacted` instead of such text. Other
-  messages are unchanged, including the reference's reflection of an
-  invalid API key. Not covered, and not yet shown either way: plain-text
-  rejections that the HTTP framework writes itself, outside `ApiError`
-  (for example malformed JSON bodies), and request logs below the default
-  `info` level.
+  restricted key's name (`plugins.py:26-27`). Both checks sit at the
+  output boundary, not at individual call sites:
+  - **Error responses.** A layer on the router reads every 4xx and 5xx
+    body, including the plain-text rejections axum writes itself outside
+    `ApiError` (a malformed JSON body's message quotes the key path), and
+    replaces one that carries evidence with the error body
+    `zabalack_restricted_error_redacted`, with the same status code
+    (Zabalack's `redact_error_response`, `plugins.py:140-146`). Other
+    responses, and error bodies without evidence, pass unchanged,
+    including the reference's reflection of an invalid API key.
+  - **Logs.** Every formatted log record, from alrust or a dependency,
+    at any level the filter admits, is written whole or replaced by
+    `zabalack_restricted_diagnostic_redacted`. This covers trigger names
+    logged at start-up and sqlx's `sqlx::postgres::notice` records, which
+    carry PostgreSQL notices and warnings raised by triggers
+    (Zabalack's `CaptureLogRedactor`, `plugins.py:30-46`).
+  Not covered: a panic message, which Rust's default panic hook prints to
+  standard error directly.
 
 ### 4.3 Receive path
 

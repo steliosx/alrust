@@ -18,6 +18,8 @@
 //!   relies on an external cron calling `/management/housekeeping`)
 //! - `RUST_LOG` (default `info`)
 
+mod redacted_log;
+
 use std::net::SocketAddr;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -125,12 +127,12 @@ async fn main() -> ExitCode {
     reason = "settings, store preparation and the server are read top to bottom in one place"
 )]
 async fn run() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,sqlx=warn".into()),
-        )
-        .init();
+    // As `fmt().init()` did: also forwards `log` records (tracing-log).
+    tracing_subscriber::util::SubscriberInitExt::try_init(redacted_log::subscriber(
+        "info,sqlx=warn",
+        std::io::stdout,
+    ))
+    .context("could not install the log subscriber")?;
 
     let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL is required")?;
     let store_cfg = StoreConfig {

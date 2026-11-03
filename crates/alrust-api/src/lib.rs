@@ -251,6 +251,31 @@ fn wanted_customer(obj: &Map<String, Value>) -> ApiResult<Option<String>> {
     }
 }
 
+/// Error bodies are read whole up to this size to be checked; a larger one is
+/// replaced, since it cannot be checked.
+const ERROR_BODY_LIMIT: usize = 1 << 20;
+
+/// Every error response, including the plain-text rejections axum writes
+/// itself outside `ApiError` (for example a JSON body it cannot parse, whose
+/// message can quote the offending key): one that may carry restricted
+/// evidence becomes the `REDACTED_ERROR` error body with the same status code
+/// (hook spec section 4.2, after Zabalack's `redact_error_response`,
+/// `zab-al-ack@eaf2acf:src/zabalack/plugins.py:140-146`). Other responses
+/// pass unchanged.
+async fn redact_error_body(r: Response) -> Response {
+    let status = r.status();
+    if !(status.is_client_error() || status.is_server_error()) {
+        return r;
+    }
+    let (parts, body) = r.into_parts();
+    match axum::body::to_bytes(body, ERROR_BODY_LIMIT).await {
+        Ok(bytes) if !contains_evidence(&String::from_utf8_lossy(&bytes)) => {
+            Response::from_parts(parts, axum::body::Body::from(bytes))
+        }
+        _ => ApiError::new(status, REDACTED_ERROR).into_response(),
+    }
+}
+
 pub fn router(state: Shared) -> Router {
     Router::new()
         .route("/", get(index))
@@ -278,6 +303,7 @@ pub fn router(state: Shared) -> Router {
             "/management/housekeeping",
             get(housekeeping).post(housekeeping),
         )
+        .layer(axum::middleware::map_response(redact_error_body))
         .with_state(state)
 }
 
@@ -1218,16 +1244,76 @@ mod tests {
         assert_eq!(v["message"], "not allowed to set customer to 'x'");
     }
 
-    /// The response body's bytes, without an async runtime: `Full` bodies
-    /// are ready on the first poll.
-    fn futures_body(r: Response) -> Vec<u8> {
+    /// A future's output, without an async runtime: everything polled here
+    /// works on in-memory bodies and is ready on the first poll.
+    fn ready<F: std::future::Future>(fut: F) -> F::Output {
         use std::pin::pin;
         use std::task::{Context, Poll, Waker};
-        let mut fut = pin!(axum::body::to_bytes(r.into_body(), usize::MAX));
+        let mut fut = pin!(fut);
         match fut.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
-            Poll::Ready(b) => b.unwrap().to_vec(),
-            Poll::Pending => panic!("body not ready"),
+            Poll::Ready(v) => v,
+            Poll::Pending => panic!("future not ready"),
         }
+    }
+
+    fn futures_body(r: Response) -> Vec<u8> {
+        ready(axum::body::to_bytes(r.into_body(), usize::MAX))
+            .unwrap()
+            .to_vec()
+    }
+
+    /// axum's own rejection of a JSON body, as the router would send it.
+    fn json_rejection(body: &str) -> Response {
+        use axum::extract::FromRequest as _;
+        let req = axum::http::Request::builder()
+            .method("POST")
+            .uri("/alert")
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(body.to_owned()))
+            .unwrap();
+        match ready(Json::<Value>::from_request(req, &())) {
+            Ok(_) => panic!("{body} parsed"),
+            Err(rejection) => rejection.into_response(),
+        }
+    }
+
+    // Codex's PR176-FRAMEWORK-ERROR-SCOPE-1 counterexample: axum's rejection
+    // text quotes the key path, outside ApiError.
+    #[test]
+    fn a_framework_rejection_carrying_evidence_is_redacted() {
+        for key in [
+            "[zabalack:v1 action=a kid=k mac=00]",
+            "[ZaBaLaCk:v1 x]",
+            "[ackline:x]",
+        ] {
+            let raw = json_rejection(&format!("{{\"{key}\": invalid}}"));
+            let status = raw.status();
+            let raw_text = String::from_utf8(futures_body(raw)).unwrap();
+            assert!(raw_text.contains(key), "unredacted rejection: {raw_text}");
+            let r = ready(redact_error_body(json_rejection(&format!(
+                "{{\"{key}\": invalid}}"
+            ))));
+            assert_eq!(r.status(), status);
+            let v: Value = serde_json::from_slice(&futures_body(r)).unwrap();
+            assert_eq!(v["message"], REDACTED_ERROR);
+            assert_eq!(v["code"], status.as_u16());
+        }
+        let plain = json_rejection("{\"plain\": invalid}");
+        let (status, text) = (
+            plain.status(),
+            String::from_utf8(futures_body(plain)).unwrap(),
+        );
+        let r = ready(redact_error_body(json_rejection("{\"plain\": invalid}")));
+        assert_eq!(r.status(), status);
+        assert_eq!(String::from_utf8(futures_body(r)).unwrap(), text);
+    }
+
+    #[test]
+    fn successful_responses_pass_unchanged() {
+        let ok = (StatusCode::OK, "[zabalack:v1 marker in history]").into_response();
+        let r = ready(redact_error_body(ok));
+        assert_eq!(r.status(), StatusCode::OK);
+        assert_eq!(futures_body(r), b"[zabalack:v1 marker in history]");
     }
 
     #[test]
