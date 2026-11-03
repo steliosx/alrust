@@ -223,8 +223,11 @@ pub(crate) async fn settle_commit(
 
 /// Zabalack's receive-time privacy filter, ported for its future adapter
 /// (section 4.3; `zab-al-ack@eaf2acf:src/zabalack/normalizer.py:15-17`,
-/// `34-36`). Nothing registers it yet: it runs only once a Zabalack adapter
-/// is enabled, as the normaliser runs only where Zabalack is installed.
+/// `34-36`). Nothing registers it yet. It runs only once a Zabalack adapter
+/// is registered (present), as the normaliser runs only where Zabalack is
+/// installed; registration is not Zabalack's `settings.enabled` (capture
+/// enablement). A registered adapter strips every incoming alert, before it
+/// looks at `source_system` or `settings.enabled` (`normalizer.py:58-63`).
 pub mod zabalack {
     use serde_json::{Map, Value};
 
