@@ -1,7 +1,8 @@
 //! The acknowledgement hook interface (`spec/integration-hooks.md` section
 //! 3) against PostgreSQL, with synthetic recording integrations: phase order
 //! and call counts, at most one owner, refusal and rollback at every phase,
-//! the attribute re-read after staging, and that hooks run only for `ack`.
+//! the attribute re-read after staging, and that hooks run only for `ack`;
+//! and the receive-time `pre_receive` phase (section 4.3).
 //!
 //! Each test creates its own database `<prefix>h<n>_<µs>` (prefix as in
 //! `reference_layout.rs`) and drops it when it ends, also on panic. Without
@@ -18,7 +19,7 @@ use std::sync::{Arc, Mutex};
 
 use alrust_domain::{Alert, HistoryEntry};
 use alrust_engine::Transition;
-use alrust_store_pg::hooks::{Gate, HookFuture, MULTIPLE_OWNERS, Staged};
+use alrust_store_pg::hooks::{Gate, HookFuture, MULTIPLE_OWNERS, Staged, zabalack};
 use alrust_store_pg::{
     AckIntegration, CallerFacts, HookError, NewAlert, Store, StoreConfig, StoreError,
 };
@@ -119,6 +120,7 @@ async fn test_db() -> Option<TestDb> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FailAt {
     Never,
+    PreReceive,
     PreLookup,
     Gate,
     Stage,
@@ -178,6 +180,23 @@ impl Fake {
 }
 
 impl AckIntegration for Fake {
+    // Records every call, so the action tests' exact call lists also prove
+    // that no action path calls pre_receive. Strips with Zabalack's ported
+    // filter, as its adapter will.
+    fn pre_receive<'a>(
+        &'a self,
+        _conn: &'a mut PgConnection,
+        _caller: &'a CallerFacts,
+        incoming: &'a mut NewAlert,
+    ) -> HookFuture<'a, ()> {
+        Box::pin(async move {
+            self.record("pre_receive");
+            self.refuse(FailAt::PreReceive)?;
+            zabalack::strip_reserved(&mut incoming.attributes);
+            Ok(())
+        })
+    }
+
     fn pre_lookup<'a>(
         &'a self,
         _conn: &'a mut PgConnection,
@@ -529,4 +548,94 @@ async fn unclaimed_alerts_and_other_actions_run_as_without_hooks() {
         .await
         .unwrap();
     assert!(calls(&log2).is_empty(), "{:?}", calls(&log2));
+}
+
+/// An incoming alert carrying reserved keys next to ordinary ones.
+fn with_reserved(id: &str) -> NewAlert {
+    let mut n = new_alert(id);
+    n.resource = "res-recv".into();
+    n.attributes = serde_json::from_value(json!({
+        "keep": 1,
+        "zabalack_x": "forged",
+        "zabbix_ack_sync_intent": {"forged": true},
+        "ack_proof": "forged",
+        "Zabalack_case": "kept"
+    }))
+    .unwrap();
+    n
+}
+
+async fn stored_attributes(pool: &PgPool) -> Vec<Value> {
+    sqlx::query_scalar("SELECT attributes FROM alerts WHERE resource = 'res-recv' ORDER BY id")
+        .fetch_all(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn pre_receive_runs_for_every_integration_before_the_alert_is_stored() {
+    let Some(db) = test_db().await else { return };
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let s = setup(
+        &db,
+        vec![
+            hook(Fake::new("A", &log, &db.pool)),
+            hook(Fake::new("B", &log, &db.pool).claiming()),
+        ],
+    )
+    .await;
+    let (a, kind) = s
+        .receive_with(with_reserved("r1"), &caller())
+        .await
+        .unwrap();
+    assert_eq!(kind, alrust_store_pg::ReceiveKind::Created);
+    assert_eq!(calls(&log), ["A:pre_receive", "B:pre_receive"]);
+    let kept = json!({"keep": 1, "Zabalack_case": "kept"});
+    assert_eq!(Value::Object(a.attributes.clone()), kept);
+    assert_eq!(
+        stored_attributes(&db.pool).await,
+        std::slice::from_ref(&kept)
+    );
+    // A duplicate of the same alert is stripped too.
+    let (_, kind) = s
+        .receive_with(with_reserved("r2"), &caller())
+        .await
+        .unwrap();
+    assert_eq!(kind, alrust_store_pg::ReceiveKind::Duplicate);
+    assert_eq!(calls(&log).len(), 4);
+    assert_eq!(stored_attributes(&db.pool).await, [kept]);
+}
+
+#[tokio::test]
+async fn a_pre_receive_refusal_stores_nothing() {
+    let Some(db) = test_db().await else { return };
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let mut fake = Fake::new("A", &log, &db.pool);
+    fake.fail = FailAt::PreReceive;
+    let s = setup(&db, vec![hook(fake)]).await;
+    let e = s
+        .receive_with(with_reserved("r1"), &caller())
+        .await
+        .unwrap_err();
+    assert!(matches!(&e, StoreError::Hook(h) if h.status == 409), "{e}");
+    assert_eq!(calls(&log), ["A:pre_receive"]);
+    assert!(stored_attributes(&db.pool).await.is_empty());
+}
+
+// Nothing strips unconditionally: with no integration registered, reserved
+// keys are stored exactly as received (and hidden on read by section 4.2).
+#[tokio::test]
+async fn without_an_integration_attributes_are_stored_as_received() {
+    let Some(db) = test_db().await else { return };
+    let s = setup(&db, vec![]).await;
+    s.receive_with(with_reserved("r1"), &caller())
+        .await
+        .unwrap();
+    assert_eq!(
+        stored_attributes(&db.pool).await,
+        [
+            json!({"keep": 1, "zabalack_x": "forged", "zabbix_ack_sync_intent": {"forged": true},
+                "ack_proof": "forged", "Zabalack_case": "kept"})
+        ]
+    );
 }

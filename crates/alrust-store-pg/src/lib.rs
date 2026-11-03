@@ -757,17 +757,44 @@ impl Store {
     ///
     /// `StoreError::Transition` when the severity is unknown or the state
     /// machine refuses the change, otherwise the database error.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the three receive outcomes share one locked transaction, kept in one place"
-    )]
     pub async fn receive(
         &self,
         n: NewAlert,
         login: &str,
     ) -> Result<(Alert, ReceiveKind), StoreError> {
+        let caller = CallerFacts {
+            login: user_of(login),
+            ..CallerFacts::default()
+        };
+        self.receive_with(n, &caller).await
+    }
+
+    /// `receive` with the caller's facts. Each registered integration's
+    /// `pre_receive` runs first, in order, inside the transaction and before
+    /// anything is looked up or written (spec/integration-hooks.md 4.3);
+    /// without one, this is exactly the unhooked path.
+    ///
+    /// # Errors
+    ///
+    /// As `receive`, and `StoreError::Hook` when a hook refuses; then
+    /// nothing is written.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the three receive outcomes share one locked transaction, kept in one place"
+    )]
+    pub async fn receive_with(
+        &self,
+        n: NewAlert,
+        caller: &CallerFacts,
+    ) -> Result<(Alert, ReceiveKind), StoreError> {
+        let login = caller.login.as_deref().unwrap_or("");
         let mut tx = self.pool.begin().await?;
         let mut n = n;
+        for h in &self.hooks {
+            h.pre_receive(&mut tx, caller, &mut n)
+                .await
+                .map_err(StoreError::Hook)?;
+        }
         let value = value_to_text(&mut tx, n.value.take()).await?;
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
             .bind(identity_lock_key(

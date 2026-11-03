@@ -14,7 +14,12 @@
 //! 4. `commit_outcome`, for the owner only, when `COMMIT` fails with no
 //!    server verdict.
 //!
-//! Hooks run only for `PUT /alert/<id>/action` with `action = "ack"`, and
+//! Separately, on receive (`POST /alert`), `pre_receive` runs for every
+//! registered integration, in order, on the incoming alert before anything
+//! is looked up or written (section 4.3); an error refuses the alert.
+//!
+//! The acknowledgement phases run only for `PUT /alert/<id>/action` with
+//! `action = "ack"`, and
 //! only when at least one integration is registered; otherwise the
 //! acknowledgement runs exactly as before. An error from any phase before
 //! `COMMIT` refuses the acknowledgement and the transaction rolls back. An
@@ -29,7 +34,7 @@ use std::pin::Pin;
 
 use alrust_domain::{Alert, HistoryEntry};
 
-use crate::StoreError;
+use crate::{NewAlert, StoreError};
 use alrust_engine::Transition;
 use serde_json::{Map, Value};
 use sqlx::{PgConnection, PgPool};
@@ -111,6 +116,20 @@ pub enum CommitVerdict {
 /// acknowledgement transaction's own connection, except `commit_outcome`,
 /// which runs after that transaction ended and gets the pool.
 pub trait AckIntegration: Send + Sync + fmt::Debug {
+    /// On receive, before anything is looked up or written: may change the
+    /// incoming alert (for example strip reserved attributes) or refuse it.
+    /// Called for every registered integration, since ownership is not
+    /// known yet. Default: nothing.
+    fn pre_receive<'a>(
+        &'a self,
+        conn: &'a mut PgConnection,
+        caller: &'a CallerFacts,
+        incoming: &'a mut NewAlert,
+    ) -> HookFuture<'a, ()> {
+        let _ = (conn, caller, incoming);
+        Box::pin(async { Ok(()) })
+    }
+
     /// Before the alert is looked up. Default: nothing.
     fn pre_lookup<'a>(
         &'a self,
@@ -199,6 +218,81 @@ pub(crate) async fn settle_commit(
             Ok(CommitVerdict::NotHandled) => Err(e.into()),
             Err(h) => Err(StoreError::OutcomeUnknown(h)),
         },
+    }
+}
+
+/// Zabalack's receive-time privacy filter, ported for its future adapter
+/// (section 4.3; `zab-al-ack@eaf2acf:src/zabalack/normalizer.py:15-17`,
+/// `34-36`). Nothing registers it yet: it runs only once a Zabalack adapter
+/// is enabled, as the normaliser runs only where Zabalack is installed.
+pub mod zabalack {
+    use serde_json::{Map, Value};
+
+    /// Case-sensitive key prefixes (`normalizer.py:16`); `zabbix_ack_sync`
+    /// has no trailing underscore.
+    pub const RESERVED_PREFIXES: &[&str] = &["zabbix_ack_sync", "zabalack_", "ackline_"];
+
+    /// Exact keys (`normalizer.py:17`).
+    pub const RESERVED_FIELDS: &[&str] = &[
+        "zabbix_ack_intent",
+        "zabbix_ack_proof",
+        "ack_intent",
+        "ack_proof",
+    ];
+
+    /// Removes reserved top-level keys; other keys and every value,
+    /// including nested ones, are unchanged (`strip_reserved`,
+    /// `normalizer.py:34-36`).
+    pub fn strip_reserved(attributes: &mut Map<String, Value>) {
+        attributes.retain(|k, _| {
+            !RESERVED_FIELDS.contains(&k.as_str())
+                && !RESERVED_PREFIXES.iter().any(|p| k.starts_with(p))
+        });
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use serde_json::json;
+
+        fn stripped(v: Value) -> Value {
+            let Value::Object(mut m) = v else {
+                panic!("an object")
+            };
+            strip_reserved(&mut m);
+            Value::Object(m)
+        }
+
+        // Codex's prepared cases (44d0cef0) for the pinned normaliser.
+        #[test]
+        fn reserved_keys_go_and_everything_else_stays() {
+            assert_eq!(
+                stripped(
+                    json!({"zabbix_ack_syncfoo": 1, "zabalack_any": 2, "ackline_legacy": 3,
+                                 "ack_intent": 4, "safe": {"keep": 1}})
+                ),
+                json!({"safe": {"keep": 1}})
+            );
+            // Case variants, near lookalikes, suffixed exact fields and
+            // nested keys are not reserved.
+            let kept = json!({"ZABBIX_ACK_SYNC_intent": 1, "Zabalack_x": 2, "zabalack": 3,
+                              "ackline": 4, "zabbix_ack_proofsuffix": 5,
+                              "ordinary": {"ack_intent": 6}});
+            assert_eq!(stripped(kept.clone()), kept);
+            assert_eq!(
+                stripped(json!({"source_system": "other", "ackline_legacy": "x",
+                                 "safe": [1, null, {"zabalack_nested": 2}]})),
+                json!({"source_system": "other", "safe": [1, null, {"zabalack_nested": 2}]})
+            );
+            // Every exact field and every prefix.
+            assert_eq!(
+                stripped(
+                    json!({"zabbix_ack_intent": 1, "zabbix_ack_proof": 2, "ack_proof": 3,
+                                 "zabbix_ack_sync": 4, "zabbix_ack_sync_intent": 5, "z": 6})
+                ),
+                json!({"z": 6})
+            );
+        }
     }
 }
 
