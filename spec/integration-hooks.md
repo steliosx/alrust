@@ -413,7 +413,8 @@ Status: the proposal was reviewed and merged (PR #180); it is implemented as
 cases listed below. It ports `normalizer.py:57-100` at `eaf2acf` as one pure
 function, which the Zabalack adapter's `pre_receive` will call once that
 adapter exists. Nothing is registered. `CallerFacts.from_request` is set by
-the API for both routes and consulted only here.
+the API for both routes and consulted by this path's `pre_receive` and by
+4.1.1's `human_actor`.
 
 Inputs, and nothing else: the incoming alert, the caller's `CallerFacts`,
 an injected `Policy`, and an injected current time (`now`, UTC), used

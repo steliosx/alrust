@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-03T02:07Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-03T02:30Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -641,6 +641,12 @@ jobs green:
 - #181 (`7ed5a77c`): that port, as a pure function over the incoming alert,
   the caller's facts, an injected policy and an injected time, with unit
   tests that run without a database.
+- #183 (`886bc48e`): the reviewed proposal (spec 4.1.1) for porting
+  Zabalack's acknowledgement-gate actor checks: who counts as a human actor
+  and who is authorised. A failure is a skip, never a refusal.
+- #184 (`0521eb83`): that port, as pure functions, with a cohort selector
+  shared with the receive path. Today every caller is an API key, so every
+  acknowledgement reaching it would be skipped; it verifies no credential.
 
 No adapter is implemented or registered, so no request calls a hook
 yet. The adapters stay gated on their named inputs: Zabalack's in-transaction
