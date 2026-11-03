@@ -18,12 +18,15 @@
 //!   relies on an external cron calling `/management/housekeeping`)
 //! - `RUST_LOG` (default `info`)
 
+mod redacted_log;
+
 use std::net::SocketAddr;
+use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
 use alrust_api::{ApiConfig, AppState, MAX_TIMEOUT, router};
-use alrust_domain::ApiKey;
+use alrust_domain::{ApiKey, redact_diagnostic};
 use alrust_store_pg::{Outcome, Store, StoreConfig};
 use anyhow::Context;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
@@ -79,7 +82,7 @@ async fn connect(url: &str) -> anyhow::Result<sqlx::PgPool> {
         {
             Ok(pool) => return Ok(pool),
             Err(e) if attempt < 30 => {
-                tracing::warn!(attempt, error = %e, "database not ready; retrying");
+                tracing::warn!(attempt, error = %redact_diagnostic(e.to_string()), "database not ready; retrying");
                 tokio::time::sleep(delay).await;
                 delay = (delay * 2).min(Duration::from_secs(5));
             }
@@ -105,18 +108,31 @@ async fn shutdown_signal() {
     tokio::select! { () = ctrl_c => {}, () = term => {} }
 }
 
+/// Runs the server. A fatal error is logged with any restricted evidence
+/// redacted (hook spec section 4.2): the error chain can carry database
+/// text. `run` installs the log subscriber first.
 #[tokio::main]
+async fn main() -> ExitCode {
+    match run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            tracing::error!(error = %redact_diagnostic(format!("{e:?}")), "alrust stopped");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "settings, store preparation and the server are read top to bottom in one place"
 )]
-async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,sqlx=warn".into()),
-        )
-        .init();
+async fn run() -> anyhow::Result<()> {
+    // As `fmt().init()` did: also forwards `log` records (tracing-log).
+    tracing_subscriber::util::SubscriberInitExt::try_init(redacted_log::subscriber(
+        "info,sqlx=warn",
+        std::io::stdout,
+    ))
+    .context("could not install the log subscriber")?;
 
     let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL is required")?;
     let store_cfg = StoreConfig {
@@ -214,7 +230,9 @@ async fn main() -> anyhow::Result<()> {
                         tracing::info!(expired = ids.len(), "housekeeping");
                     }
                     Ok(_) => {}
-                    Err(e) => tracing::error!(error = %e, "housekeeping failed"),
+                    Err(e) => {
+                        tracing::error!(error = %redact_diagnostic(e.to_string()), "housekeeping failed");
+                    }
                 }
             }
         });

@@ -3,9 +3,10 @@
 Status: **draft for review**. alrust code implements only part of section
 4.2 so far: the restricted attribute is left out of every alert response,
 and search parameters that could select, sort or group by it are refused
-(`crates/alrust-domain/src/lib.rs`, `crates/alrust-api/src/lib.rs`). The
-diagnostics rule of 4.2 is **not implemented**; see 4.2. Nothing here is a
-qualification or a deployment result. Decisions behind it: DECISIONS
+(`crates/alrust-domain/src/lib.rs`, `crates/alrust-api/src/lib.rs`), and
+error bodies and log records that may carry restricted evidence are
+redacted (4.2, diagnostics). Nothing here is a qualification or a
+deployment result. Decisions behind it: DECISIONS
 Y35 (alrust must fully support Zabalack and Voalack; exact reference storage
 first) and Y41 (option A: a hook in alrust calls each integration's existing
 SQL inside the acknowledgement's own transaction; their own sessions change
@@ -255,14 +256,29 @@ the acknowledgement adapter is enabled:
   `140-146`). The marker is never written to attributes, the alert's own
   `text`, logs or request JSON (`plugins.py:546`); its only home is the
   history entry's `text`.
-  **Not implemented in alrust yet, and a prerequisite, independent of any
-  adapter, before alrust serves a database that may already hold
-  intents.** Today some error bodies reflect caller-supplied strings (for
-  example an invalid API key or customer value), and a database error is
-  logged with the driver's full message (`crates/alrust-api/src/lib.rs`,
-  `ApiError` and its `StoreError::Db` mapping). No test shows these carry
-  an intent or a marker, and none shows they cannot. Tracked as hook
-  follow-up HOOK-DIAG-1.
+  In alrust (HOOK-DIAG-1), with Zabalack's test: text carries evidence
+  when, ignoring case, it contains `[zabalack:`, `[ackline:` or the
+  restricted key's name (`plugins.py:26-27`). Both checks sit at the
+  output boundary, not at individual call sites:
+  - **Error responses.** A layer on the router reads every 4xx and 5xx
+    body, including the plain-text rejections axum writes itself outside
+    `ApiError` (a malformed JSON body's message quotes the key path), and
+    replaces one that carries evidence with the error body
+    `zabalack_restricted_error_redacted`, with the same status code
+    (Zabalack's `redact_error_response`, `plugins.py:140-146`). An error
+    body over 1 MiB, or one that cannot be read, is replaced the same way
+    without being checked (fail closed). Other responses, and error
+    bodies without evidence, pass unchanged, including the reference's
+    reflection of an invalid API key.
+  - **Logs.** Every formatted log record, from alrust or a dependency,
+    at any level the filter admits, is written whole or replaced by
+    `zabalack_restricted_diagnostic_redacted`. This covers trigger names
+    logged at start-up and sqlx's `sqlx::postgres::notice` records, which
+    carry PostgreSQL notices and warnings raised by triggers
+    (Zabalack's `CaptureLogRedactor`, `plugins.py:30-46`). A record is
+    checked both as written and with ANSI escape sequences removed.
+  Not covered: a panic message, which Rust's default panic hook prints to
+  standard error directly.
 
 ### 4.3 Receive path
 

@@ -153,6 +153,36 @@ pub fn is_restricted_attribute(key: &str) -> bool {
     RESTRICTED_ATTRIBUTES.contains(&key)
 }
 
+/// Text that marks restricted capture evidence, compared case-insensitively:
+/// a Zabalack or Ackline marker prefix, or the restricted attribute's name
+/// (hook spec section 4.2, after `_contains_evidence`,
+/// `zab-al-ack@eaf2acf:src/zabalack/plugins.py:26-27`).
+const EVIDENCE: &[&str] = &["[zabalack:", "[ackline:", "zabbix_ack_sync_intent"];
+
+/// What an error body says instead of a message that carries evidence
+/// (`plugins.py:49-56`).
+pub const REDACTED_ERROR: &str = "zabalack_restricted_error_redacted";
+
+/// What a log record says instead of a diagnostic that carries evidence
+/// (`plugins.py:30-42`).
+pub const REDACTED_DIAGNOSTIC: &str = "zabalack_restricted_diagnostic_redacted";
+
+/// Whether `text` may carry restricted capture evidence.
+pub fn contains_evidence(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    EVIDENCE.iter().any(|e| lower.contains(e))
+}
+
+/// `text` for a log record: unchanged, or `REDACTED_DIAGNOSTIC` when it may
+/// carry evidence.
+pub fn redact_diagnostic(text: String) -> String {
+    if contains_evidence(&text) {
+        REDACTED_DIAGNOSTIC.to_owned()
+    } else {
+        text
+    }
+}
+
 /// An alert's attributes as a response shows them: every key except the
 /// restricted ones, values unchanged.
 #[expect(
@@ -679,6 +709,32 @@ mod tests {
         assert_eq!(v["history"][0]["text"], marker);
         // The stored alert is unchanged: only the response omits the key.
         assert!(a.attributes.contains_key("zabbix_ack_sync_intent"));
+    }
+
+    #[test]
+    fn evidence_is_recognized_case_insensitively() {
+        for s in [
+            "x [zabalack:v1 action=a kid=k mac=00]",
+            "[ZABALACK:",
+            "[ackline:v2",
+            "[AckLine:",
+            "column zabbix_ack_sync_intent",
+            "ZABBIX_ACK_SYNC_INTENT",
+        ] {
+            assert!(contains_evidence(s), "{s}");
+            assert_eq!(redact_diagnostic(s.to_owned()), REDACTED_DIAGNOSTIC);
+        }
+        for s in [
+            "zabalack:",
+            "[zabalack",
+            "zabbix_ack_sync",
+            "ackline",
+            "database error",
+            "",
+        ] {
+            assert!(!contains_evidence(s), "{s}");
+            assert_eq!(redact_diagnostic(s.to_owned()), s);
+        }
     }
 
     #[test]
