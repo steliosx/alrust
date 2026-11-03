@@ -16,8 +16,10 @@
 //!
 //! Hooks run only for `PUT /alert/<id>/action` with `action = "ack"`, and
 //! only when at least one integration is registered; otherwise the
-//! acknowledgement runs exactly as before. Any hook error refuses the
-//! acknowledgement and the transaction rolls back before commit.
+//! acknowledgement runs exactly as before. An error from any phase before
+//! `COMMIT` refuses the acknowledgement and the transaction rolls back. An
+//! error from `commit_outcome` is different: `COMMIT` has already been
+//! attempted, so the outcome is unknown (`StoreError::OutcomeUnknown`).
 //!
 //! No integration is registered yet: the adapters are later work.
 
@@ -26,6 +28,8 @@ use std::future::Future;
 use std::pin::Pin;
 
 use alrust_domain::{Alert, HistoryEntry};
+
+use crate::StoreError;
 use alrust_engine::Transition;
 use serde_json::{Map, Value};
 use sqlx::{PgConnection, PgPool};
@@ -33,8 +37,9 @@ use sqlx::{PgConnection, PgPool};
 /// The future a hook phase returns.
 pub type HookFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, HookError>> + Send + 'a>>;
 
-/// A refusal from a hook: the request fails with this HTTP status and
-/// message, and nothing is committed.
+/// An error from a hook: the request fails with this HTTP status and
+/// message. Before `COMMIT` nothing is committed; from `commit_outcome` the
+/// outcome is unknown.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HookError {
     pub status: u16,
@@ -174,6 +179,29 @@ pub fn commit_has_verdict(e: &sqlx::Error) -> bool {
     matches!(e, sqlx::Error::Database(_))
 }
 
+/// The request's result once `COMMIT` returned `commit`: success; a
+/// failure with a server verdict as that database error, with no hook call;
+/// otherwise, after exactly one `commit_outcome` call, success (`Saved`),
+/// the original database error (`NotHandled`), or `OutcomeUnknown` (the
+/// hook failed). Nothing is retried.
+pub(crate) async fn settle_commit(
+    commit: Result<(), sqlx::Error>,
+    owner: &dyn AckIntegration,
+    pool: &PgPool,
+    alert: Alert,
+    entry: &HistoryEntry,
+) -> Result<Alert, StoreError> {
+    match commit {
+        Ok(()) => Ok(alert),
+        Err(e) if commit_has_verdict(&e) => Err(e.into()),
+        Err(e) => match owner.commit_outcome(pool, &alert, entry).await {
+            Ok(CommitVerdict::Saved) => Ok(alert),
+            Ok(CommitVerdict::NotHandled) => Err(e.into()),
+            Err(h) => Err(StoreError::OutcomeUnknown(h)),
+        },
+    }
+}
+
 /// Applies attribute writes: a null value removes the key.
 pub(crate) fn apply_writes(attributes: &mut Map<String, Value>, writes: &Map<String, Value>) {
     for (k, v) in writes {
@@ -189,8 +217,183 @@ pub(crate) fn apply_writes(attributes: &mut Map<String, Value>, writes: &Map<Str
 mod tests {
     use super::*;
 
+    use std::borrow::Cow;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use sqlx::error::{DatabaseError, ErrorKind};
+
+    /// A server error with an SQLSTATE, as PostgreSQL returns for a refused
+    /// `COMMIT` (for example a deferred constraint).
+    #[derive(Debug)]
+    struct ServerRefusal {
+        message: String,
+    }
+
+    impl fmt::Display for ServerRefusal {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(&self.message)
+        }
+    }
+
+    impl std::error::Error for ServerRefusal {}
+
+    impl DatabaseError for ServerRefusal {
+        fn message(&self) -> &str {
+            &self.message
+        }
+        fn code(&self) -> Option<Cow<'_, str>> {
+            Some(Cow::Borrowed("23505"))
+        }
+        fn as_error(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+        fn as_error_mut(&mut self) -> &mut (dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+        fn into_error(self: Box<Self>) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+            self
+        }
+        fn kind(&self) -> ErrorKind {
+            ErrorKind::UniqueViolation
+        }
+    }
+
+    fn refused() -> sqlx::Error {
+        sqlx::Error::Database(Box::new(ServerRefusal {
+            message: "deferred constraint violated".into(),
+        }))
+    }
+
+    fn lost() -> sqlx::Error {
+        sqlx::Error::Io(std::io::Error::other("connection reset"))
+    }
+
+    /// An owner whose `commit_outcome` answers `answer` and counts its calls.
+    #[derive(Debug)]
+    struct Reconciler {
+        answer: Result<CommitVerdict, HookError>,
+        calls: AtomicUsize,
+    }
+
+    impl AckIntegration for Reconciler {
+        fn claims<'a>(&'a self, _: &'a mut PgConnection, _: &'a Alert) -> HookFuture<'a, bool> {
+            Box::pin(async { Ok(true) })
+        }
+        fn gate<'a>(
+            &'a self,
+            _: &'a mut PgConnection,
+            _: &'a Alert,
+            _: &'a CallerFacts,
+            _: &'a Transition,
+        ) -> HookFuture<'a, Gate> {
+            Box::pin(async { Ok(Gate::Proceed) })
+        }
+        fn stage<'a>(
+            &'a self,
+            _: &'a mut PgConnection,
+            _: &'a Alert,
+            _: &'a CallerFacts,
+            _: &'a str,
+        ) -> HookFuture<'a, Staged> {
+            Box::pin(async { Ok(Staged::default()) })
+        }
+        fn commit_outcome<'a>(
+            &'a self,
+            _: &'a PgPool,
+            _: &'a Alert,
+            _: &'a HistoryEntry,
+        ) -> HookFuture<'a, CommitVerdict> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let answer = self.answer.clone();
+            Box::pin(async move { answer })
+        }
+    }
+
+    fn alert() -> Alert {
+        let t = chrono::Utc::now();
+        Alert {
+            id: "a".into(),
+            resource: "r".into(),
+            event: "e".into(),
+            environment: "Production".into(),
+            severity: "major".into(),
+            correlate: vec![],
+            status: "ack".into(),
+            service: vec![],
+            group: "Misc".into(),
+            value: None,
+            text: String::new(),
+            tags: vec![],
+            attributes: Map::new(),
+            origin: "o".into(),
+            event_type: "exceptionAlert".into(),
+            create_time: t,
+            timeout: Some(0),
+            raw_data: None,
+            customer: None,
+            duplicate_count: Some(0),
+            repeat: Some(false),
+            previous_severity: None,
+            trend_indication: None,
+            receive_time: t,
+            last_receive_id: None,
+            last_receive_time: None,
+            update_time: Some(t),
+            history: vec![],
+        }
+    }
+
+    fn entry() -> HistoryEntry {
+        HistoryEntry {
+            id: "a".into(),
+            event: "e".into(),
+            severity: None,
+            status: Some("ack".into()),
+            value: None,
+            text: Some("t".into()),
+            change_type: "ack".into(),
+            update_time: chrono::Utc::now(),
+            user: None,
+            timeout: None,
+        }
+    }
+
+    /// `settle_commit` for one commit result and one reconciler answer:
+    /// the result and how often `commit_outcome` was called.
+    async fn settle(
+        commit: Result<(), sqlx::Error>,
+        answer: Result<CommitVerdict, HookError>,
+    ) -> (Result<Alert, StoreError>, usize) {
+        let owner = Reconciler {
+            answer,
+            calls: AtomicUsize::new(0),
+        };
+        // Never connected: the synthetic reconciler does not use it.
+        let pool = PgPool::connect_lazy("postgres://unused@127.0.0.1:1/unused").expect("lazy pool");
+        let r = settle_commit(commit, &owner, &pool, alert(), &entry()).await;
+        (r, owner.calls.load(Ordering::SeqCst))
+    }
+
+    #[tokio::test]
+    async fn commit_outcome_runs_only_without_a_verdict_and_settles_each_answer() {
+        let unknown = HookError::new(503, "ACK outcome unknown: check the alert before retrying");
+        // Success and a server refusal: no reconciliation.
+        let (r, n) = settle(Ok(()), Ok(CommitVerdict::Saved)).await;
+        assert!(r.is_ok() && n == 0);
+        let (r, n) = settle(Err(refused()), Ok(CommitVerdict::Saved)).await;
+        assert!(matches!(r, Err(StoreError::Db(sqlx::Error::Database(_)))) && n == 0);
+        // No verdict: exactly one call, and each answer settles as stated.
+        let (r, n) = settle(Err(lost()), Ok(CommitVerdict::Saved)).await;
+        assert!(r.is_ok() && n == 1);
+        let (r, n) = settle(Err(lost()), Ok(CommitVerdict::NotHandled)).await;
+        assert!(matches!(r, Err(StoreError::Db(sqlx::Error::Io(_)))) && n == 1);
+        let (r, n) = settle(Err(lost()), Err(unknown.clone())).await;
+        assert!(matches!(&r, Err(StoreError::OutcomeUnknown(h)) if *h == unknown) && n == 1);
+    }
+
     #[test]
     fn a_database_error_is_a_verdict_and_a_lost_connection_is_not() {
+        assert!(commit_has_verdict(&refused()));
         assert!(!commit_has_verdict(&sqlx::Error::PoolClosed));
         assert!(!commit_has_verdict(&sqlx::Error::Io(
             std::io::Error::other("reset")

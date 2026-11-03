@@ -207,7 +207,7 @@ Rules:
 | Today (in Alerta) | Citation (`zab-al-ack@eaf2acf`, `src/zabalack/`) | In alrust |
 |---|---|---|
 | Version gate: `alerta-server == 9.1.0` and `ALARM_MODEL == alerta`, otherwise a `skipped_reference_version` skip, not a refusal | `plugins.py:421-428` | Zabalack's session replaces it with an identity check that also accepts alrust (Z3). |
-| Entry conditions: action `ack`, the alert not already `ack`, `source_system = zabbix`; capture bypass | `plugins.py:410-419` | `claims` and `gate`, unchanged. An already acknowledged alert gets no hook call. |
+| Entry conditions: action `ack`, the alert not already `ack`, `source_system = zabbix`; capture bypass | `plugins.py:410-419` | `claims` and `gate`, unchanged. An already acknowledged alert gets no Zabalack capture: the adapter's `gate` or `claims` must decline it before `stage`. The generic `pre_lookup` and `claims` calls still run, and A3's refusal before lookup stays. |
 | Checks in order: privacy readiness, `AUTH_REQUIRED` and `CUSTOMER_VIEWS`, canonical id and source, cohort and one-to-one binding, human actor, `authorize_actor` | `plugins.py:432-454`; `policy.py:96-101` | `gate`, same order and outcomes, subject to A1 and A2. |
 | Duplicate call in one request reuses its staged identity | `plugins.py:455-459` | Redundant by construction: alrust calls `stage` once per request. |
 | Transition decided before staging: an invalid action stages nothing; Alerta's own refusal propagates; an undecidable transition refuses 503 `zabalack_generation_unavailable`; a transition that does not end in `ack` records `skipped_no_ack_transition` | `plugins.py:460-483` | `gate` runs alrust's engine transition for the same inputs before `stage` and maps each outcome the same way. |

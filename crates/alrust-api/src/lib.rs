@@ -118,8 +118,9 @@ impl From<StoreError> for ApiError {
             // stored value that cannot be written back, such as a duplicate
             // count at the integer maximum. Nothing was written.
             // A hook's own status and message (spec/integration-hooks.md
-            // section 3); the response layer still redacts evidence.
-            StoreError::Hook(h) => ApiError::new(
+            // sections 3 and 5): a refusal before COMMIT, or an unknown
+            // outcome after it; the response layer still redacts evidence.
+            StoreError::Hook(h) | StoreError::OutcomeUnknown(h) => ApiError::new(
                 StatusCode::from_u16(h.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
                 h.message,
             ),

@@ -26,7 +26,7 @@ use sqlx::postgres::{PgConnectOptions, PgPool, PgRow};
 use sqlx::{Postgres, QueryBuilder, Row, Transaction};
 
 pub use hooks::{AckIntegration, CallerFacts, HookError};
-use hooks::{CommitVerdict, Gate, MULTIPLE_OWNERS, apply_writes, commit_has_verdict};
+use hooks::{Gate, MULTIPLE_OWNERS, apply_writes, settle_commit};
 pub use startup::{Outcome, Report as StartupReport, StartupError};
 
 /// The search path every alrust session uses. PostgreSQL searches
@@ -58,9 +58,16 @@ pub enum StoreError {
     /// refuses such input first; this guards the store boundary.
     #[error("{0} is outside the integer range of the reference schema")]
     OutOfRange(&'static str),
-    /// An acknowledgement hook refused (spec/integration-hooks.md section 3).
+    /// An acknowledgement hook refused before `COMMIT`
+    /// (spec/integration-hooks.md section 3): nothing was committed.
     #[error("{0}")]
     Hook(HookError),
+    /// `COMMIT` failed with no server verdict and the owning integration's
+    /// reconciliation (`commit_outcome`) failed too: the acknowledgement
+    /// may or may not have been saved. Unknown, never "not saved", and
+    /// never retried (section 5, commit outcome).
+    #[error("{0}")]
+    OutcomeUnknown(HookError),
 }
 
 /// Behaviour knobs, defaulting to the reference settings.
@@ -1130,8 +1137,12 @@ impl Store {
     ///
     /// # Errors
     ///
-    /// As `take_action`, and `StoreError::Hook` when a hook refuses; then
-    /// nothing is committed.
+    /// As `take_action`; `StoreError::Hook` when a hook refuses before
+    /// `COMMIT` (then nothing is committed); and, when `COMMIT` fails with
+    /// no server verdict, whatever the owner's `commit_outcome` settles:
+    /// success, the original database error, or `StoreError::OutcomeUnknown`.
+    /// A database error from such a `COMMIT` leaves the outcome unknown, as
+    /// it always has.
     pub async fn take_action_with(
         &self,
         id: &str,
@@ -1207,18 +1218,8 @@ impl Store {
             .pre_commit(&mut tx, &a, &entry)
             .await
             .map_err(StoreError::Hook)?;
-        match tx.commit().await {
-            Ok(()) => Ok(a),
-            Err(e) if !commit_has_verdict(&e) => match owner
-                .commit_outcome(&self.pool, &a, &entry)
-                .await
-                .map_err(StoreError::Hook)?
-            {
-                CommitVerdict::Saved => Ok(a),
-                CommitVerdict::NotHandled => Err(e.into()),
-            },
-            Err(e) => Err(e.into()),
-        }
+        let commit = tx.commit().await;
+        settle_commit(commit, &**owner, &self.pool, a, &entry).await
     }
 
     /// The locked row's attributes, read again inside the transaction.
