@@ -265,15 +265,18 @@ the acknowledgement adapter is enabled:
     `ApiError` (a malformed JSON body's message quotes the key path), and
     replaces one that carries evidence with the error body
     `zabalack_restricted_error_redacted`, with the same status code
-    (Zabalack's `redact_error_response`, `plugins.py:140-146`). Other
-    responses, and error bodies without evidence, pass unchanged,
-    including the reference's reflection of an invalid API key.
+    (Zabalack's `redact_error_response`, `plugins.py:140-146`). An error
+    body over 1 MiB, or one that cannot be read, is replaced the same way
+    without being checked (fail closed). Other responses, and error
+    bodies without evidence, pass unchanged, including the reference's
+    reflection of an invalid API key.
   - **Logs.** Every formatted log record, from alrust or a dependency,
     at any level the filter admits, is written whole or replaced by
     `zabalack_restricted_diagnostic_redacted`. This covers trigger names
     logged at start-up and sqlx's `sqlx::postgres::notice` records, which
     carry PostgreSQL notices and warnings raised by triggers
-    (Zabalack's `CaptureLogRedactor`, `plugins.py:30-46`).
+    (Zabalack's `CaptureLogRedactor`, `plugins.py:30-46`). A record is
+    checked both as written and with ANSI escape sequences removed.
   Not covered: a panic message, which Rust's default panic hook prints to
   standard error directly.
 

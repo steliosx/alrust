@@ -60,7 +60,10 @@ impl<W: Write> Write for RecordWriter<W> {
 impl<W: Write> Drop for RecordWriter<W> {
     fn drop(&mut self) {
         let text = String::from_utf8_lossy(&self.record);
-        let out = if contains_evidence(&without_ansi(&text)) {
+        // Both forms: the raw text (an escape-like byte sequence must not
+        // hide a literal marker) and the text without escapes (colouring
+        // must not split one).
+        let out = if contains_evidence(&text) || contains_evidence(&without_ansi(&text)) {
             format!("{REDACTED_DIAGNOSTIC}\n").into_bytes()
         } else {
             std::mem::take(&mut self.record)
@@ -155,6 +158,24 @@ mod tests {
             got[3].contains("zabalack_capture") && got[3].contains("trigger on a reference table")
         );
         assert!(got[4].contains("relation exists, skipping"));
+    }
+
+    // Codex's PR176-LOG-RAW-CHECK-1: stripping "ESC [" up to the first letter
+    // eats the marker's own "[z", so the raw text must be checked too.
+    #[test]
+    fn an_escape_before_a_marker_cannot_hide_it() {
+        let out = Captured::default();
+        let sub = subscriber("info,sqlx=warn", out.clone());
+        tracing::subscriber::with_default(sub, || {
+            tracing::info!(
+                trigger = %"\u{1b}[[zabalack:v1 action=synthetic kid=k mac=00]",
+                "trigger on a reference table"
+            );
+        });
+        let got = lines(&out);
+        assert_eq!(got, [REDACTED_DIAGNOSTIC]);
+        let all = got.concat();
+        assert!(!all.contains("mac=00") && !all.contains("synthetic"));
     }
 
     #[test]
