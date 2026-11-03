@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-02T23:57Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-03T01:26Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -596,7 +596,13 @@ The stop helper reports `pidfd_open_failed` when `os.pidfd_open` raises
 any error other than "no such process", and it then signals nothing. If
 that is what happened, the helper behaved as designed. A plausible,
 unverified hypothesis is that the guest refuses `pidfd_open`; which error
-occurred, and why, is not yet known.
+occurred, and why, is not yet known. A later Forgehold-only probe weakens
+that hypothesis (unsigned lane report; check `125649553886`, not on this
+repository): in a guest job, `os.pidfd_open` on the job's own process
+opened and closed normally. So the open question is now `pidfd_open` on
+another process's pid, or a different error class there. The probe alone
+does not explain the failing test. The lane also reports that a job's
+`timeout-minutes` is enforced (a 1-minute probe was cancelled at 60 s).
 
 As planned before this attempt, lane work on the conformance unit tests
 is now paused at 3 of 6 reported shards. The ordinary source merges
@@ -604,6 +610,33 @@ above depended only on their hosted CI. The pause waives no other gate:
 covered-job, shared-CI qualification, cutover and held-scope gates are
 unchanged. No guest capability change and no test change is approved;
 any later proposal keeps the tests' safety checks.
+
+**Integration hooks: first three source slices on `main` (2026-11-03).**
+Implementing `spec/integration-hooks.md` (Y35, Y41, Y44) started with the
+parts that need no adapter, key or owner input. Each merged by the ordinary
+Minimal route, after Codex's approval of the exact head and all seven hosted
+jobs green:
+- #175 (`49be85ae`): Zabalack's restricted `zabbix_ack_sync_intent` is left
+  out of every alert response; searches that could select, sort or group by
+  it get a stable, content-free 400 for every caller. Route-level smoke
+  cases on PostgreSQL 18.6.
+- #176 (`2e9bc6c8`): the diagnostics rule of section 4.2 (HOOK-DIAG-1), at
+  the output boundaries. An error response that may carry restricted
+  evidence, including axum's own rejections, becomes
+  `zabalack_restricted_error_redacted` with the same status. A log record
+  that may carry it, including trigger names and sqlx's PostgreSQL notices,
+  becomes `zabalack_restricted_diagnostic_redacted`. A panic message is not
+  covered.
+- #177 (`a88d9b57`): the section 3 hook interface and its phase order
+  inside the acknowledgement transaction, with an unknown commit outcome
+  kept separate from a refusal. It is tested on PostgreSQL with synthetic
+  integrations only.
+
+No adapter is implemented or registered, so no acknowledgement calls a hook
+yet. The adapters stay gated on their named inputs: Zabalack's in-transaction
+staging review (Z1), synthetic signing vectors from both integrations, and
+the review of the signing-key placement (X1). This is source work, not a
+runtime, adoption or integration qualification.
 
 ## Work in flight
 
