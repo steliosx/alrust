@@ -234,6 +234,10 @@ jobs:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONDONTWRITEBYTECODE=1 \
             "$RUNNER_TEMP/conformance-venv/bin/python" -m pytest -c conformance/pytest.ini \
             -p no:cacheprovider -q --basetemp="$RUNNER_TEMP/pytest" conformance/tests/unit
+      - name: Forgehold shards cover exactly this suite
+        run: .github/scripts/conformance-unit.sh check-shards
+      - name: Forgehold tmpfs reaper regression cases
+        run: '"$RUNNER_TEMP/conformance-venv/bin/python" .github/scripts/test-cu-tmp-reaper.py'
 
   alpha-smoke:
     # The alpha server end to end: build the binary, start it on PostgreSQL

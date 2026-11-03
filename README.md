@@ -50,6 +50,29 @@ The full plan and its fixed decisions are in the
 
 ## Status
 
+**Reviewed checkpoint: 2 November 2026**, main
+[`95f1cdf4`](https://github.com/steliosx/alrust/commit/95f1cdf4f9a2db1f0fb19577f0a7e2f2170463ff).
+The Rust API alpha and reference-layout storage implementation are merged.
+Phase 0, full two-server compatibility and downstream integration remain open;
+there is no release or live acceptance.
+
+| Area | Current executed evidence | Remaining limit |
+|---|---|---|
+| Hosted CI | [Run 41549919000](https://github.com/steliosx/alrust/actions/runs/41549919000) executes **six successful jobs**; draft-only catalog generation is skipped. Python conformance units: **3311 passed, 97 subtests**. Rust tests: **46 passed, two ignored**. PostgreSQL 18.6 Rust alpha smoke and supervised Python reference smoke succeed. | Hosted execution has resumed; the earlier billing refusal is historical. Owner records retain the $0 spending limit. A reference-only smoke is not two-server conformance, and ignored/skipped checks receive no credit. |
+| Execution profiles | The green catalog preflight expects **all 19 profiles NOT_RUN**. | No profile, Phase 0 or shared-CI gate is closed by that green job. The corrected selected two-target pairing remains unrerun. |
+| Source fixes | [#169](https://github.com/steliosx/alrust/pull/169)–[#172](https://github.com/steliosx/alrust/pull/172) add six bounded lane shards, exact node-ID coverage checking and per-shard filesystem modes. [#173](https://github.com/steliosx/alrust/pull/173), `491e1e48`, lists the evidence staging directory through a fresh descriptor with the same device/inode check. | Source inspection supports the scoped corrections. tmpfs fsync tests do not establish disk durability. The btrfs regression models the stale descriptor; local native filesystem results are author reports. |
+| Forgehold conformance lane | At `ac1543b9`, App checks report three successful shards and one failed ref-supervisor shard; two shards did not run. [#174 / STATUS](https://github.com/steliosx/alrust/pull/174) records the pause and pending signed attestations. | **0 of 6 lane-qualified passes**; the three green App results are not independently qualified custody/cleanup evidence. `pidfd_open_failed` is a reported observation; its underlying error/cause is unverified. No capability or safety-test change is approved. |
+| Retained failure | [Earlier main run 41546466073](https://github.com/steliosx/alrust/actions/runs/41546466073), `ba5ce669`, failed `test_stdin_feed_obeys_call_deadline`: 3310 passed, one failed. | The later success is a separate run; no source cause/fix is established by a documentation-only successor. Held [#159](https://github.com/steliosx/alrust/pull/159) and [#157](https://github.com/steliosx/alrust/pull/157) retain their dispositions. |
+| Reviews and integration | Claude's STATUS records Codex clearance for the source merges; collaboration still separates implementation and independent review through signed mailboxes. The integration-hook specification is merged. | Original signed packets were not inspected here. Automatic PR reviews hit a usage limit, not a clean completed result. Hook implementation, human-login prerequisites, Zabalack/Voalack adapters and installed qualification are separate work. |
+
+The reference layout and runnable Rust implementation are more than scaffold
+checks. Their scoped tests still do not establish complete Alerta parity,
+Compose startup, web UI/desktop delivery, OIDC deployment or live integration.
+This presentation review obtained no current separate Codex Security report.
+
+<details>
+<summary>Historical checkpoints — 29 September to 31 October 2026</summary>
+
 **Reviewed checkpoint: 31 October 2026**, main
 [`33b5ce02`](https://github.com/steliosx/alrust/commit/33b5ce0211af990421563bc931cd56e6ad3abc85).
 The owner resumed the project (Y37), and the reference-storage implementation
@@ -209,6 +232,9 @@ independently reviewed, but had not yet been pushed to this repository.
 | Reference smoke test (2 HTTP cases against the upstream Python server) | Passed locally | This checks the upstream **reference** server only. It is not alrust behaviour. |
 | Customer, lifecycle and two-server conformance runs | Not run | — |
 | alrust HTTP API, receivers, auth, desktop app | Not started | Planned phases 1–6 below |
+
+</details>
+
 
 </details>
 

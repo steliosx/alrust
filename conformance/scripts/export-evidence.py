@@ -154,6 +154,22 @@ def _open_dir(path):
     return os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
 
 
+def _list_dir(dir_fd):
+    """Names in the directory DIR_FD refers to, read through a fresh descriptor
+    of that same directory (same device and inode, checked). Listing the very
+    descriptor through which the entries were just created can return no
+    names on btrfs, which made the W5B-R3 re-check fail there."""
+    fd = os.open(".", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                 dir_fd=dir_fd)
+    try:
+        was, now = os.fstat(dir_fd), os.fstat(fd)
+        if (was.st_dev, was.st_ino) != (now.st_dev, now.st_ino):
+            raise OSError("staging directory changed")
+        return os.listdir(fd)
+    finally:
+        os.close(fd)
+
+
 def credentials_remaining(job_fd):
     try:
         dfd = os.open(DATABASE_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -224,7 +240,7 @@ def export(job_root, out_dir, staging, attempted, expected=None):
             for name, data in written:
                 if _read(st_fd, name) != data:
                     return [], {"result": "UNKNOWN", "code": "staging_verify_failed"}, 3
-            if sorted(os.listdir(st_fd)) != sorted(name for name, _ in written):
+            if sorted(_list_dir(st_fd)) != sorted(name for name, _ in written):
                 return [], {"result": "UNKNOWN", "code": "staging_verify_failed"}, 3
         except (OSError, ValueError):
             return [], {"result": "UNKNOWN", "code": "staging_write_failed"}, 3
