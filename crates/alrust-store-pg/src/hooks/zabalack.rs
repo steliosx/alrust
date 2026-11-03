@@ -33,17 +33,19 @@ pub fn strip_reserved(attributes: &mut Map<String, Value>) {
     });
 }
 
-/// The settings fields the receive path uses (`config.py:15-62`), built only
-/// through [`ReceivePolicy::new`], which applies the pinned checks for them.
+/// The settings fields the receive path (4.3.1) and the actor policy (4.1.1)
+/// use (`config.py:15-62`), built only through [`Policy::new`], which applies
+/// the pinned checks for them.
 /// This is the subset of `validate_settings` these fields need, not full
 /// configuration validation, and it has not passed Zabalack's own loader.
 #[derive(Debug, Clone)]
-pub struct ReceivePolicy {
+pub struct Policy {
     capture: Capture,
     bypass: Bypass,
     config_revision: String,
     /// Login to (customer, instance).
     mappings: Vec<(String, String, String)>,
+    admin_exceptions: Vec<String>,
     cohorts: Vec<Cohort>,
 }
 
@@ -63,37 +65,41 @@ pub enum Bypass {
 
 /// The receive policy's raw inputs, as a configuration would hold them.
 #[derive(Debug, Clone)]
-pub struct ReceivePolicyInput {
+pub struct PolicyInput {
     pub capture: Capture,
     pub bypass: Bypass,
     pub config_revision: String,
     /// `ingestion_mappings`: login to `{"customer": .., "instance": ..}`.
     pub ingestion_mappings: Map<String, Value>,
+    /// `admin_exceptions`: admin logins that may still be actors.
+    pub admin_exceptions: Vec<String>,
     /// `cohorts`, each a JSON object.
     pub cohorts: Vec<Value>,
 }
 
+/// One validated cohort (`policy.py:63-85`), as `select_cohort` returns it.
 #[derive(Debug, Clone)]
-struct Cohort {
+pub struct Cohort {
     customer: String,
     instance: String,
     trigger: String,
     enabled: bool,
     one_to_one: bool,
+    allow_admin: bool,
 }
 
 /// A receive policy refused when built, with Zabalack's reason string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyBuildError(pub &'static str);
 
-impl ReceivePolicy {
+impl Policy {
     /// # Errors
     ///
     /// `PolicyBuildError` with the pinned reason: a bypass without a change
     /// reference (`config.py:145-146`), an invalid ingestion mapping
-    /// (`153-157`), an invalid cohort (`policy.py:63-85`) or a duplicate one
-    /// (`config.py:162-168`).
-    pub fn new(input: ReceivePolicyInput) -> Result<Self, PolicyBuildError> {
+    /// (`153-157`), an empty admin exception (`158-159`), an invalid cohort
+    /// (`policy.py:63-85`) or a duplicate one (`config.py:162-168`).
+    pub fn new(input: PolicyInput) -> Result<Self, PolicyBuildError> {
         if matches!(&input.bypass, Bypass::On { change_ref } if change_ref.is_empty()) {
             return Err(PolicyBuildError("bypass_requires_change_reference"));
         }
@@ -115,6 +121,9 @@ impl ReceivePolicy {
                 _ => return Err(PolicyBuildError("ingestion_mapping_invalid")),
             }
         }
+        if input.admin_exceptions.iter().any(String::is_empty) {
+            return Err(PolicyBuildError("admin_exception_invalid"));
+        }
         let mut cohorts = Vec::new();
         let mut seen = HashSet::new();
         for c in &input.cohorts {
@@ -129,12 +138,24 @@ impl ReceivePolicy {
             }
             cohorts.push(cohort);
         }
-        Ok(ReceivePolicy {
+        Ok(Policy {
             capture: input.capture,
             bypass: input.bypass,
             config_revision: input.config_revision,
             mappings,
+            admin_exceptions: input.admin_exceptions,
             cohorts,
+        })
+    }
+
+    /// `select_cohort` (`policy.py:87-94`): the first enabled cohort for this
+    /// customer, instance and trigger; none for an empty customer.
+    pub fn select_cohort(&self, customer: &str, instance: &str, trigger: &str) -> Option<&Cohort> {
+        if customer.is_empty() {
+            return None;
+        }
+        self.cohorts.iter().find(|c| {
+            c.customer == customer && c.instance == instance && c.trigger == trigger && c.enabled
         })
     }
 
@@ -190,7 +211,7 @@ fn validate_cohort(v: &Value) -> Result<Cohort, PolicyBuildError> {
         return Err(PolicyBuildError("invalid_source_id"));
     };
     let flag = |k: &str| c[k].as_bool();
-    let (Some(enabled), Some(one_to_one), Some(_), Some(_)) = (
+    let (Some(enabled), Some(one_to_one), Some(_), Some(allow_admin)) = (
         flag("enabled"),
         flag("one_to_one"),
         flag("comment_enabled"),
@@ -219,6 +240,7 @@ fn validate_cohort(v: &Value) -> Result<Cohort, PolicyBuildError> {
         trigger: trigger.to_owned(),
         enabled,
         one_to_one,
+        allow_admin,
     })
 }
 
@@ -313,12 +335,7 @@ fn validate_source(a: &Map<String, Value>) -> Option<(Option<String>, Option<Str
 }
 
 /// `project_skip` (`normalizer.py:39-47`), with the injected `now`.
-fn project_skip(
-    a: &mut Map<String, Value>,
-    reason: &str,
-    policy: &ReceivePolicy,
-    now: DateTime<Utc>,
-) {
+fn project_skip(a: &mut Map<String, Value>, reason: &str, policy: &Policy, now: DateTime<Utc>) {
     a.remove("zabbix_ack_sync_intent");
     a.insert("zabbix_ack_sync".into(), Value::String("skipped".into()));
     a.insert(
@@ -347,7 +364,7 @@ fn reject(reason: &str) -> HookError {
 ///
 /// A `HookError` with status 403 for each pinned refusal.
 pub fn pre_receive(
-    policy: &ReceivePolicy,
+    policy: &Policy,
     caller: &CallerFacts,
     incoming: &mut NewAlert,
     now: DateTime<Utc>,
@@ -421,10 +438,7 @@ pub fn pre_receive(
         .get("zabbix_trigger_id")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let cohort = policy.cohorts.iter().find(|c| {
-        c.customer == customer && c.instance == instance && c.trigger == trigger && c.enabled
-    });
-    let Some(cohort) = cohort else {
+    let Some(cohort) = policy.select_cohort(customer, instance, trigger) else {
         project_skip(a, "skipped_cohort_policy", policy, now);
         return Ok(());
     };
@@ -443,6 +457,97 @@ pub fn pre_receive(
         );
     }
     Ok(())
+}
+
+/// A human actor (`_human_actor`, `plugins.py:269-281`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Actor {
+    pub login: String,
+    /// Sorted and de-duplicated. `String` ordering is byte order, which for
+    /// UTF-8 is Python's code-point order.
+    pub customers: Vec<String>,
+    pub admin: bool,
+}
+
+/// `_human_actor` (`plugins.py:269-281`), from `CallerFacts` only (spec
+/// 4.1.1). The facts must be upstream-verified human facts: populated fields
+/// and `from_request` are not credential verification. Today the API gives
+/// every caller no user id, so this returns `None` for every current caller.
+pub fn human_actor(policy: &Policy, caller: &CallerFacts) -> Option<Actor> {
+    if !caller.from_request || present(caller.user_id.as_deref()).is_none() {
+        return None;
+    }
+    let login = present(caller.login.as_deref())?;
+    if policy.mapping(Some(login)).is_some() {
+        return None;
+    }
+    let admin = caller
+        .scopes
+        .iter()
+        .any(|s| s == "admin" || s == "admin:alerts");
+    if admin && !policy.admin_exceptions.iter().any(|e| e == login) {
+        return None;
+    }
+    let mut customers = caller.customers.clone()?;
+    customers.sort();
+    customers.dedup();
+    Some(Actor {
+        login: login.to_owned(),
+        customers,
+        admin,
+    })
+}
+
+/// A value present and non-empty, as Python's truthiness reads a string.
+fn present(v: Option<&str>) -> Option<&str> {
+    v.filter(|s| !s.is_empty())
+}
+
+/// `authorize_actor` (`policy.py:96-101`): an admin by the cohort's
+/// `allow_admin` alone, anyone else by membership of the alert's customer.
+pub fn authorize_actor(actor: &Actor, customer: &str, cohort: &Cohort) -> bool {
+    if customer.is_empty() || actor.login.is_empty() {
+        return false;
+    }
+    if actor.admin {
+        cohort.allow_admin
+    } else {
+        actor.customers.iter().any(|c| c == customer)
+    }
+}
+
+/// The actor checks' outcome for the adapter's `gate` (`plugins.py:452-454`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ActorOutcome {
+    Authorized(Actor),
+    /// `skipped_actor_policy`: these attribute writes (a null removes the
+    /// key), carried as `Gate::Skip`; the acknowledgement proceeds.
+    Skip(Map<String, Value>),
+}
+
+/// Human-actor extraction then authorisation, for the cohort the caller
+/// already selected (spec 4.1.1). Never a refusal.
+pub fn actor_gate(
+    policy: &Policy,
+    caller: &CallerFacts,
+    customer: &str,
+    cohort: &Cohort,
+    now: DateTime<Utc>,
+) -> ActorOutcome {
+    match human_actor(policy, caller) {
+        Some(actor) if authorize_actor(&actor, customer, cohort) => ActorOutcome::Authorized(actor),
+        _ => ActorOutcome::Skip(skip_writes("skipped_actor_policy", policy, now)),
+    }
+}
+
+/// `project_skip`'s effect as attribute writes: the intent removed (null),
+/// then the four record keys.
+fn skip_writes(reason: &str, policy: &Policy, now: DateTime<Utc>) -> Map<String, Value> {
+    let mut m = Map::new();
+    m.insert("zabbix_ack_sync_intent".into(), Value::Null);
+    project_skip(&mut m, reason, policy, now);
+    m.insert("zabbix_ack_sync_intent".into(), Value::Null);
+    m
 }
 
 #[cfg(test)]
@@ -516,8 +621,8 @@ mod policy_tests {
         })
     }
 
-    fn input() -> ReceivePolicyInput {
-        ReceivePolicyInput {
+    fn input() -> PolicyInput {
+        PolicyInput {
             capture: Capture::Enabled,
             bypass: Bypass::Off,
             config_revision: "cfg-7".into(),
@@ -525,12 +630,13 @@ mod policy_tests {
                 .as_object()
                 .unwrap()
                 .clone(),
+            admin_exceptions: vec![],
             cohorts: vec![cohort()],
         }
     }
 
-    fn policy() -> ReceivePolicy {
-        ReceivePolicy::new(input()).unwrap()
+    fn policy() -> Policy {
+        Policy::new(input()).unwrap()
     }
 
     fn caller() -> CallerFacts {
@@ -582,7 +688,7 @@ mod policy_tests {
 
     /// Runs the policy on these attributes; the result and the attributes after.
     fn run_with(
-        p: &ReceivePolicy,
+        p: &Policy,
         c: &CallerFacts,
         attributes: Map<String, Value>,
         customer: Option<&str>,
@@ -668,7 +774,7 @@ mod policy_tests {
     fn capture_disabled_strips_and_records_the_skip() {
         let mut i = input();
         i.capture = Capture::Disabled;
-        let p = ReceivePolicy::new(i).unwrap();
+        let p = Policy::new(i).unwrap();
         let m = with(
             with(source(), "zabbix_ack_sync_intent", json!({"forged": 1})),
             "zabalack_x",
@@ -844,24 +950,14 @@ mod policy_tests {
     fn cohort_ambiguity_and_bypass_skips() {
         let mut i = input();
         i.cohorts = vec![with_v(cohort(), "enabled", json!(false))];
-        let (r, a) = run_with(
-            &ReceivePolicy::new(i).unwrap(),
-            &caller(),
-            source(),
-            Some("acme"),
-        );
+        let (r, a) = run_with(&Policy::new(i).unwrap(), &caller(), source(), Some("acme"));
         assert!(r.is_ok() && skipped(&a, "skipped_cohort_policy"));
         let (r, a) = run(with(source(), "zabbix_trigger_id", json!("78")));
         assert!(r.is_ok() && skipped(&a, "skipped_cohort_policy"));
 
         let mut i = input();
         i.cohorts = vec![with_v(cohort(), "one_to_one", json!(false))];
-        let (r, a) = run_with(
-            &ReceivePolicy::new(i).unwrap(),
-            &caller(),
-            source(),
-            Some("acme"),
-        );
+        let (r, a) = run_with(&Policy::new(i).unwrap(), &caller(), source(), Some("acme"));
         assert!(r.is_ok() && skipped(&a, "skipped_ambiguous_source"));
         for k in ["zabbix_event_ids", "zabbix_trigger_ids", "source_members"] {
             let (r, a) = run(with(source(), k, json!([])));
@@ -872,12 +968,7 @@ mod policy_tests {
         i.bypass = Bypass::On {
             change_ref: "CHG-1".into(),
         };
-        let (r, a) = run_with(
-            &ReceivePolicy::new(i).unwrap(),
-            &caller(),
-            source(),
-            Some("acme"),
-        );
+        let (r, a) = run_with(&Policy::new(i).unwrap(), &caller(), source(), Some("acme"));
         assert!(r.is_ok() && skipped(&a, "skipped_capture_bypass"));
         assert_eq!(a["zabbix_ack_sync_change_reference"], "CHG-1");
     }
@@ -908,9 +999,9 @@ mod policy_tests {
 
     #[test]
     fn invalid_policies_are_refused_when_built() {
-        let refuse = |i: ReceivePolicyInput, reason: &str| {
+        let refuse = |i: PolicyInput, reason: &str| {
             assert_eq!(
-                ReceivePolicy::new(i).unwrap_err(),
+                Policy::new(i).unwrap_err(),
                 PolicyBuildError(match reason {
                     "bypass" => "bypass_requires_change_reference",
                     "mapping" => "ingestion_mapping_invalid",
@@ -977,6 +1068,237 @@ mod policy_tests {
         let mut i = input();
         i.cohorts = vec![cohort(), with_v(cohort(), "revision", json!("r2"))];
         refuse(i, "duplicate_cohort");
+    }
+
+    // ---- actor policy (spec 4.1.1)
+
+    fn human() -> CallerFacts {
+        CallerFacts {
+            login: Some("op".into()),
+            user_id: Some("u-1".into()),
+            auth_type: Some("bearer:test".into()),
+            scopes: vec!["write:alerts".into()],
+            customers: Some(vec!["acme".into()]),
+            auth_required: true,
+            from_request: true,
+            ..CallerFacts::default()
+        }
+    }
+
+    fn policy_with(admin_exceptions: &[&str], allow_admin: Value) -> Policy {
+        let mut i = input();
+        i.admin_exceptions = admin_exceptions.iter().map(|s| (*s).to_owned()).collect();
+        i.cohorts = vec![with_v(cohort(), "allow_admin", allow_admin)];
+        Policy::new(i).unwrap()
+    }
+
+    fn the_cohort(p: &Policy) -> &Cohort {
+        p.select_cohort("acme", "zbx-1", "77").unwrap()
+    }
+
+    fn gate(p: &Policy, c: &CallerFacts, customer: &str) -> ActorOutcome {
+        actor_gate(p, c, customer, the_cohort(p), now())
+    }
+
+    fn is_skip(o: &ActorOutcome) -> bool {
+        matches!(o, ActorOutcome::Skip(m) if m == &skip_writes_expected())
+    }
+
+    fn skip_writes_expected() -> Map<String, Value> {
+        json!({
+            "zabbix_ack_sync_intent": null,
+            "zabbix_ack_sync": "skipped",
+            "zabbix_ack_sync_reason": "skipped_actor_policy",
+            "zabbix_ack_sync_config_revision": "cfg-7",
+            "zabbix_ack_sync_local_at": LOCAL_AT
+        })
+        .as_object()
+        .unwrap()
+        .clone()
+    }
+
+    #[test]
+    fn an_ordinary_actor_in_the_customer_list_is_authorised() {
+        let p = policy_with(&[], json!(false));
+        let o = gate(&p, &human(), "acme");
+        assert_eq!(
+            o,
+            ActorOutcome::Authorized(Actor {
+                login: "op".into(),
+                customers: vec!["acme".into()],
+                admin: false
+            })
+        );
+        // Not in the list, or an empty alert customer: skipped.
+        assert!(is_skip(&gate(&p, &human(), "other")));
+        assert!(is_skip(&gate(&p, &human(), "")));
+        let c = CallerFacts {
+            customers: Some(vec!["other".into()]),
+            ..human()
+        };
+        assert!(is_skip(&gate(&p, &c, "acme")));
+    }
+
+    #[test]
+    fn extraction_needs_request_facts_and_a_non_ingestion_login() {
+        let p = policy_with(&[], json!(false));
+        for c in [
+            CallerFacts {
+                from_request: false,
+                ..human()
+            },
+            CallerFacts {
+                user_id: None,
+                ..human()
+            },
+            CallerFacts {
+                user_id: Some(String::new()),
+                ..human()
+            },
+            CallerFacts {
+                login: None,
+                ..human()
+            },
+            CallerFacts {
+                login: Some(String::new()),
+                ..human()
+            },
+            CallerFacts {
+                login: Some("zbx-ingest".into()),
+                ..human()
+            },
+            CallerFacts {
+                customers: None,
+                ..human()
+            },
+        ] {
+            assert_eq!(human_actor(&p, &c), None, "{c:?}");
+            assert!(is_skip(&gate(&p, &c, "acme")), "{c:?}");
+        }
+        // Today's API-key caller: no user id, so no actor.
+        let api_key = CallerFacts {
+            user_id: None,
+            auth_type: None,
+            ..human()
+        };
+        assert!(is_skip(&gate(&p, &api_key, "acme")));
+    }
+
+    #[test]
+    fn admin_is_an_exact_scope_and_needs_an_exception() {
+        let none = policy_with(&[], json!(true));
+        let excepted = policy_with(&["op"], json!(true));
+        for s in ["admin", "admin:alerts"] {
+            let c = CallerFacts {
+                scopes: vec!["read".into(), s.into()],
+                ..human()
+            };
+            assert_eq!(human_actor(&none, &c), None, "{s} without an exception");
+            assert!(
+                human_actor(&excepted, &c).is_some_and(|a| a.admin),
+                "{s} with one"
+            );
+        }
+        for s in [
+            "admin:alert",
+            "Admin",
+            "admin:alerts:x",
+            "ADMIN:ALERTS",
+            "xadmin",
+        ] {
+            let c = CallerFacts {
+                scopes: vec![s.into()],
+                ..human()
+            };
+            assert!(
+                human_actor(&none, &c).is_some_and(|a| !a.admin),
+                "{s} is not admin"
+            );
+        }
+    }
+
+    #[test]
+    fn an_admin_is_authorised_by_allow_admin_alone() {
+        let c = CallerFacts {
+            scopes: vec!["admin".into()],
+            customers: Some(vec![]),
+            ..human()
+        };
+        // allow_admin true: authorised even with an empty customer list.
+        let yes = policy_with(&["op"], json!(true));
+        assert!(matches!(gate(&yes, &c, "acme"), ActorOutcome::Authorized(a) if a.admin));
+        // allow_admin false: skipped even when the customer is listed.
+        let no = policy_with(&["op"], json!(false));
+        let listed = CallerFacts {
+            customers: Some(vec!["acme".into()]),
+            ..c.clone()
+        };
+        assert!(is_skip(&gate(&no, &listed, "acme")));
+        // An exception alone does not authorise; an empty alert customer neither.
+        assert!(is_skip(&gate(&no, &c, "acme")));
+        assert!(is_skip(&gate(&yes, &c, "")));
+    }
+
+    #[test]
+    fn an_empty_customer_list_is_an_actor_but_not_authorised() {
+        let p = policy_with(&[], json!(false));
+        let c = CallerFacts {
+            customers: Some(vec![]),
+            ..human()
+        };
+        assert_eq!(
+            human_actor(&p, &c),
+            Some(Actor {
+                login: "op".into(),
+                customers: vec![],
+                admin: false
+            })
+        );
+        assert!(is_skip(&gate(&p, &c, "acme")));
+    }
+
+    #[test]
+    fn actor_customers_are_sorted_and_deduplicated() {
+        let p = policy_with(&[], json!(false));
+        let c = CallerFacts {
+            customers: Some(vec![
+                "b".into(),
+                "acme".into(),
+                "b".into(),
+                "Z".into(),
+                "é".into(),
+            ]),
+            ..human()
+        };
+        let a = human_actor(&p, &c).unwrap();
+        assert_eq!(a.customers, ["Z", "acme", "b", "é"]);
+    }
+
+    #[test]
+    fn select_cohort_needs_a_customer_and_an_enabled_match() {
+        let p = policy();
+        assert!(p.select_cohort("acme", "zbx-1", "77").is_some());
+        assert!(p.select_cohort("", "zbx-1", "77").is_none());
+        assert!(p.select_cohort("acme", "zbx-2", "77").is_none());
+        assert!(p.select_cohort("acme", "zbx-1", "78").is_none());
+        let mut i = input();
+        i.cohorts = vec![with_v(cohort(), "enabled", json!(false))];
+        assert!(
+            Policy::new(i)
+                .unwrap()
+                .select_cohort("acme", "zbx-1", "77")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn an_empty_admin_exception_is_refused() {
+        let mut i = input();
+        i.admin_exceptions = vec!["op".into(), String::new()];
+        assert_eq!(
+            Policy::new(i).unwrap_err(),
+            PolicyBuildError("admin_exception_invalid")
+        );
     }
 
     fn without_v(v: Value, k: &str) -> Value {
