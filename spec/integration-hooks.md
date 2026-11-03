@@ -1,6 +1,9 @@
 # Integration hook contract (Zabalack and Voalack)
 
-Status: **draft for review**. No alrust code implements this yet, and nothing
+Status: **draft for review**. alrust code implements only part of section
+4.2 so far: the restricted attribute is left out of every alert response,
+and search parameters that could select, sort or group by it are refused
+(`crates/alrust-domain/src/lib.rs`, `crates/alrust-api/src/lib.rs`). Nothing
 here is a qualification or a deployment result. Decisions behind it: DECISIONS
 Y35 (alrust must fully support Zabalack and Voalack; exact reference storage
 first) and Y41 (option A: a hook in alrust calls each integration's existing
