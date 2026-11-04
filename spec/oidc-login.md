@@ -215,9 +215,9 @@ adopted.
 
   | Rule | Reference | Fully stateless | Proposal | Contract change? |
   |---|---|---|---|---|
-  | User status | a `users` row whose `status` is not `active` gives 403 (`oidc.py:189-190`) | no rows, so no check: an inactive user of an adopted database could log in | read-only lookup by subject; 403 when a row exists and is not `active`; no write | no, for rows keyed by subject; yes for e-mail-linked rows (Q-L2) |
-  | E-mail domain | with `AUTH_REQUIRED`, `ALLOWED_EMAIL_DOMAINS` checked against the stored user's domain, pre-update (`oidc.py:192`) | from the verified `email` claim | the verified `email` claim's domain, only when the setting is not `*` | yes (source of the domain): owner |
-  | Roles or groups | with `AUTH_REQUIRED`, `ALLOWED_OIDC_ROLES` against claim roles plus stored roles; ineffective from a configuration file (AUTH-SEC-7) | claim roles only | claim roles or groups only, from alrust configuration, effective however set | yes (stored roles dropped; the setting made effective): owner |
+  | User status | a `users` row whose `status` is not `active` gives 403 (`oidc.py:189-190`) | no rows, so no check: an inactive user of an adopted database could log in | read-only lookup by subject; 403 when a row exists and is not `active`, whatever `AUTH_REQUIRED` is (the reference checks status unconditionally); no write | no, for rows keyed by subject; yes for e-mail-linked rows (Q-L2) |
+  | E-mail domain | with `AUTH_REQUIRED`, `ALLOWED_EMAIL_DOMAINS` checked against the stored user's domain, pre-update (`oidc.py:192`) | from the verified `email` claim | with `AUTH_REQUIRED` on: the verified `email` claim's domain against the setting unless it is `*`, else 403; with `AUTH_REQUIRED` off: no check, as in the reference | yes (source of the domain): owner; the `AUTH_REQUIRED` condition is kept, no change |
+  | Roles or groups | with `AUTH_REQUIRED`, `ALLOWED_OIDC_ROLES` against claim roles plus stored roles; ineffective from a configuration file (AUTH-SEC-7) | claim roles only | with `AUTH_REQUIRED` on: claim roles or groups only against the setting from alrust configuration, effective however set, unless it is `*`, else 403; with `AUTH_REQUIRED` off: no check, as in the reference | yes (stored roles dropped; the setting made effective): owner; the `AUTH_REQUIRED` condition is kept, no change |
   | Account association | e-mail linking by default (Q-L2) | none | none (Q-L2) | yes: owner (Q-L2) |
   | Stored roles to scopes | stored roles join claim roles for `Permission.lookup` (`oidc.py:183-196`) | none | claim roles through the Q-L3 map | yes: owner (Q-L3) |
 
@@ -262,19 +262,35 @@ adopted.
   the code to the browser that started the login, so a login-forgery attack
   (a victim's browser completing an attacker's code) is not prevented
   server-side. Tokens carry no `alrust_hook_customers`. Does not meet P5.
-- **(b) Server-issued `state` and `nonce`.** A new initiation route on
-  alrust (for example `POST /auth/openid/start`) creates a random `state`
-  and `nonce` (at least 128 bits each), records them with the configured
-  provider, client id, allowed `redirectUri` and an expiry (for example 10
-  minutes), and returns the authorization URL with both. The record is
-  either a server-side row keyed by `state` or an HttpOnly, Secure,
-  SameSite cookie MACed with the signing key. The web UI opens that URL
-  instead of building its own. On `POST /auth/openid` alrust requires the
-  echoed `state` to match the record (constant-time), unexpired and unused;
-  marks it used (a row is deleted; a cookie is cleared, and replay within
-  the expiry is then stopped by the provider's single-use `code`); and
-  requires the verified ID token's `nonce` to equal the recorded one. Meets
-  P5. Needs the UI change and either new state (a row) or a cookie.
+- **(b) Server-issued `state` and `nonce`, bound to the initiating
+  browser.** One concrete possibility, not an adopted architecture:
+  - *Initiation.* A new alrust route (for example
+    `POST /auth/openid/start`) creates a login transaction: random `state`,
+    `nonce` and browser-binding secret (at least 128 bits each), and, with
+    PKCE (c), a `code_verifier`. It stores a server-side row keyed by
+    `state` holding the `nonce`, the configured provider, client id and
+    allowed `redirectUri`, the verifier, a hash of the binding secret, an
+    expiry (for example 10 minutes) and a consumed flag. It sets the binding
+    secret in an HttpOnly, Secure cookie scoped to the login route (with
+    `SameSite=None` and credentialed CORS when the web UI is served from
+    another origin than the API) and returns the authorization URL with
+    `state`, `nonce` and the S256 challenge. The web UI opens that URL
+    instead of building its own.
+  - *Completion.* `POST /auth/openid` requires both the echoed `state` and
+    the binding cookie; the row must exist, be unexpired and unconsumed,
+    and the cookie's secret must hash to the stored value (constant-time).
+    The row is consumed atomically, in one statement that succeeds only if
+    it was still unconsumed, before the code is redeemed; so of concurrent
+    completions exactly one proceeds, and a second completion with a fresh
+    `code` from the same authorization URL is refused. alrust then redeems
+    the `code` with the stored verifier, and requires the verified ID
+    token's `nonce` to equal the stored one.
+  - *Meets P5* in this form. Costs: the web UI change, the CORS and cookie
+    requirements above, and new state (a transaction table, which Q-L4's
+    read-only proposal does not otherwise need), with expiry clean-up.
+  - A stateless variant (the transaction in a signed cookie, no row) is
+    left unresolved: clearing a cookie does not invalidate copied bytes,
+    so its one-use property is not defined here.
 - **(c) PKCE.** The initiator creates a `code_verifier`, sends its S256
   `code_challenge` with the authorization request and the verifier with the
   token exchange; the provider then refuses a code redeemed without that
@@ -297,7 +313,10 @@ only). None is needed to review this design.
 When an implementation is proposed: an in-process fake issuer with
 synthetic keys and recorded discovery, JWKS, token and userinfo responses;
 cases for each section 5 refusal, each claim rule of section 6, each Q-L6
-outcome, Q-L9's behavior, issued-token round-trips through R, provider
+outcome under both `AUTH_REQUIRED` settings, Q-L9's behavior (for (b): a
+transferred `code` and `state` without the initiating browser's cookie,
+two concurrent completions of one transaction, reuse of a transaction with
+a fresh `code`, an expired transaction, a `nonce` mismatch), issued-token round-trips through R, provider
 error bodies whose `error` and `error_description` carry synthetic code,
 token, secret and URL markers, non-string and oversized values, and that
 no secret, code,
