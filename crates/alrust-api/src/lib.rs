@@ -7,9 +7,11 @@
 use std::sync::Arc;
 
 use alrust_domain::{
-    Alert, ApiKey, HistoryOutput, KeySecret, iso8601, parse_time, scope_allows, truncate_ms,
+    Alert, ApiKey, HistoryOutput, KeySecret, REDACTED_ERROR, RESTRICTED_ATTRIBUTES,
+    contains_evidence, is_restricted_attribute, iso8601, parse_time, redact_diagnostic,
+    scope_allows, truncate_ms,
 };
-use alrust_store_pg::{AlertEdit, AlertQuery, NewAlert, Store, StoreError};
+use alrust_store_pg::{AlertEdit, AlertQuery, CallerFacts, NewAlert, Store, StoreError};
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -84,8 +86,16 @@ impl ApiError {
 }
 
 impl IntoResponse for ApiError {
+    /// The message is the only caller- or database-derived string in an
+    /// error body; one that may carry restricted evidence becomes
+    /// `REDACTED_ERROR` (hook spec section 4.2), the status code unchanged.
     fn into_response(self) -> Response {
-        let body = json!({"status": "error", "message": self.message, "code": self.code.as_u16(), "errors": null});
+        let message = if contains_evidence(&self.message) {
+            REDACTED_ERROR.to_owned()
+        } else {
+            self.message
+        };
+        let body = json!({"status": "error", "message": message, "code": self.code.as_u16(), "errors": null});
         (self.code, Json(body)).into_response()
     }
 }
@@ -101,12 +111,19 @@ impl From<StoreError> for ApiError {
                 ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, t.to_string())
             }
             StoreError::Db(e) => {
-                tracing::error!(error = %e, "database error");
+                tracing::error!(error = %redact_diagnostic(e.to_string()), "database error");
                 ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "database error")
             }
             // Input ranges are refused with 400 before the store; this is a
             // stored value that cannot be written back, such as a duplicate
             // count at the integer maximum. Nothing was written.
+            // A hook's own status and message (spec/integration-hooks.md
+            // sections 3 and 5): a refusal before COMMIT, or an unknown
+            // outcome after it; the response layer still redacts evidence.
+            StoreError::Hook(h) | StoreError::OutcomeUnknown(h) => ApiError::new(
+                StatusCode::from_u16(h.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                h.message,
+            ),
             StoreError::OutOfRange(what) => {
                 tracing::error!(field = what, "value outside the reference integer range");
                 ApiError::new(
@@ -141,6 +158,21 @@ impl Caller {
                 StatusCode::FORBIDDEN,
                 format!("Missing required scope: {scope}"),
             ))
+        }
+    }
+
+    /// The facts the integration hooks receive. API keys carry no user id
+    /// and no verified auth type; human operators are not implemented yet.
+    fn facts(&self, st: &AppState) -> CallerFacts {
+        CallerFacts {
+            login: self.login.clone(),
+            user_id: None,
+            auth_type: None,
+            scopes: self.scopes.clone(),
+            customers: self.customers(),
+            auth_required: st.cfg.auth_required,
+            request_id: None,
+            from_request: true,
         }
     }
 
@@ -241,6 +273,31 @@ fn wanted_customer(obj: &Map<String, Value>) -> ApiResult<Option<String>> {
     }
 }
 
+/// Error bodies are read whole up to this size to be checked; a larger one is
+/// replaced, since it cannot be checked.
+const ERROR_BODY_LIMIT: usize = 1 << 20;
+
+/// Every error response, including the plain-text rejections axum writes
+/// itself outside `ApiError` (for example a JSON body it cannot parse, whose
+/// message can quote the offending key): one that may carry restricted
+/// evidence becomes the `REDACTED_ERROR` error body with the same status code
+/// (hook spec section 4.2, after Zabalack's `redact_error_response`,
+/// `zab-al-ack@eaf2acf:src/zabalack/plugins.py:140-146`). Other responses
+/// pass unchanged.
+async fn redact_error_body(r: Response) -> Response {
+    let status = r.status();
+    if !(status.is_client_error() || status.is_server_error()) {
+        return r;
+    }
+    let (parts, body) = r.into_parts();
+    match axum::body::to_bytes(body, ERROR_BODY_LIMIT).await {
+        Ok(bytes) if !contains_evidence(&String::from_utf8_lossy(&bytes)) => {
+            Response::from_parts(parts, axum::body::Body::from(bytes))
+        }
+        _ => ApiError::new(status, REDACTED_ERROR).into_response(),
+    }
+}
+
 pub fn router(state: Shared) -> Router {
     Router::new()
         .route("/", get(index))
@@ -268,6 +325,7 @@ pub fn router(state: Shared) -> Router {
             "/management/housekeeping",
             get(housekeeping).post(housekeeping),
         )
+        .layer(axum::middleware::map_response(redact_error_body))
         .with_state(state)
 }
 
@@ -480,7 +538,7 @@ async fn receive(
         }
     }
 
-    let (alert, _kind) = st.store.receive(n, caller.login()).await?;
+    let (alert, _kind) = st.store.receive_with(n, &caller.facts(&st)).await?;
     Ok((
         StatusCode::CREATED,
         Json(json!({"status": "ok", "id": alert.id, "alert": alert_json(&st, &alert)})),
@@ -649,14 +707,7 @@ async fn take_action(
         v => Some(parse_timeout(v, 0)?),
     };
     st.store
-        .take_action(
-            &id,
-            caller.customers().as_deref(),
-            &action,
-            text,
-            timeout,
-            caller.login(),
-        )
+        .take_action_with(&id, &action, text, timeout, &caller.facts(&st))
         .await?;
     Ok(Json(json!({"status": "ok"})))
 }
@@ -669,7 +720,45 @@ struct Search {
     show_history: HistoryOutput,
 }
 
+/// Whether `attributes.<key>` names a restricted attribute.
+fn restricted_path(path: &str) -> bool {
+    path.strip_prefix("attributes.")
+        .is_some_and(is_restricted_attribute)
+}
+
+/// A query parameter that could select, sort or group by a restricted
+/// attribute (hook spec section 4.2, after Zabalack's query guard,
+/// `zab-al-ack@eaf2acf:src/zabalack/query_guard.py:1-50`): a direct
+/// `attributes.<key>` filter, negated or not; `sort-by` on it, either
+/// direction; `group-by` the whole `attributes` object; `q.df` defaulting to
+/// `attributes` or to the key; and any `q` that mentions the key. alrust
+/// parses none of `q`, `q.df`, `sort-by`, `group-by` or `attributes.*` filters
+/// yet (they are ignored like other unknown parameters), so today this only
+/// refuses; it is in place before any of them is supported.
+fn restricted_selector(key: &str, value: &str) -> bool {
+    match key {
+        "sort-by" => restricted_path(value.strip_prefix('-').unwrap_or(value)),
+        "group-by" => value == "attributes",
+        "q.df" => value == "attributes" || restricted_path(value),
+        "q" => RESTRICTED_ATTRIBUTES.iter().any(|r| value.contains(r)),
+        _ => restricted_path(key.strip_suffix('!').unwrap_or(key)),
+    }
+}
+
+/// Refuses a search that has any restricted selector, for every caller,
+/// with a stable, content-free 400.
+fn refuse_restricted_selectors(params: &[(String, String)]) -> ApiResult<()> {
+    if params.iter().any(|(k, v)| restricted_selector(k, v)) {
+        return Err(ApiError::bad(
+            "Query selector is not permitted on restricted attributes",
+        ));
+    }
+    Ok(())
+}
+
 fn parse_search(st: &AppState, caller: &Caller, params: &[(String, String)]) -> ApiResult<Search> {
+    // Before anything else is parsed.
+    refuse_restricted_selectors(params)?;
     let mut q = AlertQuery {
         customers: caller.customers(),
         ..AlertQuery::default()
@@ -1106,4 +1195,160 @@ async fn housekeeping(
     Ok(Json(
         json!({"status": "ok", "expired": expired, "unshelve": [], "unack": [], "count": count}),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restricted_selectors_are_refused() {
+        let refused = [
+            ("attributes.zabbix_ack_sync_intent", "x"),
+            ("attributes.zabbix_ack_sync_intent!", "x"),
+            ("sort-by", "attributes.zabbix_ack_sync_intent"),
+            ("sort-by", "-attributes.zabbix_ack_sync_intent"),
+            ("group-by", "attributes"),
+            ("q.df", "attributes"),
+            ("q.df", "attributes.zabbix_ack_sync_intent"),
+            ("q", "_exists_:attributes.zabbix_ack_sync_intent"),
+            ("q", "attributes.zabbix_ack_sync_intent:*"),
+        ];
+        for (k, v) in refused {
+            assert!(restricted_selector(k, v), "{k}={v}");
+        }
+    }
+
+    #[test]
+    fn a_search_with_a_restricted_selector_is_refused_without_content() {
+        let params = |k: &str, v: &str| {
+            vec![
+                ("status".to_owned(), "open".to_owned()),
+                (k.to_owned(), v.to_owned()),
+            ]
+        };
+        let e = refuse_restricted_selectors(&params("attributes.zabbix_ack_sync_intent", "s3cr3t"))
+            .unwrap_err();
+        assert_eq!(e.code, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            e.message,
+            "Query selector is not permitted on restricted attributes"
+        );
+        assert!(refuse_restricted_selectors(&params("attributes.region", "eu")).is_ok());
+        assert!(refuse_restricted_selectors(&[]).is_ok());
+    }
+
+    #[test]
+    fn an_error_message_carrying_evidence_is_redacted() {
+        let body = |e: ApiError| {
+            let r = e.into_response();
+            let code = r.status();
+            let bytes = futures_body(r);
+            (code, serde_json::from_slice::<Value>(&bytes).unwrap())
+        };
+        let (code, v) = body(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "API key parameter '[zabalack:v1 action=a kid=k mac=00]' is invalid",
+        ));
+        assert_eq!(code, StatusCode::UNAUTHORIZED);
+        assert_eq!(v["message"], REDACTED_ERROR);
+        assert_eq!(v["code"], 401);
+        assert!(!v.to_string().contains("mac=00"));
+        let (code, v) = body(ApiError::bad("not allowed to set customer to 'x'"));
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        assert_eq!(v["message"], "not allowed to set customer to 'x'");
+    }
+
+    /// A future's output, without an async runtime: everything polled here
+    /// works on in-memory bodies and is ready on the first poll.
+    fn ready<F: std::future::Future>(fut: F) -> F::Output {
+        use std::pin::pin;
+        use std::task::{Context, Poll, Waker};
+        let mut fut = pin!(fut);
+        match fut.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+            Poll::Ready(v) => v,
+            Poll::Pending => panic!("future not ready"),
+        }
+    }
+
+    fn futures_body(r: Response) -> Vec<u8> {
+        ready(axum::body::to_bytes(r.into_body(), usize::MAX))
+            .unwrap()
+            .to_vec()
+    }
+
+    /// axum's own rejection of a JSON body, as the router would send it.
+    fn json_rejection(body: &str) -> Response {
+        use axum::extract::FromRequest as _;
+        let req = axum::http::Request::builder()
+            .method("POST")
+            .uri("/alert")
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(body.to_owned()))
+            .unwrap();
+        match ready(Json::<Value>::from_request(req, &())) {
+            Ok(_) => panic!("{body} parsed"),
+            Err(rejection) => rejection.into_response(),
+        }
+    }
+
+    // Codex's PR176-FRAMEWORK-ERROR-SCOPE-1 counterexample: axum's rejection
+    // text quotes the key path, outside ApiError.
+    #[test]
+    fn a_framework_rejection_carrying_evidence_is_redacted() {
+        for key in [
+            "[zabalack:v1 action=a kid=k mac=00]",
+            "[ZaBaLaCk:v1 x]",
+            "[ackline:x]",
+        ] {
+            let raw = json_rejection(&format!("{{\"{key}\": invalid}}"));
+            let status = raw.status();
+            let raw_text = String::from_utf8(futures_body(raw)).unwrap();
+            assert!(raw_text.contains(key), "unredacted rejection: {raw_text}");
+            let r = ready(redact_error_body(json_rejection(&format!(
+                "{{\"{key}\": invalid}}"
+            ))));
+            assert_eq!(r.status(), status);
+            let v: Value = serde_json::from_slice(&futures_body(r)).unwrap();
+            assert_eq!(v["message"], REDACTED_ERROR);
+            assert_eq!(v["code"], status.as_u16());
+        }
+        let plain = json_rejection("{\"plain\": invalid}");
+        let (status, text) = (
+            plain.status(),
+            String::from_utf8(futures_body(plain)).unwrap(),
+        );
+        let r = ready(redact_error_body(json_rejection("{\"plain\": invalid}")));
+        assert_eq!(r.status(), status);
+        assert_eq!(String::from_utf8(futures_body(r)).unwrap(), text);
+    }
+
+    #[test]
+    fn successful_responses_pass_unchanged() {
+        let ok = (StatusCode::OK, "[zabalack:v1 marker in history]").into_response();
+        let r = ready(redact_error_body(ok));
+        assert_eq!(r.status(), StatusCode::OK);
+        assert_eq!(futures_body(r), b"[zabalack:v1 marker in history]");
+    }
+
+    #[test]
+    fn other_selectors_are_not_refused() {
+        let allowed = [
+            ("attributes.zabbix_ack_sync", "pending"),
+            ("attributes.zabbix_ack_sync_reason!", "x"),
+            ("attributes.source_system", "zabbix"),
+            ("sort-by", "attributes.zabbix_ack_sync"),
+            ("sort-by", "lastReceiveTime"),
+            ("group-by", "attributes.region"),
+            ("group-by", "environment"),
+            ("q.df", "text"),
+            ("q", "attributes.zabbix_ack_sync:pending"),
+            ("status", "zabbix_ack_sync_intent"),
+            ("resource", "attributes.zabbix_ack_sync_intent"),
+            ("attributes.Zabbix_ack_sync_intent", "x"),
+        ];
+        for (k, v) in allowed {
+            assert!(!restricted_selector(k, v), "{k}={v}");
+        }
+    }
 }

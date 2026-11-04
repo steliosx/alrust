@@ -50,14 +50,20 @@ The full plan and its fixed decisions are in the
 
 ## Status
 
-**Reviewed checkpoint: 2 November 2026**, main
-[`95f1cdf4`](https://github.com/steliosx/alrust/commit/95f1cdf4f9a2db1f0fb19577f0a7e2f2170463ff).
-The Rust API alpha and reference-layout storage implementation are merged.
-Phase 0, full two-server compatibility and downstream integration remain open;
-there is no release or live acceptance.
+**Reviewed checkpoint: 3 November 2026**, main
+[`a5c66fee`](https://github.com/steliosx/alrust/commit/a5c66fee0dab19563b3b8aa14ee20cbe29da1b04).
+The Rust API alpha and reference-layout storage implementation remain merged.
+Thirty-eight newer commits add acknowledgement-hook infrastructure, pure Zabalack
+policy functions and an OIDC caller-facts design. No downstream adapter is
+registered, full two-server compatibility remains open, and there is no release
+or live acceptance.
 
 | Area | Current executed evidence | Remaining limit |
 |---|---|---|
+| Exact-head CI | [PR #189 run 41657256490](https://github.com/steliosx/alrust/actions/runs/41657256490) succeeded at head `b8cc0d47`: seven jobs; **95 Rust tests passed, two ignored**, **3311 Python conformance-unit tests passed**, and the alpha smoke recorded zero failures or not-runs. | The hosted-profile job intentionally reports all profiles `NOT_RUN`. The reference comparison is a smoke check, not full two-server conformance, and no workflow run was found for the resulting main merge commit. |
+| ACK integration hooks | [#177](https://github.com/steliosx/alrust/pull/177)–[#188](https://github.com/steliosx/alrust/pull/188) merge hook phases, reserved-key stripping and pure Zabalack receive/actor/precheck policy with tests. Source inspection at `a5c66fee` finds `Store::new` starts with an empty hook list. | No `AckIntegration` implementation is registered for Zabalack or Voalack, so this is infrastructure and policy logic, not an active adapter or installed qualification. |
+| Identity and downstream pin | [#189](https://github.com/steliosx/alrust/pull/189) merges an OIDC caller-facts **design**. [STATUS](docs/STATUS.md) holds the Voalack slices because their pinned input changed. | Current runtime auth remains API-key based and caller facts carry no human user, so actor-gated ACK work is skipped. OIDC owner choices and a newly reviewed Voalack pin remain prerequisites. |
+| Review evidence | Repository records attribute correction/review hashes to Codex through the signed-mailbox workflow. | GitHub shows no submitted review object for these PRs, and the automatic review on #189 stopped at a usage limit. This presentation review did not inspect the original signed mailbox artifacts. |
 | Hosted CI | [Run 41549919000](https://github.com/steliosx/alrust/actions/runs/41549919000) executes **six successful jobs**; draft-only catalog generation is skipped. Python conformance units: **3311 passed, 97 subtests**. Rust tests: **46 passed, two ignored**. PostgreSQL 18.6 Rust alpha smoke and supervised Python reference smoke succeed. | Hosted execution has resumed; the earlier billing refusal is historical. Owner records retain the $0 spending limit. A reference-only smoke is not two-server conformance, and ignored/skipped checks receive no credit. |
 | Execution profiles | The green catalog preflight expects **all 19 profiles NOT_RUN**. | No profile, Phase 0 or shared-CI gate is closed by that green job. The corrected selected two-target pairing remains unrerun. |
 | Source fixes | [#169](https://github.com/steliosx/alrust/pull/169)–[#172](https://github.com/steliosx/alrust/pull/172) add six bounded lane shards, exact node-ID coverage checking and per-shard filesystem modes. [#173](https://github.com/steliosx/alrust/pull/173), `491e1e48`, lists the evidence staging directory through a fresh descriptor with the same device/inode check. | Source inspection supports the scoped corrections. tmpfs fsync tests do not establish disk durability. The btrfs regression models the stale descriptor; local native filesystem results are author reports. |

@@ -1,7 +1,18 @@
 # Integration hook contract (Zabalack and Voalack)
 
-Status: **draft for review**. No alrust code implements this yet, and nothing
-here is a qualification or a deployment result. Decisions behind it: DECISIONS
+Status: **draft for review**. alrust code implements part of this page so
+far. Section 4.2: the restricted attribute is left out of every alert
+response, search parameters that could select, sort or group by it are
+refused (`crates/alrust-domain/src/lib.rs`, `crates/alrust-api/src/lib.rs`),
+and error bodies and log records that may carry restricted evidence are
+redacted. Section 3: the hook interface and its phase order inside the
+acknowledgement transaction (`crates/alrust-store-pg/src/hooks.rs`,
+`take_action_with`), and the receive-time `pre_receive` phase of 4.3
+(`receive_with`), tested with synthetic integrations only. The Zabalack
+receive policy of 4.3.1, the actor policy of 4.1.1 and the source and
+cohort prechecks of 4.1.2 are implemented as pure functions. No adapter is
+implemented or registered, so no request calls a hook yet.
+Nothing here is a qualification or a deployment result. Decisions behind it: DECISIONS
 Y35 (alrust must fully support Zabalack and Voalack; exact reference storage
 first) and Y41 (option A: a hook in alrust calls each integration's existing
 SQL inside the acknowledgement's own transaction; their own sessions change
@@ -158,6 +169,7 @@ acknowledgement. Each registered integration implements:
 
 | Phase | When, inside the acknowledgement transaction | Purpose |
 |---|---|---|
+| `pre_receive(caller, incoming)` | on `POST /alert` only, in the receive transaction, for every registered integration, before anything is looked up or written | Section 4.3: change the incoming alert (strip reserved keys) or refuse it. Never called by an action. |
 | `pre_lookup(caller)` | before the alert is looked up | Refusals that must not depend on the alert (A3 option (a)). |
 | `claims(alert)` | after the alert row is locked | Ownership on pinned `main`. Zabalack claims an alert with `attributes.source_system = 'zabbix'` (`plugins.py:411`). Voalack claims an alert when the protected registry `voalack.bindings` has an active row for its id, **whatever its current event or resource** (`boundary.py:99-109`, `158-165`); an error querying the registry refuses 503 "ACK not processed: capture registry unavailable" (`159-162`), and under the lock the binding is re-read through `voalack.lock_binding` (`185-198`), a binding gone by then leaving the alert unclaimed. Source drift of a bound alert is refused in `gate`, not treated as unclaimed. |
 | `gate(alert, caller)` | after `claims`, before the history entry is built | Policy and health checks and integration locks; may decline (no capture, a recorded skip) or refuse (the request fails and everything rolls back). |
@@ -199,7 +211,7 @@ Rules:
 | Today (in Alerta) | Citation (`zab-al-ack@eaf2acf`, `src/zabalack/`) | In alrust |
 |---|---|---|
 | Version gate: `alerta-server == 9.1.0` and `ALARM_MODEL == alerta`, otherwise a `skipped_reference_version` skip, not a refusal | `plugins.py:421-428` | Zabalack's session replaces it with an identity check that also accepts alrust (Z3). |
-| Entry conditions: action `ack`, the alert not already `ack`, `source_system = zabbix`; capture bypass | `plugins.py:410-419` | `claims` and `gate`, unchanged. An already acknowledged alert gets no hook call. |
+| Entry conditions: action `ack`, the alert not already `ack`, `source_system = zabbix`; capture bypass | `plugins.py:410-419` | `claims` and `gate`, unchanged. An already acknowledged alert gets no Zabalack capture: the adapter's `gate` or `claims` must decline it before `stage`. The generic `pre_lookup` and `claims` calls still run, and A3's refusal before lookup stays. |
 | Checks in order: privacy readiness, `AUTH_REQUIRED` and `CUSTOMER_VIEWS`, canonical id and source, cohort and one-to-one binding, human actor, `authorize_actor` | `plugins.py:432-454`; `policy.py:96-101` | `gate`, same order and outcomes, subject to A1 and A2. |
 | Duplicate call in one request reuses its staged identity | `plugins.py:455-459` | Redundant by construction: alrust calls `stage` once per request. |
 | Transition decided before staging: an invalid action stages nothing; Alerta's own refusal propagates; an undecidable transition refuses 503 `zabalack_generation_unavailable`; a transition that does not end in `ack` records `skipped_no_ack_transition` | `plugins.py:460-483` | `gate` runs alrust's engine transition for the same inputs before `stage` and maps each outcome the same way. |
@@ -214,6 +226,154 @@ Rules:
 `pre_commit` and `commit_outcome` have nothing to do for Zabalack: its
 trigger completes the record inside the same `UPDATE`.
 
+### 4.1.1 Actor policy port: proposal
+
+Status: the proposal was reviewed and merged (PR #183); it is implemented as
+`hooks::zabalack::human_actor`, `authorize_actor` and `actor_gate`, with
+`Policy::select_cohort` (`policy.py:87-94`) so that a caller can obtain the
+cohort, and unit tests for the cases listed below. Nothing is registered.
+It ports only the last
+two checks of Zabalack's acknowledgement gate, human-actor extraction and
+actor authorisation (`plugins.py:452-454`, using `_human_actor` at
+`plugins.py:269-281` and `authorize_actor` at `policy.py:96-101`, at
+`eaf2acf`), as pure functions the Zabalack adapter's `gate` will call.
+Nothing is registered.
+
+**Scope, delimited.** The gate's earlier checks are not in this slice and
+keep their pinned order and outcomes when the adapter's `gate` is written
+(`plugins.py:410-451`): the entry conditions, capture disabled, capture
+bypass, the route, the reference-version check, privacy readiness (503
+`zabalack_privacy_adapter_required`), routing order, `AUTH_REQUIRED` and
+`CUSTOMER_VIEWS`, the canonical alert id and source, the cohort, and
+ambiguity. This slice assumes the caller has already selected the cohort
+(as `select_cohort` does at `plugins.py:445`) and passes it in. The
+transition decision, the health probe and staging that follow
+(`plugins.py:460` onwards) are also out of scope.
+
+**Inputs, and nothing else:** `CallerFacts`; the alert's customer; the
+selected cohort; an injected policy; and an injected `now` for the skip
+record. No file, environment variable, key, clock or database. The policy
+gains `admin_exceptions`, a list of non-empty strings, checked when it is
+built (refusal `admin_exception_invalid`, `config.py:158-159`), and each
+cohort keeps `allow_admin`. The policy type is renamed from `ReceivePolicy`
+to `Policy` (with `PolicyInput`), since it is Zabalack's settings subset for
+both paths. The rename touches only `hooks::zabalack` and the names in 4.3.1;
+nothing registers the policy, and no other crate uses it.
+
+**Human-actor extraction** (`plugins.py:269-281`), from `CallerFacts` only:
+
+1. `from_request` must be true, and `user_id` and `login` must be present
+   and non-empty. Otherwise there is no actor.
+2. A login that has an ingestion mapping is not a human actor.
+3. `admin` is true when any one scope is exactly the string `admin` or
+   exactly `admin:alerts`; the caller's other scopes are irrelevant, and
+   there is no prefix or case-insensitive match (`plugins.py:275-276`). An
+   admin whose login is not in `admin_exceptions` is not an actor.
+4. The caller's customer list must be present (`customers` is `Some`); an
+   empty list is allowed. `None`, which in alrust means every customer, is
+   not a list and gives no actor.
+5. The actor is the login, the customer list sorted and de-duplicated, the
+   admin flag, and the auth type `user`.
+
+**Authorisation** (`policy.py:96-101`): the alert's customer must be
+non-empty and the actor's login non-empty. An admin actor is authorised
+exactly when the cohort's `allow_admin` is true, whatever its customer
+list (no membership check is added). A non-admin actor is authorised
+exactly when the alert's customer is in its customer list. An admin
+exception lets an admin be an actor; it does not by itself authorise.
+
+**Outcome.** No actor, or an actor not authorised, is the skip
+`skipped_actor_policy`: the adapter's `gate` returns `Gate::Skip` with
+`project_skip`'s writes (the intent removed by a null; `zabbix_ack_sync`,
+`_reason`, `_config_revision`, `_local_at` with the injected `now`), and the
+acknowledgement proceeds without capture. It is never a refusal and never a
+new 403. An authorised actor is returned for the later staging intent.
+
+**Identity, stated plainly.** These are the facts the hooks will receive
+for a verified human operator once OIDC exists (A1, A2; DECISIONS Y44). A
+production caller must supply upstream-verified human facts: populated
+fields and `from_request` are not credential verification. Today the API
+sets `user_id` and `auth_type` to none for every caller (API keys only), so
+every current API-key caller that reaches this slice gets
+`skipped_actor_policy`; earlier gate checks can decide other outcomes.
+This slice evaluates facts; it does not verify a credential, does not turn
+an API key into a human, and adds no customer views, RBAC or OIDC mapping.
+
+Tests the code will carry, with synthetic facts, cohorts, policy and a
+fixed `now`: facts not from a request; a missing or empty `user_id` or
+`login`; an ingestion-mapped login; each admin scope and near lookalikes
+(`admin:alert`, `Admin`, `admin:alerts:x`); an admin with and without an
+exception; an admin under `allow_admin` true (authorised even with an empty
+customer list) and false (skipped even with the customer listed); an
+ordinary actor in and not in the customer list; an empty customer list
+(extracted, then skipped); `customers` absent (no actor); an empty alert
+customer; the actor's customers sorted and de-duplicated; the exact skip
+writes; and the constructor refusing an empty `admin_exceptions` entry
+(`admin_exception_invalid`).
+
+### 4.1.2 Source and cohort prechecks port: proposal
+
+Status: the proposal was reviewed and merged (PR #186); it is implemented as
+`hooks::zabalack::ack_prechecks`, returning `Precheck` (eligible with a
+`SourceSnapshot` and the cohort, or a skip), with unit tests for the cases
+listed below. It takes the stored alert by shared reference, so nothing can
+be written back. Nothing is registered. It ports the
+acknowledgement gate's source and cohort prechecks (`plugins.py:438-451`
+at `eaf2acf`) as one pure function the Zabalack adapter's `gate` will call
+just before 4.1.1's actor checks. It is the step that selects the cohort
+4.1.1 takes. Nothing is registered.
+
+**Scope, delimited.** The gate's checks before it (`plugins.py:410-437`:
+the entry conditions, capture disabled, capture bypass, the route, the
+reference version, privacy readiness, routing order, and `AUTH_REQUIRED`
+with `CUSTOMER_VIEWS`) and after it (the actor checks of 4.1.1, then the
+transition, health and staging from `plugins.py:452`) are not in this
+slice and keep their pinned order.
+
+**Inputs, and nothing else:** the alert as stored (its id, customer and
+attributes), the injected `Policy`, and an injected `now` for the skip
+record. No file, environment variable, key, clock or database.
+
+Order, as pinned:
+
+1. **Canonical id and source contract** (`plugins.py:438-444`). The alert
+   id must already be a canonical UUID string: Python's
+   `str(UUID(id)) == id` holds only for 32 lowercase hexadecimal digits
+   grouped 8-4-4-4-12 with hyphens. Upper case, the compact form, braces,
+   `urn:uuid:` and anything `UUID` refuses all fail. Then `validate_source`
+   (`policy.py:49-61`, as in 4.3.1 step 9: all seven contract keys present,
+   `source_system` `zabbix`, version `"1"`, instance and ids valid,
+   nullable cause and recovery ids, recovery not the event id). Any
+   failure: skip `legacy_missing_mapping`.
+2. **Cohort** (`plugins.py:445-447`): `Policy::select_cohort` with the
+   alert's customer (absent or empty selects nothing) and the source's
+   instance and trigger. None: skip `skipped_cohort_policy`.
+3. **Ambiguity** (`plugins.py:448-451`): the cohort is not one-to-one, or
+   any of `zabbix_event_ids`, `zabbix_trigger_ids`, `source_members` is
+   present as a key, whatever its value (null and empty count). Skip
+   `skipped_ambiguous_source`.
+4. Otherwise the alert is eligible: the function returns the source
+   snapshot (instance, event id, trigger id) and the selected cohort, for
+   4.1.1's `actor_gate`.
+
+**Unlike the receive path (4.3.1), nothing is written back** when the
+alert passes. The validated cause and recovery values are not stored, and
+the alert's attributes stay exactly as they were. A skip is the same
+`project_skip` writes as in 4.1.1 (the intent removed by a null, and the
+four record keys with the injected `now`), carried as `Gate::Skip`; the
+acknowledgement proceeds without capture. None of these outcomes is a
+refusal.
+
+Tests the code will carry, with synthetic alerts, policies and a fixed
+`now`: the canonical id against upper-case, compact, braced, `urn:uuid:`,
+short and non-UUID ids; each source-contract failure, including missing
+keys and id bounds; present nullable sentinels accepted with the
+attributes left unchanged; an empty, unmatched and disabled-cohort
+customer; a non-one-to-one cohort and each ambiguity key with a null and
+an empty value; competing failures, which prove the order source, then
+cohort, then ambiguity; the exact skip writes; and an eligible alert's
+snapshot and cohort, passed on to `actor_gate`.
+
 ### 4.2 Privacy on every read path
 
 Zabalack treats one attribute, `zabbix_ack_sync_intent`
@@ -224,9 +384,9 @@ the acknowledgement adapter is enabled:
 
 - **Serialisation.** The restricted key is removed from serialised alert
   attributes in every response (alert, list, history), and nothing else is
-  removed (`plugins.py:60-114`). alrust today emits `attributes` and history
-  `text` verbatim (`crates/alrust-domain/src/lib.rs:302`, `326`); the
-  attribute filter is a required alrust change.
+  removed (`plugins.py:60-114`). alrust's alert serialiser leaves the
+  restricted key out of `attributes` and emits history `text` verbatim
+  (`AlertBody` in `crates/alrust-domain/src/lib.rs`).
 - **The committed proof stays visible.** The signed marker in the
   acknowledgement's history `text` is the committed history proof, which
   Zabalack deliberately keeps in successful history responses (A1 on their
@@ -251,6 +411,29 @@ the acknowledgement adapter is enabled:
   `140-146`). The marker is never written to attributes, the alert's own
   `text`, logs or request JSON (`plugins.py:546`); its only home is the
   history entry's `text`.
+  In alrust (HOOK-DIAG-1), with Zabalack's test: text carries evidence
+  when, ignoring case, it contains `[zabalack:`, `[ackline:` or the
+  restricted key's name (`plugins.py:26-27`). Both checks sit at the
+  output boundary, not at individual call sites:
+  - **Error responses.** A layer on the router reads every 4xx and 5xx
+    body, including the plain-text rejections axum writes itself outside
+    `ApiError` (a malformed JSON body's message quotes the key path), and
+    replaces one that carries evidence with the error body
+    `zabalack_restricted_error_redacted`, with the same status code
+    (Zabalack's `redact_error_response`, `plugins.py:140-146`). An error
+    body over 1 MiB, or one that cannot be read, is replaced the same way
+    without being checked (fail closed). Other responses, and error
+    bodies without evidence, pass unchanged, including the reference's
+    reflection of an invalid API key.
+  - **Logs.** Every formatted log record, from alrust or a dependency,
+    at any level the filter admits, is written whole or replaced by
+    `zabalack_restricted_diagnostic_redacted`. This covers trigger names
+    logged at start-up and sqlx's `sqlx::postgres::notice` records, which
+    carry PostgreSQL notices and warnings raised by triggers
+    (Zabalack's `CaptureLogRedactor`, `plugins.py:30-46`). A record is
+    checked both as written and with ANSI escape sequences removed.
+  Not covered: a panic message, which Rust's default panic hook prints to
+  standard error directly.
 
 ### 4.3 Receive path
 
@@ -258,6 +441,159 @@ The normaliser strips reserved attribute keys and prefixes on receive and
 validates Zabbix source and ingestion identity (ingestion is a mapped API-key
 login with no user id) (`normalizer.py:16-36`, `57-100`). alrust needs a
 receive-time hook with the same reserved list and mapping.
+
+In alrust the hook is `pre_receive` (section 3). Like the normaliser, which
+runs only where Zabalack is installed, it runs only when an integration is
+registered; with none, attributes are stored as received (and the
+restricted key stays hidden on read by 4.2). The reserved list is ported as
+`hooks::zabalack::strip_reserved` for the adapter to call: the exact keys
+`zabbix_ack_intent`, `zabbix_ack_proof`, `ack_intent` and `ack_proof`, and
+the case-sensitive key prefixes `zabbix_ack_sync` (no trailing underscore),
+`zabalack_` and `ackline_` (`normalizer.py:16-17`, `34-36`). Only top-level
+keys are removed; values, nested keys and every other key are unchanged.
+Nothing registers it yet. The rest of the normaliser (`normalizer.py:57-100`:
+the settings file, ingestion mappings, `AUTH_REQUIRED` and `CUSTOMER_VIEWS`,
+the identity policy, the customer, instance and cohort checks, and the skip
+records) is adapter work and is deferred; 4.3.1 proposes its port. A
+rejection there maps to the reference's 403 for `RejectException`
+(`reference/alerta/alerta/views/alerts.py:57-60`). Registration (the adapter
+is present) is not Zabalack's `settings.enabled` (capture enablement): a
+registered adapter strips every incoming alert, Zabbix or not and with
+capture on or off, because the normaliser strips before it looks at
+`source_system` or `settings.enabled` (`normalizer.py:58-63`).
+In alrust the `pre_receive` call comes after the API's own environment and
+service policy and its Heartbeat conversion (the store is called only after
+those). In 9.1.0 the plugin order decides whether the normaliser sees a
+Heartbeat event. `PUT /alert/<id>/attributes` and the tag routes have no
+receive hook, in Alerta or here.
+
+### 4.3.1 Receive policy port: proposal
+
+Status: the proposal was reviewed and merged (PR #180); it is implemented as
+`hooks::zabalack::pre_receive` and `Policy` (named `ReceivePolicy` until
+4.1.1 added the actor fields)
+(`crates/alrust-store-pg/src/hooks/zabalack.rs`), with unit tests for the
+cases listed below. It ports `normalizer.py:57-100` at `eaf2acf` as one pure
+function, which the Zabalack adapter's `pre_receive` will call once that
+adapter exists. Nothing is registered. `CallerFacts.from_request` is set by
+the API for both routes and consulted by this path's `pre_receive` and by
+4.1.1's `human_actor`.
+
+Inputs, and nothing else: the incoming alert, the caller's `CallerFacts`,
+an injected `Policy`, and an injected current time (`now`, UTC), used
+only for the skip record's timestamp, so that evaluation is deterministic.
+The function reads no file, environment variable, key, clock or database,
+and performs no I/O. `Policy` holds, for this path,
+the settings fields this path uses (`config.py:15-62`): `enabled`,
+`capture_bypass`, `bypass_change_ref`, `config_revision`,
+`ingestion_mappings` (login to `{customer, instance}`) and `cohorts`. It is
+built only through a constructor that applies the pinned checks for those
+fields: each mapping's login is a non-empty string and the mapping has
+exactly `customer` and `instance`, both non-empty strings
+(`config.py:153-157`); each cohort passes `validate_cohort`
+(`policy.py:63-85`) and no two share (customer, instance, trigger)
+(`config.py:162-168`); `capture_bypass` needs a change reference
+(`config.py:145-146`). The flags are typed booleans and the revision and
+change reference typed strings, so the pinned boolean check
+(`config.py:121-123`) holds by construction. This is the subset of
+`validate_settings` these fields need, not full deployment or configuration
+validation, and an injected policy has not passed Zabalack's own loader.
+An invalid policy is refused when it is built, not per request. Where the
+policy comes from (a configuration file, its path, its permissions), and the
+errors a future loader can raise, belong to registration and are deferred.
+
+Order, as pinned (`normalizer.py:57-100`):
+
+1. Strip reserved keys (4.3), for every alert.
+2. `source_system` not `zabbix`: done, alert unchanged otherwise.
+3. Capture disabled (`enabled` false): skip `skipped_disabled`.
+3a. Request context (`normalizer.py:64-65`): `Store::receive` and
+   `receive_with` are public and can be called outside HTTP, so the hook
+   cannot assume a request. `CallerFacts` gains `from_request`, true only
+   when the API builds the facts from the request it is serving (the same
+   facts it authenticated); every other caller, including the legacy
+   `Store::receive`, gets false. False refuses with 403
+   `zabbix_ingestion_requires_authenticated_context`. No identity or
+   context is inferred from other fields.
+4. Tenant gate (`normalizer.py:68-70`): Zabalack requires Alerta's
+   `AUTH_REQUIRED` and `CUSTOMER_VIEWS`. Proposed mapping:
+   `AUTH_REQUIRED` is `CallerFacts.auth_required`. `CUSTOMER_VIEWS` has no
+   alrust switch: alrust can bind a customer to an API key and then always
+   scopes that key to it; binding is optional today (no global customer
+   views, no per-customer RBAC; KICKOFF, DECISIONS Y44 A2). So the
+   `CUSTOMER_VIEWS` half is treated as satisfied only by a customer-bound
+   API key, which step 6 enforces (an unbound key is refused there).
+   Refusal: 403
+   `zabbix_ingestion_tenant_gate` when `auth_required` is false. This adds
+   no customer views and changes no authentication; it evaluates existing
+   caller facts. It sits next to the owner's auth-contract gate, so the
+   mapping is stated here for review rather than assumed.
+5. Identity policy (`normalizer.py:66-67`, `71-73`): the caller's login must
+   have an ingestion mapping, `user_id` must be absent (an API key, not a
+   human), and the scopes must contain neither `admin` nor `admin:alerts`.
+   Otherwise 403 `zabbix_ingestion_identity_policy`.
+6. Customer (`normalizer.py:74-77`): the alert's customer must be
+   non-empty, equal the mapping's customer, and be in the caller's customer
+   list; a caller with no customer binding (`customers` absent, meaning
+   every customer in alrust) fails this. Otherwise 403
+   `zabbix_ingestion_customer_mismatch`.
+7. Any of `source_contract_version`, `zabbix_instance`, `zabbix_event_id`,
+   `zabbix_trigger_id` missing or falsy: skip `legacy_missing_mapping`.
+8. `zabbix_instance` not the mapping's instance: 403
+   `zabbix_ingestion_instance_mismatch`.
+9. `validate_source` (`policy.py:49-61`) fails for any reason: skip
+   `legacy_missing_mapping`. It needs all seven source-contract keys
+   present (`policy.py:26`, `50-51`): `source_system`, `zabbix_instance`,
+   `zabbix_event_id`, `zabbix_trigger_id`, `zabbix_cause_event_id`,
+   `zabbix_recovery_event_id` and `source_contract_version`, so a **missing**
+   cause or recovery key is a skip, not a null. A **present** cause or
+   recovery value that is one of Python's zero sentinels becomes null
+   (`policy.py:33-35`): null, `""`, `"0"`, and, because Python compares them
+   equal to `0`, any JSON number equal to zero (`0`, `0.0`, `-0.0`) and the
+   JSON `false` (but not `true`, `"0.0"` or `" 0"`). alrust keeps that exact
+   parity. Any other value must be a decimal id string
+   (`policy.py:36-37`), else the skip. On success the normalised values are
+   written back.
+10. No enabled cohort for (customer, instance, trigger)
+    (`policy.py:87-94`): skip `skipped_cohort_policy`.
+11. The cohort is not one-to-one, or any of `zabbix_event_ids`,
+    `zabbix_trigger_ids`, `source_members` is present: skip
+    `skipped_ambiguous_source`.
+12. `capture_bypass`: skip `skipped_capture_bypass` and set
+    `zabbix_ack_sync_change_reference` to the change reference. Otherwise
+    the alert passes unchanged.
+
+A skip is Zabalack's `project_skip` (`normalizer.py:39-47`), and the
+receive proceeds: remove `zabbix_ack_sync_intent`, then set
+`zabbix_ack_sync = skipped`, `zabbix_ack_sync_reason`,
+`zabbix_ack_sync_config_revision` and `zabbix_ack_sync_local_at` (the
+injected `now`, ISO 8601 with microseconds and `+00:00`, as Python's
+`isoformat(timespec="microseconds")` writes it). A refusal is a
+`HookError` with status 403 and the reason string as its message, and
+nothing is stored. Zabalack's `zabalack_configuration_invalid` (503) does not arise per
+request here, because the injected policy is validated when built; a future
+configuration loader's own errors belong to registration. Refusals (403),
+that configuration error (503) and skips (the receive proceeds, with the
+skip record) stay distinct.
+
+Malformed-policy parity, disclosed rather than claimed: in a cohort's
+`host_ids` or `group_ids`, Python's `len(set(values))` raises `TypeError` for
+an unhashable member (a crash, not a `PolicyError`), and treats `1`, `true`
+and `1.0` as one value, so `[1, true]` or `[1, 1.0]` is
+`cohort_host_group_bound`. The port de-duplicates by JSON text and then
+refuses any non-string member as `invalid_source_id`. Both refuse every such
+policy, and valid string-id lists agree.
+
+Tests the code will carry, with synthetic policies, caller facts and a
+fixed `now` only: a non-Zabbix alert (stripped, otherwise unchanged);
+capture disabled (strip and `skipped_disabled`); facts not from a request;
+each refusal above; each skip; a missing cause or recovery key (skip)
+against a present null, `""`, `"0"`, `0`, `0.0`, `-0.0` or `false` (null)
+and `true` or `"0.0"` (skip); a
+passing alert with normalised source values; capture bypass; constructor
+refusals (empty login, extra mapping key, bad cohort, duplicate cohort,
+bypass without a change reference); and stripping of reserved keys a
+producer supplied, also when the alert is then skipped.
 
 ## 5. Voalack adapter (pinned `main`)
 

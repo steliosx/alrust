@@ -57,6 +57,19 @@ def call(method, path, body=None, key=KEY, headers=None):
         return code, raw.decode(errors='replace')
 
 
+def call_raw(method, path, data, key=KEY):
+    """Like call, with a raw request body sent as application/json."""
+    req = urllib.request.Request(BASE + path, data=data, method=method)
+    req.add_header('Content-Type', 'application/json')
+    if key:
+        req.add_header('Authorization', f'Key {key}')
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status, r.read().decode(errors='replace')
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode(errors='replace')
+
+
 def check(name, cond, detail=''):
     global failures
     if cond:
@@ -437,6 +450,86 @@ check('max-integer heartbeat timeout is accepted and renders [A2V2-DOM-R1, ADR-0
 code, body = call('GET', '/heartbeats')
 check('heartbeat list with a max-integer timeout still renders', code == 200, code)
 call('DELETE', f'/heartbeat/{hmax}')
+
+# --- restricted attribute [spec/integration-hooks.md 4.2]: never in a response,
+# on every alert read path; selectors on it refused for every caller
+RK = 'zabbix_ack_sync_intent'
+RSECRET = f'intent-{RUN}'
+RRES = f'restricted-{RUN}'
+MARKER = f'done\n[zabalack:v1 action={RUN} kid=k mac=00]'
+REFUSAL = 'Query selector is not permitted on restricted attributes'
+SHOWN = {'zabbix_ack_sync': 'pending', 'zabbix_ack_sync_reason': 'awaiting_capture', 'region': 'eu'}
+
+
+def hides(attrs):
+    return isinstance(attrs, dict) and RK not in attrs and all(attrs.get(k) == v for k, v in SHOWN.items())
+
+
+code, body = call('POST', '/alert', alert(resource=RRES, attributes={RK: {'secret': RSECRET}, **SHOWN}))
+ra = body.get('alert', {}) if isinstance(body, dict) else {}
+rid = ra.get('id', '')
+check('POST /alert reply hides the restricted attribute, keeps the others',
+      code == 201 and hides(ra.get('attributes')) and RSECRET not in json.dumps(body), (code, ra.get('attributes')))
+code, body = call('PUT', f'/alert/{rid}/action', {'action': 'ack', 'text': MARKER})
+check('ack with a marker-bearing text', code == 200, (code, body))
+code, body = call('GET', f'/alert/{rid}')
+ga = body.get('alert', {}) if isinstance(body, dict) else {}
+check('GET /alert/<id> hides the restricted attribute, keeps the others',
+      code == 200 and hides(ga.get('attributes')) and RSECRET not in json.dumps(body), (code, ga.get('attributes')))
+check('GET /alert/<id> keeps the marker in history text',
+      any(h.get('text') == MARKER and h.get('type') == 'ack' for h in ga.get('history', [])), ga.get('history'))
+for show in ('true', 'false'):
+    code, body = call('GET', f'/alerts?resource={RRES}&show-history={show}')
+    la = body.get('alerts', []) if isinstance(body, dict) else []
+    check(f'GET /alerts (show-history={show}) hides the restricted attribute, keeps the others',
+          code == 200 and len(la) == 1 and hides(la[0].get('attributes')) and RSECRET not in json.dumps(body),
+          (code, [x.get('attributes') for x in la]))
+    if show == 'true':
+        check('GET /alerts with history keeps the marker in history text',
+              la and any(h.get('text') == MARKER for h in la[0].get('history', [])), la and la[0].get('history'))
+code, rkey, rkey_id = mint(['read:alerts'])
+check('a read-only key for the restricted-selector checks', code == 201 and rkey, code)
+SELECTORS = [
+    (f'attributes.{RK}', RSECRET),
+    (f'attributes.{RK}!', RSECRET),
+    ('sort-by', f'-attributes.{RK}'),
+    ('group-by', 'attributes'),
+    ('q', f'_exists_:attributes.{RK}'),
+]
+for who, k_ in (('admin', KEY), ('read-only', rkey)):
+    for path in ('/alerts', '/alerts/count'):
+        for name, value in SELECTORS:
+            qs = urllib.parse.urlencode({'resource': RRES, name: value})
+            code, body = call('GET', f'{path}?{qs}', key=k_)
+            check(f'{path} refuses {name} for the {who} caller with a content-free 400',
+                  code == 400 and isinstance(body, dict) and body.get('message') == REFUSAL
+                  and RSECRET not in json.dumps(body), (code, body))
+code, body = call('GET', f"/alerts/count?{urllib.parse.urlencode({'resource': RRES, 'attributes.region': 'eu'})}", key=rkey)
+check('an ordinary attribute parameter is not refused', code == 200, (code, body))
+call('DELETE', f'/key/{rkey_id}')
+call('DELETE', f'/alert/{rid}')
+# Error bodies never carry restricted evidence [4.2 diagnostics, HOOK-DIAG-1]
+REDACTED = 'zabalack_restricted_error_redacted'
+for bad in (f'[zabalack:v1 action={RUN} kid=k mac=00]', f'[ACKLINE:{RUN}]', f'{RK.upper()}-{RUN}'):
+    code, body = call('GET', '/alerts', key=bad)
+    check(f'an invalid key carrying evidence ({bad[:10]}...) gets 401 with a redacted message',
+          code == 401 and isinstance(body, dict) and body.get('message') == REDACTED
+          and RUN not in json.dumps(body), (code, body))
+code, body = call('GET', '/alerts', key=f'plain-{RUN}')
+check('an ordinary invalid key is still named in the 401 message',
+      code == 401 and isinstance(body, dict) and f'plain-{RUN}' in body.get('message', ''), (code, body))
+# axum's own rejection of a malformed JSON body quotes the key path, outside ApiError
+code, plain = call_raw('POST', '/alert', f'{{"plain-{RUN}": invalid}}'.encode())
+check('malformed JSON is refused by the framework (4xx)', 400 <= code < 500, (code, plain))
+for mk in (f'[zabalack:v1 action={RUN} kid=k mac=00]', f'[ZaBaLaCk:v1 {RUN}]', f'[AckLine:{RUN}]'):
+    c2, text = call_raw('POST', '/alert', f'{{"{mk}": invalid}}'.encode())
+    try:
+        msg = json.loads(text).get('message')
+    except ValueError:
+        msg = None
+    check(f'malformed JSON with a key carrying evidence ({mk[:10]}...): same status, redacted message',
+          c2 == code and msg == REDACTED and RUN not in text and '[zabalack:' not in text.lower()
+          and '[ackline:' not in text.lower(), (c2, text))
 
 # --- housekeeping expiry [K2.1-K2.3, A2V3-STORE-N1]: global, so disposable targets only
 HK_CASES = 6
