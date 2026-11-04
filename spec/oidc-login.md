@@ -12,10 +12,11 @@ PRs #192, #194 and #196). It keeps two kinds of statement apart:
   reopen: KICKOFF's auth target, DECISIONS Y9, Y44 A1 and A2, Y50 and Y51,
   SF-MGMT item 3, and the prerequisites P1 to P5 of
   `spec/oidc-caller-facts.md` section 7.
-- **Open choices**, each with the reference behavior, options and a
-  recommendation. None is adopted here. After review, those that change the
-  auth contract go to the owner one at a time; the others are settled in a
-  later reviewed design.
+- **Owner choices**, each with the reference behavior, options and a
+  recommendation. Q-L1's verification requirement and failure rule are
+  decided (DECISIONS Y52); every other choice and detail remains a proposal,
+  not adopted. Those that change the auth contract go to the owner one at a
+  time; the others are settled in a later reviewed design.
 
 It reads no provider, configuration, key, secret or mapping, and it names no
 deployment's provider: every value below is a parameter or fictional.
@@ -113,7 +114,7 @@ Compatibility gaps this inventory shows:
 | ID token, access token | provider | not stored | — | alrust (section 5) | discarded after the login |
 | alrust token | alrust | browser | alrust on each request | R | section 6 |
 
-## 5. Provider exchange (proposals, not adopted)
+## 5. Provider exchange (Y52 requirement decided; other details proposed)
 
 - **Request fields.** `code`: a non-empty string, passed on once and never
   logged. `clientId`: must equal the configured client id, else 400.
@@ -176,10 +177,11 @@ Not issued: `customers` (the reference's global customer claim;
 issued token must round-trip through R: a synthetic issued token verified by
 `verify_bearer` gives the expected `Caller` and hook facts.
 
-## 7. Open choices
+## 7. Login choices and decision status
 
-Each lists the reference behavior, options and a recommendation; none is
-adopted.
+Each lists the reference behavior, options and a recommendation. Q-L1's
+verification requirement and failure rule are decided (Y52); the remaining
+choices, and Q-L1's open details, are proposals, not adopted.
 
 - **Q-L1, ID-token verification. Decided (DECISIONS Y52), in part.** The
   owner chose "Always check; refuse failure": verification is mandatory,
