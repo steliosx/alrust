@@ -70,7 +70,7 @@ UI's login works). What it does, from source:
 
 | Step | Who | What | Source |
 |---|---|---|---|
-| Configuration | browser | merges, in order, build-time environment values, its own `config.json`, then the server's `GET <endpoint>/config`; from the last it takes `provider`, `client_id` and the provider's URL settings (`oidc_auth_url`, `keycloak_url` and `keycloak_realm`, `azure_tenant`, `gitlab_url`, `cognito_domain` and `aws_region`), and alerts the user if that request fails | `alerta-webui/src/services/config.ts:15-35`, `:66-75`; `auth.ts:14-121`; `alerta/views/config.py:25-40` |
+| Configuration | browser | fetches build-time environment values, then its own `config.json`, then the server's `GET <endpoint>/config`, and alerts and stops if the last request fails; but the effective value of each key gives priority the other way: environment over `config.json` over the server (`mergeConfig` spreads server, then local, then environment). So `provider`, `client_id` and the provider URL settings (`oidc_auth_url`, `keycloak_url` and `keycloak_realm`, `azure_tenant`, `gitlab_url`, `cognito_domain` and `aws_region`) can come from the browser deployment as well as from the server's `/config` | `alerta-webui/src/services/config.ts:15-35`, `:65-77`, `:80-86`; `auth.ts:14-121`; `alerta/views/config.py:25-40` |
 | Initiation | browser | generates `state` as `Math.random().toString(36).substr(2)`, stores it in `localStorage` under `<provider name>_state`, opens a popup at the provider's authorization endpoint with `response_type=code`, `client_id`, `redirect_uri`, `scope=openid+profile+email` and `state`; no `nonce`, no PKCE | `auth.ts` provider blocks; `vue-authenticate:src/oauth/oauth2.js:39-50`, `:121-153` |
 | Callback | browser | reads the popup's query and fragment at `redirect_uri` (`window.location.origin` plus the base path); rejects on `error`; rejects only when a returned `state` differs from the stored one, so a callback without `state` passes | `vue-authenticate:src/oauth/popup.js:50-70`; `oauth2.js:57-59` |
 | Exchange | browser to alrust | `POST <provider url>` with JSON `{code, clientId, redirectUri}` and `state` when the callback had one | `oauth2.js:77-112` |
@@ -105,8 +105,8 @@ Compatibility gaps this inventory shows:
 | `nonce` | nobody (today) | — | — | — | Q-L9 |
 | PKCE verifier | nobody (today) | — | — | — | Q-L9 |
 | `code` | provider | — | browser, then alrust | provider, at the token endpoint | one use, provider-enforced |
-| `redirectUri` | browser config | — | alrust, then provider | alrust (proposed) and provider | must equal a configured allowed value |
-| `clientId` | `/config` | — | alrust | alrust (proposed) | must equal the configured client id |
+| `redirectUri` | browser (its origin and base path) | — | alrust, then provider | alrust (proposed) and provider | must equal a configured allowed value |
+| `clientId` | effective browser configuration (environment, `config.json` or server `/config`) | — | alrust | alrust (proposed) | must equal the configured client id |
 | client secret | configuration | server | provider token endpoint | provider | never in a response or log |
 | ID token, access token | provider | not stored | — | alrust (section 5) | discarded after the login |
 | alrust token | alrust | browser | alrust on each request | R | section 6 |
@@ -117,8 +117,10 @@ Compatibility gaps this inventory shows:
   logged. `clientId`: must equal the configured client id, else 400.
   `redirectUri`: must equal one configured allowed redirect URI, else 400.
   `state`: see Q-L9. Unknown fields ignored.
-- **Discovery.** From a configured issuer URL (`OIDC_ISSUER_URL`, or a
-  per-alias rule, Q-L5): fetch `/.well-known/openid-configuration` over
+- **Discovery.** From the issuer URL the configured provider selects (as
+  the reference: a provider-specific rule for `AUTH_PROVIDER` = `azure`,
+  `cognito`, `gitlab`, `google` or `keycloak`, else `OIDC_ISSUER_URL`,
+  `oidc.py:20-32`), whichever of the five routes was called (Q-L5): fetch `/.well-known/openid-configuration` over
   HTTPS; require `issuer` to equal the configured issuer exactly; take
   `token_endpoint`, `userinfo_endpoint` and `jwks_uri` from it. Cache with a
   bounded lifetime. The reference fetches on every login with a 2-second
@@ -136,9 +138,16 @@ Compatibility gaps this inventory shows:
   algorithm from the header when it does (AUTH-SEC-5, `oidc.py:121-142`).
 - **Userinfo.** Fetch with the access token. If it returns `sub`, it must
   equal the verified ID token's `sub` (P1, settled); else refuse.
-- **Failures.** Provider unreachable or malformed: 503 with a fixed message
-  that names no URL, token or secret. Provider error response: 400 with the
-  provider's error code only.
+- **Failures.** Provider unreachable, timed out or malformed: 503 with a
+  fixed message that names no URL, token or secret. A provider error
+  response: 400 with a fixed alrust message chosen from the provider's
+  `error` only through this mapping: `invalid_grant` gives `Login code was
+  rejected by the identity provider`; `invalid_client` and
+  `unauthorized_client` give `alrust is not authorised at the identity
+  provider`; every other value, including a missing, non-string, empty,
+  oversized (over 64 bytes) or unknown one, gives `Login failed at the
+  identity provider`. The provider's `error_description`, `error_uri` and
+  any other field are never echoed or logged.
 
 ## 6. The issued token's claims
 
@@ -186,22 +195,34 @@ adopted.
   each login and then uses the pre-update row (`oidc.py:171-181`). In alrust
   the reference-layout migration creates the `users` table, but no route
   reads or writes it (no `/users`, `/userinfo` or logout routes).
-  Classification: storing rows has no observable contract until a consumer
-  exists; it becomes one with Q-L2, Q-L3 (stored roles) and Q-L6 (user
-  status). Recommendation: stateless for this slice; revisit with those
-  consumers.
-- **Q-L5, routes and providers.** Reference: one handler on
+  Storage mechanics alone are not an owner question; what matters is the
+  login outcomes the stored data drives, set out in Q-L6. Recommendation:
+  no row creation or update, no e-mail linking and no stored roles, but a
+  read-only status check by subject (Q-L6), so that a user marked inactive
+  in an adopted reference database stays refused.
+- **Q-L5, routes and providers.** Reference: one handler serves
   `/auth/openid`, `/auth/azure`, `/auth/gitlab`, `/auth/google` and
-  `/auth/keycloak`, each alias deriving its issuer from its own settings
-  (`oidc.py:22-28`, `:61-66`). The UI needs whichever route its configured
-  provider uses (section 3). Recommendation: serve all five routes with one
-  generic handler and the reference's per-alias issuer rules, configured
-  per deployment.
-- **Q-L6, login eligibility.** Reference: refuses inactive users and
-  checks `ALLOWED_OIDC_ROLES` and `ALLOWED_EMAIL_DOMAINS`, but the role
-  allowlist is silently ineffective when set in a configuration file
-  (AUTH-SEC-7). Recommendation: an explicit allowlist of roles or groups,
-  read from alrust configuration, refusing with 403 when set and unmet.
+  `/auth/keycloak` (`oidc.py:61-66`); the issuer comes from the configured
+  `AUTH_PROVIDER`, not from the route called (`oidc.py:20-32`). So a request
+  to `/auth/google` on a server configured for `keycloak` uses the Keycloak
+  issuer. The UI calls the route of its effective `provider` (section 3).
+  Recommendation (parity, no contract change): the same five routes, one
+  handler, issuer selected by the configured provider, the route name
+  ignored. Alternative (a contract change, needing owner disposition):
+  refuse with 400 a route that does not match the configured provider.
+- **Q-L6, login eligibility.** Reference outcomes and the proposal, rule by
+  rule (`oidc.py:171-197`; `auth/utils.py:36-39`):
+
+  | Rule | Reference | Fully stateless | Proposal | Contract change? |
+  |---|---|---|---|---|
+  | User status | a `users` row whose `status` is not `active` gives 403 (`oidc.py:189-190`) | no rows, so no check: an inactive user of an adopted database could log in | read-only lookup by subject; 403 when a row exists and is not `active`; no write | no, for rows keyed by subject; yes for e-mail-linked rows (Q-L2) |
+  | E-mail domain | with `AUTH_REQUIRED`, `ALLOWED_EMAIL_DOMAINS` checked against the stored user's domain, pre-update (`oidc.py:192`) | from the verified `email` claim | the verified `email` claim's domain, only when the setting is not `*` | yes (source of the domain): owner |
+  | Roles or groups | with `AUTH_REQUIRED`, `ALLOWED_OIDC_ROLES` against claim roles plus stored roles; ineffective from a configuration file (AUTH-SEC-7) | claim roles only | claim roles or groups only, from alrust configuration, effective however set | yes (stored roles dropped; the setting made effective): owner |
+  | Account association | e-mail linking by default (Q-L2) | none | none (Q-L2) | yes: owner (Q-L2) |
+  | Stored roles to scopes | stored roles join claim roles for `Permission.lookup` (`oidc.py:183-196`) | none | claim roles through the Q-L3 map | yes: owner (Q-L3) |
+
+  The status lookup is the only state the proposal reads, and it writes
+  none.
 - **Q-L7, lifetime.** `exp` is required (settled). Reference lifetime:
   `TOKEN_EXPIRE_DAYS`, default 14 days (`auth/utils.py:60`,
   `settings.py:174`), already a reviewed public setting in SF-MGMT item 1.
@@ -213,14 +234,55 @@ adopted.
 - **Q-L8, no login claim.** Reference: falls back to `nickname`, else 400
   (`oidc.py:167-169`). P2 already says such a login never carries hook
   customers. Recommendation: refuse with 400, as without `nickname`.
-- **Q-L9, flow binding with the pinned UI (gap G1).** Options: (a) accept
-  the browser-only `state` check and issue tokens without
-  `alrust_hook_customers` until a server-checkable binding exists (P5 holds
-  by omission); (b) add a server-issued, single-use `state` and `nonce`
-  (for example in a short-lived cookie set by a new initiation route), which
-  needs a web UI change; (c) PKCE, which also needs a web UI change.
-  Recommendation: (a) now, (b) as a later UI change if hook capture by
-  operators is wanted.
+- **Q-L9, flow binding with the pinned UI (gap G1).** Operator capture
+  through the hooks is already required (Y35; Y44 A1 and A2, which set
+  aside leaving customers undefined because Y35 would then be unmet). It
+  needs `alrust_hook_customers`, which P5 allows only for a bound login. The
+  options, with flows outlined in section 7a:
+  - (a) **Staging only, deliberately incomplete.** Keep the pinned UI's
+    browser-only `state`; issue tokens without `alrust_hook_customers`.
+    Cost: no operator is ever a hook actor, so operator capture stays
+    unfinished, and a reviewed binding and web UI change (b) are still
+    required to finish it. Whether alrust should admit such global-only
+    logins in the meantime is an open policy proposal, not adopted here.
+  - (b) **Server-issued `state` and `nonce`**, with a web UI change. Meets
+    P5.
+  - (c) **PKCE alone**, with a web UI change. Does not by itself meet P5
+    (section 7a); it supplements (b).
+  Recommendation: (b) with PKCE as the target that completes operator
+  capture; (a) only as an interim step if the owner admits global-only
+  logins before the UI change.
+
+## 7a. Flow outlines for Q-L9 (proposals)
+
+- **(a) Staging.** Initiation, `state` creation, storage and checking stay
+  in the browser (section 3); the server receives `code`, `clientId`,
+  `redirectUri` and an optional echoed `state` it cannot check; no `nonce`
+  in the ID token. The provider enforces single use of `code`. Nothing binds
+  the code to the browser that started the login, so a login-forgery attack
+  (a victim's browser completing an attacker's code) is not prevented
+  server-side. Tokens carry no `alrust_hook_customers`. Does not meet P5.
+- **(b) Server-issued `state` and `nonce`.** A new initiation route on
+  alrust (for example `POST /auth/openid/start`) creates a random `state`
+  and `nonce` (at least 128 bits each), records them with the configured
+  provider, client id, allowed `redirectUri` and an expiry (for example 10
+  minutes), and returns the authorization URL with both. The record is
+  either a server-side row keyed by `state` or an HttpOnly, Secure,
+  SameSite cookie MACed with the signing key. The web UI opens that URL
+  instead of building its own. On `POST /auth/openid` alrust requires the
+  echoed `state` to match the record (constant-time), unexpired and unused;
+  marks it used (a row is deleted; a cookie is cleared, and replay within
+  the expiry is then stopped by the provider's single-use `code`); and
+  requires the verified ID token's `nonce` to equal the recorded one. Meets
+  P5. Needs the UI change and either new state (a row) or a cookie.
+- **(c) PKCE.** The initiator creates a `code_verifier`, sends its S256
+  `code_challenge` with the authorization request and the verifier with the
+  token exchange; the provider then refuses a code redeemed without that
+  verifier. If the browser creates the verifier, PKCE binds the code to the
+  holder of the verifier but not to a request alrust started: an attacker
+  can complete a login with their own code and verifier pair, so it does
+  not meet P5 alone. If alrust creates and records the verifier as in (b),
+  PKCE adds protection against intercepted codes. So PKCE supplements (b).
 
 ## 8. Missing inputs
 
@@ -234,8 +296,11 @@ only). None is needed to review this design.
 
 When an implementation is proposed: an in-process fake issuer with
 synthetic keys and recorded discovery, JWKS, token and userinfo responses;
-cases for each section 5 refusal, each claim rule of section 6, Q-L9's
-behavior, issued-token round-trips through R, and that no secret, code,
+cases for each section 5 refusal, each claim rule of section 6, each Q-L6
+outcome, Q-L9's behavior, issued-token round-trips through R, provider
+error bodies whose `error` and `error_description` carry synthetic code,
+token, secret and URL markers, non-string and oversized values, and that
+no secret, code,
 provider token or key appears in a response, log or `Debug` output. Running
 listeners, network, databases or builds for these is execution and keeps
 its own gates.
