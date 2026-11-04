@@ -16,4 +16,5 @@ Planned:
   reviewed.
 - `oidc-caller-facts.md`: how a verified OIDC operator's Bearer token becomes
   the caller facts the integration hooks receive (Y44 A1, A2; Y50, Y51); a
-  reviewed design, implemented behind an unset verifier (PRs #192, #194).
+  reviewed design, implemented and active except the login stage (PRs #192,
+  #194, #196).
