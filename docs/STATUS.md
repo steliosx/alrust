@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-03T02:59Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-04T02:40Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -673,6 +673,21 @@ A3(a) refusal before lookup, are held, and no new pin is adopted. This hold
 covers only Voalack work. A separate Voalack source and provenance transfer
 that Codex prepared awaits the owner's explicit approval; it is Codex's
 request, not alrust's.
+
+**OIDC operator caller facts: design on `main` (2026-11-03).** #189
+(`a5c66fee`) adds `spec/oidc-caller-facts.md`, the reviewed design for the
+one place where a verified operator Bearer token becomes the caller facts
+the integration hooks receive (Y44 A1, A2), inside SF-MGMT item 3 and Y9.
+API-key and auth-off callers keep exactly today's facts; a token's customer
+list reaches only the hooks, never global filtering, customer assignment or
+route permissions. Codex approved the exact head `b8cc0d47` after three
+review rounds (`83fc8774`); it merged after all seven hosted jobs passed.
+The owner's answers to its two choices were recorded on 2026-11-04
+(DECISIONS Y50): malformed
+tokens that the reference answers with a 500, and a non-text username, get
+401; a token without an expiry gets 401. The login stage (`/auth/openid`)
+is a later design. Nothing is implemented, and no key, configuration or
+provider was read.
 
 ## Work in flight
 
