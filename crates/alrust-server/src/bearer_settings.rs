@@ -5,7 +5,7 @@
 //! random source, so the rules are tested without either. The key is never
 //! logged, displayed or put in an error; `BearerConfig`'s `Debug` redacts it.
 
-use alrust_api::{BearerConfig, system_now};
+use alrust_api::{ApiConfig, BearerConfig, system_now};
 
 /// The reference's default `SECRET_KEY` (`alerta/settings.py:15`), treated
 /// as unset.
@@ -123,6 +123,52 @@ pub(crate) fn resolve<E: std::error::Error + Send + Sync + 'static>(
         },
         warnings,
     ))
+}
+
+/// The variables [`install`] reads, by their reference names.
+pub(crate) const VARIABLES: [&str; 4] = [
+    "SECRET_KEY",
+    "OAUTH2_CLIENT_ID",
+    "SAML2_ENTITY_ID",
+    "AUTH_PROVIDER",
+];
+
+/// The start-up step `run` uses: reads the four variables through `lookup`
+/// (`None` only when unset), resolves them against `cfg.base_url` with
+/// `random`, passes each warning's fixed text to `warn`, and returns `cfg`
+/// with the verifier installed. Nothing it emits or returns carries the key.
+///
+/// # Errors
+///
+/// A failing `lookup` (such as a value that is not UTF-8) or random source.
+pub(crate) fn install<E: std::error::Error + Send + Sync + 'static>(
+    cfg: ApiConfig,
+    lookup: impl Fn(&str) -> anyhow::Result<Option<String>>,
+    random: impl FnOnce() -> Result<[u8; 32], E>,
+    mut warn: impl FnMut(&'static str),
+) -> anyhow::Result<ApiConfig> {
+    let [secret_key, oauth2_client_id, saml2_entity_id, auth_provider] = VARIABLES;
+    let secret_key = lookup(secret_key)?;
+    let oauth2_client_id = lookup(oauth2_client_id)?;
+    let saml2_entity_id = lookup(saml2_entity_id)?;
+    let auth_provider = lookup(auth_provider)?;
+    let (bearer, warnings) = resolve(
+        Settings {
+            secret_key: secret_key.as_deref(),
+            oauth2_client_id: oauth2_client_id.as_deref(),
+            saml2_entity_id: saml2_entity_id.as_deref(),
+            auth_provider: auth_provider.as_deref(),
+        },
+        &cfg.base_url,
+        random,
+    )?;
+    for w in warnings {
+        warn(w.text());
+    }
+    Ok(ApiConfig {
+        bearer: Some(bearer),
+        ..cfg
+    })
 }
 
 #[cfg(test)]
@@ -298,13 +344,124 @@ mod tests {
         )
     }
 
-    /// A token signed with the resolved key, through the real router with a
+    /// A synthetic environment: these variables are set, every other unset;
+    /// each name read is recorded.
+    fn environment<'a>(
+        set: &'a [(&'a str, &'a str)],
+        read: &'a std::cell::RefCell<Vec<String>>,
+    ) -> impl Fn(&str) -> anyhow::Result<Option<String>> + 'a {
+        move |name: &str| {
+            read.borrow_mut().push(name.to_owned());
+            Ok(set
+                .iter()
+                .find(|(k, _)| *k == name)
+                .map(|(_, v)| (*v).to_owned()))
+        }
+    }
+
+    fn base_cfg(auth_required: AuthRequired) -> alrust_api::ApiConfig {
+        alrust_api::ApiConfig {
+            base_url: BASE.into(),
+            auth_required: matches!(auth_required, AuthRequired::Yes),
+            ..alrust_api::ApiConfig::default()
+        }
+    }
+
+    #[test]
+    fn install_reads_the_reference_names_and_installs_the_verifier() {
+        let key = "synthetic-install-key-0123456789abc";
+        let set = [
+            ("SECRET_KEY", key),
+            ("OAUTH2_CLIENT_ID", "client-1"),
+            ("AUTH_PROVIDER", "keycloak-test"),
+            // Other spellings are not read.
+            ("ALRUST_SECRET_KEY", "wrong"),
+            ("secret_key", "wrong"),
+        ];
+        let read = std::cell::RefCell::new(Vec::new());
+        let mut warned = Vec::new();
+        let cfg = super::install(
+            base_cfg(AuthRequired::Yes),
+            environment(&set, &read),
+            never,
+            |w| warned.push(w),
+        )
+        .expect("installed");
+        assert_eq!(*read.borrow(), super::VARIABLES.map(str::to_owned));
+        assert!(warned.is_empty());
+        let bearer = cfg.bearer.as_ref().expect("verifier installed");
+        assert_eq!(bearer.key, key.as_bytes());
+        assert_eq!(bearer.audience, "client-1");
+        assert_eq!(bearer.provider, "keycloak-test");
+        assert!(cfg.auth_required);
+        assert_eq!(cfg.base_url, BASE);
+        assert!(!format!("{cfg:?}").contains(key));
+    }
+
+    #[test]
+    fn install_emits_each_warning_and_never_the_key() {
+        // Unset: a generated key and the full Y9 warning.
+        let read = std::cell::RefCell::new(Vec::new());
+        let mut warned = Vec::new();
+        let cfg = super::install(
+            base_cfg(AuthRequired::Yes),
+            environment(&[], &read),
+            || Ok::<_, Failed>([0x5a; 32]),
+            |w| warned.push(w),
+        )
+        .expect("installed");
+        assert_eq!(warned, vec![Warning::GeneratedKey.text()]);
+        let bearer = cfg.bearer.as_ref().expect("verifier installed");
+        assert_eq!(bearer.key, vec![0x5a; 32]);
+        assert_eq!(bearer.audience, BASE);
+        assert_eq!(bearer.provider, "");
+        let shown = format!("{cfg:?}{warned:?}");
+        assert!(!shown.contains("ZZZZ"), "{shown}");
+
+        // A short configured key: used, with the short-key warning only.
+        let short = "synthetic-short-key";
+        let mut warned = Vec::new();
+        let cfg = super::install(
+            base_cfg(AuthRequired::No),
+            environment(&[("SECRET_KEY", short)], &read),
+            never,
+            |w| warned.push(w),
+        )
+        .expect("installed");
+        assert_eq!(warned, vec![Warning::ShortKey.text()]);
+        assert_eq!(
+            cfg.bearer.as_ref().expect("installed").key,
+            short.as_bytes()
+        );
+        assert!(!format!("{cfg:?}{warned:?}").contains(short));
+    }
+
+    #[test]
+    fn install_stops_on_a_bad_variable_or_random_source() {
+        let failing = |name: &str| -> anyhow::Result<Option<String>> {
+            anyhow::bail!("{name} is not valid UTF-8")
+        };
+        let e = super::install(base_cfg(AuthRequired::Yes), failing, never, |_| {})
+            .expect_err("refused");
+        assert_eq!(e.to_string(), "SECRET_KEY is not valid UTF-8");
+        let read = std::cell::RefCell::new(Vec::new());
+        let e = super::install(
+            base_cfg(AuthRequired::Yes),
+            environment(&[], &read),
+            || Err(Failed),
+            |_| {},
+        )
+        .expect_err("refused");
+        assert!(format!("{e:#}").contains("could not generate a random SECRET_KEY"));
+    }
+
+    /// The configuration `install` returns, through the real router with a
     /// never-connected pool: the route refuses on scope before any query.
     #[tokio::test]
-    async fn a_resolved_verifier_authenticates_through_the_router() {
+    async fn the_installed_verifier_authenticates_through_the_router() {
         use std::sync::Arc;
 
-        use alrust_api::{ApiConfig, AppState, BearerConfig, router};
+        use alrust_api::{AppState, router};
         use alrust_store_pg::{Store, StoreConfig};
         use axum::body::Body;
         use axum::http::{Request, StatusCode};
@@ -316,84 +473,68 @@ mod tests {
         }
 
         let key = "synthetic-router-key-0123456789abcd";
-        let settings = Settings {
-            secret_key: Some(key),
-            oauth2_client_id: Some("client-1"),
-            saml2_entity_id: None,
-            auth_provider: Some("keycloak-test"),
-        };
-        let (with_provider, warnings) = resolve(settings, BASE, never).expect("resolved");
-        assert!(warnings.is_empty());
-        // The resolver wires the system clock; the router checks use a fixed one.
-        assert!(((with_provider.now)() - chrono::Utc::now().timestamp()).abs() <= 5);
-        let with_provider = BearerConfig {
-            now: fixed_now,
-            ..with_provider
-        };
-        // No AUTH_PROVIDER: the same token still authenticates, without hook facts.
-        let without_provider = BearerConfig {
-            now: fixed_now,
-            ..resolve(
-                Settings {
-                    auth_provider: None,
-                    ..settings
-                },
-                BASE,
-                never,
-            )
-            .expect("resolved")
-            .0
-        };
-        assert_eq!(without_provider.provider, "");
         let token = router_token(key.as_bytes(), NOW);
         // The same claims signed with another key.
         let forged = router_token(b"another-synthetic-key-0123456789ab", NOW);
-
-        let cases = [AuthRequired::Yes, AuthRequired::No]
-            .into_iter()
-            .flat_map(|a| [(a, with_provider.clone()), (a, without_provider.clone())]);
-        for (auth_required, cfg) in cases {
-            let pool = sqlx::postgres::PgPoolOptions::new()
-                .connect_lazy("postgres://unused@127.0.0.1:1/unused")
-                .expect("lazy pool");
-            let app = router(Arc::new(AppState {
-                store: Store::new(pool, StoreConfig::default()),
-                cfg: ApiConfig {
-                    auth_required: matches!(auth_required, AuthRequired::Yes),
-                    bearer: Some(cfg),
-                    ..ApiConfig::default()
-                },
-            }));
-            let post = |authorization: String| {
-                Request::builder()
-                    .method("POST")
-                    .uri("/key")
-                    .header("authorization", authorization)
-                    .header("content-type", "application/json")
-                    .body(Body::from("{}"))
-                    .expect("request")
-            };
-            // The operator is authenticated, and lacks write:keys.
-            let r = app
-                .clone()
-                .oneshot(post(format!("Bearer {token}")))
-                .await
-                .expect("response");
-            assert_eq!(r.status(), StatusCode::FORBIDDEN, "{auth_required:?}");
-            let body = axum::body::to_bytes(r.into_body(), usize::MAX)
-                .await
-                .expect("body");
-            assert!(
-                String::from_utf8_lossy(&body).contains("Missing required scope: write:keys"),
-                "{auth_required:?}"
-            );
-            // A token signed with another key is a 401 in both settings.
-            let r = app
-                .clone()
-                .oneshot(post(format!("Bearer {forged}")))
-                .await
-                .expect("response");
-            assert_eq!(r.status(), StatusCode::UNAUTHORIZED, "{auth_required:?}");
+        let with_provider = [
+            ("SECRET_KEY", key),
+            ("OAUTH2_CLIENT_ID", "client-1"),
+            ("AUTH_PROVIDER", "keycloak-test"),
+        ];
+        // No AUTH_PROVIDER: the same token still authenticates, without hook facts.
+        let without_provider = [("SECRET_KEY", key), ("OAUTH2_CLIENT_ID", "client-1")];
+        let read = std::cell::RefCell::new(Vec::new());
+        for auth_required in [AuthRequired::Yes, AuthRequired::No] {
+            for set in [&with_provider[..], &without_provider[..]] {
+                let mut cfg = super::install(
+                    base_cfg(auth_required),
+                    environment(set, &read),
+                    never,
+                    |_| {},
+                )
+                .expect("installed");
+                let bearer = cfg.bearer.as_mut().expect("verifier installed");
+                // The resolver wires the system clock; the checks use a fixed one.
+                assert!(((bearer.now)() - chrono::Utc::now().timestamp()).abs() <= 5);
+                bearer.now = fixed_now;
+                let pool = sqlx::postgres::PgPoolOptions::new()
+                    .connect_lazy("postgres://unused@127.0.0.1:1/unused")
+                    .expect("lazy pool");
+                let app = router(Arc::new(AppState {
+                    store: Store::new(pool, StoreConfig::default()),
+                    cfg,
+                }));
+                let post = |authorization: String| {
+                    Request::builder()
+                        .method("POST")
+                        .uri("/key")
+                        .header("authorization", authorization)
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .expect("request")
+                };
+                // The operator is authenticated, and lacks write:keys.
+                let r = app
+                    .clone()
+                    .oneshot(post(format!("Bearer {token}")))
+                    .await
+                    .expect("response");
+                assert_eq!(r.status(), StatusCode::FORBIDDEN, "{auth_required:?}");
+                let body = axum::body::to_bytes(r.into_body(), usize::MAX)
+                    .await
+                    .expect("body");
+                assert!(
+                    String::from_utf8_lossy(&body).contains("Missing required scope: write:keys"),
+                    "{auth_required:?}"
+                );
+                // A token signed with another key is a 401 in both settings.
+                let r = app
+                    .clone()
+                    .oneshot(post(format!("Bearer {forged}")))
+                    .await
+                    .expect("response");
+                assert_eq!(r.status(), StatusCode::UNAUTHORIZED, "{auth_required:?}");
+            }
         }
     }
 

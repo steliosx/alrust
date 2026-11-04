@@ -176,30 +176,10 @@ async fn run() -> anyhow::Result<()> {
     let hostname = std::fs::read_to_string("/etc/hostname")
         .map(|h| h.trim().to_string())
         .unwrap_or_default();
-    let base_url = env_or("ALRUST_BASE_URL", "http://localhost:8080")
-        .trim_end_matches('/')
-        .to_string();
-    let secret_key = env_present("SECRET_KEY")?;
-    let oauth2_client_id = env_present("OAUTH2_CLIENT_ID")?;
-    let saml2_entity_id = env_present("SAML2_ENTITY_ID")?;
-    let auth_provider = env_present("AUTH_PROVIDER")?;
-    let (bearer, warnings) = bearer_settings::resolve(
-        bearer_settings::Settings {
-            secret_key: secret_key.as_deref(),
-            oauth2_client_id: oauth2_client_id.as_deref(),
-            saml2_entity_id: saml2_entity_id.as_deref(),
-            auth_provider: auth_provider.as_deref(),
-        },
-        &base_url,
-        bearer_settings::os_random,
-    )?;
-    drop(secret_key);
-    for w in warnings {
-        tracing::warn!("{}", w.text());
-    }
     let api_cfg = ApiConfig {
-        base_url,
-        bearer: Some(bearer),
+        base_url: env_or("ALRUST_BASE_URL", "http://localhost:8080")
+            .trim_end_matches('/')
+            .to_string(),
         auth_required: env_bool("ALRUST_AUTH_REQUIRED", true)?,
         allowed_environments: env_or("ALRUST_ALLOWED_ENVIRONMENTS", "Production,Development")
             .split(',')
@@ -213,6 +193,10 @@ async fn run() -> anyhow::Result<()> {
         },
         ..ApiConfig::default()
     };
+    let api_cfg =
+        bearer_settings::install(api_cfg, env_present, bearer_settings::os_random, |w| {
+            tracing::warn!("{w}");
+        })?;
 
     let pool = connect(&database_url).await?;
     let store = Store::new(pool, store_cfg);
