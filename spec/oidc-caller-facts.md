@@ -3,9 +3,12 @@
 Status: **reviewed design (PR #189, Codex approval `83fc8774`); its owner
 choices are decided (DECISIONS Y50, Y51). The verifier and conversions of
 sections 4 to 6 are implemented as pure code (`crates/alrust-domain/src/bearer.rs`,
-PR #192: `verify_bearer`, and `VerifiedToken`'s `login`, `scopes` and
-`operator_facts`) that nothing calls yet; the request path of section 3,
-`Caller` and `facts()` are not implemented.** This page
+PR #192), and the request path of sections 3, 5 and 6 (`authenticate`,
+`Caller::from_bearer`, `facts()` in `crates/alrust-api/src/lib.rs`, PR #194)
+behind `ApiConfig::bearer`. That setting is `None` unless configured, and the
+server configures nothing yet, so section 3's credential order is not in
+effect: with `None` a Bearer header is ignored as before. Configuring the
+verifier from the server's settings is a separate, later slice.** This page
 designs the one place where a verified operator credential becomes the
 `CallerFacts` that the integration hooks receive
 (`crates/alrust-store-pg/src/hooks.rs`; `spec/integration-hooks.md`,
