@@ -292,7 +292,7 @@ fn key_from_request(headers: &HeaderMap, params: &[(String, String)]) -> Option<
 
 /// The credential a request presents, in the reference's order
 /// (`auth/decorators.py:30-91`; spec section 3).
-#[derive(Debug)]
+/// No `Debug`: the Bearer variant holds a raw token.
 enum Credential<'a> {
     /// An API key from any of its three carriers, as before.
     Key(String),

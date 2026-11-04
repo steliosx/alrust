@@ -389,6 +389,8 @@ async fn failed_hook_checks_keep_the_global_caller() {
         without("sub"),
         with("sub", json!("")),
         with("preferred_username", json!("")),
+        without("preferred_username"),
+        with("preferred_username", Value::Null),
         without("provider"),
         with("provider", json!("basic")),
         without("alrust_hook_customers"),
@@ -408,6 +410,16 @@ async fn failed_hook_checks_keep_the_global_caller() {
         assert_eq!(facts.auth_type, None, "{c}");
         assert_eq!(facts.customers, None, "{c}");
         assert_eq!(facts.login, caller.login, "{c}");
+    }
+    // An absent or null login is no login at all, in the caller and facts.
+    for c in [
+        without("preferred_username"),
+        with("preferred_username", Value::Null),
+    ] {
+        let h = headers(&[("authorization", &bearer(&mint(&c)))]);
+        let caller = auth(&st, &h).await.expect("valid token");
+        assert_eq!(caller.login, None);
+        assert_eq!(caller.facts(&st).login, None);
     }
 }
 

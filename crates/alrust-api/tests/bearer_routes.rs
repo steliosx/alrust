@@ -145,10 +145,14 @@ fn bearer_cfg() -> BearerConfig {
 }
 
 fn mint(claims: &Value) -> String {
+    signed(&URL_SAFE_NO_PAD.encode(claims.to_string()))
+}
+
+/// A token over this literal payload segment, signed as written.
+fn signed(payload_segment: &str) -> String {
     let input = format!(
-        "{}.{}",
-        URL_SAFE_NO_PAD.encode(r#"{"alg":"HS256","typ":"JWT"}"#),
-        URL_SAFE_NO_PAD.encode(claims.to_string())
+        "{}.{payload_segment}",
+        URL_SAFE_NO_PAD.encode(r#"{"alg":"HS256","typ":"JWT"}"#)
     );
     let mut mac = Hmac::<Sha256>::new_from_slice(SIGNING_KEY).unwrap();
     mac.update(input.as_bytes());
@@ -368,6 +372,154 @@ async fn bearer_operators_through_the_router() {
             json!({"status": "error", "message": expected, "code": 401, "errors": null})
         );
     }
+}
+
+fn claims_for(changes: &[(&str, Value)], removed: &[&str]) -> Value {
+    let mut c = json!({
+        "sub": "user-1", "preferred_username": "ops@example.test", "provider": PROVIDER,
+        "scope": "read", "aud": AUD, "exp": NOW + 3600, "alrust_hook_customers": ["acme"],
+    });
+    for (k, v) in changes {
+        c[*k] = v.clone();
+    }
+    for k in removed {
+        c.as_object_mut().unwrap().remove(*k);
+    }
+    c
+}
+
+/// Recognised but invalid tokens and their exact 401 messages: the three
+/// errors, mixed-failure precedence, and type and decoding-profile refusals.
+fn invalid_tokens() -> Vec<(String, &'static str)> {
+    let valid = operator("read");
+    let bad_signature = format!("{}AA", &valid[..valid.len() - 2]);
+    let nan_payload = {
+        let text = claims_for(&[], &[]).to_string();
+        let body = text.strip_suffix('}').unwrap();
+        signed(&URL_SAFE_NO_PAD.encode(format!("{body},\"x\":NaN}}")))
+    };
+    vec![
+        ("garbage".to_owned(), "Token is invalid"),
+        (bad_signature, "Token is invalid"),
+        (
+            mint(&claims_for(&[("exp", json!(NOW))], &[])),
+            "Token has expired",
+        ),
+        (
+            mint(&claims_for(&[("aud", json!("other"))], &[])),
+            "Invalid audience",
+        ),
+        (
+            mint(&claims_for(&[("aud", json!("other"))], &["exp"])),
+            "Token is invalid",
+        ),
+        (
+            mint(&claims_for(
+                &[("aud", json!("other")), ("exp", json!(NOW))],
+                &[],
+            )),
+            "Token has expired",
+        ),
+        (
+            mint(&claims_for(
+                &[("aud", json!("other")), ("sub", json!(5))],
+                &[],
+            )),
+            "Invalid audience",
+        ),
+        (
+            mint(&claims_for(&[("preferred_username", json!(5))], &[])),
+            "Token is invalid",
+        ),
+        (nan_payload, "Token is invalid"),
+    ]
+}
+
+/// The table itself, checked without a database: each token is refused
+/// by the verifier with exactly the message the router test expects, and
+/// the valid operator token is accepted.
+#[test]
+fn the_invalid_token_table_matches_the_verifier() {
+    use alrust_domain::bearer::verify_bearer;
+    for (token, expected) in invalid_tokens() {
+        let e = verify_bearer(&token, SIGNING_KEY, AUD, NOW).expect_err(expected);
+        assert_eq!(e.message(), expected, "{token}");
+    }
+    assert!(verify_bearer(&operator("read"), SIGNING_KEY, AUD, NOW).is_ok());
+}
+
+/// Spec section 3 and the section 4 errors through the real router, with a
+/// verifier configured, in both `AUTH_REQUIRED` settings: a recognised
+/// invalid token is always a 401 with the exact envelope, never the auth-off
+/// caller; key carriers still win; an unrecognised header is no credential.
+#[tokio::test]
+async fn the_credential_matrix_through_the_router_in_both_auth_settings() {
+    let Some(db) = test_db().await else { return };
+    let store = store(&db).await;
+    let valid = operator("read");
+    let invalid = invalid_tokens();
+    for (mode, auth_off_status) in [
+        (AuthRequired::Yes, StatusCode::UNAUTHORIZED),
+        (AuthRequired::No, StatusCode::OK),
+    ] {
+        let app = app(
+            Store::new(db.pool.clone(), StoreConfig::default()),
+            mode,
+            Some(bearer_cfg()),
+        );
+        for (token, expected) in &invalid {
+            let value = format!("Bearer {token}");
+            let (code, body) =
+                call(&app, "GET", "/alerts", &[("authorization", &value)], None).await;
+            assert_eq!(code, StatusCode::UNAUTHORIZED, "{mode:?} {expected}");
+            assert_eq!(
+                body,
+                json!({"status": "error", "message": expected, "code": 401, "errors": null}),
+                "{mode:?} {token}"
+            );
+        }
+        // A valid token is the operator in both settings.
+        let value = format!("Bearer {valid}");
+        let (code, _) = call(&app, "GET", "/alerts", &[("authorization", &value)], None).await;
+        assert_eq!(code, StatusCode::OK, "{mode:?}");
+        // Key carriers win over an invalid Bearer header, also when empty.
+        let (code, _) = call(
+            &app,
+            "GET",
+            "/alerts",
+            &[("authorization", "Bearer garbage"), ("x-api-key", ACME_KEY)],
+            None,
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK, "{mode:?}");
+        let (code, body) = call(
+            &app,
+            "GET",
+            "/alerts",
+            &[("authorization", "Bearer garbage"), ("x-api-key", "")],
+            None,
+        )
+        .await;
+        assert_eq!(code, StatusCode::UNAUTHORIZED, "{mode:?}");
+        assert_eq!(body["message"], "API key parameter '' is invalid");
+        // An unrecognised header is no credential: 401 Missing, or auth-off.
+        let (code, body) = call(
+            &app,
+            "GET",
+            "/alerts",
+            &[("authorization", "bearer x")],
+            None,
+        )
+        .await;
+        assert_eq!(code, auth_off_status, "{mode:?}");
+        if code == StatusCode::UNAUTHORIZED {
+            assert_eq!(
+                body["message"],
+                "Missing authorization API Key or Bearer Token"
+            );
+        }
+    }
+    drop(store);
 }
 
 #[tokio::test]
