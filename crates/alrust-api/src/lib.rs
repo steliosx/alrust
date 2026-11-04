@@ -4,8 +4,10 @@
 //! status, action, heartbeats, API keys, health and housekeeping. Paths,
 //! status codes and JSON shapes follow the reference v9.1.0 views.
 
+use std::fmt;
 use std::sync::Arc;
 
+use alrust_domain::bearer::{OperatorFacts, VerifiedToken, verify_bearer};
 use alrust_domain::{
     Alert, ApiKey, HistoryOutput, KeySecret, REDACTED_ERROR, RESTRICTED_ATTRIBUTES,
     contains_evidence, is_restricted_attribute, iso8601, parse_time, redact_diagnostic,
@@ -40,6 +42,40 @@ pub struct ApiConfig {
     /// `DELETE_EXPIRED_AFTER` / `DELETE_INFO_AFTER`, in seconds.
     pub delete_expired_after_s: i64,
     pub delete_info_after_s: i64,
+    /// Operator Bearer verification (spec/oidc-caller-facts.md sections 3
+    /// to 6). `None`, the default, is a deliberately incomplete staging seam:
+    /// a Bearer header is then ignored exactly as before this field existed.
+    /// That is not the settled credential order of section 3 (O1), which
+    /// applies once a verifier is configured; configuring one from the
+    /// server's settings is a separate, later slice.
+    pub bearer: Option<BearerConfig>,
+}
+
+/// The verifier inputs for operator Bearer tokens: the signing key, the
+/// expected audience, the configured OIDC provider name and the clock, all
+/// injected. The key is never printed.
+#[derive(Clone)]
+pub struct BearerConfig {
+    pub key: Vec<u8>,
+    pub audience: String,
+    pub provider: String,
+    /// Whole seconds since the epoch, rounded down.
+    pub now: fn() -> i64,
+}
+
+impl fmt::Debug for BearerConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BearerConfig")
+            .field("key", &"[REDACTED]")
+            .field("audience", &self.audience)
+            .field("provider", &self.provider)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The system clock for [`BearerConfig::now`].
+pub fn system_now() -> i64 {
+    Utc::now().timestamp()
 }
 
 impl Default for ApiConfig {
@@ -54,6 +90,7 @@ impl Default for ApiConfig {
             default_origin: "alrust".into(),
             delete_expired_after_s: 7200,
             delete_info_after_s: 43200,
+            bearer: None,
         }
     }
 }
@@ -147,9 +184,26 @@ struct Caller {
     /// `AUTH_REQUIRED=False` with no credential: the route permission check
     /// is skipped, but the caller holds **no** scopes (`auth/decorators.py:156-161`).
     auth_off: bool,
+    /// Hook-only facts of a verified operator; `None` for every API-key and
+    /// auth-off caller, and for an operator whose token fails a section 6
+    /// check. Only [`Caller::from_bearer`] sets it.
+    operator: Option<OperatorFacts>,
 }
 
 impl Caller {
+    /// A verified operator (spec section 5): the token's login and scopes,
+    /// no customer (no customer views, so nothing is filtered), and the
+    /// hook-only facts for the configured provider (section 6).
+    fn from_bearer(token: &VerifiedToken, provider: &str) -> Caller {
+        Caller {
+            login: token.login().map(str::to_owned),
+            scopes: token.scopes(),
+            customer: None,
+            auth_off: false,
+            operator: token.operator_facts(provider),
+        }
+    }
+
     fn require(&self, scope: &str) -> ApiResult<()> {
         if self.auth_off || scope_allows(&self.scopes, scope) {
             Ok(())
@@ -162,9 +216,11 @@ impl Caller {
     }
 
     /// The facts the integration hooks receive. API keys carry no user id
-    /// and no verified auth type; human operators are not implemented yet.
+    /// and no verified auth type; a verified operator whose token passes
+    /// every section 6 check carries its hook-only facts, and any other
+    /// caller gets the API-key shape.
     fn facts(&self, st: &AppState) -> CallerFacts {
-        CallerFacts {
+        let mut facts = CallerFacts {
             login: self.login.clone(),
             user_id: None,
             auth_type: None,
@@ -173,7 +229,15 @@ impl Caller {
             auth_required: st.cfg.auth_required,
             request_id: None,
             from_request: true,
+        };
+        // An operator's login is already `self.login`: both are the token's
+        // `preferred_username`.
+        if let Some(op) = &self.operator {
+            facts.user_id = Some(op.user_id().to_owned());
+            facts.auth_type = Some(op.auth_type().to_owned());
+            facts.customers = Some(op.customers().to_vec());
         }
+        facts
     }
 
     /// `g.customers`: the key's customer, if any.
@@ -226,37 +290,104 @@ fn key_from_request(headers: &HeaderMap, params: &[(String, String)]) -> Option<
         .map(|(_, v)| v.clone())
 }
 
+/// The credential a request presents, in the reference's order
+/// (`auth/decorators.py:30-91`; spec section 3).
+/// No `Debug`: the Bearer variant holds a raw token.
+enum Credential<'a> {
+    /// An API key from any of its three carriers, as before.
+    Key(String),
+    /// A recognised Bearer token, only when a verifier is configured.
+    Bearer(String, &'a BearerConfig),
+    /// Neither.
+    Absent,
+}
+
+/// API-key carriers first, exactly as before; then, only with a configured
+/// verifier, a recognised Bearer header.
+fn select_credential<'a>(
+    headers: &HeaderMap,
+    params: &[(String, String)],
+    bearer: Option<&'a BearerConfig>,
+) -> Credential<'a> {
+    if let Some(k) = key_from_request(headers, params) {
+        return Credential::Key(k);
+    }
+    match (bearer, bearer_token(headers)) {
+        (Some(cfg), Some(token)) => Credential::Bearer(token, cfg),
+        _ => Credential::Absent,
+    }
+}
+
+/// The reference's `re.match(r'Bearer (\S+)', auth_header)`
+/// (`auth/decorators.py:70-72`): the `Authorization` value starts with
+/// exactly `Bearer` and one space, then at least one non-whitespace
+/// character; the token is that first run, and the rest is ignored. The
+/// value is read as Latin-1, as the reference's server decodes header bytes,
+/// so a run may hold non-ASCII characters (which the decoding profile then
+/// refuses); `\s` there also matches U+0085 and U+00A0.
+fn bearer_token(headers: &HeaderMap) -> Option<String> {
+    let value = headers.get("authorization")?.as_bytes();
+    let rest = value.strip_prefix(b"Bearer ")?;
+    let token: String = rest
+        .iter()
+        .map(|&b| char::from(b))
+        .take_while(|c| !c.is_whitespace())
+        .collect();
+    (!token.is_empty()).then_some(token)
+}
+
 /// A presented key is checked before `AUTH_REQUIRED` (C1); only the secret
-/// authenticates (SF-KEYS S4), never the public id.
+/// authenticates (SF-MGMT S4), never the public id. A recognised Bearer
+/// token is verified before `AUTH_REQUIRED` too, so an invalid one is a 401
+/// either way (spec section 3).
 async fn authenticate(
     st: &AppState,
     headers: &HeaderMap,
     params: &[(String, String)],
 ) -> ApiResult<Caller> {
-    match key_from_request(headers, params) {
-        Some(k) => match st.store.use_key(&k).await? {
+    match select_credential(headers, params, st.cfg.bearer.as_ref()) {
+        Credential::Key(k) => match st.store.use_key(&k).await? {
             Some(key) => Ok(Caller {
                 login: Some(key.user),
                 // use_key matches only keys with scopes.
                 scopes: key.scopes.unwrap_or_default(),
                 customer: key.customer,
                 auth_off: false,
+                operator: None,
             }),
             None => Err(ApiError::new(
                 StatusCode::UNAUTHORIZED,
                 format!("API key parameter '{k}' is invalid"),
             )),
         },
-        None if !st.cfg.auth_required => Ok(Caller {
+        Credential::Bearer(token, cfg) => bearer_caller(cfg, &token),
+        Credential::Absent => no_credential(&st.cfg),
+    }
+}
+
+/// A recognised Bearer token: the verified operator, or a 401 with one of
+/// the three fixed messages (spec section 4; DECISIONS Y50, Y51).
+fn bearer_caller(cfg: &BearerConfig, token: &str) -> ApiResult<Caller> {
+    verify_bearer(token, &cfg.key, &cfg.audience, (cfg.now)())
+        .map(|t| Caller::from_bearer(&t, &cfg.provider))
+        .map_err(|e| ApiError::new(StatusCode::UNAUTHORIZED, e.message()))
+}
+
+/// No credential: the auth-off caller, or the reference's 401.
+fn no_credential(cfg: &ApiConfig) -> ApiResult<Caller> {
+    if cfg.auth_required {
+        Err(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "Missing authorization API Key or Bearer Token",
+        ))
+    } else {
+        Ok(Caller {
             login: None,
             scopes: Vec::new(),
             customer: None,
             auth_off: true,
-        }),
-        None => Err(ApiError::new(
-            StatusCode::UNAUTHORIZED,
-            "Missing authorization API Key or Bearer Token",
-        )),
+            operator: None,
+        })
     }
 }
 
@@ -1196,6 +1327,9 @@ async fn housekeeping(
         json!({"status": "ok", "expired": expired, "unshelve": [], "unack": [], "count": count}),
     ))
 }
+
+#[cfg(test)]
+mod bearer_tests;
 
 #[cfg(test)]
 mod tests {
