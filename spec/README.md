@@ -18,3 +18,5 @@ Planned:
   the caller facts the integration hooks receive (Y44 A1, A2; Y50, Y51); a
   reviewed design, implemented and active except the login stage (PRs #192,
   #194, #196).
+- `oidc-login.md`: a proposed design for the OIDC login stage that issues
+  operator Bearer tokens; not adopted, not implemented.
