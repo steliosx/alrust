@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-04T16:38Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-04T17:15Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -697,13 +697,21 @@ Its tests use a synthetic key only. #194 (`bb6aa15d`, slice R2) wires it
 into `authenticate`, `Caller` and the hook facts behind
 `ApiConfig::bearer`, after Codex's approval of the exact head `fd9159ed`
 (`ec68374b`, one test-matrix finding fixed) and all seven hosted jobs green,
-with the PostgreSQL router tests executed in CI. The slice is inactive:
-`bearer` is `None` unless configured, the server configures nothing, and
-with `None` a Bearer header is ignored exactly as before. That is a staging
-seam, not the section 3 credential order (O1), which applies only once a
-verifier is configured. Configuring it from the server's settings (key,
-audience, provider; Y9) is a separate slice (R3), to be agreed with Codex
-first.
+with the PostgreSQL router tests executed in CI. At that merge the slice
+was inactive: `bearer` was `None` and the server configured nothing. #196
+(`ad969099`, slice R3) makes the server always configure it, after Codex's
+approval of the exact head `0be9cbcd` (`82a9ab0e`, one start-up-coverage
+finding fixed) and all seven hosted jobs green; the CI alpha smoke started
+the server with a generated key and passed. The key is `SECRET_KEY`, used
+unchanged; if it is unset, empty or `changeme`, a random 256-bit key is
+generated at each start with the Y9 warning (sessions, e-mail confirmation
+and password-reset links do not survive a restart; every instance behind
+one address needs the same configured key). The audience is
+`OAUTH2_CLIENT_ID`, else `SAML2_ENTITY_ID`, else `ALRUST_BASE_URL`; the
+provider is `AUTH_PROVIDER`, empty when unset (no hook facts). Section 3's
+credential order (O1) is now in effect: a recognised but invalid Bearer
+header is a 401 even with `AUTH_REQUIRED` off. No login route issues tokens
+yet; that stage (L) needs its own design first.
 
 ## Work in flight
 
