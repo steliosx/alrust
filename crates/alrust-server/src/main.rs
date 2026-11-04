@@ -17,7 +17,18 @@
 //! - `ALRUST_HOUSEKEEPING_INTERVAL` seconds (default 0 = off; the reference
 //!   relies on an external cron calling `/management/housekeeping`)
 //! - `RUST_LOG` (default `info`)
+//!
+//! Operator Bearer tokens (spec/oidc-caller-facts.md; DECISIONS Y9, Y50,
+//! Y51), under the reference's names:
+//! - `SECRET_KEY`: the HS256 signing key, used unchanged; if unset, empty or
+//!   `changeme`, a random 256-bit key is generated at each start, with a
+//!   warning (shorter than 32 characters: used, with a warning)
+//! - `OAUTH2_CLIENT_ID`, else `SAML2_ENTITY_ID`, else `ALRUST_BASE_URL`: the
+//!   tokens' expected audience
+//! - `AUTH_PROVIDER`: the OIDC provider name whose tokens carry hook facts
+//!   (unset: none do)
 
+mod bearer_settings;
 mod redacted_log;
 
 use std::net::SocketAddr;
@@ -38,6 +49,16 @@ fn env_or(name: &str, default: &str) -> String {
         .ok()
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| default.to_string())
+}
+
+/// A variable that may be set and empty: `None` only when unset. A value
+/// that is not UTF-8 stops start-up; the message never contains the value.
+fn env_present(name: &str) -> anyhow::Result<Option<String>> {
+    match std::env::var(name) {
+        Ok(v) => Ok(Some(v)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => anyhow::bail!("{name} is not valid UTF-8"),
+    }
 }
 
 fn env_i64(name: &str, default: i64) -> anyhow::Result<i64> {
@@ -172,6 +193,10 @@ async fn run() -> anyhow::Result<()> {
         },
         ..ApiConfig::default()
     };
+    let api_cfg =
+        bearer_settings::install(api_cfg, env_present, bearer_settings::os_random, |w| {
+            tracing::warn!("{w}");
+        })?;
 
     let pool = connect(&database_url).await?;
     let store = Store::new(pool, store_cfg);
