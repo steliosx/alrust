@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-04T14:50Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-04T15:18Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -689,7 +689,13 @@ tokens that the reference answers with a 500, and a non-text username, get
 is a later design. Nothing is implemented, and no key, configuration or
 provider was read. A third owner choice, recorded on 2026-11-04 (DECISIONS
 Y51), fixes the token decoding profile: loosely encoded tokens that the
-reference's Python stack accepts are refused with 401.
+reference's Python stack accepts are refused with 401. #192 (`027052d4`)
+implements the token verifier of sections 4 to 6 as pure code in
+`alrust-domain`, after Codex's approval of the exact head `fc553384`
+(`50b1ee45`, one padding finding fixed) and all seven hosted jobs green.
+Nothing calls it yet: `authenticate`, `Caller` and the hook facts are
+unchanged, and its tests use a synthetic key only. Wiring it into the
+request path is the next slice, to be agreed with Codex first.
 
 ## Work in flight
 
