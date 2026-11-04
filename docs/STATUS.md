@@ -682,7 +682,8 @@ API-key and auth-off callers keep exactly today's facts; a token's customer
 list reaches only the hooks, never global filtering, customer assignment or
 route permissions. Codex approved the exact head `b8cc0d47` after three
 review rounds (`83fc8774`); it merged after all seven hosted jobs passed.
-Its two owner choices were decided on 2026-11-04 (DECISIONS Y50): malformed
+The owner's answers to its two choices were recorded on 2026-11-04
+(DECISIONS Y50): malformed
 tokens that the reference answers with a 500, and a non-text username, get
 401; a token without an expiry gets 401. The login stage (`/auth/openid`)
 is a later design. Nothing is implemented, and no key, configuration or
