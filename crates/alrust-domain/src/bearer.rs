@@ -31,14 +31,34 @@ const ALGORITHM: &str = "HS256";
 
 /// URL-safe base64 with the profile's two allowances, both as `PyJWT`'s
 /// `base64url_decode` behaves (`jwt/utils.py:25-33`): canonical padding may
-/// be present or absent, and unused trailing bits are ignored. Any other
-/// character, non-canonical padding or data after padding is refused (Y51).
-const BASE64URL: GeneralPurpose = GeneralPurpose::new(
+/// be wholly present or wholly absent, and unused trailing bits are ignored.
+/// Any other character, partial or other non-canonical padding, or data
+/// after padding is refused (Y51).
+const PADDED: GeneralPurpose = GeneralPurpose::new(
     &URL_SAFE,
     GeneralPurposeConfig::new()
-        .with_decode_padding_mode(DecodePaddingMode::Indifferent)
+        .with_decode_padding_mode(DecodePaddingMode::RequireCanonical)
         .with_decode_allow_trailing_bits(true),
 );
+
+/// The unpadded form of the same profile (see [`PADDED`]).
+const UNPADDED: GeneralPurpose = GeneralPurpose::new(
+    &URL_SAFE,
+    GeneralPurposeConfig::new()
+        .with_decode_padding_mode(DecodePaddingMode::RequireNone)
+        .with_decode_allow_trailing_bits(true),
+);
+
+/// One token segment under the profile: with any `=` present, the padding
+/// must be canonical; without one, none is needed.
+fn decode_segment(segment: &str) -> Result<Vec<u8>, BearerError> {
+    let engine = if segment.contains('=') {
+        &PADDED
+    } else {
+        &UNPADDED
+    };
+    engine.decode(segment).map_err(|_| BearerError::Invalid)
+}
 
 /// Why a recognised Bearer token was refused. Each maps to one 401 message
 /// (SF-MGMT item 3; DECISIONS Y50).
@@ -135,9 +155,9 @@ pub fn verify_bearer(
     // api_jws.py _load: rsplit once for the signature, then split once.
     let (signing_input, signature) = token.rsplit_once('.').ok_or(Invalid)?;
     let (header, payload) = signing_input.split_once('.').ok_or(Invalid)?;
-    let header = json_object(&BASE64URL.decode(header).map_err(|_| Invalid)?)?;
-    let payload = BASE64URL.decode(payload).map_err(|_| Invalid)?;
-    let signature = BASE64URL.decode(signature).map_err(|_| Invalid)?;
+    let header = json_object(&decode_segment(header)?)?;
+    let payload = decode_segment(payload)?;
+    let signature = decode_segment(signature)?;
 
     // decode_complete: header checks (api_jws.py:240-250, :373-397), then
     // _verify_signature, where the algorithm is fixed, never taken from the

@@ -14,6 +14,8 @@ const KEY: &[u8] = b"synthetic-test-key-not-a-secret-0123456789";
 const AUD: &str = "alrust-test-audience";
 const NOW: i64 = 1_800_000_000;
 const PROVIDER: &str = "keycloak-test";
+/// The URL-safe base64 alphabet, in value order.
+const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 fn sign(signing_input: &str, key: &[u8]) -> String {
     let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC takes any key length");
@@ -447,7 +449,6 @@ fn the_customers_claim_is_not_the_hook_claim() {
 fn non_canonical_trailing_bits_are_accepted() {
     // PyJWT's decoder ignores the unused low bits of the last character;
     // so does alrust's.
-    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let token = mint(&base());
     let last = token.bytes().last().expect("signature");
     let index = ALPHABET.iter().position(|&c| c == last).expect("url-safe");
@@ -693,4 +694,64 @@ fn ordinary_unicode_claim_text_is_allowed() {
     assert_eq!(f.user_id(), "Ünïcødé-ид-用户");
     assert_eq!(f.login(), "opérateur@例え.test");
     assert_eq!(f.customers(), ["Kunde-Ä".to_owned(), "客户".to_owned()]);
+}
+
+#[test]
+fn padding_is_wholly_present_or_wholly_absent() {
+    // A header and a payload whose canonical encodings end in `==`; each
+    // form is signed over its own literal encoded segments.
+    let header = URL_SAFE.encode(r#"{"alg":"HS256","x":12}"#);
+    assert!(header.ends_with("=="));
+    let mut claims = base();
+    claims["x"] = json!(1);
+    let mut payload = URL_SAFE.encode(claims.to_string());
+    while !payload.ends_with("==") {
+        claims["x"] = json!(claims["x"].as_i64().expect("int") * 10);
+        payload = URL_SAFE.encode(claims.to_string());
+    }
+    let header_bare = header.trim_end_matches('=');
+    let payload_bare = payload.trim_end_matches('=');
+    let header_partial = &header[..header.len() - 1];
+    let payload_partial = &payload[..payload.len() - 1];
+    // Positive controls: canonical and unpadded, in each segment.
+    for (h, p) in [
+        (header.as_str(), payload.as_str()),
+        (header_bare, payload_bare),
+        (header.as_str(), payload_bare),
+        (header_bare, payload.as_str()),
+    ] {
+        assert!(verify(&signed(h, p)).is_ok(), "{h}.{p}");
+    }
+    // Partial padding is refused in the header and in the payload.
+    for (h, p) in [
+        (header_partial, payload_bare),
+        (header_bare, payload_partial),
+    ] {
+        assert_eq!(
+            verify(&signed(h, p)).err(),
+            Some(BearerError::Invalid),
+            "{h}.{p}"
+        );
+    }
+    // And in the signature segment.
+    let token = signed(header_bare, payload_bare);
+    let (input, sig) = token.rsplit_once('.').expect("three segments");
+    let padded_sig = URL_SAFE.encode(URL_SAFE_NO_PAD.decode(sig).expect("signature"));
+    assert!(padded_sig.ends_with('='));
+    assert!(verify(&format!("{input}.{padded_sig}")).is_ok());
+    // Unused low bits of the last data character are ignored when padded too.
+    let last = padded_sig.as_bytes()[padded_sig.len() - 2];
+    let index = ALPHABET.iter().position(|&c| c == last).expect("url-safe");
+    let flipped = format!(
+        "{}{}=",
+        &padded_sig[..padded_sig.len() - 2],
+        char::from(ALPHABET[index ^ 1])
+    );
+    assert_ne!(flipped, padded_sig);
+    assert!(verify(&format!("{input}.{flipped}")).is_ok());
+    // A 32-byte MAC needs one `=`, so two are non-canonical.
+    assert_eq!(
+        verify(&format!("{input}.{sig}==")).err(),
+        Some(BearerError::Invalid)
+    );
 }
