@@ -1,7 +1,7 @@
 # OIDC operator caller facts (design)
 
 Status: **reviewed design (PR #189, Codex approval `83fc8774`); its owner
-choices are decided (DECISIONS Y50); nothing here is implemented.** This page
+choices are decided (DECISIONS Y50, Y51); nothing here is implemented.** This page
 designs the one place where a verified operator credential becomes the
 `CallerFacts` that the integration hooks receive
 (`crates/alrust-store-pg/src/hooks.rs`; `spec/integration-hooks.md`,
@@ -11,8 +11,9 @@ per-customer RBAC), DECISIONS Y9 and `spec/security-fixes.md` SF-MGMT (the
 token signing key and HS256 Bearer tokens), Y28 (auth-route spec depth
 only) and Y44 A1 and A2 (what the hooks capture and where operator
 customers come from). Where the design answers differently from the
-reference, the owner decided the point (DECISIONS Y50, owner choices O3a
-and O3b, section 8); it adopts no other auth contract. Section 7 separates what the later login design must
+reference, the owner decided the point (DECISIONS Y50 and Y51, owner
+choices O3a, O3b and O3c, section 8); it adopts no other auth contract.
+Section 7 separates what the later login design must
 guarantee for these facts to be true from proposals that are that design's
 own to make. It reads no provider, configuration, key or credential; the
 examples use synthetic values.
@@ -147,7 +148,7 @@ these messages (`decorators.py:75-82`); alrust keeps them (SF-MGMT item 3):
 
 | Failure | Reference | alrust |
 |---|---|---|
-| malformed token, bad signature, an `exp` or `nbf` string that is not an integer (`DecodeError`, `jwt/api_jwt.py:486-489`, `:500-505`) | 401 `Token is invalid` | same |
+| malformed token, bad signature, an `exp` or `nbf` string that is not an integer (`DecodeError`, `jwt/api_jwt.py:486-489`, `:500-505`), a `b64` header that is `false` (a detached payload, which the reference never supplies; `DecodeError`, `jwt/api_jws.py:244-248`) | 401 `Token is invalid` | same |
 | `exp` in the past (`ExpiredSignatureError`) | 401 `Token has expired` | same |
 | `aud` present but not the expected audience (`InvalidAudienceError`) | 401 `Invalid audience` | same |
 
@@ -160,7 +161,12 @@ string that is not an integer (`InvalidIssuedAtError`, `:471-476`); an
 `exp`, `nbf` or `iat` of a type `int()` does not take, such as `null` or an
 array (`TypeError`, which the `except ValueError` clauses do not catch,
 `:471-473`, `:486-488`, `:500-502`); a non-string `sub`
-(`InvalidSubjectError`, `:444-445`); and, after PyJWT, a `scope` that is
+(`InvalidSubjectError`, `:444-445`); a present non-string `jti`
+(`InvalidJTIError`; `verify_jti` is on by default, `:60`, `:459-463`); a
+present non-string `kid` header, or a `crit` header that is not a non-empty
+list whose every item is the string `b64` with a `b64` header present
+(`InvalidTokenError`, `jwt/api_jws.py:242`, `:373-397`); and, after PyJWT,
+a `scope` that is
 present but not a string, including `null` (`AttributeError` on `.split`,
 `models/token.py:71`). The reference already refuses these, as a 500. In
 alrust each is 401 `Token is invalid`, except a missing or empty `aud`,
@@ -178,6 +184,56 @@ A token with **no `exp`** is accepted by the reference, since PyJWT checks
 `exp` only when present and the reference requires no claims
 (`jwt/api_jwt.py:394`, `:404-405`). alrust requires `exp`: a token without
 it is 401 `Token is invalid` (**owner choice O3b**, section 8).
+
+**Order.** The checks run in PyJWT 2.12.1's order, and the first failure
+decides the response: split the compact token (the last `.` ends the
+payload, the first `.` ends the header, `jwt/api_jws.py:302-303`); decode
+the three segments; the header as a JSON object; the `kid`, `crit` and
+`b64` header checks; `alg`; the signature, computed over the original
+encoded `header.payload` bytes, never over re-encoded data; the payload as a
+JSON object; then the claims (`jwt/api_jwt.py:394-419`): `exp` present
+(where PyJWT's `require` option runs), `iat`, `nbf`, `exp` not expired,
+`aud`, `sub`, `jti`; then `scope` and `preferred_username`. So a token with
+no `exp` and a wrong `aud` gets `Token is invalid`; an expired token with a
+wrong `aud` gets `Token has expired`; a wrong `aud` with a non-string `sub`
+gets `Invalid audience`.
+
+**Decoding profile (owner choice O3c, section 8).** alrust decodes tokens
+by this profile. Any token outside it is 401 `Token is invalid`, with no
+`Caller` and no facts, even where the reference's Python stack accepts it.
+
+- **Segments:** base64url with the URL-safe alphabet (`A-Z`, `a-z`, `0-9`,
+  `-`, `_`) only. Two allowances are chosen to match PyJWT
+  (`jwt/utils.py:25-33`), though JWS itself omits padding: canonical `=`
+  padding may be present or absent, and unused low bits of the last
+  character are ignored. Refused, though the reference's non-strict decoder
+  accepts them: any other character, including `+`, `/`, whitespace and a
+  further `.` inside the payload segment; non-canonical padding; data after
+  padding.
+- **JSON:** UTF-8 JSON as `serde_json` 1.0.154 parses it, with the
+  workspace's features (no `arbitrary_precision`, no `preserve_order`); the
+  header and the payload must each be a JSON object. Duplicate keys: the
+  last wins, as in Python. Refused, though Python's `json.loads` accepts
+  them: a byte-order mark; UTF-16 or UTF-32 text; the literals `NaN`,
+  `Infinity` and `-Infinity`; unpaired surrogate escapes such as
+  `"\ud800"`; numbers outside the `f64` range, including integers of more
+  than about 308 digits; nesting of 128 levels or more, counting the
+  top-level object (`serde_json`'s recursion limit; 127 levels are
+  accepted). Integers beyond 64 bits but inside the `f64` range are
+  read as `f64`.
+- **Time claims (`exp`, `nbf`, `iat`)** convert as Python's `int()` does in
+  PyJWT's checks. A JSON number: an integer as it is, any other number
+  truncated toward zero. A boolean: 1 or 0. A string: optional surrounding
+  whitespace (the same set `int()` strips), an optional `+` or `-`, then
+  ASCII digits `0-9` with single underscores allowed between digits, at
+  most 4300 digits (Python 3.12's default `int()` limit, which the
+  reference also refuses beyond). Values beyond the `i128` range saturate,
+  which leaves every comparison with a real `now` unchanged. Refused,
+  though Python's `int()` accepts them: non-ASCII decimal digits (Python
+  accepts every Unicode 15.0 decimal digit). Every other string, `null`, an
+  array or an object is refused as in the reference (section 4's lists).
+- The profile constrains only how the token is encoded. It sets no rule for
+  the text of logins, customers or other claim values.
 
 Then two conversions read `VerifiedToken`, and nothing else does:
 
@@ -327,11 +383,11 @@ The AUTH-SEC observations are evidence for them, not authority:
 
 ## 8. Owner choices (decided)
 
-After Codex approved this page (`83fc8774`), the owner decided both
-choices in Claude's session, one at a time, each shown with the reference
-behavior, the advisor's recommendation and Codex's; the owner chose the
-recommended option each time (DECISIONS Y50; Codex recorded them resolved
-in `88b2b4b4`).
+After Codex approved this page (`83fc8774`), the owner decided O3a and
+O3b, and later O3c, in Claude's session, one at a time, each shown with the
+reference behavior, the advisor's recommendation and Codex's; the owner
+chose the recommended option each time (DECISIONS Y50, Codex recorded them
+resolved in `88b2b4b4`; Y51, Codex recorded it resolved in `ca7605fe`).
 
 - **O3a, token shapes the reference does not refuse cleanly** (section 4):
   "Refuse both, 401".
@@ -349,6 +405,14 @@ in `88b2b4b4`).
   refuses a token that is otherwise validly signed with the effective key
   but was made some other way, such as by hand or by an older tool, which
   the reference accepts.
+- **O3c, loosely encoded tokens** (section 4, decoding profile): "Refuse,
+  401". A token outside the profile, that is, loose base64, JSON that is
+  not standard UTF-8 JSON as the profile states, or a time claim written as
+  text with non-ASCII digits, is refused with 401 `Token is invalid`; no
+  `Caller` and no facts. alrust's own login is designed never to make such
+  tokens; a validly signed token made some other way, which the reference
+  accepts, can be refused. The alternative set aside was a
+  Python-compatible JSON parser and base64 decoder in the login check.
 
 Settled without a new owner decision (Codex `f2ba85e5`): the credential
 order and the refusal of an invalid recognised token (section 3, SF-MGMT
@@ -359,17 +423,22 @@ engineering detail).
 
 Synthetic key, tokens minted in the test, fixed `now`; no provider, no real
 key. Codex's synthetic cases (review input `98221a76`) map as follows.
-Rows marked **O3a** or **O3b** follow those owner choices (section 8).
+Rows marked **O3a**, **O3b** or **O3c** follow those owner choices
+(section 8). Each token is fully signed over its original encoded
+segments; nothing is normalised before verification.
 
 | Case | Expectation |
 |---|---|
 | Malformed token, bad signature | 401 `Token is invalid`; no `Caller`, no facts |
 | `exp` in the past | 401 `Token has expired` |
 | `aud` present and wrong | 401 `Invalid audience` |
-| An `exp` or `nbf` string that is not an integer | 401 `Token is invalid` (reference parity) |
-| `alg` `none` or `HS512`; `aud` missing or `""`; `nbf` or `iat` in the future; an `iat` string that is not an integer; `exp`, `nbf` or `iat` `null` or an array; `sub` a number, array or object; `scope` `null`, a number or an array | **O3a part 1**: 401 `Token is invalid`, except `aud` missing or `""`: 401 `Invalid audience`; no `Caller`, no facts |
+| An `exp` or `nbf` string that is not an integer; a `b64` header `false` | 401 `Token is invalid` (reference parity) |
+| `alg` `none` or `HS512`; `aud` missing or `""`; `nbf` or `iat` in the future; an `iat` string that is not an integer; `exp`, `nbf` or `iat` `null` or an array; `sub` a number, array or object; `jti` not a string; `kid` not a string; `crit` empty, not a list, or naming anything but a present `b64`; `scope` `null`, a number or an array | **O3a part 1**: 401 `Token is invalid`, except `aud` missing or `""`: 401 `Invalid audience`; no `Caller`, no facts |
 | `preferred_username` a number, boolean, array or object | **O3a part 2**: 401 `Token is invalid`; no `Caller`, no facts |
 | No `exp`, otherwise valid | **O3b**: 401 `Token is invalid`; no `Caller`, no facts |
+| Outside the decoding profile, each in its own signed token: a `+`, `/`, `!` or non-ASCII byte in a segment; a further `.` in the payload segment; non-canonical padding; data after padding; a UTF-8 byte-order mark; UTF-16 or UTF-32 text; `NaN` or `Infinity`; an unpaired surrogate escape; a number such as `1e400` or a 401-digit integer; 128 levels of nesting; a time string with non-ASCII digits | **O3c**: 401 `Token is invalid`; no `Caller`, no facts |
+| Inside the profile: segments with and without canonical padding; a last character with unused low bits set; duplicate keys (last wins); a 300-digit integer; 127 levels of nesting; time strings such as `" +1_800_000_001 "`; a time string of exactly 4300 digits | accepted where every other check passes; 4301 digits refused, as in the reference |
+| Mixed failures: no `exp` and a wrong `aud`; an expired token with a wrong `aud`; a wrong `aud` with a non-string `sub` | `Token is invalid`; `Token has expired`; `Invalid audience` (section 4, order) |
 | `now` exactly at `exp`, `nbf` and `iat`, and one second either side | expired at and after `exp`; not yet valid before `nbf` and before `iat`; valid otherwise (section 4) |
 | `sub` absent or `""` | `Caller` as section 5; `OperatorFacts` `None`; the hook skips |
 | `preferred_username` absent, `null` or `""` | `Caller.login` `None`, `None` or `Some("")`; `OperatorFacts` `None` |
