@@ -1,6 +1,8 @@
 # OIDC operator login (proposed design)
 
-Status: **PROPOSED, for review; nothing here is adopted or implemented.**
+Status: **PROPOSED; nothing here is implemented. One owner choice is
+decided: Q-L1's verification requirement and failure rule (DECISIONS
+Y52, section 7). Everything else is open.**
 This page proposes how alrust's login stage (L) would turn an operator's
 OpenID Connect sign-in into the HS256 Bearer token that
 `spec/oidc-caller-facts.md` verifies (R, sections 4 to 6, implemented by
@@ -131,10 +133,14 @@ Compatibility gaps this inventory shows:
 - **Token endpoint.** Client authentication `client_secret_basic` or
   `client_secret_post`, chosen from the provider's advertised methods; the
   reference also offers `client_secret_jwt` (`oidc.py:84-118`).
-- **ID token (Q-L1).** Verify signature with the selected key and an
-  algorithm from a configured allowlist (never the token's header), `iss`,
-  `aud` = the client id, `exp`, `iat`; `nonce` per Q-L9. Any failure refuses
-  the login. The reference verifies nothing by default and takes the
+- **ID token (Q-L1).** Decided (Y52): the ID token is always verified,
+  with no switch to turn verification off, and a missing or invalid ID
+  token refuses the login even if userinfo is available. The check covers
+  the issuer, the signature with a trusted compatible key, a configured
+  allowed algorithm (never the token's header), the intended client
+  (`aud`) and the validity times (`exp`, `iat`); `nonce` per Q-L9. Still
+  proposals, not decided: the key model and discovery described here, the
+  algorithm list, key rotation and time tolerances. The reference verifies nothing by default and takes the
   algorithm from the header when it does (AUTH-SEC-5, `oidc.py:121-142`).
 - **Userinfo.** Fetch with the access token. If it returns `sub`, it must
   equal the verified ID token's `sub` (P1, settled); else refuse.
@@ -175,11 +181,15 @@ issued token must round-trip through R: a synthetic issued token verified by
 Each lists the reference behavior, options and a recommendation; none is
 adopted.
 
-- **Q-L1, ID-token verification detail.** P1 already requires a verified
-  ID-token subject for hook facts. Open: the exact issuer, key, algorithm,
-  audience and time rules of section 5, and whether a login without a
-  verifiable ID token may still issue a token without hook customers.
-  Recommendation: always verify as in section 5; no token otherwise.
+- **Q-L1, ID-token verification. Decided (DECISIONS Y52), in part.** The
+  owner chose "Always check; refuse failure": verification is mandatory,
+  there is no off switch, and a missing or invalid ID token refuses the
+  login even if userinfo is available, so no token is issued without a
+  verified ID token. This changes the reference's failure handling, which
+  can ignore a failed check and continue on userinfo (AUTH-SEC-5). Still
+  open: the exact key model, algorithm list, discovery, key rotation and
+  time tolerances (section 5's proposals), and whether a given provider is
+  compatible, which has not been proved.
 - **Q-L2, account linking.** Reference: by default links a provider
   identity to an existing local account with the same e-mail
   (`OIDC_LINK_USER_EMAIL`, AUTH-SEC-6, `oidc.py:171-187`). A1 fixes only the

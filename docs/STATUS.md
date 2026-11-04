@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-04T17:15Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-04T19:25Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -711,7 +711,17 @@ one address needs the same configured key). The audience is
 provider is `AUTH_PROVIDER`, empty when unset (no hook facts). Section 3's
 credential order (O1) is now in effect: a recognised but invalid Bearer
 header is a 401 even with `AUTH_REQUIRED` off. No login route issues tokens
-yet; that stage (L) needs its own design first.
+yet. #198 (`42f5ec68`) adds `spec/oidc-login.md`, a PROPOSED design for that
+login stage (L), after Codex's approval of the exact head `08edd501`
+(`4dab6912`, after seven findings fixed in two correction rounds); its first hosted
+run lost two jobs to a failed download of PostgreSQL's signing key, and the
+one rerun Codex agreed was green. It separates settled constraints from
+nine open choices (Q-L1 to Q-L9) and records that the pinned web UI's login
+gives the server nothing of its own to bind a login to (gap G1), so operator
+capture needs a later binding and UI change (Q-L9). The owner's answer to
+Q-L1 was recorded on 2026-11-04 (DECISIONS Y52): the ID token is always
+verified and a failure refuses the login; the key model, algorithms and the
+other choices stay open. Nothing of L is implemented.
 
 ## Work in flight
 
