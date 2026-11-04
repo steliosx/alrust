@@ -1,6 +1,7 @@
 # OIDC operator caller facts (design)
 
-Status: **design for review; nothing here is implemented.** This page
+Status: **reviewed design (PR #189, Codex approval `83fc8774`); its owner
+choices are decided (DECISIONS Y50); nothing here is implemented.** This page
 designs the one place where a verified operator credential becomes the
 `CallerFacts` that the integration hooks receive
 (`crates/alrust-store-pg/src/hooks.rs`; `spec/integration-hooks.md`,
@@ -9,10 +10,9 @@ sections 2 and 4.1.1). It builds on settled decisions: KICKOFF's auth target
 per-customer RBAC), DECISIONS Y9 and `spec/security-fixes.md` SF-MGMT (the
 token signing key and HS256 Bearer tokens), Y28 (auth-route spec depth
 only) and Y44 A1 and A2 (what the hooks capture and where operator
-customers come from). It adopts no new auth contract. Where the design
-would answer differently from the reference, the point is an open owner
-choice in section 8 and every expectation that depends on it is marked
-conditional. Section 7 separates what the later login design must
+customers come from). Where the design answers differently from the
+reference, the owner decided the point (DECISIONS Y50, owner choices O3a
+and O3b, section 8); it adopts no other auth contract. Section 7 separates what the later login design must
 guarantee for these facts to be true from proposals that are that design's
 own to make. It reads no provider, configuration, key or credential; the
 examples use synthetic values.
@@ -137,9 +137,9 @@ verify_bearer(token, key, audience, now) -> Result<VerifiedToken, BearerError>
   infer them from a library's defaults.
 - It also checks the claim types that sections 5 and 6 depend on and that
   the reference already fails on: `sub`, if present, is a string; `scope`,
-  if present, is a string. A `preferred_username` that is present and
-  neither a string nor `null` is not a reference failure; how alrust treats
-  it is unadopted (O3a part 2, section 8).
+  if present, is a string; and `preferred_username`, if present, is a
+  string or `null` (the last is not a reference failure; owner choice O3a
+  part 2, section 8).
 - The key is passed in; the function reads no file, environment or clock.
 
 **Errors.** The reference catches three PyJWT errors and gives 401 with
@@ -162,23 +162,22 @@ array (`TypeError`, which the `except ValueError` clauses do not catch,
 `:471-473`, `:486-488`, `:500-502`); a non-string `sub`
 (`InvalidSubjectError`, `:444-445`); and, after PyJWT, a `scope` that is
 present but not a string, including `null` (`AttributeError` on `.split`,
-`models/token.py:71`). The reference already refuses these, as a 500; they
-stay refusals with no `Caller` and no facts, and their status code and
-message are **owner choice O3a part 1** (section 8).
+`models/token.py:71`). The reference already refuses these, as a 500. In
+alrust each is 401 `Token is invalid`, except a missing or empty `aud`,
+which is 401 `Invalid audience`; no `Caller` and no facts (**owner choice
+O3a part 1**, section 8).
 
 One more shape is **not** a reference failure: a `preferred_username` that
 is a number, boolean, array or object is carried on as `g.login`
 (`decorators.py:84`) with route-dependent results. alrust's
-`Caller.login` is text. Whether alrust refuses such a token, and with what
-response, is **owner choice O3a part 2**; it is not adopted here. The
-design proposes no coercion, no dropping and no other fallback for it, and
-no implementation of this path proceeds until the owner decides.
+`Caller.login` is text. alrust refuses such a token with 401 `Token is
+invalid`, no `Caller` and no facts (**owner choice O3a part 2**, section
+8); it neither coerces nor drops the value.
 
 A token with **no `exp`** is accepted by the reference, since PyJWT checks
 `exp` only when present and the reference requires no claims
-(`jwt/api_jwt.py:394`, `:404-405`). Whether alrust requires `exp` is
-**owner choice O3b**. Until it is decided, the design accepts such a token,
-as the reference does.
+(`jwt/api_jwt.py:394`, `:404-405`). alrust requires `exp`: a token without
+it is 401 `Token is invalid` (**owner choice O3b**, section 8).
 
 Then two conversions read `VerifiedToken`, and nothing else does:
 
@@ -201,10 +200,10 @@ is alrust's only kind. Each claim's outcome at each layer:
 |---|---|---|
 | `preferred_username` absent or `null` | `login` `None` | `g.login = None` (`decorators.py:84`) |
 | `preferred_username` a string, including `""` | `login` `Some` of it, unchanged | `g.login` is the string |
-| `preferred_username` a number, boolean, array or object | unadopted: O3a part 2 (section 8); no implementation until decided | `g.login` is that value, with route-dependent results |
+| `preferred_username` a number, boolean, array or object | not reached: 401 `Token is invalid` (section 4; O3a part 2) | `g.login` is that value, with route-dependent results |
 | `scope` absent | `scopes` `[""]` | `''.split(' ')` gives `['']` (`models/token.py:71`) |
 | `scope` a string | `scopes` = the string split on every single space, **empty items kept** | `str.split(' ')`, same |
-| `scope` `null`, a number, boolean, array or object | not reached: a refusal under O3a part 1 (section 4) | 500 (`AttributeError`) |
+| `scope` `null`, a number, boolean, array or object | not reached: 401 `Token is invalid` (section 4; O3a part 1) | 500 (`AttributeError`) |
 | any | `customer` **always `None`** | with `CUSTOMER_VIEWS` off the token has no `customers` (`token.py:111-112`) and `g.customers` is empty, so no filter applies |
 | any | `auth_off` `false` | the route's scope check runs (`decorators.py:88-91`) |
 
@@ -326,30 +325,28 @@ The AUTH-SEC observations are evidence for them, not authority:
 - How an operator's scopes are chosen (the reference's `Permission.lookup`
   over roles and `ADMIN_USERS`, AUTH-SEC-6 and AUTH-SEC-7).
 
-## 8. Open owner choices
+## 8. Owner choices (decided)
 
-After Codex approves this page, these go to the owner one at a time, each
-with the reference behavior, the advisor's recommendation and Codex's.
-Until then, every expectation that depends on them is conditional.
+After Codex approved this page (`83fc8774`), the owner decided both
+choices in Claude's session, one at a time, each shown with the reference
+behavior, the advisor's recommendation and Codex's; the owner chose the
+recommended option each time (DECISIONS Y50; Codex recorded them resolved
+in `88b2b4b4`).
 
-- **O3a, token shapes the reference does not refuse cleanly** (section 4),
-  in two parts:
-  - **Part 1, the response to failures the reference already refuses as a
-    generic 500.** They stay refusals with no `Caller` and no facts; only
-    the response is open. Recommendation (Claude and Codex): 401 `Token is
-    invalid`, except a missing or empty `aud`, which is 401 `Invalid
-    audience`.
+- **O3a, token shapes the reference does not refuse cleanly** (section 4):
+  "Refuse both, 401".
+  - **Part 1, failures the reference refuses as a generic 500:** 401
+    `Token is invalid`, except a missing or empty `aud`, which is 401
+    `Invalid audience`; no `Caller` and no facts. The three settled
+    SF-MGMT 401s are unchanged.
   - **Part 2, a `preferred_username` that is present and neither a string
-    nor `null`.** The reference does not refuse it; it carries the value on
-    as `g.login`. Whether alrust refuses it at all, and with what response,
-    is open; nothing about this path is adopted and none of it is
-    implemented until the owner decides. Proposal (unapproved): refuse it
-    with 401 `Token is invalid`, no `Caller` and no facts.
-- **O3b, a token with no `exp`.** Reference: accepted, and it never
-  expires. Recommendation (Claude and Codex): refuse it with 401 `Token is
+    nor `null`** (the reference carries it on as `g.login`): 401 `Token is
+    invalid`; no `Caller` and no facts.
+- **O3b, a token with no `exp`** (the reference accepts it, and it never
+  expires): "Require expiry, 401". It is refused with 401 `Token is
   invalid`. Tokens that L issues always carry `exp`
-  (`alerta/auth/utils.py:60`), so this changes nothing for them. It does
-  refuse a token that is otherwise validly signed with the effective key
+  (`alerta/auth/utils.py:60`), so this changes nothing for them; it
+  refuses a token that is otherwise validly signed with the effective key
   but was made some other way, such as by hand or by an older tool, which
   the reference accepts.
 
@@ -362,9 +359,7 @@ engineering detail).
 
 Synthetic key, tokens minted in the test, fixed `now`; no provider, no real
 key. Codex's synthetic cases (review input `98221a76`) map as follows.
-Rows marked **O3a part 1** or **O3b** take their status code and message
-from that choice once it is made; the **O3a part 2** row has no adopted
-behavior at all until the owner decides.
+Rows marked **O3a** or **O3b** follow those owner choices (section 8).
 
 | Case | Expectation |
 |---|---|
@@ -372,9 +367,9 @@ behavior at all until the owner decides.
 | `exp` in the past | 401 `Token has expired` |
 | `aud` present and wrong | 401 `Invalid audience` |
 | An `exp` or `nbf` string that is not an integer | 401 `Token is invalid` (reference parity) |
-| `alg` `none` or `HS512`; `aud` missing or `""`; `nbf` or `iat` in the future; an `iat` string that is not an integer; `exp`, `nbf` or `iat` `null` or an array; `sub` a number, array or object; `scope` `null`, a number or an array | **O3a part 1**: a refusal; no `Caller`, no facts |
-| `preferred_username` a number, boolean, array or object | **O3a part 2**: unadopted; no test or implementation of this path until decided |
-| No `exp`, otherwise valid | **O3b**: until decided, accepted as the reference does |
+| `alg` `none` or `HS512`; `aud` missing or `""`; `nbf` or `iat` in the future; an `iat` string that is not an integer; `exp`, `nbf` or `iat` `null` or an array; `sub` a number, array or object; `scope` `null`, a number or an array | **O3a part 1**: 401 `Token is invalid`, except `aud` missing or `""`: 401 `Invalid audience`; no `Caller`, no facts |
+| `preferred_username` a number, boolean, array or object | **O3a part 2**: 401 `Token is invalid`; no `Caller`, no facts |
+| No `exp`, otherwise valid | **O3b**: 401 `Token is invalid`; no `Caller`, no facts |
 | `now` exactly at `exp`, `nbf` and `iat`, and one second either side | expired at and after `exp`; not yet valid before `nbf` and before `iat`; valid otherwise (section 4) |
 | `sub` absent or `""` | `Caller` as section 5; `OperatorFacts` `None`; the hook skips |
 | `preferred_username` absent, `null` or `""` | `Caller.login` `None`, `None` or `Some("")`; `OperatorFacts` `None` |

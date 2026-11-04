@@ -15,5 +15,5 @@ Planned:
   Zabalack and Voalack acknowledgement capture (Y35, Y41); a draft until
   reviewed.
 - `oidc-caller-facts.md`: how a verified OIDC operator's Bearer token becomes
-  the caller facts the integration hooks receive (Y44 A1, A2); a design for
-  review, not implemented.
+  the caller facts the integration hooks receive (Y44 A1, A2; Y50); a
+  reviewed design, not implemented.
