@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-04T02:40Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-04T14:50Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -687,7 +687,9 @@ The owner's answers to its two choices were recorded on 2026-11-04
 tokens that the reference answers with a 500, and a non-text username, get
 401; a token without an expiry gets 401. The login stage (`/auth/openid`)
 is a later design. Nothing is implemented, and no key, configuration or
-provider was read.
+provider was read. A third owner choice, recorded on 2026-11-04 (DECISIONS
+Y51), fixes the token decoding profile: loosely encoded tokens that the
+reference's Python stack accepts are refused with 401.
 
 ## Work in flight
 
