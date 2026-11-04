@@ -1,7 +1,11 @@
 # OIDC operator caller facts (design)
 
 Status: **reviewed design (PR #189, Codex approval `83fc8774`); its owner
-choices are decided (DECISIONS Y50, Y51); nothing here is implemented.** This page
+choices are decided (DECISIONS Y50, Y51). The verifier and conversions of
+sections 4 to 6 are implemented as pure code (`crates/alrust-domain/src/bearer.rs`,
+PR #192: `verify_bearer`, and `VerifiedToken`'s `login`, `scopes` and
+`operator_facts`) that nothing calls yet; the request path of section 3,
+`Caller` and `facts()` are not implemented.** This page
 designs the one place where a verified operator credential becomes the
 `CallerFacts` that the integration hooks receive
 (`crates/alrust-store-pg/src/hooks.rs`; `spec/integration-hooks.md`,
@@ -216,8 +220,9 @@ by this profile. Any token outside it is 401 `Token is invalid`, with no
   last wins, as in Python. Refused, though Python's `json.loads` accepts
   them: a byte-order mark; UTF-16 or UTF-32 text; the literals `NaN`,
   `Infinity` and `-Infinity`; unpaired surrogate escapes such as
-  `"\ud800"`; numbers outside the `f64` range, including integers of more
-  than about 308 digits; nesting of 128 levels or more, counting the
+  `"\ud800"`; numbers that overflow `f64`, including integers of more
+  than about 308 digits (numbers that underflow, such as `1e-400`, are
+  read as zero, not refused); nesting of 128 levels or more, counting the
   top-level object (`serde_json`'s recursion limit; 127 levels are
   accepted). Integers beyond 64 bits but inside the `f64` range are
   read as `f64`.
