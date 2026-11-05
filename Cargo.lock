@@ -25,8 +25,14 @@ dependencies = [
  "alrust-engine",
  "alrust-store-pg",
  "axum",
+ "base64",
  "chrono",
+ "hmac",
  "serde_json",
+ "sha2",
+ "sqlx",
+ "tokio",
+ "tower",
  "tracing",
  "uuid",
 ]
@@ -35,9 +41,12 @@ dependencies = [
 name = "alrust-domain"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "chrono",
+ "hmac",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -62,9 +71,15 @@ dependencies = [
  "alrust-store-pg",
  "anyhow",
  "axum",
+ "base64",
  "chrono",
+ "getrandom 0.4.3",
+ "hmac",
+ "serde_json",
+ "sha2",
  "sqlx",
  "tokio",
+ "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",

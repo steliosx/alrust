@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-03T02:59Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-04T19:25Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -673,6 +673,55 @@ A3(a) refusal before lookup, are held, and no new pin is adopted. This hold
 covers only Voalack work. A separate Voalack source and provenance transfer
 that Codex prepared awaits the owner's explicit approval; it is Codex's
 request, not alrust's.
+
+**OIDC operator caller facts: design on `main` (2026-11-03).** #189
+(`a5c66fee`) adds `spec/oidc-caller-facts.md`, the reviewed design for the
+one place where a verified operator Bearer token becomes the caller facts
+the integration hooks receive (Y44 A1, A2), inside SF-MGMT item 3 and Y9.
+API-key and auth-off callers keep exactly today's facts; a token's customer
+list reaches only the hooks, never global filtering, customer assignment or
+route permissions. Codex approved the exact head `b8cc0d47` after three
+review rounds (`83fc8774`); it merged after all seven hosted jobs passed.
+The owner's answers to its two choices were recorded on 2026-11-04
+(DECISIONS Y50): malformed
+tokens that the reference answers with a 500, and a non-text username, get
+401; a token without an expiry gets 401. The login stage (`/auth/openid`)
+is a later design. That merge implemented nothing, and no key,
+configuration or provider was read. A third owner choice, recorded on 2026-11-04 (DECISIONS
+Y51), fixes the token decoding profile: loosely encoded tokens that the
+reference's Python stack accepts are refused with 401. #192 (`027052d4`)
+implements the token verifier of sections 4 to 6 as pure code in
+`alrust-domain`, after Codex's approval of the exact head `fc553384`
+(`50b1ee45`, one padding finding fixed) and all seven hosted jobs green.
+Its tests use a synthetic key only. #194 (`bb6aa15d`, slice R2) wires it
+into `authenticate`, `Caller` and the hook facts behind
+`ApiConfig::bearer`, after Codex's approval of the exact head `fd9159ed`
+(`ec68374b`, one test-matrix finding fixed) and all seven hosted jobs green,
+with the PostgreSQL router tests executed in CI. At that merge the slice
+was inactive: `bearer` was `None` and the server configured nothing. #196
+(`ad969099`, slice R3) makes the server always configure it, after Codex's
+approval of the exact head `0be9cbcd` (`82a9ab0e`, one start-up-coverage
+finding fixed) and all seven hosted jobs green; the CI alpha smoke started
+the server with a generated key and passed. The key is `SECRET_KEY`, used
+unchanged; if it is unset, empty or `changeme`, a random 256-bit key is
+generated at each start with the Y9 warning (sessions, e-mail confirmation
+and password-reset links do not survive a restart; every instance behind
+one address needs the same configured key). The audience is
+`OAUTH2_CLIENT_ID`, else `SAML2_ENTITY_ID`, else `ALRUST_BASE_URL`; the
+provider is `AUTH_PROVIDER`, empty when unset (no hook facts). Section 3's
+credential order (O1) is now in effect: a recognised but invalid Bearer
+header is a 401 even with `AUTH_REQUIRED` off. No login route issues tokens
+yet. #198 (`42f5ec68`) adds `spec/oidc-login.md`, a PROPOSED design for that
+login stage (L), after Codex's approval of the exact head `08edd501`
+(`4dab6912`, after seven findings fixed in two correction rounds); its first hosted
+run lost two jobs to a failed download of PostgreSQL's signing key, and the
+one rerun Codex agreed was green. It separates settled constraints from
+nine open choices (Q-L1 to Q-L9) and records that the pinned web UI's login
+gives the server nothing of its own to bind a login to (gap G1), so operator
+capture needs a later binding and UI change (Q-L9). The owner's answer to
+Q-L1 was recorded on 2026-11-04 (DECISIONS Y52): the ID token is always
+verified and a failure refuses the login; the key model, algorithms and the
+other choices stay open. Nothing of L is implemented.
 
 ## Work in flight
 

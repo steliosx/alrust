@@ -15,5 +15,9 @@ Planned:
   Zabalack and Voalack acknowledgement capture (Y35, Y41); a draft until
   reviewed.
 - `oidc-caller-facts.md`: how a verified OIDC operator's Bearer token becomes
-  the caller facts the integration hooks receive (Y44 A1, A2); a design for
-  review, not implemented.
+  the caller facts the integration hooks receive (Y44 A1, A2; Y50, Y51); a
+  reviewed design, implemented and active except the login stage (PRs #192,
+  #194, #196).
+- `oidc-login.md`: a proposed design for the OIDC login stage that issues
+  operator Bearer tokens; one owner choice decided (Y52), the rest open; not
+  implemented.

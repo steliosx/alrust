@@ -4,6 +4,8 @@
 //! (`alerta/models/alert.py` `serialize`, `history.py`, `heartbeat.py`,
 //! `key.py`), so existing Alerta clients can talk to alrust unchanged.
 
+pub mod bearer;
+
 use std::fmt::Write as _;
 
 use chrono::{DateTime, SecondsFormat, Utc};
