@@ -1,8 +1,9 @@
 # OIDC operator login (proposed design)
 
-Status: **PROPOSED; nothing here is implemented. One owner choice is
-decided: Q-L1's verification requirement and failure rule (DECISIONS
-Y52, section 7). Everything else is open.**
+Status: **PROPOSED; nothing here is implemented. Two owner choices are
+decided in part: Q-L1's verification requirement and failure rule
+(DECISIONS Y52) and Q-L9's interim-login policy (DECISIONS Y53), both in
+section 7. Everything else is open.**
 This page proposes how alrust's login stage (L) would turn an operator's
 OpenID Connect sign-in into the HS256 Bearer token that
 `spec/oidc-caller-facts.md` verifies (R, sections 4 to 6, implemented by
@@ -14,8 +15,9 @@ PRs #192, #194 and #196). It keeps two kinds of statement apart:
   `spec/oidc-caller-facts.md` section 7.
 - **Owner choices**, each with the reference behavior, options and a
   recommendation. Q-L1's verification requirement and failure rule are
-  decided (DECISIONS Y52); every other choice and detail remains a proposal,
-  not adopted. Those that change the auth contract go to the owner one at a
+  decided (DECISIONS Y52), and so is Q-L9's interim-login policy
+  (DECISIONS Y53); every other choice and detail remains a proposal, not
+  adopted. Those that change the auth contract go to the owner one at a
   time; the others are settled in a later reviewed design.
 
 It reads no provider, configuration, key, secret or mapping, and it names no
@@ -180,8 +182,9 @@ issued token must round-trip through R: a synthetic issued token verified by
 ## 7. Login choices and decision status
 
 Each lists the reference behavior, options and a recommendation. Q-L1's
-verification requirement and failure rule are decided (Y52); the remaining
-choices, and Q-L1's open details, are proposals, not adopted.
+verification requirement and failure rule are decided (Y52), and Q-L9's
+interim-login policy is decided (Y53); the remaining choices, and the open
+details of Q-L1 and Q-L9, are proposals, not adopted.
 
 - **Q-L1, ID-token verification. Decided (DECISIONS Y52), in part.** The
   owner chose "Always check; refuse failure": verification is mandatory,
@@ -246,7 +249,8 @@ choices, and Q-L1's open details, are proposals, not adopted.
 - **Q-L8, no login claim.** Reference: falls back to `nickname`, else 400
   (`oidc.py:167-169`). P2 already says such a login never carries hook
   customers. Recommendation: refuse with 400, as without `nickname`.
-- **Q-L9, flow binding with the pinned UI (gap G1).** Operator capture
+- **Q-L9, flow binding with the pinned UI (gap G1). Interim-login policy
+  decided (DECISIONS Y53); the binding design is open.** Operator capture
   through the hooks is already required (Y35; Y44 A1 and A2, which set
   aside leaving customers undefined because Y35 would then be unmet). It
   needs `alrust_hook_customers`, which P5 allows only for a bound login. The
@@ -255,17 +259,34 @@ choices, and Q-L1's open details, are proposals, not adopted.
     browser-only `state`; issue tokens without `alrust_hook_customers`.
     Cost: no operator is ever a hook actor, so operator capture stays
     unfinished, and a reviewed binding and web UI change (b) are still
-    required to finish it. Whether alrust should admit such global-only
-    logins in the meantime is an open policy proposal, not adopted here.
+    required to finish it. **Not admitted as an interim path (Y53).**
   - (b) **Server-issued `state` and `nonce`**, with a web UI change. Meets
     P5.
   - (c) **PKCE alone**, with a web UI change. Does not by itself meet P5
     (section 7a); it supplements (b).
   Recommendation: (b) with PKCE as the target that completes operator
-  capture; (a) only as an interim step if the owner admits global-only
-  logins before the UI change.
+  capture; PKCE alone is not a completion target.
+
+  **Decided (Y53), in part.** The owner chose "Wait for bound login":
+  alrust admits no incomplete interim global-only operator login, so
+  operator login waits until reviewed browser binding and the required
+  operator-capture path are ready. The question as shown also said that
+  option A "needs a change to the web UI and new login records on the
+  server before operator login exists". That wording was added after
+  Codex's review of the question's framing, from the example in section
+  7a(b), and the same question excluded any choice of implementation. So
+  this answer neither mandates nor rejects server-side login records: the
+  exact login-transaction state and architecture remain unresolved, and
+  that point must be settled before a later design depends on it. Still
+  open: options (b) and (c) and every section 7a outline, as proposals;
+  Q-L1 and the operator-capture requirement (Y35, Y44, P5) are
+  unchanged.
 
 ## 7a. Flow outlines for Q-L9 (proposals)
+
+Outline (a) is kept as a description of the pinned UI's flow only; it is
+not admitted as an interim login path (Y53). Outlines (b) and (c) are
+proposals, not an adopted architecture.
 
 - **(a) Staging.** Initiation, `state` creation, storage and checking stay
   in the browser (section 3); the server receives `code`, `clientId`,
