@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-04T19:25Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-05T23:04Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -721,7 +721,13 @@ gives the server nothing of its own to bind a login to (gap G1), so operator
 capture needs a later binding and UI change (Q-L9). The owner's answer to
 Q-L1 was recorded on 2026-11-04 (DECISIONS Y52): the ID token is always
 verified and a failure refuses the login; the key model, algorithms and the
-other choices stay open. Nothing of L is implemented.
+other choices stay open. The owner's answer to Q-L9's interim-login policy
+was recorded on 2026-11-05 (DECISIONS Y53): no incomplete interim
+global-only operator login, so operator login waits for reviewed browser
+binding and the operator-capture path. The question as shown also named
+"new login records on the server" as a cost of that choice, wording added
+without Codex's review; Y53 records it and leaves the login-transaction
+design unresolved. Nothing of L is implemented.
 
 ## Work in flight
 

@@ -19,5 +19,5 @@ Planned:
   reviewed design, implemented and active except the login stage (PRs #192,
   #194, #196).
 - `oidc-login.md`: a proposed design for the OIDC login stage that issues
-  operator Bearer tokens; one owner choice decided (Y52), the rest open; not
-  implemented.
+  operator Bearer tokens; two owner choices decided in part (Y52, Y53), the
+  rest open; not implemented.
