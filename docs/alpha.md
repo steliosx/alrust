@@ -36,12 +36,36 @@ Add `--disposable-target` only against a server and database you are about
 to throw away: it also runs the housekeeping checks, and housekeeping is
 global (it can expire or delete any alert).
 
+Compose uses the same `ALRUST_DB_PASSWORD` value for PostgreSQL's initial
+password and SQLx's `PGPASSWORD`; it is passed separately from the connection
+URL, so reserved URL characters do not need encoding. The default `alrust`
+password is for this disposable local trial. Compose does not publish the
+database port to the host. Changing the environment variable is not a password
+rotation for an already initialized volume.
+
+Local `.env` and `.env.*` files are excluded from Git and the Docker build
+context. Keep real credentials out of issues, logs and build inputs.
+
 Stop with `docker compose down`; add `-v` to delete the database volume.
 
 ### Without Docker
 
-Build with `cargo build --release --bin alrust`, point `DATABASE_URL` at a
-PostgreSQL 18.6 database, and run `target/release/alrust`.
+Use a disposable PostgreSQL 18.6 development database. Set its connection
+URL privately; do not commit real connection strings or credentials. The native
+server defaults to listening on all interfaces, so bind it to loopback explicitly
+for a local trial. Authentication is enabled by default; bootstrap a local admin
+key before using the authenticated examples above:
+
+```sh
+export DATABASE_URL='<your disposable PostgreSQL 18.6 connection URL>'
+export ALRUST_ADMIN_KEY="$(openssl rand -hex 20)"
+export ALRUST_BIND=127.0.0.1:8080
+cargo build --locked --release --bin alrust
+target/release/alrust
+```
+
+These are setup instructions, not a recorded successful native or Compose run.
+Start with a disposable database rather than an existing deployment.
 
 ### The database
 
@@ -54,11 +78,14 @@ it. At start-up it decides what it was pointed at:
   place, in one transaction, checking every copied value. On any problem it
   stops with the reason and changes nothing. A database with other objects
   attached to its tables (views, triggers, foreign keys, grants) is refused.
-- **An existing Alerta 9.1.0 database:** adopts it unchanged if its schema
-  matches the reference exactly, otherwise stops and lists the differences.
-  An older Alerta database must first be upgraded by starting Alerta 9.1.0.
-  API keys there with no expiry or no scopes cannot authenticate until
-  edited.
+- **An existing Alerta 9.1.0 database:** accepts it at the schema-adoption
+  step if its schema matches the reference exactly, otherwise stops and lists
+  the differences. An older Alerta database must first be upgraded by starting
+  Alerta 9.1.0. Schema adoption does not make server startup or operation
+  read-only: a nonempty `ALRUST_ADMIN_KEY` inserts a bootstrap key or updates
+  the matching key's scopes and expiry. Authenticated key use records usage;
+  API writes and enabled housekeeping can change or delete data. API keys
+  with no expiry or no scopes cannot authenticate until edited.
 - **Anything else:** stops with nothing written.
 
 ## What works
@@ -116,5 +143,9 @@ it. At start-up it decides what it was pointed at:
   the matching reads. Customer assignment follows `assign_customer`
   (customer-mapping C5–C11). Roles, users and the reference's full
   permission model are not implemented.
-- The conformance suite has not yet been run against alrust; differences
-  found there will be tracked as issues.
+- **Qualification:** the ten selected A3B cases at historical candidate
+  `ff7bc55a` passed 9 of 10, versus 10 of 10 for the pinned reference. The
+  `event!=` failure was fixed in #147, but the corrected pairing has not been
+  re-run. This selected local evidence is not full parity, Compose or hosted
+  qualification. All 19 runtime profiles remain `NOT_RUN`; see
+  [STATUS](STATUS.md) for the exact scope and retained deviations.
