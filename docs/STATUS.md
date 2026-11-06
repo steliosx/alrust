@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-06T07:35Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-06T10:18Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -748,7 +748,20 @@ review paths, and adds Alerta's Apache-2.0 `LICENSE` and `NOTICE` with
 `THIRD_PARTY_NOTICES.md` (also copied into the image). Each merged after
 Codex's approval of the exact head, all seven hosted jobs green and the
 advisor's no objection; the push run on `main` after each merge was
-green.
+green. Three more merged the same way on 2026-11-06, each after Codex's
+approval of the exact head, green hosted jobs on it and the advisor's no
+objection. #136 (`9faf06b1`, SCLOCK-HISTORY-1) makes the receive-clock
+oracle read history in the reference API's ascending order
+(`models/alert.py:149`, spec R7.3b); main was merged into the existing
+branch so its history was kept, and the push run on that merge was
+cancelled when the next merge started its own run, which passed. #71
+(`69bfb16b`) adds an `OpenAPI structure` job that lints `spec/openapi.yaml`
+with Redocly CLI 2.57.0 on Node 24.22.2 (two warnings, no errors). #204
+(`40766683`) adds `CONTRIBUTING.md`, corrects the native setup and the
+qualification line in `docs/alpha.md`, and moves the Compose database
+password out of the URL into `PGPASSWORD`, with `.env` files kept out of
+Git and the image build context. No CI job runs Compose: the Compose
+setup, its database connection and the documented commands are NOT_RUN.
 Still open, all owner decisions: public visibility, the license for
 alrust's own code, how to handle the repository history (session links,
 home paths) and the security-reporting contact. Before any visibility
@@ -1331,7 +1344,8 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
     need an agreed resource window each.
   - Next features (owner-agreed): notes, after decision (1).
   - A corrected A3B pairing (after #147) needs a new agreed window.
-  - Open: Codex's PR #136 (`codex/receive-clock-history-1`).
+  - Codex's PR #136 (`codex/receive-clock-history-1`) merged on
+    2026-11-06 as `9faf06b1`.
 
 - **codex-alrust** (current task `01a0f3d9`): review this STATUS head. The
   broker is approved at c7 for source/offline scope; the next Alrust
