@@ -7,7 +7,9 @@
 # build, Docker or network.
 set -euo pipefail
 
-cd -- "$(git rev-parse --show-toplevel)"
+# A separate assignment so that a failing rev-parse stops the script.
+root=$(git rev-parse --show-toplevel)
+cd -- "$root"
 sums=third_party/rust/SHA256SUMS
 work=$(mktemp -d -- "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/notice-corpus.XXXXXXXX")
 trap 'rm -rf -- "$work"' EXIT
