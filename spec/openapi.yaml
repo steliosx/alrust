@@ -18,9 +18,20 @@ info:
       **blackouts**; **API keys**; **users**; **groups**; **permissions**
       (with `/scopes`); **customers**; **`/config`**; **management**;
       the root index `/` and `/_`; the **webhook dispatcher**
-      (`/webhooks/{webhook}`) and the **prometheus** provider mapping.
-      Not yet written: the other eleven provider webhook payload mappings, the auth routes and other routes
-      the static inventory lists.
+      (`/webhooks/{webhook}`) and all twelve **provider mappings** (cloudwatch,
+      grafana, graylog, newrelic, pagerduty, pingdom, prometheus, riemann,
+      serverdensity, slack, stackdriver, telegram); the **auth routes**
+      (`/auth/login` with its basic and LDAP paths, `/auth/logout`,
+      `/userinfo`, OIDC `/auth/openid` and its aliases, SAML `/auth/saml`
+      and `/auth/saml/metadata.xml` in full; signup, email confirmation,
+      password reset, GitHub and CAS at inventory depth only; that sets
+      spec depth, not an alrust auth-contract or adoption decision); the
+      **bulk operations** (`/_bulk/alerts`, `/_bulk/alerts/action`,
+      `/_bulk/alerts/attributes`, `/_bulk/alerts/status`,
+      `/_bulk/alerts/tag`, `/_bulk/alerts/untag`, `/_bulk/task/{task_id}`);
+      and **oEmbed** (`/oembed`, `/oembed.{format}`, `/embed.js`).
+      Every route in the static inventory is now specified; none remains
+      unwritten.
     - **Reference security defects** are recorded where found (marked
       SECURITY). They describe the class of problem at source level only;
       no exploit was built or run. They are recorded for the owner's
@@ -121,6 +132,7 @@ components:
     Forbidden: {description: "missing required scope (auth/decorators.py:51-52 and peers)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     ServerError: {description: "ApiError 500, or an unhandled exception with message 'An internal error has occurred!' (exceptions.py:120-136)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
     UnsupportedMediaType: {description: "POST or PUT without a JSON Content-Type, rejected by the `api` blueprint before the handler (views/__init__.py:17-20), including on routes that read no body", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    AuthUnsupportedMediaType: {description: "POST or PUT whose Content-Type is not JSON (`application/json` or `application/*+json`, werkzeug 3.1.7 `sansio/request.py:527-535`), rejected by the **auth** blueprint's own before_request with message `POST and PUT requests must set 'Content-Type' to 'application/json'` (auth/__init__.py:44-54). Exempt: every method on `/auth/logout`, and POST `/auth/saml` whose Content-Type is exactly `application/x-www-form-urlencoded`. A POST `/auth/saml` whose WSGI environ has no `CONTENT_TYPE` key fails earlier, at the header lookup (auth/__init__.py:47): werkzeug 3.1.7 `EnvironHeaders` indexes the environ directly for that key (`datastructures/headers.py:627-639`), so a plain KeyError, which Alerta maps to a generic 500 (exceptions.py:80, :120-136), not 400 or 415. A present but empty Content-Type reaches the 415. Whether a given WSGI server omits the key is NOT_RUN", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
   parameters:
     ListSortBy:
       name: sort-by
@@ -560,6 +572,87 @@ components:
         code: {type: integer}
         errors: {description: "null, or the list passed to ApiError, serialized by CustomJSONEncoder. A list element that is an exception (for example the q ParseException) is encoded as a list of traceback strings (format.py:47-48), so nested lists can occur. Generic 500s carry [str(error)]"}
         requestId: {type: [string, "null"]}
+    AuthToken:
+      type: object
+      x-source: alerta/auth/basic.py:105; alerta/models/token.py:117-118
+      required: [token]
+      description: "`{token: <jwt>}` with status 200 (Flask `jsonify` default). The JWT is HS256-signed with SECRET_KEY; its payload is the TokenClaims object."
+      properties:
+        token: {type: string}
+    TokenClaims:
+      type: object
+      x-source: alerta/models/token.py:78-118; alerta/auth/utils.py:52-73
+      description: |
+        Output of `Jwt.serialize` at issue time (`create_token` then
+        `tokenize`): the JWT payload **as issued** by every login route.
+        `/userinfo` echoes a parsed and re-serialized token and uses the
+        wider UserinfoClaims schema instead. Values taken from an external
+        identity provider (OIDC `name`, `picture`, `email_verified`, role
+        and group claims) carry whatever JSON types the provider sent. The
+        first eight members are always
+        present (null when unset). Members marked *truthy* are omitted when
+        empty or false; `email_verified` and `picture` are omitted only when
+        null; `customers` is present (possibly `[]`) exactly when
+        `CUSTOMER_VIEWS` is on (`models/token.py:111-112`). No other claim
+        is ever emitted.
+      required: [iss, typ, sub, aud, exp, nbf, iat, jti]
+      properties:
+        iss: {type: [string, "null"], description: "request.url_root at issue (Host-derived); never verified on parse"}
+        typ: {type: [string, "null"], description: "Bearer"}
+        sub: {type: [string, "null"], description: "user id; for OIDC, GitHub and CAS the provider subject"}
+        aud: {type: [string, "null"], description: "OAUTH2_CLIENT_ID, else SAML2_ENTITY_ID, else absolute_url() (auth/utils.py:59)"}
+        exp: {type: [integer, "null"], description: "issue time + TOKEN_EXPIRE_DAYS days (default 14, settings.py:174), integer seconds"}
+        nbf: {type: [integer, "null"]}
+        iat: {type: [integer, "null"]}
+        jti: {type: [string, "null"], description: "uuid4"}
+        name: {description: "truthy; a string for basic, LDAP, SAML, GitHub and CAS, but for OIDC any truthy JSON value the provider sent (auth/oidc.py:152, :203-205; auth/utils.py:64; models/token.py:90-91)"}
+        preferred_username: {type: string, description: "truthy; the login (g.login on later requests, auth/decorators.py:84)"}
+        email: {type: string, description: "truthy"}
+        provider: {type: string, description: "truthy; basic, ldap, saml2, github, cas, or the AUTH_PROVIDER value for OIDC"}
+        orgs: {type: array, items: {type: string}, description: "truthy; GitHub only"}
+        groups: {type: array, items: {type: string}, description: "truthy"}
+        roles: {type: array, items: {type: string}, description: "truthy"}
+        scope: {type: string, description: "truthy; the scopes joined with single spaces (models/token.py:104-105)"}
+        email_verified: {description: "omitted only when null; OIDC may carry a non-boolean value"}
+        picture: {description: "omitted only when null; any non-null JSON value for OIDC (auth/oidc.py:158, :203-205; auth/utils.py:71; models/token.py:109-110), otherwise as stored by the provider path"}
+        customers: {type: array, items: {type: string}, description: "only when CUSTOMER_VIEWS; at login, [] comes from an ADMIN_USERS login or a `*` customer match (models/customer.py:85-87; postgres/base.py:1351-1367)"}
+        oid: {type: string, description: "truthy; OIDC only, the linked local user id when it differs from sub (auth/oidc.py:186-187)"}
+    UserinfoClaims:
+      type: object
+      x-source: alerta/models/token.py:43-115; alerta/auth/userinfo.py:22-23; PyJWT 2.12.1 jwt/api_jwt.py:396-419, :430-505, :510-558
+      description: |
+        `/userinfo` body: `Jwt.parse` then `Jwt.serialize` of a token that
+        passed PyJWT validation (HS256 signature, audience, time claims).
+        Values are copied as decoded, not normalized, so this is wider than
+        TokenClaims. Presence rules are those of TokenClaims, except that
+        `scope` is always present: a token without it parses to `['']` and
+        serializes as `""` (`models/token.py:71`, `:104-105`).
+      required: [iss, typ, sub, aud, exp, nbf, iat, jti, scope]
+      properties:
+        iss: {description: "any JSON value; never validated (no issuer passed)"}
+        typ: {description: "any JSON value"}
+        sub: {type: [string, "null"], description: "a present non-string sub fails validation (InvalidSubjectError, api_jwt.py:444-445)"}
+        aud:
+          description: "as stored: a non-empty string equal to the expected audience, or a list of strings containing it (non-strict check, api_jwt.py:547-558)"
+          oneOf:
+            - {type: string}
+            - {type: array, items: {type: string}}
+        exp: {type: [number, string, boolean, "null"], description: "as stored; validation converts a temporary int() and keeps the original (api_jwt.py:494-508), so fractional numbers, numeric strings and booleans survive"}
+        nbf: {type: [number, string, boolean, "null"], description: "as stored (api_jwt.py:480-492)"}
+        iat: {type: [number, string, boolean, "null"], description: "as stored (api_jwt.py:465-478)"}
+        jti: {type: [string, "null"], description: "a present non-string jti fails validation (InvalidJTIError, api_jwt.py:462-463)"}
+        name: {description: "any truthy JSON value"}
+        preferred_username: {description: "any truthy JSON value"}
+        email: {description: "any truthy JSON value"}
+        provider: {description: "any truthy JSON value"}
+        orgs: {description: "any truthy JSON value"}
+        groups: {description: "any truthy JSON value"}
+        roles: {description: "any truthy JSON value"}
+        scope: {type: string, description: "the token's `scope` string split on single spaces and re-joined; `\"\"` when absent; a non-string scope fails in parse (500)"}
+        email_verified: {description: "any non-null JSON value"}
+        picture: {description: "any non-null JSON value"}
+        customers: {description: "only when CUSTOMER_VIEWS: `[customer]` from a legacy singular claim, else the `customers` value as stored (default [])"}
+        oid: {description: "any truthy JSON value"}
     Heartbeat:
       type: object
       x-source: alerta/models/heartbeat.py:93-111
@@ -906,7 +999,7 @@ components:
         status: {type: string, description: "any string: PUT status stores it unvalidated (A1.2)"}
         service: {type: array, items: {type: string}}
         group: {type: string}
-        value: {description: "as sent, except that JSON integers and booleans become strings (R0.3)"}
+        value: {description: "as sent, except that JSON integers and booleans become strings (R0.3) and floats, arrays and objects become their jsonb text (ADR-0005 decision 8)"}
         text: {type: string}
         tags: {type: array, items: {type: string}}
         attributes: {type: object}
@@ -2258,6 +2351,673 @@ paths:
         "401": {$ref: '#/components/responses/Unauthorized'}
         "403": {$ref: '#/components/responses/Forbidden'}
         "500": {$ref: '#/components/responses/ServerError'}
+  /_bulk/alerts:
+    delete:
+      operationId: bulkDeleteAlerts
+      x-source: alerta/views/bulk.py:141-150; alerta/models/alert.py:487-489; alerta/database/backends/postgres/base.py:390-397, :1604-1612; alerta/database/backends/postgres/utils.py:142-198
+      x-scope: write:alerts
+      summary: Delete every alert the query selects
+      description: |
+        **Selection, shared by every `/_bulk/alerts*` route.** Each bulk
+        view builds its WHERE clause with `qb.alerts.from_params(request.args)`
+        (`bulk.py:43`, `:85`, `:105`, `:120`, `:135`, `:147`), the same
+        builder as `GET /alerts`, so the `q=` grammar, the filters, `id`,
+        `from-date`/`to-date`, `sort-by` and `group-by` parameters below
+        apply, with the same 400s for an unparsable `q`
+        (`postgres/utils.py:144-155`), an invalid filter name or an invalid
+        sort name. Differences from the alert queries:
+        - **No customer scoping.** The bulk views do not pass `customers`,
+          so `from_params` adds no `customer = ANY(...)` predicate
+          (`postgres/utils.py:160-163`); every alert-query view passes
+          `customers=g.customers` (`views/alerts.py:316`, `:391`, and
+          peers). See BULK-SEC-1.
+        - **No `to-date` default**: `query_time` is not passed, so there is
+          no upper time bound unless `to-date` is given
+          (`postgres/utils.py:167`).
+        - `group-by` is parsed and ignored. `sort-by` is validated (400)
+          but only orders the status and action selections (which 1000
+          alerts are taken); the other bulk routes do not sort.
+        - **No row limit on the set-based routes.** DELETE, tag, untag and
+          attributes run one UPDATE or DELETE over the whole WHERE clause
+          with no LIMIT (`postgres/base.py:361-397`). `BULK_QUERY_LIMIT`
+          (`settings.py:54`, default 100000, commented "max number of
+          alerts for bulk endpoints") is read nowhere in the package. The
+          status and action routes instead load at most 1000 alerts (see
+          those entries).
+        - With **no query parameters at all**, the WHERE clause is `1=1`
+          (`postgres/utils.py:157`): every alert is selected.
+        - No bulk route writes an audit event (none calls
+          `write_audit_trail`, `bulk.py:1-150`), whereas each single-alert
+          operation does (`views/alerts.py:136-137`, `:185-186`, `:212-213`,
+          `:239-240`, `:266-267`, `:300-301`). See BULK-SEC-3.
+        - `@jsonp` applies (`bulk.py:22`, `:34`, and peers): `?callback=`
+          wraps the body as for other routes, except on `PUT
+          /_bulk/alerts/action`, whose tuple return breaks the wrapper (see
+          there).
+
+        **This operation** (`bulk.py:141-150`):
+        1. `DELETE FROM alerts WHERE <selection> RETURNING id`, committed
+           (`postgres/base.py:390-397`, `:1604-1612`).
+        2. 200 `{status: ok, deleted: [ids], count}`. An empty selection
+           gives 200 with `deleted: []` and `count: 0`, not 404.
+
+        Bulk-specific differences from `DELETE /alert/{alert_id}`
+        (`views/alerts.py:276-306`):
+        - It needs only `write:alerts`, not `delete:alerts` (`bulk.py:143`
+          versus `views/alerts.py:278`). Under `DELETE_SCOPES` containing
+          `delete:alerts` (default `[]`, `settings.py:75`), the single
+          delete requires `delete:alerts` or `admin:alerts`
+          (`models/permission.py:104-108`), while this route still admits
+          any `write:alerts` holder.
+        - No `process_delete`: plugin delete hooks do not run, so no plugin
+          can reject or observe the delete.
+        - No audit event.
+        - **SECURITY BULK-SEC-2 (bulk delete bypasses delete controls):**
+          the route admits `write:alerts` regardless of `DELETE_SCOPES`,
+          skips plugin delete hooks and auditing, and with no filter
+          deletes every alert in one committed statement (and, per
+          BULK-SEC-1, regardless of customer). Source-derived, NOT_RUN.
+
+        **SECURITY BULK-SEC-1 (no customer scoping on any bulk route):**
+        because `from_params` is called without `customers`, a caller whose
+        credentials are limited to some customers (API key `customer`, or
+        token `customers` under `CUSTOMER_VIEWS`) selects, modifies and
+        deletes alerts of **every** customer through these routes. The
+        single-alert operations scope the lookup (`views/alerts.py:117-118`
+        and peers; customer-mapping C16-C18). Source-derived, NOT_RUN.
+
+        **SECURITY BULK-SEC-3 (bulk mutations are unaudited):** none of the
+        bulk routes, nor the action task, sends an audit event, so a bulk
+        delete or update leaves no audit-trail record even when
+        `AUDIT_TRAIL` includes `write`. Source-derived, NOT_RUN.
+
+        Source-derived; runtime NOT_RUN.
+      parameters: &bulkSelectionParams
+        - {$ref: '#/components/parameters/Q'}
+        - {$ref: '#/components/parameters/QDf'}
+        - {$ref: '#/components/parameters/AlertFilters'}
+        - {$ref: '#/components/parameters/AlertQueryId'}
+        - {$ref: '#/components/parameters/AlertDateRange'}
+        - {name: to-date, in: query, schema: {type: string}, description: "see from-date; no default on bulk routes"}
+        - {$ref: '#/components/parameters/AlertSortBy'}
+        - {$ref: '#/components/parameters/AlertGroupBy'}
+      responses:
+        "200":
+          description: "Deleted (possibly none)"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, deleted, count]
+                properties:
+                  status: {const: ok}
+                  deleted: {type: array, items: {type: string}}
+                  count: {type: integer}
+        "400": {description: "q parse failure, or invalid filter or sort name", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+      x-runtime: "NOT_RUN"
+  /_bulk/alerts/action:
+    put:
+      operationId: bulkActionAlerts
+      x-source: alerta/views/bulk.py:70-93; alerta/tasks.py:1-46; alerta/app.py:96-123; alerta/settings.py:54-59
+      x-scope: write:alerts
+      summary: Queue an action for every selected alert (Celery task)
+      description: |
+        Selection as described under `DELETE /_bulk/alerts`, without
+        customer scoping (BULK-SEC-1). Steps in source order:
+        1. `from alerta.tasks import action_alerts` runs inside the request
+           (`bulk.py:76`), **before** the body is read, so when the import
+           fails (below) the generic 500 comes first and no body
+           validation happens. On first import, `tasks.py:10` calls
+           `create_celery_app()` (`app.py:102-123`), which first imports
+           `kombu` to register the `customjson` serializer
+           (`utils/format.py:72-76`), then builds a **second** Flask app
+           with `create_app()` (`app.py:106`) and a `Celery` instance with
+           `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND` (both default
+           null, `settings.py:55-56`), copying the whole app configuration
+           into the Celery configuration (`app.py:112`).
+           - **Celery is not a declared dependency**: it appears in neither
+             `setup.py` `install_requires` nor any `requirements*.txt`, and
+             `app.py:96-99` swallows its ImportError. Without Celery or
+             kombu installed, the import raises (ModuleNotFoundError for
+             `kombu`, or NameError for `Celery`), giving the generic 500,
+             and the module is not cached, so every call retries. Inferred,
+             NOT_RUN.
+           - With Celery installed but no broker configured, which broker
+             Celery falls back to, and whether `delay` then fails, is NOT
+             established (Celery is unpinned; its source was not read).
+           - The reference repository ships no worker launcher (no
+             `celery` or `worker` in `Dockerfile`, `docker-compose*.yml`,
+             `Makefile` or `contrib/`). Who runs the tasks is a deployment
+             matter, NOT established.
+        2. Body, only once the import succeeded (`bulk.py:78-83`): `action`
+           (falsy or absent: 400 `must supply 'action' as json data`);
+           `text` (default `bulk status update`, not the single route's
+           `<action> operator action`); `timeout` (default null). Not
+           type-checked. A non-object JSON body raises AttributeError at
+           `.get` (generic 500).
+        3. Selection: `Alert.find_all(query)` with the default page 1 and
+           page size 1000 (`models/alert.py:493-494`), so **at most 1000
+           alert ids** are taken, in `sort-by` order or, without it, in no
+           defined order (`ORDER BY (select 1)`,
+           `postgres/utils.py:50-51`; `postgres/base.py:434-440`). Further
+           alerts are silently left out. None: 404 `not found`.
+        4. `action_alerts.delay(ids, action, text, timeout, g.login)`
+           (`bulk.py:91`); 202 `{status: ok, message: '<n> alerts queued
+           for action'}` with `Location: absolute_url('/_bulk/task/<task
+           id>')` (`bulk.py:93`).
+        5. JSONP: `jsonp` wraps only when `callback` is present and
+           truthy (`utils/response.py:11-12`), and it runs inside the
+           permission check, so only after authentication and the scope
+           check pass. A non-empty `callback` makes it read `.data` from
+           the view's tuple return (`utils/response.py:13`), which raises
+           AttributeError: generic 500 **after** the task was queued. An
+           empty `callback=` takes the ordinary path (202).
+
+        **The task** (`action_alerts`, `tasks.py:13-46`), per alert id, in a
+        Celery worker under an app context (`app.py:115-122`):
+        1. `Alert.find_by_id(id)` with **no customer filter**
+           (`tasks.py:18`). This lookup runs **before** the per-alert `try`
+           (`:20`): an exception raised by the lookup itself (for example
+           a database error) is not caught, ends the task, and leaves the
+           remaining ids unprocessed, after earlier alerts were already
+           written. A vanished alert returns None; the AttributeError on
+           `alert.status` (`:22`) is inside the `try` and is caught.
+        2. `g.login` = the requester's login; pre-action plugins
+           (`process_action`, `utils/api.py:95-133`: each routed plugin's
+           `take_action`), then `from_action` (lifecycle A2-A5).
+        3. If the status changed, `process_status` (each plugin's
+           `status_change`, `utils/api.py:169-200`) and `from_status`
+           (`models/alert.py:616-642`) run as well, writing a **second**
+           history entry and storing the possibly re-mapped status
+           (`tasks.py:35-44`).
+        4. Inside the per-alert `try` blocks (`:20-33`, `:36-44`), any
+           exception (RejectException, InvalidAction, ForwardingLoop,
+           anything else) is appended to a local `errors` list and the
+           alert is skipped. Exceptions outside them (step 1's lookup,
+           `updated.append` at `:46`) escape the task.
+
+        Bulk-specific differences from `PUT /alert/{alert_id}/action`
+        (`views/alerts.py:145-191`):
+        - **post-action plugins never run** (no `post_action=True` call);
+        - the extra `process_status` and `from_status` pass of step 3;
+        - caught errors never reach the client: the task builds `updated`
+          and `errors` and **returns nothing** (`tasks.py:15-46`), so
+          neither a 409, 400 nor 202 per alert, nor the list of updated
+          alerts, is observable through the task-status route, which shows
+          only the lowercased state (`bulk.py:24-27`). Whether an uncaught
+          exception (step 1) shows up as a failure state there depends on
+          Celery and is NOT established;
+        - **carry-over between alerts:** `action`, `text` and `timeout`
+          are reassigned from each alert's plugin results
+          (`tasks.py:23`, `:37`), so a plugin's change for one alert
+          applies to every later alert in the batch;
+        - alerts loaded for the action are re-read by id (`get_alert`,
+          `id ~* '^<id>'`, `postgres/base.py:293-299`);
+        - no audit event (BULK-SEC-3).
+
+        Source-derived; runtime NOT_RUN.
+      parameters: *bulkSelectionParams
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                action: {type: string, description: "required (truthy); same names as the single action route"}
+                text: {type: string, default: bulk status update}
+                timeout: {description: "unvalidated; falsy values fall back per lifecycle A4"}
+      responses:
+        "202":
+          description: "Task queued"
+          headers:
+            Location: {description: "absolute URL of GET /_bulk/task/{task_id}", schema: {type: string}}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, message]
+                properties:
+                  status: {const: ok}
+                  message: {type: string, description: "`<n> alerts queued for action`"}
+        "400": {description: "missing action; q parse failure; invalid filter or sort name", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "404": {description: "no alert selected", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {description: "Celery/kombu not installed (raised before any body validation) or task submission failure; non-object body; a non-empty `callback` after queuing", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+      x-runtime: "NOT_RUN"
+  /_bulk/alerts/attributes:
+    put:
+      operationId: bulkUpdateAlertAttributes
+      x-source: alerta/views/bulk.py:126-138; alerta/models/alert.py:481-484; alerta/database/backends/postgres/base.py:381-388, :85
+      x-scope: write:alerts
+      summary: Merge attributes into every selected alert
+      description: |
+        Selection as described under `DELETE /_bulk/alerts`, without
+        customer scoping or a row limit (BULK-SEC-1).
+        1. `attributes` falsy or absent: 400 `must supply 'attributes' as
+           json data` (`bulk.py:132-133`). A non-object JSON body: generic
+           500 (AttributeError).
+        2. One statement: `UPDATE alerts SET attributes = attributes ||
+           <attributes> WHERE <selection> RETURNING id`, committed
+           (`postgres/base.py:381-388`). A dict is sent as JSON (the
+           registered `dict` adapter, `postgres/base.py:85`). Any other
+           truthy value passes the only guard (truthiness, `bulk.py:132`)
+           unchanged; how psycopg2 adapts it and whether PostgreSQL then
+           resolves `jsonb || <value>` or errors is NOT established.
+        3. 200 `{status: ok, updated: [ids], count}`; an empty selection
+           gives 200 with `count: 0`, not 404.
+
+        Bulk-specific differences from `PUT /alert/{alert_id}/attributes`:
+        - a top-level **JSON merge in SQL** (`jsonb ||`), not the
+          single route's Python read-modify-write: there is no lost-update
+          window, but a `null` value is **stored as JSON null**, not used
+          to delete the key (contrast `postgres/base.py:340-341`);
+        - no "committed, then 500" case: the response does not depend on
+          the resulting maps;
+        - no 404 and no audit event.
+        As for the single route, no history entry is written, `updateTime`
+        is unchanged and no plugins run.
+
+        Source-derived; runtime NOT_RUN.
+      parameters: *bulkSelectionParams
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                attributes: {type: object, description: "required (truthy); merged at the top level; null values are stored, not removed"}
+      responses:
+        "200": &bulkUpdatedResponse
+          description: "Updated (possibly none)"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, updated, count]
+                properties:
+                  status: {const: ok}
+                  updated: {type: array, items: {type: string}}
+                  count: {type: integer}
+        "400": {description: "missing or empty attributes; q parse failure; invalid filter or sort name", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {$ref: '#/components/responses/ServerError'}
+      x-runtime: "NOT_RUN"
+  /_bulk/alerts/status:
+    put:
+      operationId: bulkSetAlertStatus
+      x-source: alerta/views/bulk.py:30-67; alerta/models/alert.py:433-449, :493-494; alerta/utils/api.py:169-200; alerta/database/backends/postgres/base.py:303-310
+      x-scope: write:alerts
+      summary: Set the status of every selected alert (synchronous)
+      description: |
+        Selection as described under `DELETE /_bulk/alerts`, without
+        customer scoping (BULK-SEC-1).
+        1. Body: `status` (falsy or absent: 400 `must supply 'status' as
+           json data`); `text` (default `bulk status update`, not `''`);
+           `timeout` (default null). Not type-checked; any non-empty status
+           string is accepted, as on the single route (lifecycle A1.2).
+        2. `Alert.find_all(query)`: **at most 1000 alerts** (page 1, size
+           1000, `models/alert.py:493-494`), in `sort-by` order or no
+           defined order; the rest are silently skipped. These rows are
+           loaded **without history and raw data** (`postgres/base.py:415-423`),
+           so status plugins see an empty history. None: 404 `not found`.
+        3. Per alert, in order (`bulk.py:51-62`):
+           - `process_status` (each routed plugin's `status_change`,
+             `utils/api.py:169-200`). Any exception, RejectException
+             included, is appended to `errors` and the alert is skipped.
+           - `alert.set_status(status, text, timeout)`
+             (`models/alert.py:433-449`, `postgres/base.py:303-310`):
+             updates only `status`, `timeout` (the given value, else
+             `ALERT_TIMEOUT`), `update_time` and a status history entry
+             whose `timeout` is the alert's **previous** timeout
+             (`models/alert.py:447`). A truthy return adds the id to
+             `updated`. This call is outside the try: an exception here
+             (for example a `timeout` PostgreSQL cannot store) ends the
+             request with the generic 500, with earlier alerts already
+             committed.
+        4. Any collected error: 500 `failed to bulk set alert status` with
+           `errors` = the messages (`bulk.py:64-65`), **after** the other
+           alerts were updated. Otherwise 200 `{status: ok, updated: [ids],
+           count}`.
+
+        Bulk-specific differences from `PUT /alert/{alert_id}/status`
+        (`views/alerts.py:104-141`):
+        - it calls `set_status`, not `from_status`: severity, tags and
+          attributes are not rewritten by the status write, and an absent
+          timeout stores `ALERT_TIMEOUT` instead of NULL (contrast
+          lifecycle A1.3);
+        - a plugin rejection becomes part of a 500 (with partial success),
+          not a 400;
+        - **carry-over between alerts:** `status` and `text` are
+          reassigned from each alert's plugin result (`bulk.py:53`), so a
+          plugin's re-mapping for one alert applies to every later alert;
+        - no audit event (BULK-SEC-3) and at most 1000 alerts.
+
+        Source-derived; runtime NOT_RUN.
+      parameters: *bulkSelectionParams
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status: {type: string, description: "required (truthy)"}
+                text: {type: string, default: bulk status update}
+                timeout: {description: "unvalidated; falsy gives ALERT_TIMEOUT"}
+      responses:
+        "200": *bulkUpdatedResponse
+        "400": {description: "missing status; q parse failure; invalid filter or sort name", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "404": {description: "no alert selected", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {description: "`failed to bulk set alert status` with per-alert error messages (other alerts already updated), or an exception from set_status mid-batch", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+      x-runtime: "NOT_RUN"
+  /_bulk/alerts/tag:
+    put:
+      operationId: bulkTagAlerts
+      x-source: alerta/views/bulk.py:96-108; alerta/models/alert.py:471-474; alerta/database/backends/postgres/base.py:361-369
+      x-scope: write:alerts
+      summary: Add tags to every selected alert
+      description: |
+        Selection as described under `DELETE /_bulk/alerts`, without
+        customer scoping or a row limit (BULK-SEC-1).
+        1. `tags` falsy or absent: `ApiError("must supply 'tags' as json
+           list")` with no code, so **500**, not 400 (`bulk.py:102-103`;
+           `exceptions.py:10`), as on the single route.
+        2. One statement: `UPDATE alerts SET tags = ARRAY(SELECT DISTINCT
+           UNNEST(tags || <tags>)) WHERE <selection> RETURNING id`,
+           committed (`postgres/base.py:361-369`). Union, de-duplicated,
+           undefined order. `tags` is not type-checked (as on the single
+           route; non-list values NOT verified).
+        3. 200 `{status: ok, updated: [ids], count}`; an empty selection
+           gives 200 with `count: 0`, not 404.
+
+        Bulk-specific differences from `PUT /alert/{alert_id}/tag`: one
+        set-based statement with no per-alert lookup, no 404, no audit
+        event. As for the single route, no history, no `updateTime` change
+        and no plugins.
+
+        Source-derived; runtime NOT_RUN.
+      parameters: *bulkSelectionParams
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tags: {type: array, items: {type: string}}
+      responses:
+        "200": *bulkUpdatedResponse
+        "400": {description: "q parse failure, or invalid filter or sort name", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {description: "missing or empty tags (`must supply 'tags' as json list`), or SQL failure", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+      x-runtime: "NOT_RUN"
+  /_bulk/alerts/untag:
+    put:
+      operationId: bulkUntagAlerts
+      x-source: alerta/views/bulk.py:111-123; alerta/models/alert.py:476-479; alerta/database/backends/postgres/base.py:371-379
+      x-scope: write:alerts
+      summary: Remove tags from every selected alert
+      description: |
+        Selection as described under `DELETE /_bulk/alerts`, without
+        customer scoping or a row limit (BULK-SEC-1).
+        1. `tags` falsy or absent: 500 `must supply 'tags' as json list`
+           (no code given, `bulk.py:117-118`).
+        2. One statement: `UPDATE alerts SET tags = (SELECT array_agg(t)
+           FROM unnest(tags) t WHERE NOT t = ANY(<tags>)) WHERE <selection>
+           RETURNING id`, committed (`postgres/base.py:371-379`). An alert
+           left with no tags gets SQL NULL, as on the single route.
+        3. 200 `{status: ok, updated: [ids], count}`; an empty selection
+           gives 200 with `count: 0`. Every selected alert is counted,
+           whether or not it carried any of the tags.
+
+        Bulk-specific differences from `PUT /alert/{alert_id}/untag`: one
+        set-based statement, no 404, no audit event, and the `tag_timer`
+        metric rather than `untag_timer` (`bulk.py:114`;
+        `views/alerts.py:225`). No history, no `updateTime` change, no
+        plugins.
+
+        Source-derived; runtime NOT_RUN.
+      parameters: *bulkSelectionParams
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tags: {type: array, items: {type: string}}
+      responses:
+        "200": *bulkUpdatedResponse
+        "400": {description: "q parse failure, or invalid filter or sort name", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "415": {$ref: '#/components/responses/UnsupportedMediaType'}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {description: "missing or empty tags, or SQL failure", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+      x-runtime: "NOT_RUN"
+  /_bulk/task/{task_id}:
+    parameters:
+      - {name: task_id, in: path, required: true, schema: {type: string}, description: "any string; not checked against tasks this caller submitted"}
+    get:
+      operationId: getBulkTaskStatus
+      x-source: alerta/views/bulk.py:18-27; alerta/tasks.py:10-14; alerta/app.py:96-123
+      x-scope: read:alerts
+      summary: Celery state of a bulk action task
+      description: |
+        1. Imports `alerta.tasks` (`bulk.py:24`), with the same Celery
+           and kombu requirements and failure modes as `PUT
+           /_bulk/alerts/action` (generic 500 without them).
+        2. `action_alerts.AsyncResult(task_id)`; 200 `{status:
+           <task.status lowercased>, id: <task_id>}` (`bulk.py:25-27`).
+           The value set is Celery's task-state names in lower case; which
+           states occur, what an unknown id reports, and what happens with
+           the default null `CELERY_RESULT_BACKEND` (`settings.py:56`) are
+           NOT established (Celery unpinned, not read).
+        3. The task returns nothing (`tasks.py:15-46`), so even a finished
+           task exposes no result, no updated ids and no errors here.
+        4. No customer or ownership check: any `read:alerts` caller can
+           query any task id (BULK-SEC-1 class). The response carries only
+           the state.
+
+        Source-derived; runtime NOT_RUN.
+      responses:
+        "200":
+          description: "Task state"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, id]
+                properties:
+                  status: {type: string, description: "Celery state, lowercased"}
+                  id: {type: string}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {description: "Celery or kombu not installed, or result-backend failure (NOT established)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+      x-runtime: "NOT_RUN"
+  /oembed:
+    get:
+      operationId: oembed
+      x-source: alerta/views/oembed.py:14-68; alerta/templates/oembed/counts.html:1-24; alerta/database/backends/postgres/utils.py:142-198
+      x-scope: read:oembed
+      summary: oEmbed counts widget for an `/alerts/count` URL
+      description: &oembedDescription |
+        `/oembed` (format defaults to `json`) and `/oembed.<format>` run the
+        same view (`oembed.py:14-19`). `@permission(Scope.read_oembed)`
+        (`models/enums.py:83`): `read:oembed`, or derived from `read`,
+        `write:oembed`, `write`, `admin:oembed` or `admin`
+        (`models/permission.py:96-103`), so `READONLY_SCOPES` (`['read']`)
+        and the default user scopes qualify. `OPTIONS` via `cross_origin()`.
+        1. `format` is **never read**: any value (for example
+           `/oembed.xml`) gives the same JSON. Flask's default path
+           converter excludes `/`.
+        2. `url` and `title` are both **required** query parameters
+           (`oembed.py:20-25`); either missing gives 400 `{status: error,
+           message: 'Client Error'}`. This is not the ApiError body (no
+           `code`, `errors` or `requestId`). The bundled `embed.js` sends
+           `title` only when configured (`static/embed.js:22`).
+        3. `urlparse(url)`; an exception (for example a malformed IPv6
+           host) gives the same 400 (`:27-31`). Only the URL's **path
+           suffix** and **query** are used: host, scheme and port are
+           ignored, so the counts always come from this server's database.
+        4. Path ending `/alerts/count` (`:33-62`):
+           - `qb.alerts.from_params(parse_qs(o.query))`: a plain `dict` of
+             lists, not a werkzeug MultiDict, and **no customer scoping**.
+             `from_params` calls `params.get('from-date', default=None,
+             type=DateTime.parse)` unconditionally
+             (`postgres/utils.py:166`), and `dict.get` accepts no keyword
+             arguments, so this raises TypeError; any `q` value fails
+             earlier in the parser or later at the same line. The
+             `except Exception` turns it into 500 `{status: error,
+             message: 'Server Error'}` (`:37-39`). **Inferred: this branch
+             always returns that 500**, so the widget never renders.
+             NOT_RUN.
+           - Code after that point, unreachable on the inferred path:
+             `get_counts_by_severity` (`SELECT severity, COUNT(*) ... GROUP
+             BY severity`, `postgres/base.py:538-545`); `max` = the highest
+             of `informational`, `warning`, `minor`, `major`, `critical`
+             with a non-zero count, else `none` (ALERTA-model names only);
+             `counts.html` rendered with `title`, `max` and the counts
+             (autoescaped, Flask `.html` rule); 200 `{version: '1.0', type:
+             rich, title, provider_name: Alerta, provider_url:
+             request.url_root, html}` with an explicit
+             `Access-Control-Allow-Origin: *` header. `title` is
+             HTML-escaped inside `html` but returned raw in the JSON
+             `title` member.
+        5. Path ending `/alerts/top10/count`: the branch is a TODO `pass`
+           (`:64-66`), so the view returns None. In Flask 3.1.3, turning
+           None into a response raises TypeError (`flask/app.py:1211-1212`).
+           Where that conversion first happens is NOT established: the
+           outer `cross_origin()` decorator (Flask-Cors 6.0.2, source not
+           read) may convert the return value inside dispatch, where the
+           app's `Exception` handler (`exceptions.py:80`, `:120-136`) would
+           give the generic 500; otherwise it happens in `finalize_request`
+           outside the view's handlers (`flask/app.py:920`), and
+           `handle_exception` (`:841-861`) passes an InternalServerError to
+           the registered 500 handler (`exceptions.py:74-95`). Either way a
+           500 with an Error-shaped body is the inferred outcome (NOT_RUN);
+           the exact message is NOT established.
+        6. Any other path: 400 `{status: error, message: 'unsupported
+           oEmbed URL scheme'}` (`:67-68`).
+        7. JSONP: `jsonp` runs inside the permission check, so only after
+           authentication and the scope check pass, and wraps only when
+           `callback` is present and truthy (`utils/response.py:11-12`). A
+           non-empty `callback` makes it read `.data` from the view's
+           return value (`:13`); every branch returns a tuple or None, so
+           this raises AttributeError: generic 500. An empty `callback=`
+           takes the ordinary path.
+
+        **SECURITY OEMBED-SEC-1 (unscoped counts, latent):** the counts
+        query is built without `customers` (`oembed.py:35`) and needs only
+        `read:oembed`, which plain `read` (including `READONLY_SCOPES` for
+        anonymous callers under `ALLOW_READONLY`) grants. If the branch
+        worked, a customer-limited or read-only caller would see severity
+        counts across every customer. Currently masked by the inferred
+        TypeError above. Source-derived, NOT_RUN.
+
+        Source-derived; runtime NOT_RUN.
+      parameters: &oembedParams
+        - {name: url, in: query, required: true, schema: {type: string}, description: "only its path suffix and query string are used"}
+        - {name: title, in: query, required: true, schema: {type: string}, description: "required; reflected"}
+      responses: &oembedResponses
+        "200":
+          description: "oEmbed rich response (inferred unreachable, step 4)"
+          headers:
+            Access-Control-Allow-Origin: {schema: {const: "*"}}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, type, title, provider_name, provider_url, html]
+                properties:
+                  version: {const: "1.0"}
+                  type: {const: rich}
+                  title: {type: string}
+                  provider_name: {const: Alerta}
+                  provider_url: {type: string}
+                  html: {type: string}
+        "400":
+          description: "missing url or title, unparsable url (`Client Error`), or unsupported path (`unsupported oEmbed URL scheme`)"
+          content:
+            application/json:
+              schema: &oembedError
+                type: object
+                required: [status, message]
+                properties:
+                  status: {const: error}
+                  message: {type: string}
+        "401": {$ref: '#/components/responses/Unauthorized'}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500":
+          description: "`{status: error, message: 'Server Error'}` from the counts branch (inferred always), or an Error body for the top10 branch (inferred) and for a non-empty `callback`. The Error body also satisfies the minimal oEmbed error shape, so the alternatives overlap (anyOf)."
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - *oembedError
+                  - {$ref: '#/components/schemas/Error'}
+      x-runtime: "NOT_RUN"
+  /oembed.{format}:
+    parameters:
+      - {name: format, in: path, required: true, schema: {type: string}, description: "ignored; any value without '/'"}
+    get:
+      operationId: oembedWithFormat
+      x-source: alerta/views/oembed.py:15-68
+      x-scope: read:oembed
+      summary: Same view as /oembed; the format is ignored
+      description: *oembedDescription
+      parameters: *oembedParams
+      responses: *oembedResponses
+      x-runtime: "NOT_RUN"
+  /embed.js:
+    get:
+      operationId: embedJs
+      x-source: alerta/views/oembed.py:71-74; alerta/static/embed.js:1-36
+      x-scope: none
+      summary: jQuery plugin that loads the oEmbed widget
+      security: [{}]
+      description: |
+        No permission decorator and no `cross_origin`. Returns
+        `send_static_file('embed.js')` (`oembed.py:71-74`), status 200;
+        the Content-Type is set by Flask's static-file handling and is
+        NOT established here (no media type is claimed). The route lists
+        `OPTIONS` itself, so Flask's automatic OPTIONS response does not
+        apply and an OPTIONS request is routed to this view (Flask route
+        semantics, inferred); what the app-level Flask-Cors extension
+        (`app.py:35`) adds or intercepts is NOT established.
+
+        The script (`static/embed.js:1-36`) defines `$.fn.alerta(url,
+        options)`: it builds `<endpoint>/oembed?url=<encoded url>`, adds
+        `&api-key=<key>` (unencoded) and `&title=<encoded title>` when
+        configured, fetches it with `$.ajax`, and inserts `data.html` with
+        jQuery `.html()`. The default endpoint is `http://api.alerta.io`.
+
+        **SECURITY OEMBED-SEC-2 (credential placement in the embedding
+        page):** the documented embedding puts an API key into the
+        embedding page's script and the request query string (`:5`,
+        `:21`), so anyone who can view that page can read the key, and the
+        key travels in URLs (logs, referrers); the default endpoint is
+        plain HTTP (`:4`). The returned `html` is inserted as HTML
+        (`:29`). Source-derived, NOT_RUN.
+
+        Source-derived; runtime NOT_RUN.
+      responses:
+        "200": {description: "embed.js (`static/embed.js`); media type NOT established", content: {"*/*": {schema: {type: string}}}}
+        "500": {$ref: '#/components/responses/ServerError'}
+      x-runtime: "NOT_RUN"
   /blackout:
     post:
       operationId: createBlackout
@@ -4077,6 +4837,1108 @@ paths:
         "401": {$ref: '#/components/responses/Unauthorized'}
         "403": {$ref: '#/components/responses/Forbidden'}
         "500": {$ref: '#/components/responses/ServerError'}
+  /auth/login:
+    post:
+      operationId: authLogin
+      x-source: alerta/auth/login.py:7-18; alerta/auth/basic.py:67-105; alerta/auth/basic_ldap.py:12-182; alerta/auth/__init__.py:44-54; alerta/auth/utils.py:36-73; alerta/models/token.py:78-118
+      x-scope: none
+      summary: Password login (basic or LDAP), or the CAS ticket path; returns a Bearer token
+      security: [{}]
+      description: |
+        No permission decorator: credentials sent with the request (API key,
+        Bearer, Basic) are ignored. The route takes `OPTIONS` (CORS,
+        `cross_origin(supports_credentials=True)`) and `POST`. No auth route
+        has the `jsonp` decorator, so `?callback=` is ignored on every route
+        in this slice.
+
+        **Dispatch** on `AUTH_PROVIDER` (default `basic`, `settings.py:63`),
+        read on each request (`login.py:10-18`):
+        - `ldap`: `basic_ldap.login()`, the LDAP path below.
+        - `cas`: `cas.cas_login()` (`cas.py:129-224`), the CAS ticket path,
+          listed only under `POST /auth/cas`.
+        - anything else: `basic.login()`, the basic path below. This
+          includes `openid`, `saml2`, `github`, `azure` and the other SSO
+          providers, so password login against the local user table stays
+          available under every SSO provider.
+
+        **Body handling** (both password paths):
+        1. The auth blueprint's `before_request` (`auth/__init__.py:44-54`)
+           rejects a POST whose Content-Type is not JSON with 415.
+        2. A JSON Content-Type with an empty or malformed body: reading
+           `request.json` raises BadRequest (Flask 3.1.3
+           `flask/wrappers.py:212-219`; werkzeug 3.1.7
+           `wrappers/request.py:644-645`), so **400** with message
+           `400 Bad Request: ...` (`exceptions.py:83-95`).
+        3. Valid JSON that is not an object (`null`, a list, a string, a
+           number): `.get` raises AttributeError, which is not the caught
+           KeyError, so the generic **500** `An internal error has occurred!`.
+        4. An object without `password`, or without a truthy `username` and
+           without `email`: KeyError, so **401** `must supply 'username' and
+           'password'` (`basic.py:69-73`; `basic_ldap.py:14-18`). A falsy
+           `username` (for example `""`, `0` or `false`) falls through to
+           `email`, whatever its type. The selected value is not
+           type-checked, and what happens next depends on the path:
+           - basic: it is passed to SQL for both `login` and `email`
+             (`models/user.py:194-199`, `postgres/base.py:1051-1053`). A JSON
+             `null` (for example `username` and `email` both null) becomes
+             SQL NULL, matches no row, and gives 401 `Invalid username or
+             password`. Other non-string types may give an adapter or SQL
+             error (inferred generic 500, NOT_RUN).
+           - LDAP: after the empty-password check, `'\\' in login` and
+             `login.split(...)` run before any SQL (`basic_ldap.py:20-27`).
+             `null` or a number raises TypeError at the membership test; a
+             list or object passes it and raises AttributeError at `split`.
+             Neither is the caught ValueError, so generic 500 (NOT_RUN).
+
+        **Basic path** (`basic.py:67-105`), in order:
+        1. `User.check_credentials` (`models/user.py:194-199`): `SELECT *
+           FROM users WHERE login=%s OR email=%s` with the username for both
+           (`postgres/base.py:1051-1053`; if two rows match, an arbitrary one
+           is used), then bcrypt `checkpw` on the first 72 UTF-8 bytes of the
+           password (`auth/utils.py:27-29`). No row, or a wrong password:
+           401 `Invalid username or password`.
+           - **SECURITY AUTH-SEC-2 (empty password accepted):** there is no
+             empty-password check (contrast `basic_ldap.py:20-21`). A user
+             created by `POST /user` without `password` stores the hash of
+             `''` (`models/user.py:67`), so the password `""` logs in as that
+             user. This answers the question left open on `POST /user`.
+             Source-derived, NOT_RUN.
+           - **SECURITY AUTH-SEC-3 (account enumeration):** the password is
+             encoded only after a row is found (`auth/utils.py:28`), so a
+             non-string JSON password gives 500 (AttributeError) for an
+             existing login or email and 401 for an unknown one; bcrypt also
+             runs only when a row exists (a timing difference).
+             Source-derived, NOT_RUN.
+           - Users created by LDAP, OIDC, SAML, CAS, GitHub or the auth
+             proxy store the literal `''` as the password, not a hash
+             (`basic_ldap.py:135`, `oidc.py:177`, `saml.py:89`, `cas.py:171`,
+             `github.py:73`, `auth/decorators.py:107`). What bcrypt 5.0.0
+             `checkpw` does with that stored value is NOT established
+             (inferred: an exception, so 500).
+        2. `EMAIL_VERIFICATION` (default false, `settings.py:215`) and a
+           falsy `email_verified`: `send_confirmation()` stores a new
+           confirmation hash and mails a link built from the request's
+           `Referer` (`models/user.py:212-215`, `auth/utils.py:76-92`), then
+           403 `email not verified`. This repeats on every correct-password
+           attempt. With no `Referer`, `link(None, ...)` raises
+           AttributeError (`auth/utils.py:77`): inferred 500, NOT_RUN. Mail
+           delivery itself is not traced here.
+        3. `not_authorized('ALLOWED_EMAIL_DOMAINS', [user.domain])`
+           (`auth/utils.py:36-39`): 403 `unauthorized domain` only when
+           `AUTH_REQUIRED` is true (default false, `settings.py:62`) and the
+           list (default `['*']`, `settings.py:100`) holds neither `*` nor
+           the domain. `user.domain` is the part before `\` when the stored
+           `login` contains a backslash, else the email's domain, else null
+           (`models/user.py:47-55`).
+        4. `status` other than `active`: 403 `User <login> not active`.
+        5. `UPDATE users SET last_login=NOW() at time zone 'utc'`
+           (`models/user.py:170-171`, `postgres/base.py:1063-1069`).
+        6. `groups` = the names of the user's groups; `scopes` =
+           `Permission.lookup(user.login, roles=user.roles + groups)`
+           (`models/permission.py:113-114`, `postgres/base.py:1277-1293`;
+           rules under `/group`). `ADMIN_USERS` (default `[]`,
+           `settings.py:64`) is compared here with the **login**
+           (`postgres/base.py:1278`); separately, the `User` constructor
+           gives `ADMIN_ROLES` to any loaded row whose stored **email** is
+           listed (`models/user.py:39`), so either attribute confers
+           `ADMIN_SCOPES`. `customers` =
+           `get_customers(user.login, groups + ([user.domain] if
+           user.domain else []))` (`basic.py:95`, `auth/utils.py:42-49`):
+           `[]` when `CUSTOMER_VIEWS` is off
+           (default, `settings.py:76`); otherwise `Customer.lookup`
+           (`models/customer.py:85-87`, `postgres/base.py:1351-1367`) matches
+           the login, then each group, then the domain (only when
+           `user.domain` is truthy), against `customers.match`. An `ADMIN_USERS` login or a `*` customer gives
+           `[]`; no match raises NoCustomerMatch, which becomes 403 `No
+           customer lookup configured for user '<login>' or '<matches>'`.
+        7. Audit event `basic-auth-login` on the `auth` signal
+           (`basic.py:97-99`). The signal is connected only when
+           `AUDIT_TRAIL` contains `auth` (default `['admin']`,
+           `settings.py:178`) and `AUDIT_LOG` or `AUDIT_URL` is set
+           (`utils/audit.py:42-46`), so by default nothing is recorded. The
+           record includes the request JSON with a top-level `password`
+           replaced by `[REDACTED]` while `AUDIT_LOG_REDACT` is true (the
+           default) (`utils/audit.py:83-90`).
+        8. Token: `create_token(provider='basic', roles=user.roles,
+           groups=groups, email=user.email,
+           email_verified=user.email_verified, ...)`; 200 `{token}`.
+
+        **LDAP path** (`basic_ldap.py:12-182`; only when `AUTH_PROVIDER` is
+        `ldap`, which needs python-ldap at startup, `auth/__init__.py:9-15`):
+        1. Body as above; an empty `password` gives 401 `password not allowed
+           to be empty` (`:20-21`).
+        2. Split the login (`:23-33`): `DOMAIN\user`, else `user@domain`.
+           Neither form, or more than one separator, falls back to
+           `LDAP_DEFAULT_DOMAIN` (default `''`, `settings.py:136`) with the
+           whole login as the username; with no default domain, 401
+           `expected username with domain`.
+        3. While `LDAP_USE_EMAIL_DOMAIN_WHITELIST` is true (the default,
+           `settings.py:132`), the domain must be listed in
+           `ALLOWED_EMAIL_DOMAINS` or be a key of `LDAP_DOMAINS` (default
+           `{}`, `settings.py:123-125`), else 403 `unauthorized domain`
+           (`:36-39`). This is plain membership: `*` is **not** a wildcard
+           here, and the check applies even when `AUTH_REQUIRED` is false.
+        4. Process-global python-ldap options are set on every request
+           (`:42-56`): `LDAP_CACERT` (hard certificate check),
+           `LDAP_ALLOW_SELF_SIGNED_CERT`, `LDAP_TIMEOUT` (default -1, which
+           is truthy, so it is always set), and each `LDAP_CONFIG` item via
+           `getattr(ldap, <name>)`, so an unknown name raises (500).
+        5. `ldap.initialize(LDAP_URL)`; an error gives 500 with its text
+           (`:59-63`). In Flask debug mode the trace level is 2 (`:60`); what
+           python-ldap writes at that level is NOT established.
+        6. With `LDAP_BIND_USERNAME` set, a service bind; invalid
+           credentials give 500 `invalid ldap bind credentials` (`:66-72`).
+           Other LDAP errors (for example an unreachable server) are not
+           caught: generic 500.
+        7. Locate the user (`:86-124`):
+           - With `LDAP_USER_FILTER`: a subtree search under
+             `LDAP_USER_BASEDN` or `LDAP_BASEDN`, filter
+             `LDAP_USER_FILTER.format(username=<escaped username>)`,
+             attributes `LDAP_USER_NAME_ATTR` (default `cn`) and
+             `LDAP_USER_EMAIL_ATTR` (default `mail`); results containing
+             `None` (referrals) are dropped. More than one result: 500
+             `invalid search query for domain "<domain>"`; none: 401
+             `invalid username or password`. `name` is the first name value
+             (a missing name attribute raises KeyError: 500). When the
+             entry has a non-empty list of email values, `email` = the first
+             value decoded and `email_verified` = `bool(email)`; a first
+             value that decodes to `""` therefore gives `email = ""`, not
+             verified, and is **not** rejected by the missing-email check
+             below (`:108-111`). When the email attribute is absent or its
+             value list is empty: 401 `User LDAP entry missing required
+             email attribute` while the whitelist flag is on, else email
+             `<escaped username, lowercased>@ldapdomain.invalid`, not
+             verified (`:112-116`).
+           - Without a filter: the DN is `LDAP_DOMAINS[domain]` with the
+             escaped username inserted by `%` or by `.format()`; `name` is the
+             escaped username and the email `<username>@<domain>` (both
+             escaped), not verified. A domain that is not a key of
+             `LDAP_DOMAINS` (it passed step 3 through
+             `ALLOWED_EMAIL_DOMAINS`, or the flag is off) raises KeyError:
+             500.
+           - **SECURITY AUTH-SEC-11 (DN and filter construction):** the
+             username is escaped with `escape_filter_chars`, which is LDAP
+             filter escaping (`:92-93`), and is then also placed in a DN
+             (`:118-121`), where DN escaping would apply. The group filter
+             (step 10) inserts `email` and `userdn` without escaping
+             (`:155`). Class: LDAP DN or filter injection. Impact NOT
+             established (no directory was exercised).
+        8. Bind as the user's DN with the password; invalid credentials: 401
+           `invalid username or password` (`:127-130`).
+        9. Local user (`:132-139`): `login` = `email or username` (`:132`),
+           where `username` is the step 2 value (unescaped). `email` is
+           truthy on every path except the empty decoded mail value of step
+           7, where `login` falls back to `username`. Lookup by `login OR
+           email` (`postgres/base.py:1051-1053`):
+           - Not found: `user = User(...).create()` (`:135-137`) with
+             `USER_ROLES` (default `['user']`, `settings.py:67-68`), password
+             `''` (unhashed) and text `LDAP user`; the constructor accepts an
+             empty email (`models/user.py:29-45`). The stored row is used
+             from here on. An insert error is not caught (500).
+           - Found: `update(login, email, email_verified)` (`:139`). An empty
+             email fails the update's email check (`'@' not in ''`,
+             ValueError, generic 500, `models/user.py:174-176`) before any
+             token. Otherwise the return value is discarded, so the rest of
+             the request uses the **pre-update** row
+             (`models/user.py:173-182`).
+           The service account is bound again if configured (`:141-145`).
+        10. Groups (`:148-162`): with `LDAP_GROUP_FILTER`, a subtree search
+            under `LDAP_GROUP_BASEDN` or `LDAP_BASEDN` with
+            `LDAP_GROUP_FILTER.format(username=, email=, userdn=)`, collecting
+            the values of `LDAP_GROUP_NAME_ATTR` (default `dn`), or the entry
+            DN when the entry lacks that attribute.
+        11. `status` other than `active`: 403 `User <login> not active`;
+            then `not_authorized('ALLOWED_LDAP_GROUPS', groups)` (default
+            `['*']`, `settings.py:138`; effective only with `AUTH_REQUIRED`):
+            403 `User <login> is not authorized` (`:165-168`). The local user
+            was already created or updated in step 9.
+        12. Last login; `scopes` = `Permission.lookup(login,
+            roles=user.roles + groups)` and `customers` =
+            `get_customers(login, groups + ([user.domain] if user.domain
+            else []))` (`:171-172`) as in the basic path; audit event
+            `basic-ldap-login` (`:174-176`).
+        13. Token (`:179-182`): provider `ldap`; `preferred_username` and
+            `email` are both `user.email`, not the step 9 `login`: for a
+            found user the pre-update stored email, for a new user the
+            created row's email. When that email is empty (a new user from
+            the empty-mail case), both claims are omitted, since
+            `serialize` keeps them only when truthy
+            (`models/token.py:92-95`). Roles `user.roles`; groups the LDAP
+            group names or DNs.
+
+        **Token** (`create_token`, `auth/utils.py:52-73`; `Jwt.serialize`
+        and `tokenize`, `models/token.py:78-118`; schema TokenClaims):
+        - Always present: `iss` = `request.url_root`; `typ` `Bearer`;
+          `sub` = the user id; `aud` = `OAUTH2_CLIENT_ID`, else
+          `SAML2_ENTITY_ID`, else `absolute_url()`, which is `BASE_URL` or
+          else `request.url_root` (`utils/response.py:22-27`); `exp` = now +
+          `TOKEN_EXPIRE_DAYS` days (default 14, `settings.py:174`); `nbf` and
+          `iat` = now; `jti` = a uuid4. Times are naive UTC, encoded as
+          integer seconds (PyJWT 2.12.1 `api_jwt.py:132-135`). With
+          `BASE_URL` empty and no client or entity id, the audience depends
+          on the request's host, so a token minted through one host name is
+          rejected with `Invalid audience` through another.
+        - Only when truthy: `name`, `preferred_username` (the login),
+          `email`, `provider`, `orgs`, `groups`, `roles`, `scope` (the
+          scopes **space-joined**; omitted when there are none), `oid`.
+          Only when not null: `email_verified`, `picture` (never set on
+          these two paths). `customers`: present, possibly `[]`, exactly when
+          `CUSTOMER_VIEWS` is on.
+        - Signed HS256 with `SECRET_KEY`.
+          **SECURITY AUTH-SEC-4 (default signing key):** `SECRET_KEY`
+          defaults to `changeme` (`settings.py:15`; kept by
+          `utils/config.py:29` unless the environment overrides it) and
+          nothing rejects that value at startup; PyJWT 2.12.1 only warns on
+          a short HMAC key (`api_jws.py:192-197`, `:360-365`). The same key
+          signs the itsdangerous confirmation and reset tokens
+          (`auth/utils.py:106-112`). A deployment that keeps the default
+          issues tokens that anyone who knows the default can forge.
+          Source-derived, NOT_RUN.
+        - The token is stateless: later changes to roles, groups, status or
+          customers do not affect it before `exp` (see `/group`).
+
+        Source-derived; runtime NOT_RUN.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              description: "The body depends on AUTH_PROVIDER (login.py:10-18): the password object for basic (and any non-ldap, non-cas provider) and ldap; the CAS ticket object for cas. Neither alternative applies to the other provider."
+              anyOf:
+                - title: Password login (AUTH_PROVIDER other than cas)
+                  type: object
+                  required: [password]
+                  description: "`username` (truthy) or else `email` must be present (basic.py:69-73; basic_ldap.py:14-18)."
+                  properties:
+                    username: {type: string, description: "login or email (basic); `DOMAIN\\user`, `user@domain` or a bare name with LDAP_DEFAULT_DOMAIN (LDAP); not type-checked"}
+                    email: {type: string, description: "used when `username` is absent or falsy"}
+                    password: {type: string, description: "basic: only the first 72 UTF-8 bytes count; LDAP: must be non-empty"}
+                  additionalProperties: true
+                - title: CAS ticket (AUTH_PROVIDER=cas; inventory depth, see POST /auth/cas)
+                  type: object
+                  description: "Both members must be present and truthy, else 400 `Fields 'ticket' and 'service' are required` (cas.py:135-138); an empty string is falsy and gets the same 400. No password is read."
+                  required: [ticket, service]
+                  properties:
+                    ticket: {type: string, minLength: 1}
+                    service: {type: string, minLength: 1}
+                  additionalProperties: true
+      responses:
+        "200": &authTokenOk {description: "Token issued", content: {application/json: {schema: {$ref: '#/components/schemas/AuthToken'}}}}
+        "400": {description: "JSON Content-Type with an empty or malformed body (werkzeug BadRequest); under AUTH_PROVIDER=cas also the CAS errors listed under POST /auth/cas", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {description: "`must supply 'username' and 'password'`; `Invalid username or password` (basic) or `invalid username or password` (LDAP); LDAP also `password not allowed to be empty`, `expected username with domain`, `User LDAP entry missing required email attribute`", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "403": {description: "`email not verified`; `unauthorized domain`; `User <login> not active`; LDAP `User <login> is not authorized`; NoCustomerMatch text", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "415": {$ref: '#/components/responses/AuthUnsupportedMediaType'}
+        "500": {description: "non-object JSON body; non-string password for an existing user (AUTH-SEC-3); LDAP `invalid ldap bind credentials`, `invalid search query for domain ...`, initialize errors and uncaught LDAP or KeyError failures; or the generic handler (exceptions.py:120-136)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+      x-runtime: "NOT_RUN"
+  /auth/logout:
+    get:
+      operationId: authLogout
+      x-source: alerta/auth/logout.py:7-14; alerta/auth/__init__.py:27-33, :50-51; alerta/settings.py:152
+      x-scope: none
+      summary: Report the OIDC end-session URL (no server-side logout)
+      security: [{}]
+      description: &authLogout |
+        No permission decorator, and no body is read. The auth blueprint's
+        JSON Content-Type check is skipped for this path
+        (`auth/__init__.py:50-51`), so a POST needs no JSON. GET and POST run
+        the same handler; `OPTIONS` is handled by `cross_origin`.
+        1. `OIDC_LOGOUT_URL` falsy: 200 `{status: ok, message: 'OIDC
+           end_session_endpoint not configured'}` (`logout.py:11-12`).
+        2. Otherwise: 200 `{status: ok, logoutUrl: <OIDC_LOGOUT_URL>}`
+           (`:14`).
+
+        `OIDC_LOGOUT_URL` defaults to null (`settings.py:152`). When
+        `AUTH_PROVIDER` is `openid`, `azure`, `cognito`, `gitlab` or
+        `keycloak`, blueprint registration replaces it with the discovery
+        document's `end_session_endpoint` (null when the document has
+        none), overriding any configured value, and sets `OIDC_AUTH_URL`
+        from `authorization_endpoint`; a discovery failure there aborts
+        startup with RuntimeError (`auth/__init__.py:27-33`). `google` is
+        not in that list, so with `AUTH_PROVIDER=google` the configured
+        value (default null) stays.
+
+        Nothing is invalidated. Tokens are stateless JWTs and parsing checks
+        only signature, audience and times (`models/token.py:43-53`); there
+        is no revocation list, so a token stays valid until `exp`.
+
+        Source-derived; runtime NOT_RUN.
+      responses: &authLogoutResponses
+        "200":
+          description: "Always 200"
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    required: [status, message]
+                    properties:
+                      status: {const: ok}
+                      message: {const: OIDC end_session_endpoint not configured}
+                  - type: object
+                    required: [status, logoutUrl]
+                    properties:
+                      status: {const: ok}
+                      logoutUrl: {type: string}
+        "500": {$ref: '#/components/responses/ServerError'}
+      x-runtime: "NOT_RUN"
+    post:
+      operationId: authLogoutPost
+      x-source: alerta/auth/logout.py:7-14
+      x-scope: none
+      summary: Same handler as GET
+      security: [{}]
+      description: *authLogout
+      responses: *authLogoutResponses
+      x-runtime: "NOT_RUN"
+  /userinfo:
+    get:
+      operationId: getUserinfo
+      x-source: alerta/auth/userinfo.py:14-25; alerta/models/token.py:43-115; alerta/auth/decorators.py:25-175; alerta/models/enums.py:86
+      x-scope: read:userinfo
+      summary: Echo the claims of the caller's Bearer token
+      description: |
+        `@permission(Scope.read_userinfo)` (`userinfo.py:16`;
+        `models/enums.py:86`), so the credential precedence above runs first;
+        a valid API key has already recorded its use (UW-R1). `OPTIONS` via
+        `cross_origin()`; a GET, so no Content-Type check.
+        1. The view matches `Bearer (\S+)` at the start of the
+           `Authorization` header, case-sensitively (`userinfo.py:18-20`).
+           No match: 401 `Missing authorization Bearer token` (`:24-25`).
+           This is the outcome for every caller that passed the decorator
+           without a Bearer header: an API key (`Authorization: Key`, or
+           `X-API-Key` / `?api-key=` alone), Hawk (whose dispatch has no
+           scope check), auth proxy, Basic, and precedence branches 3-5.
+        2. `Jwt.parse(token)` (`models/token.py:43-76`) is a second,
+           independent PyJWT 2.12.1 decode: algorithm HS256 only, key
+           `SECRET_KEY`, signature verified, audience `OAUTH2_CLIENT_ID` or
+           `SAML2_ENTITY_ID` or `absolute_url()`; `exp`, `nbf` and `iat` are
+           checked when present (PyJWT defaults, `api_jwt.py:52-65`); `iss`
+           is never checked (no issuer is passed, `api_jwt.py:563-564`); a
+           token without `aud` fails with MissingRequiredClaimError
+           (`api_jwt.py:524-527`). The view catches nothing, so **any**
+           failure here is the generic 500:
+           - Through the Bearer branch, the decorator has just parsed the
+             same token (`auth/decorators.py:69-91`), so this parse is
+             expected to succeed, except across an expiry boundary between
+             the two parses (ExpiredSignatureError, then 500).
+           - Through `X-API-Key` or `?api-key=` with an additional
+             `Authorization: Bearer` header, the decorator never examines
+             the token: a bad signature, wrong audience or expired token
+             here gives 500, not 401.
+           - For reference, the decorator itself maps only DecodeError
+             (including its subclass InvalidSignatureError) to 401 `Token is
+             invalid`, ExpiredSignatureError to 401 `Token has expired`, and
+             InvalidAudienceError to 401 `Invalid audience`
+             (`auth/decorators.py:75-82`). The other PyJWT InvalidTokenError
+             subclasses (PyJWT `exceptions.py:15-71`) are not caught, so on
+             any Bearer-authenticated route the following give the generic
+             500, not 401: an `alg` other than HS256 (InvalidAlgorithmError,
+             `api_jws.py:347-348`); a future `nbf` or a future `iat`
+             (ImmatureSignatureError, `api_jwt.py:477-478`, `:491-492`); an
+             `iat` whose `int()` conversion raises ValueError, such as
+             `"1.5"` (InvalidIssuedAtError, `api_jwt.py:471-476`); a missing
+             `aud` (MissingRequiredClaimError); a non-string `sub` or `jti`
+             (InvalidSubjectError, InvalidJTIError, `api_jwt.py:444-445`,
+             `:460-461`); and a time claim of a type `int()` rejects with
+             TypeError (for example `null` or a list), which is not a PyJWT
+             error at all. A ValueError on `nbf` or `exp` is raised as
+             DecodeError (`api_jwt.py:486-489`, `:500-505`), so that one is
+             401 `Token is invalid`. A non-string `scope` fails at
+             `.split` in `Jwt.parse` (`models/token.py:71`): AttributeError,
+             500.
+        3. The body is `Jwt(...).serialize`, bare (no `status` wrapper), 200
+           (schema UserinfoClaims). These are the **parsed and re-serialized**
+           claims of whatever token passed step 2, not necessarily a token
+           this server issued in the TokenClaims shape: `Jwt.parse` copies
+           each value as decoded and `serialize` writes it back without
+           normalizing (`models/token.py:55-75`, `:80-115`).
+           - `iss`, `typ`, `sub`, `aud`, `exp`, `nbf`, `iat`, `jti` always
+             (null when the claim is absent).
+           - `aud` is echoed as stored: a string, or a list of strings, which
+             non-strict PyJWT audience validation accepts when it contains
+             the expected audience (`api_jwt.py:547-558`).
+           - `exp`, `nbf`, `iat` are echoed as stored. Validation runs
+             `int()` on a temporary copy and does not rewrite the payload
+             (`api_jwt.py:465-505`), so accepted fractional numbers, numeric
+             strings (for example `"0"`) and booleans come back unchanged.
+             Tokens issued by this server carry integers.
+           - `scope` round trip: parse reads the `scope` string and splits it
+             on single spaces into `scopes` (`:71`); serialize joins them
+             back (`:104-105`). A token without `scope` parses to `['']`,
+             which is truthy, so the output then carries `scope: ""`. Such a
+             token cannot pass the decorator's `read:userinfo` check itself,
+             but can be echoed on the API-key path above.
+           - `customers`: parse takes a legacy singular `customer` claim as
+             `[customer]`, else `customers` (default `[]`) (`:74`); serialize
+             emits `customers` only while `CUSTOMER_VIEWS` is on
+             (`:111-112`), whatever the token holds.
+           - `name`, `preferred_username`, `email`, `provider`, `orgs`,
+             `groups`, `roles`, `oid` when truthy; `email_verified` and
+             `picture` when not null. Any other claim in the token is
+             dropped.
+
+        Source-derived; runtime NOT_RUN.
+      responses:
+        "200": {description: "The token's claims, parsed and re-serialized", content: {application/json: {schema: {$ref: '#/components/schemas/UserinfoClaims'}}}}
+        "401": {description: "decorator rejections (precedence above), or `Missing authorization Bearer token` from the view", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "403": {$ref: '#/components/responses/Forbidden'}
+        "500": {description: "any PyJWT failure in the view's own parse, or an uncaught PyJWT error in the decorator (see step 2)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+      x-runtime: "NOT_RUN"
+  /auth/openid:
+    post:
+      operationId: authOpenid
+      x-source: alerta/auth/oidc.py:20-206; alerta/auth/__init__.py:27-33, :41, :44-54; alerta/settings.py:98-157; alerta/utils/config.py:49-71
+      x-scope: none
+      summary: OpenID Connect authorization-code login (generic issuer; one handler for all OIDC routes)
+      security: [{}]
+      description: &oidcLogin |
+        One handler, `openid()`, serves `/auth/openid`, `/auth/azure`,
+        `/auth/gitlab`, `/auth/google` and `/auth/keycloak`
+        (`oidc.py:61-67`). **No behavior depends on the path used**: the
+        issuer, and the `provider` claim, come from `AUTH_PROVIDER`, so
+        posting to `/auth/google` while `AUTH_PROVIDER` is `keycloak` runs the
+        Keycloak flow. There is no `/auth/cognito` route; Cognito uses any of
+        these paths. The module is always imported (`auth/__init__.py:41`),
+        so the routes exist under every `AUTH_PROVIDER`; with a provider
+        that has no fixed issuer (for example the default `basic`), the flow
+        runs whenever `OIDC_ISSUER_URL` is set, with `provider` = that
+        `AUTH_PROVIDER` value. No permission decorator; `OPTIONS` via
+        `cross_origin(supports_credentials=True)`; the JSON Content-Type
+        check applies (415).
+
+        **Startup** (`auth/__init__.py:27-33`): for `AUTH_PROVIDER` in
+        `openid`, `azure`, `cognito`, `gitlab`, `keycloak` (not `google`),
+        discovery runs once at blueprint registration to set `OIDC_AUTH_URL`
+        and `OIDC_LOGOUT_URL`; any failure aborts startup (RuntimeError).
+
+        **Per request**, in order:
+        1. Discovery (`get_oidc_configuration`, `oidc.py:20-58`) runs on
+           **every** request. Issuer URL by `AUTH_PROVIDER` (`:22-30`):
+           - `azure`: `https://login.microsoftonline.com/<AZURE_TENANT>/v2.0`
+             (default tenant `common`, `settings.py:141`);
+           - `cognito`:
+             `https://cognito-idp.<AWS_REGION>.amazonaws.com/<COGNITO_USER_POOL_ID>`
+             (defaults `us-east-1` and null, `settings.py:103-104`);
+           - `gitlab`: `GITLAB_URL` (default `https://gitlab.com`,
+             `settings.py:114`);
+           - `google`: `https://accounts.google.com`;
+           - `keycloak`: `<KEYCLOAK_URL>/realms/<KEYCLOAK_REALM>` (both
+             default null, `settings.py:144-145`, which formats as the
+             truthy string `None/realms/None`);
+           - otherwise, or when the mapped value is falsy: `OIDC_ISSUER_URL`
+             (default null, `settings.py:149`). None: 503 `Must define Issuer
+             URL (OIDC_ISSUER_URL) in server configuration to use OpenID
+             Connect.`
+
+           Then GET `<issuer stripped of '/'>/.well-known/openid-configuration`
+           (timeout 2 s). Any exception, including a non-JSON body: 503
+           `Could not get OpenID configuration from well known URL: <e>`
+           (`:33-39`). No `issuer` member: `ApiError` with no code, which is
+           **500** (`exceptions.py:10`), `OpenID Connect issuer response
+           invalid: <error or message or document>` (`:41-43`). The
+           document's `issuer`, after `.format(tenantid=AZURE_TENANT)`, must
+           equal the issuer URL exactly (unstripped), else 503 `Issuer Claim
+           does not match Issuer URL used to retrieve OpenID configuration`
+           (`:45-46`); an issuer containing other `{...}` fields makes
+           `.format` raise (generic 500, inferred). With `OIDC_VERIFY_TOKEN`
+           (default **false**, `settings.py:153`), GET `jwks_uri` (timeout
+           2 s) and build `{kid: RSAAlgorithm.from_jwk(key)}`; any failure,
+           including a non-RSA key in the set, gives 503 `Could not get
+           OpenID JWT Key Set from JWKS URL: <e>` (`:48-54`). A missing
+           `token_endpoint` or `userinfo_endpoint` raises KeyError (generic
+           500, `:70-71`).
+        2. Body (`:73-77`): `code` and `redirectUri` are required; `clientId`
+           is required by all three supported client-authentication methods.
+           A missing member is an uncaught KeyError: generic **500**, not
+           400. `clientId` is not compared with `OAUTH2_CLIENT_ID`.
+        3. Client authentication (`:79-117`): the IdP's
+           `token_endpoint_auth_methods_supported` (default
+           `['client_secret_basic']`; a non-list is wrapped). The first entry
+           of `OIDC_TOKEN_AUTH_METHODS` (default `client_secret_basic`,
+           `client_secret_post`, `client_secret_jwt`, `settings.py:151`) that
+           the IdP lists is used; if none is listed, `client_secret_post`
+           (the initial value) is used anyway. The token request is a form
+           POST of `grant_type=authorization_code`, `code`, `redirect_uri`:
+           - `client_secret_basic`: HTTP Basic `clientId` :
+             `OAUTH2_CLIENT_SECRET` (`settings.py:99`);
+           - `client_secret_post`: adds `client_id` and `client_secret`;
+           - `client_secret_jwt`: adds `client_assertion_type`
+             `urn:ietf:params:oauth:client-assertion-type:jwt-bearer` and an
+             HS256 `client_assertion` signed with `OAUTH2_CLIENT_SECRET`
+             (`iss` = `sub` = `clientId`, `aud` = the token endpoint, a uuid4
+             `jti`, `exp` now + 5 min, `iat` now);
+           - any other configured method that the IdP lists: 400 `Token
+             endpoint auth method '<m>' is not supported by Alerta.`
+           The token POST, and the userinfo GET in step 6, have **no
+           timeout** (`:93`, `:97`, `:115`, `:146`), unlike discovery.
+           Reference availability defect: a slow IdP holds the worker.
+        4. Token response (`:118-122`): a non-JSON body raises (generic
+           500). An `error` member gives `ApiError(error_description or
+           error)` with no code, so **500**; an invalid or reused `code`
+           therefore surfaces as 500.
+        5. ID token (`:124-142`): the unverified header gives `kid` and
+           `alg`. With `OIDC_VERIFY_TOKEN`, `jwt.decode` uses
+           `jwt_key_set[kid]` and `algorithms=<the header's own alg>`, with
+           no `audience`; PyJWT 2.12.1 then raises InvalidAudienceError for
+           any token that carries a non-empty `aud` (`api_jwt.py:517-522`),
+           which OIDC ID tokens do, so in verify mode the ID token is
+           inferred to be **always discarded**. Without it (the default),
+           the token is decoded with `verify_signature: False`, which also
+           turns off `exp`, `aud`, `iss` and the other claim checks
+           (`api_jwt.py:79-88`). Any exception (no `id_token`, unknown
+           `kid`, bad token) is logged and gives `id_token = {}`; the flow
+           continues. No `nonce` is sent or checked anywhere in the server.
+           **SECURITY AUTH-SEC-5 (ID-token verification absent or
+           ineffective):** by default the ID token's signature and claims are
+           not verified; in verify mode the algorithm is taken from the
+           token's own header (PyJWT's docstring warns against this,
+           `api_jwt.py:204-215`) and every failure is swallowed. Boundary:
+           the ID token arrives in the server-side token-endpoint response
+           from the discovered issuer (requests' default TLS verification),
+           so the HTTP caller does not supply it directly. Source-derived,
+           NOT_RUN.
+        6. Userinfo (`:144-149`): GET `userinfo_endpoint` with
+           `Authorization: <token_type or Bearer> <access_token>`; any
+           exception (no `access_token`, network error, non-JSON body): 500
+           `No access token in OpenID Connect token response.` (an
+           `ApiError` with no code). Then `sub` = `userinfo['sub']`; a
+           userinfo body without `sub` (for example an error object) raises
+           KeyError (generic 500, `:151`).
+        7. Claim mapping (`:151-169`), userinfo first, then the ID token
+           (an `or` chain, so a falsy userinfo value falls back): `name`,
+           `preferred_username`, `nickname`, `email`, `picture`.
+           `email_verified` = userinfo's value if userinfo has the key, else
+           the ID token's value if it has the key, else `bool(email)`; so
+           the email fallback applies only when **both** sources omit the
+           claim, and an explicit `false` from either is kept. Then the
+           string `'true'` becomes `True` and every other value is kept as is
+           (`:156-157`). Custom
+           claims: `{OIDC_ROLE_CLAIM: ..., OIDC_GROUP_CLAIM: ...}` (defaults
+           `roles` and `groups`, `settings.py:154-155`), each from userinfo,
+           else the ID token, else `[]`; equal claim names collapse into one
+           entry. `login` = `preferred_username` or `nickname` or `email`;
+           none: 400 `Must support one of the following OpenID claims:
+           'preferred_username', 'nickname' or 'email'`.
+        8. Local user (`:171-181`): when `OIDC_LINK_USER_EMAIL` (default
+           **true**, `settings.py:157`) and `email` and `email_verified` are
+           truthy, look up by email (`SELECT * FROM users WHERE email=%s`,
+           `postgres/base.py:1055-1057`); otherwise by id = `sub`. Not found:
+           create `User(id=sub, name, login, password '', email,
+           roles=USER_ROLES, text '', email_verified)`; an insert error (for
+           example a duplicate `login` or `email`, both UNIQUE,
+           `sql/schema.sql:161`, `:177`) is not caught: generic 500. Found:
+           `update(login, email, email_verified)`; an email without `@`
+           raises ValueError (generic 500, `models/user.py:174-176`). The
+           update's return value is discarded, so later steps use the
+           **pre-update** row (old email, domain and roles).
+           **SECURITY AUTH-SEC-6 (identity linking on IdP-asserted, possibly
+           unverified attributes):** linking is selected when
+           `OIDC_LINK_USER_EMAIL`, `email` and the resolved `email_verified`
+           are all truthy (`:171`), and binds the IdP identity to any
+           existing local account with that email. If both userinfo and the
+           ID token omit `email_verified`, it defaults to `bool(email)`
+           (`:156`), so a truthy email links. Non-empty strings, including
+           `'false'`, stay strings and are truthy (`:157`); an empty string,
+           `false`, `null` or `0` is falsy and does not link. The linked
+           account's stored roles join the role list, and a stored email
+           listed in `ADMIN_USERS` gives `ADMIN_ROLES` when the row is loaded
+           (`models/user.py:39`). Separately, `Permission.lookup` and
+           `get_customers` take `login`, which prefers `preferred_username`
+           (`:167`, `:196-197`), and compare it with `ADMIN_USERS`
+           (`postgres/base.py:1278`, `:1352-1353`); an issuer whose users can
+           choose that claim can supply a value listed there.
+           Source-derived, NOT_RUN.
+        9. `roles` = role claim + `user.roles`; a non-list role claim (for
+           example a string) makes the `+` raise TypeError (generic 500).
+           `groups` = the group claim. If the user's id differs from `sub`
+           (an email-linked account), `custom_claims['oid']` = the local id
+           (`:183-187`).
+        10. Checks (`:189-193`): `status` other than `active`: 403 `User
+            <login> is not active`. `not_authorized('ALLOWED_OIDC_ROLES',
+            roles)` or `not_authorized('ALLOWED_EMAIL_DOMAINS',
+            [user.domain])`: 403 `User <login> is not authorized`; both are
+            no-ops while `AUTH_REQUIRED` is false, and `user.domain` is the
+            pre-update value. The local user was already created or updated.
+            **SECURITY AUTH-SEC-7 (role allowlist silently ineffective):**
+            `ALLOWED_OIDC_ROLES` is computed once inside `settings.py` from
+            that module's own defaults (`settings.py:156`, so `['*']`). Only
+            **environment variables** named `ALLOWED_GITLAB_GROUPS` or
+            `ALLOWED_KEYCLOAK_ROLES` feed it (`utils/config.py:59-65`, then
+            `:71`); the same keys set in a configuration file
+            (`utils/config.py:23-24`) change keys that nothing reads, leaving
+            every role admitted. `ALLOWED_OIDC_ROLES` itself, set in a
+            configuration file or the environment, does take effect
+            (`utils/config.py:71`). Source-derived, NOT_RUN.
+        11. Last login; `scopes` = `Permission.lookup(login, roles)`;
+            `customers` = `get_customers(login, groups + ([user.domain] if
+            user.domain else []))`; `user.domain` is null when the login has
+            no `\` and the email is absent or has no `@`, which OIDC allows
+            with a `preferred_username` or `nickname` login
+            (`models/user.py:47-55`) (NoCustomerMatch: 403)
+            (`:194-197`).
+        12. Audit event `openid-login` (connected only as described under
+            `/auth/login`), with the custom claims as extra fields and
+            `resource_id` = `sub` (`:199-201`).
+        13. Token (`:203-206`): `sub` = the IdP's `sub` (not the local id
+            when linked; the local id is in `oid`, and the permission
+            decorator uses `oid or sub` as the user id,
+            `auth/decorators.py:83`); `provider` = `AUTH_PROVIDER`;
+            `preferred_username` = `login`; `email`, `email_verified` (which
+            may be a non-boolean, step 7) and `picture` from the claims. The
+            custom claims are passed as keyword arguments: `Jwt` keeps only
+            `roles`, `groups`, `orgs` and `oid` (`models/token.py:29-40`),
+            so a non-default `OIDC_ROLE_CLAIM` or `OIDC_GROUP_CLAIM` name
+            drops that list from the token, and the token's `roles` is the
+            IdP claim alone, without `user.roles`. A claim name equal to a
+            `create_token` or audit parameter (`email`, `name`, `scopes`,
+            `customers`, `user`, `type`, ...) raises TypeError (generic 500).
+            200 `{token}`.
+
+        With the default settings (`AZURE_TENANT` `common`, every
+        `ALLOWED_*` list `['*']`, `AUTH_REQUIRED` false), any account the
+        issuer authenticates is admitted with at least `USER_ROLES` scopes.
+
+        Source-derived; runtime NOT_RUN.
+      requestBody: &oidcBody
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, redirectUri, clientId]
+              properties:
+                code: {type: string, description: "authorization code from the IdP redirect"}
+                redirectUri: {type: string, description: "sent as redirect_uri; not validated by the server"}
+                clientId: {type: string, description: "sent as client_id or Basic user or assertion iss/sub; not compared with OAUTH2_CLIENT_ID"}
+              additionalProperties: true
+      responses: &oidcResponses
+        "200": *authTokenOk
+        "400": {description: "JSON Content-Type with a malformed body; no login claim; unsupported client-authentication method", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "403": {description: "`User <login> is not active`; `User <login> is not authorized`; NoCustomerMatch text", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "415": {$ref: '#/components/responses/AuthUnsupportedMediaType'}
+        "500": {description: "missing body member; invalid issuer document; IdP token error (`ApiError` without code); userinfo failure; missing `sub`; insert or update failure; claim-shape TypeErrors; generic handler", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "503": {description: "no issuer URL; discovery failure; issuer mismatch; JWKS failure", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+      x-runtime: "NOT_RUN"
+  /auth/azure:
+    post:
+      operationId: authAzure
+      x-source: alerta/auth/oidc.py:62, :66-206
+      x-scope: none
+      summary: Alias of POST /auth/openid (same handler; the issuer follows AUTH_PROVIDER, not this path)
+      security: [{}]
+      description: *oidcLogin
+      requestBody: *oidcBody
+      responses: *oidcResponses
+      x-runtime: "NOT_RUN"
+  /auth/gitlab:
+    post:
+      operationId: authGitlab
+      x-source: alerta/auth/oidc.py:63, :66-206
+      x-scope: none
+      summary: Alias of POST /auth/openid (same handler; the issuer follows AUTH_PROVIDER, not this path)
+      security: [{}]
+      description: *oidcLogin
+      requestBody: *oidcBody
+      responses: *oidcResponses
+      x-runtime: "NOT_RUN"
+  /auth/google:
+    post:
+      operationId: authGoogle
+      x-source: alerta/auth/oidc.py:64, :66-206
+      x-scope: none
+      summary: Alias of POST /auth/openid (same handler; the issuer follows AUTH_PROVIDER, not this path)
+      security: [{}]
+      description: *oidcLogin
+      requestBody: *oidcBody
+      responses: *oidcResponses
+      x-runtime: "NOT_RUN"
+  /auth/keycloak:
+    post:
+      operationId: authKeycloak
+      x-source: alerta/auth/oidc.py:65-206
+      x-scope: none
+      summary: Alias of POST /auth/openid (same handler; the issuer follows AUTH_PROVIDER, not this path)
+      security: [{}]
+      description: *oidcLogin
+      requestBody: *oidcBody
+      responses: *oidcResponses
+      x-runtime: "NOT_RUN"
+  /auth/saml:
+    description: |
+      Registered only when `AUTH_PROVIDER` is `saml2`, which also needs
+      pysaml2 at startup (`auth/__init__.py:19-25`); under any other
+      provider these paths and `/auth/saml/metadata.xml` do not exist (404).
+      Library behavior below is from pysaml2 7.5.0 (pinned in the reference
+      repository's `requirements-ci.txt:2`),
+      read from its published wheel; nothing was run.
+
+      **SP configuration** (`get_saml2_config`, `saml.py:21-55`), rebuilt on
+      **every** request to any SAML route:
+      - `metadata.remote` = `[{url: SAML2_METADATA_URL}]` (default null,
+        `settings.py:161`), replaced wholesale by `SAML2_CONFIG['metadata']`
+        when that is set (`:48-49`);
+      - `entityid` = `absolute_url()` (`BASE_URL`, else the request's
+        `url_root`, so Host-dependent), replaced by `SAML2_ENTITY_ID` when
+        set (default null, `settings.py:160`);
+      - one assertion consumer service, `absolute_url('/auth/saml')`, HTTP-POST
+        binding;
+      - `allow_unsolicited: True`, `authn_requests_signed: False`,
+        `want_assertions_signed: True`, `want_response_signed: False`
+        (`:38-41`);
+      - then `SAML2_CONFIG` (default `{}`, `settings.py:164`) is deep-merged
+        over all of this (`utils/collections.py:1-12`), so it can override
+        any of the above; `allow_unknown_attributes` is forced true
+        (`:54`).
+      pysaml2 loads metadata while loading this configuration (pysaml2
+      `config.py:280`, `:338`, `:265-273`, `:369-390`); a `remote` entry is fetched by HTTP GET
+      (`mdstore.py:862-873`), so the IdP metadata is inferred to be
+      re-fetched on every SAML request (NOT_RUN). The remote entry carries
+      no `cert`, so pysaml2 does not check a metadata signature
+      (`mdstore.py:731-732`); trust in the IdP's signing keys rests on how
+      `SAML2_METADATA_URL` is fetched.
+    get:
+      operationId: authSamlRedirect
+      x-source: alerta/auth/saml.py:21-67
+      x-scope: none
+      summary: Start SP-initiated SAML login (redirect to the IdP)
+      security: [{}]
+      description: |
+        No permission decorator and no `cross_origin`; a GET, so no
+        Content-Type check.
+        1. `prepare_for_authenticate(relay_state=request.referrer)`
+           (`saml.py:66`). pysaml2's default request binding is HTTP-Redirect
+           (`client.py:39-43`). The IdP is the only one in the metadata; zero
+           or several IdPs raise IdpUnspecified (`client_base.py:209-230`),
+           which is uncaught (generic 500). The AuthnRequest is unsigned
+           unless `SAML2_CONFIG` overrides `authn_requests_signed`.
+        2. 302 with the headers pysaml2 returns (`saml.py:67`), expected to be
+           a `Location` to the IdP's single-sign-on URL carrying the request
+           and the relay state. The exact header set is NOT established.
+        3. **RelayState** is the request's `Referer`. With no `Referer` it is
+           `None`; what pysaml2 then puts in the redirect is NOT
+           established.
+        4. The request id is discarded: no outstanding-request state is kept,
+           so the POST below cannot match `InResponseTo` (see
+           AUTH-SEC-9).
+
+        Source-derived; runtime NOT_RUN.
+      responses:
+        "302":
+          description: "Redirect to the IdP"
+          headers:
+            Location: {schema: {type: string}}
+        "500": {description: "metadata load failure, IdP selection failure, or other pysaml2 error (generic handler)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+      x-runtime: "NOT_RUN"
+    post:
+      operationId: authSamlAcs
+      x-source: alerta/auth/saml.py:70-118; alerta/templates/auth/saml2.html:1-14; alerta/auth/__init__.py:44-54
+      x-scope: none
+      summary: SAML assertion consumer service; delivers the token to the opener window by postMessage
+      security: [{}]
+      description: |
+        No permission decorator; `OPTIONS` via
+        `cross_origin(supports_credentials=True)`.
+        1. Content-Type (`auth/__init__.py:47-54`): the JSON check is skipped
+           only when the header is **exactly**
+           `application/x-www-form-urlencoded`; a `; charset=...` suffix
+           falls through to 415. If the WSGI environ has no `CONTENT_TYPE` key,
+           the header lookup itself raises a plain KeyError (werkzeug 3.1.7
+           `datastructures/headers.py:627-639` indexes the environ directly),
+           so a generic 500 (`exceptions.py:80`, `:120-136`); a present but
+           empty Content-Type reaches the 415. Whether a WSGI server omits
+           the key is NOT_RUN. A JSON
+           Content-Type passes the check, and then step 2 fails (400).
+        2. `RelayState` is read from the form first (`saml.py:73`); a
+           missing one is a BadRequestKeyError
+           (`datastructures/structures.py:226-238`), so 400, before any SAML
+           client work. `saml_client()` (`saml.py:75`), which builds the
+           client from the configured metadata, is evaluated before the
+           `SAMLResponse` argument is read (`:76`). So a missing
+           `SAMLResponse` gives the same 400 only after the client was
+           built successfully; a construction failure (for example
+           unreadable metadata) happens first, and its outcome is
+           dependency-specific and NOT_RUN.
+        3. `parse_authn_request_response(SAMLResponse, HTTP-POST)` with no
+           outstanding requests (`saml.py:75-78`; pysaml2
+           `client_base.py:759-811`). It returns None for an empty response,
+           an undecodable one (UnravelError) or a non-AuthnResponse; the next
+           line then raises AttributeError (generic 500). StatusError and
+           other parse or verification errors propagate (generic 500).
+           Unsolicited responses are accepted: with no matching outstanding
+           query, pysaml2 passes when `allow_unsolicited` is set, next to its
+           own comment "Should check that I haven't seen this before"
+           (`response.py:541-543`, `:703-704`). How pysaml2 enforces
+           `want_assertions_signed`, audience and time conditions was not
+           traced: NOT established.
+           **SECURITY AUTH-SEC-9 (unsolicited and unbound responses):**
+           unsolicited (IdP-initiated) responses are enabled and the GET
+           keeps no request state, so no response is tied to a request this
+           server issued, and no replay cache is applied at this point.
+           Class: login CSRF and assertion replay within the assertion's
+           validity window. Source-derived, NOT_RUN.
+        4. Mapping (`saml.py:79-84`): `identity` = `get_identity()`, a dict
+           of attribute name to value list built from every assertion's
+           attribute statements, including statements inside `Advice`
+           assertions (`response.py:657-679`); names are as pysaml2's
+           attribute converters render them (NOT established).
+           `name` = `SAML2_USER_NAME_FORMAT` (default `{givenName}
+           {surname}`, `settings.py:162`) formatted with the first value of
+           every attribute; a missing referenced attribute raises KeyError
+           (generic 500). `login` = the subject NameID text. `email` = first
+           value of `SAML2_EMAIL_ATTRIBUTE` (default `emailAddress`,
+           `settings.py:163`); absent: KeyError, generic 500.
+        5. Local user (`:87-94`): `find_by_username(email)`, which matches
+           `login` OR `email` (`postgres/base.py:1051-1053`). Not found: a
+           new `User(name, login=NameID, password '', email,
+           roles=USER_ROLES, text 'SAML2 user', email_verified=True)`; an
+           insert failure is **swallowed** (an `ApiError` is built and not
+           raised, `:91-94`), so the flow continues with the unsaved object
+           and can still issue a token. Found: nothing is updated (name,
+           NameID and roles stay as stored).
+        6. `status` other than `active`: `ApiError` 403 `User <email> is not
+           active`, a **JSON** error, not the HTML page, so the opener
+           receives no message (`:96-97`).
+        7. `groups` = `identity['groups']`, a fixed attribute name, default
+           `[]` (`:99`). `not_authorized('ALLOWED_SAML2_GROUPS', groups)`
+           (default `['*']`, `settings.py:165`) or
+           `not_authorized('ALLOWED_EMAIL_DOMAINS', [user.domain])`: 403
+           **HTML** page posting `{status: error, message: 'User <email> is
+           not authorized'}` (`:100-102`). Both are no-ops while
+           `AUTH_REQUIRED` is false.
+        8. Last login; `scopes` = `Permission.lookup(user.email,
+           roles=user.roles + groups)`; `customers` =
+           `get_customers(user.email, groups + ([user.domain] if user.domain
+           else []))` (NoCustomerMatch: JSON 403); audit event `saml2-login`
+           (`:104-111`).
+        9. Token (`:113-115`): `sub` = the local user id, provider `saml2`,
+           `preferred_username` = `user.email`, roles `user.roles`, groups
+           the SAML `groups` values, `email_verified` as stored.
+        10. 200 `text/html` from `templates/auth/saml2.html`: a script that
+            runs `window.opener.postMessage(<message as JSON>, '<origin>')`
+            then `window.close()`, where the message is `{status: ok,
+            token}` and `<origin>` is the posted `RelayState` (`:117-118`;
+            template `:7`). Flask autoescapes `.html` templates
+            (`flask/sansio/app.py:545-547`), so a quote in `RelayState`
+            cannot end the JavaScript string; whether any other character
+            can break the script is NOT established. Opened without an
+            opener window, the script fails and the token stays in the page.
+            **SECURITY AUTH-SEC-8 (token sent to a request-chosen origin):**
+            the `postMessage` target origin is the unvalidated `RelayState`
+            (seeded from the GET's `Referer`, but supplied by whoever builds
+            the IdP request, and `*` matches any origin). No allowlist
+            exists, so the Bearer token can be delivered to whichever origin
+            opened the login window. Source-derived, NOT_RUN.
+
+        Source-derived; runtime NOT_RUN.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [SAMLResponse, RelayState]
+              properties:
+                SAMLResponse: {type: string, description: "base64 SAML Response (HTTP-POST binding)"}
+                RelayState: {type: string, description: "used verbatim as the postMessage target origin"}
+      responses:
+        "200": {description: "HTML page that posts `{status: ok, token}` to window.opener", content: {text/html: {schema: {type: string}}}}
+        "400": {description: "missing form member (werkzeug BadRequestKeyError)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "403":
+          description: "HTML page posting `{status: error, message: 'User <email> is not authorized'}`; or JSON `User <email> is not active` or NoCustomerMatch text"
+          content:
+            text/html: {schema: {type: string}}
+            application/json: {schema: {$ref: '#/components/schemas/Error'}}
+        "415": {$ref: '#/components/responses/AuthUnsupportedMediaType'}
+        "500": {description: "unparseable or rejected SAML response, missing attributes, other pysaml2 errors, or (inferred) no CONTENT_TYPE key in the WSGI environ (generic handler)", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+      x-runtime: "NOT_RUN"
+  /auth/saml/metadata.xml:
+    get:
+      operationId: authSamlMetadata
+      x-source: alerta/auth/saml.py:121-124
+      x-scope: none
+      summary: SP metadata (XML)
+      security: [{}]
+      description: |
+        No permission decorator, no `cross_origin`. Builds the SP
+        configuration above (fetching the IdP metadata, inferred) and
+        returns `str(saml2.metadata.entity_descriptor(config))` with
+        `Content-Type: text/xml; charset=utf-8`, status 200. The descriptor
+        reflects the configuration (entity id, the HTTP-POST assertion
+        consumer service, the signing flags and any `SAML2_CONFIG`
+        overrides); its exact XML is pysaml2's and is NOT established.
+        Because `entityid` and the service URL default to `absolute_url()`,
+        the document varies with the request's Host when `BASE_URL` and
+        `SAML2_ENTITY_ID` are unset. Errors loading metadata or building
+        the descriptor are uncaught (generic 500).
+
+        Source-derived; runtime NOT_RUN.
+      responses:
+        "200": {description: "SP EntityDescriptor", content: {text/xml: {schema: {type: string}}}}
+        "500": {$ref: '#/components/responses/ServerError'}
+      x-runtime: "NOT_RUN"
+  /auth/signup:
+    post:
+      operationId: authSignup
+      x-source: alerta/auth/basic.py:13-64
+      x-scope: none
+      summary: Self-service signup (basic provider) returning a token
+      security: [{}]
+      description: |
+        Inventory depth only (owner's spec-depth ruling, 2026-10-11); this sets
+        spec depth, not an alrust auth-contract or adoption decision.
+        Enabled only when `AUTH_PROVIDER` is `basic` and `SIGNUP_ENABLED`
+        (default true, `settings.py:82`), else 403 `user signup is disabled`
+        (`basic.py:16-19`). The body is parsed by `User.parse`; roles are
+        forced to `USER_ROLES` and `email_verified` to false; then the domain
+        check, a duplicate-email check (409), the insert, the
+        `EMAIL_VERIFICATION` gate, and the same group, scope, customer, audit
+        (`basic-auth-signup`) and token steps as `/auth/login`
+        (`basic.py:21-64`). The route is absent when `AUTH_PROVIDER` is
+        `ldap` (`auth/__init__.py:9-17`).
+
+        **SECURITY AUTH-SEC-1 (self-chosen login drives authorization):**
+        `User.parse` takes `login` from the body (`models/user.py:66`), and
+        only the email is checked for duplicates (`basic.py:34`). The login
+        is what `Permission.lookup` compares with `ADMIN_USERS` and what
+        customer matching uses first (`postgres/base.py:1278`, `:1352-1356`),
+        and a login containing `\` sets `user.domain` (`models/user.py:50-51`)
+        for the domain check and customer lookup. A failed insert (for
+        example a duplicate `login`, UNIQUE in `sql/schema.sql:177`) is built
+        as an `ApiError` but not raised (`basic.py:37-40`), so a token is
+        still minted for the unsaved user. Source-derived, NOT_RUN.
+      responses:
+        "200": *authTokenOk
+        "400": {description: "parse error", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "403": {description: "signup disabled, domain, email not verified, inactive, or customer match", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "409": {description: "email already exists", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "415": {$ref: '#/components/responses/AuthUnsupportedMediaType'}
+      x-runtime: "NOT_RUN"
+  /auth/confirm/{hash}:
+    parameters:
+      - {name: hash, in: path, required: true, schema: {type: string}}
+    post:
+      operationId: authConfirmEmail
+      x-source: alerta/auth/basic.py:108-124; alerta/auth/utils.py:111-124; alerta/models/user.py:201-219
+      x-scope: none
+      summary: Confirm an email address from a mailed link
+      security: [{}]
+      description: |
+        Inventory depth only (owner's spec-depth ruling, 2026-10-11); this sets
+        spec depth, not an alrust auth-contract or adoption decision.
+        Checks the itsdangerous token (salt `confirm`, maximum age 900 s:
+        expired 401, invalid 400, `auth/utils.py:111-124`), finds the user
+        whose stored hash equals it, and sets `email_verified` (400 when
+        already verified or not found; audit `basic-auth-verify-email`;
+        200 `{status: ok, message}`) (`basic.py:108-124`). Still a POST, so
+        the JSON Content-Type check applies (415).
+      responses:
+        "200": {description: "email confirmed", content: {application/json: {schema: {type: object}}}}
+        "400": {description: "invalid or used hash, or already verified", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {description: "confirmation token has expired", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "415": {$ref: '#/components/responses/AuthUnsupportedMediaType'}
+      x-runtime: "NOT_RUN"
+  /auth/forgot:
+    post:
+      operationId: authForgotPassword
+      x-source: alerta/auth/basic.py:127-147; alerta/auth/utils.py:76-80, :95-108
+      x-scope: none
+      summary: Request a password-reset email
+      security: [{}]
+      description: |
+        Inventory depth only (owner's spec-depth ruling, 2026-10-11); this sets
+        spec depth, not an alrust auth-contract or adoption decision.
+        Reads `email` (400 when absent), finds the user by email, and for an
+        active user stores a reset token (salt `reset`) and mails a reset
+        link; 200 `password reset sent`, 403 `user not active`, 400
+        `invalid email address` for an unknown email; audit
+        `basic-auth-password-forgot` (`basic.py:127-147`). The route has no
+        provider check.
+
+        **SECURITY AUTH-SEC-10 (reset-link host and enumeration):** the
+        mailed link's base URL is the request's `Referer`
+        (`auth/utils.py:95-103`, `:76-80`), which is chosen by whoever calls
+        this route for a given email, while the token goes to the account
+        owner; and 200 versus 400 reveals whether an email is registered.
+        Source-derived, NOT_RUN.
+      responses:
+        "200": {description: "password reset sent", content: {application/json: {schema: {type: object}}}}
+        "400": {description: "missing email, or unknown email", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "403": {description: "user not active", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "415": {$ref: '#/components/responses/AuthUnsupportedMediaType'}
+      x-runtime: "NOT_RUN"
+  /auth/reset/{hash}:
+    parameters:
+      - {name: hash, in: path, required: true, schema: {type: string}}
+    post:
+      operationId: authResetPassword
+      x-source: alerta/auth/basic.py:150-170; alerta/auth/utils.py:111-124; alerta/models/user.py:226-228
+      x-scope: none
+      summary: Set a new password from a reset link
+      security: [{}]
+      description: |
+        Inventory depth only (owner's spec-depth ruling, 2026-10-11); this sets
+        spec depth, not an alrust auth-contract or adoption decision.
+        Reads `password` (400 when absent), checks the token (salt `reset`,
+        maximum age 900 s), finds the user by stored hash, and for an active
+        user stores the new password hash and clears the hash; 200
+        `password reset successful`, 403 `user not active`, 400 `invalid
+        password reset hash`; audit `basic-auth-password-reset`
+        (`basic.py:150-170`). No emptiness or strength check on the new
+        password.
+      responses:
+        "200": {description: "password reset successful", content: {application/json: {schema: {type: object}}}}
+        "400": {description: "missing password, invalid token or hash", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "401": {description: "confirmation token has expired", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "403": {description: "user not active", content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        "415": {$ref: '#/components/responses/AuthUnsupportedMediaType'}
+      x-runtime: "NOT_RUN"
+  /auth/github:
+    post:
+      operationId: authGithub
+      x-source: alerta/auth/github.py:14-99
+      x-scope: none
+      summary: GitHub OAuth2 login
+      security: [{}]
+      description: |
+        Inventory depth only (owner's spec-depth ruling, 2026-10-11); this sets
+        spec depth, not an alrust auth-contract or adoption decision.
+        Always registered (`auth/__init__.py:41`). Exchanges `code` at
+        `GITHUB_URL` (github.com, or GitHub Enterprise with `/api/v3`), using
+        the client secret paired with the posted `clientId` in the
+        comma-separated `OAUTH2_CLIENT_ID` and `OAUTH2_CLIENT_SECRET`
+        lists, then reads the user's profile, teams and organizations
+        (`github.py:18-51`). It creates or updates a local user with id =
+        the GitHub numeric id and login `@<login>`, checks status,
+        `ALLOWED_GITHUB_ORGS` and `ALLOWED_EMAIL_DOMAINS`, and issues a token
+        with provider `github`, groups = teams and `orgs` (`:53-99`).
+      responses:
+        "200": *authTokenOk
+        "415": {$ref: '#/components/responses/AuthUnsupportedMediaType'}
+      x-runtime: "NOT_RUN"
+  /auth/cas:
+    post:
+      operationId: authCas
+      x-source: alerta/auth/cas.py:20-224; alerta/auth/login.py:13-15
+      x-scope: none
+      summary: CAS ticket login
+      security: [{}]
+      description: |
+        Inventory depth only (owner's spec-depth ruling, 2026-10-11); this sets
+        spec depth, not an alrust auth-contract or adoption decision.
+        Always registered (`auth/__init__.py:41`); `cas_login` is also what
+        `POST /auth/login` runs when `AUTH_PROVIDER` is `cas`
+        (`login.py:13-15`). It validates the posted `ticket` for `service`
+        against `CAS_SERVER` + `/serviceValidate` (the `CAS_VALIDATE_ROUTE`
+        setting is not passed, `cas.py:144` versus `:31`), reading a JSON or
+        XML reply per `CAS_RESPONSE_TYPE` (`:31-126`). It then creates or
+        updates a local user whose id is the CAS username, merges roles from
+        the `CAS_ROLE_CLAIM` attribute, checks status and
+        `ALLOWED_EMAIL_DOMAINS`, and issues a token with provider `cas`
+        (`:129-224`).
+      responses:
+        "200": *authTokenOk
+        "415": {$ref: '#/components/responses/AuthUnsupportedMediaType'}
+      x-runtime: "NOT_RUN"
   /webhooks/{webhook}:
     parameters:
       - {$ref: '#/components/parameters/WebhookName'}

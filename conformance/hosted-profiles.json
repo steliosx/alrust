@@ -1,0 +1,825 @@
+{
+  "schema": "alrust-hosted-profile-inventory/1",
+  "status": "PROPOSED_SOURCE_INVENTORY",
+  "source_commit": "b046c6b087a958a19f67ff83674b731c152d8cee",
+  "reference_commit": "f4312727783dad64198b62ed778bbca98a5144a3",
+  "reference_webui_commit": "2687e4afa93b41c4fa1d46201bba9ea38be0d491",
+  "execution_enabled": false,
+  "executor_implemented": false,
+  "phase0_complete": false,
+  "scope": "Existing HTTP modules only; not a complete Phase0 coverage inventory or execution authorization.",
+  "gate_policy": {
+    "all_listed_modules_required": true,
+    "not_run_keeps_gate_open": true,
+    "existing_modules_pass_sufficient": false,
+    "additional_requirements": [
+      "Reviewed coverage closure against KICKOFF and lifecycle/API specs, including unimplemented vectors.",
+      "Adversarial lifecycle-spec approval.",
+      "Exact-main executed CI evidence accepted by Codex; no skipped, empty, cancelled or queued result counts.",
+      "No required case removed just because it is difficult, unimplemented or NOT_RUN; any reclassification cites reviewed scope/ADR/owner basis and retains gap history.",
+      "Security intentional divergences remain separately identified; do not run candidate-fix assertions as reference expectations."
+    ]
+  },
+  "hosted_prerequisites": [
+    "Exact reviewed CPython3.12 reference build with hash-locked build/runtime closure and immutable reference submodule.",
+    "Reviewed profile launcher/provisioner/cleanup verifier and concrete execution-permission basis under X5; no new heavy/HTTP path on publication before review.",
+    "Finite build/startup/test/cleanup budgets and explicit test selection; no inherited pytest/ALRUST settings or third-party autoload.",
+    "Document hosted concurrency/exclusion scope; no self-hosted fallback until reviewed/approved/qualified PhaseB and shared exclusion.",
+    "Fresh disposable database and fresh serving process for EACH profile; no housekeeping, forwarding, production inputs or shared state.",
+    "Observe effective served config and stored synthetic fixtures; files alone are not proof of their producer.",
+    "Capture failure/cancellation and all owned cleanup; do not treat database teardown as proof of per-case cleanup.",
+    "Private raw evidence; allowlisted redacted output only after actual-credential and generic-pattern scans, including test-generated keys.",
+    "No paid usage; spending limit remains $0."
+  ],
+  "baseline_settings": {
+    "BASE_URL": "",
+    "AUTH_REQUIRED": false,
+    "CUSTOMER_VIEWS": false,
+    "DEBUG": false,
+    "ALARM_MODEL": "ALERTA",
+    "ALERT_TIMEOUT": 86400,
+    "ACK_TIMEOUT": 0,
+    "PLUGINS": [
+      "remote_ip",
+      "reject",
+      "heartbeat",
+      "blackout",
+      "forwarder"
+    ],
+    "FWD_DESTINATIONS": []
+  },
+  "credential_profiles": {
+    "none": {
+      "api_key_environment": "UNSET",
+      "reason": "Scaffold proposal uses isolated AUTH_REQUIRED=False."
+    },
+    "four-role-synthetic": {
+      "format": "SYNTHETIC- plus 48 random lowercase hex characters; distinct per role/job",
+      "provisioner": "Not implemented here. Reviewed reference CLI with explicit --username/--key/--scope/--customer as needed; capture secret-bearing output privately.",
+      "username": "alrust-synthetic-admin",
+      "admin_users": [
+        "alrust-synthetic-admin"
+      ],
+      "file_contract": "conformance/customer-fixtures.md",
+      "roles": {
+        "unscoped_admin": {
+          "customer": null,
+          "scopes": [
+            "admin"
+          ]
+        },
+        "a_admin": {
+          "customer": "alrust-synthetic-customer-a",
+          "scopes": [
+            "admin"
+          ]
+        },
+        "a_writer": {
+          "customer": "alrust-synthetic-customer-a",
+          "scopes": [
+            "write:alerts"
+          ]
+        },
+        "b_writer": {
+          "customer": "alrust-synthetic-customer-b",
+          "scopes": [
+            "write:alerts"
+          ]
+        }
+      },
+      "attest": "Actual stored records, validity and source/config binding; metadata declarations alone insufficient."
+    }
+  },
+  "profiles": [
+    {
+      "id": "scaffold",
+      "module": "conformance/tests/http/test_scaffold.py",
+      "module_sha256": "70be90e642cd1762095a3f89498562104e8a8271fb115f90c401bfd1ef3bcb3d",
+      "fixture_imports": [],
+      "contract": "conformance/README.md",
+      "gate_required": true,
+      "execution_enabled": false,
+      "hosted_runnable_as_is": false,
+      "hosted_result": "NOT_RUN",
+      "test_changes_proposed": false,
+      "adapter_class": "standard",
+      "credential_profile": "none",
+      "settings_base": "baseline_settings",
+      "settings_overrides": {},
+      "target": "http://127.0.0.1:18081",
+      "environment_inputs": [
+        "ALRUST_API_KEY",
+        "ALRUST_TARGET"
+      ],
+      "pytest": {
+        "cwd": "repository root",
+        "config": "conformance/pytest.ini",
+        "selection": [
+          "conformance/tests/http/test_scaffold.py"
+        ],
+        "plugins_autoload": false,
+        "clear_inherited_addopts": true,
+        "shared_output": "Only separately scanned, allowlisted evidence; never upload raw logs by glob."
+      },
+      "missing": [
+        "Reviewed hosted profile adapter, prerequisite producer and execution evidence.",
+        "Health plus receive/dedup/detail/owned-alert cleanup; no API key in this proposed auth-disabled profile."
+      ]
+    },
+    {
+      "id": "customer-mapping",
+      "module": "conformance/tests/http/test_customer_mapping.py",
+      "module_sha256": "b5baaf345d3551703bea0826ac56360406cff1b428c049a4996c69540a8e6d9c",
+      "fixture_imports": [],
+      "contract": "conformance/customer-fixtures.md",
+      "gate_required": true,
+      "execution_enabled": false,
+      "hosted_runnable_as_is": false,
+      "hosted_result": "NOT_RUN",
+      "test_changes_proposed": false,
+      "adapter_class": "standard",
+      "credential_profile": "four-role-synthetic",
+      "settings_base": "baseline_settings",
+      "settings_overrides": {},
+      "target": "http://127.0.0.1:18081",
+      "environment_inputs": [
+        "ALRUST_SYNTHETIC_KEYS_FILE",
+        "ALRUST_TARGET"
+      ],
+      "pytest": {
+        "cwd": "repository root",
+        "config": "conformance/pytest.ini",
+        "selection": [
+          "conformance/tests/http/test_customer_mapping.py"
+        ],
+        "plugins_autoload": false,
+        "clear_inherited_addopts": true,
+        "shared_output": "Only separately scanned, allowlisted evidence; never upload raw logs by glob."
+      },
+      "missing": [
+        "Reviewed hosted profile adapter, prerequisite producer and execution evidence.",
+        "Attest all four actual stored key records and default plugins; fresh database with no blackouts."
+      ]
+    },
+    {
+      "id": "operator-actions",
+      "module": "conformance/tests/http/test_operator_actions.py",
+      "module_sha256": "cd0d23b1172638eab285a8852bb0d0312c8f2c5f40cdd09e4d7ad759d7fee6dd",
+      "fixture_imports": [],
+      "contract": "conformance/operator-actions.md",
+      "gate_required": true,
+      "execution_enabled": false,
+      "hosted_runnable_as_is": false,
+      "hosted_result": "NOT_RUN",
+      "test_changes_proposed": false,
+      "adapter_class": "standard",
+      "credential_profile": "four-role-synthetic",
+      "settings_base": "baseline_settings",
+      "settings_overrides": {},
+      "target": "http://127.0.0.1:18081",
+      "environment_inputs": [
+        "ALRUST_SYNTHETIC_KEYS_FILE",
+        "ALRUST_TARGET"
+      ],
+      "pytest": {
+        "cwd": "repository root",
+        "config": "conformance/pytest.ini",
+        "selection": [
+          "conformance/tests/http/test_operator_actions.py"
+        ],
+        "plugins_autoload": false,
+        "clear_inherited_addopts": true,
+        "shared_output": "Only separately scanned, allowlisted evidence; never upload raw logs by glob."
+      },
+      "missing": [
+        "Reviewed hosted profile adapter, prerequisite producer and execution evidence.",
+        "Attest default alarm model, timeouts and stored fixture records; retain raw timestamp/history comparisons."
+      ]
+    },
+    {
+      "id": "metadata-edges",
+      "module": "conformance/tests/http/test_metadata_edges.py",
+      "module_sha256": "f87442fc4bffb50060e767117faa3b6d31390d84a88df2590b0f0b14b8f5c45a",
+      "fixture_imports": [],
+      "contract": "conformance/metadata-edges.md",
+      "gate_required": true,
+      "execution_enabled": false,
+      "hosted_runnable_as_is": false,
+      "hosted_result": "NOT_RUN",
+      "test_changes_proposed": false,
+      "adapter_class": "standard",
+      "credential_profile": "four-role-synthetic",
+      "settings_base": "baseline_settings",
+      "settings_overrides": {},
+      "target": "http://127.0.0.1:18081",
+      "environment_inputs": [
+        "ALRUST_SYNTHETIC_KEYS_FILE",
+        "ALRUST_TARGET"
+      ],
+      "pytest": {
+        "cwd": "repository root",
+        "config": "conformance/pytest.ini",
+        "selection": [
+          "conformance/tests/http/test_metadata_edges.py"
+        ],
+        "plugins_autoload": false,
+        "clear_inherited_addopts": true,
+        "shared_output": "Only separately scanned, allowlisted evidence; never upload raw logs by glob."
+      },
+      "missing": [
+        "Reviewed hosted profile adapter, prerequisite producer and execution evidence.",
+        "Attest default plugins including remote_ip; empty FWD_DESTINATIONS; capture redacted passed-test output privately."
+      ]
+    },
+    {
+      "id": "metadata-mutations",
+      "module": "conformance/tests/http/test_metadata_mutations.py",
+      "module_sha256": "4d8976c8f2954cc3efc910f5f4579ea310a4aa9adcca8d151c0c06610bc9d89c",
+      "fixture_imports": [
+        "conformance/tests/http/test_metadata_edges.py"
+      ],
+      "contract": "conformance/metadata-mutations.md",
+      "gate_required": true,
+      "execution_enabled": false,
+      "hosted_runnable_as_is": false,
+      "hosted_result": "NOT_RUN",
+      "test_changes_proposed": false,
+      "adapter_class": "standard",
+      "credential_profile": "four-role-synthetic",
+      "settings_base": "baseline_settings",
+      "settings_overrides": {},
+      "target": "http://127.0.0.1:18081",
+      "environment_inputs": [
+        "ALRUST_SYNTHETIC_KEYS_FILE",
+        "ALRUST_TARGET"
+      ],
+      "pytest": {
+        "cwd": "repository root",
+        "config": "conformance/pytest.ini",
+        "selection": [
+          "conformance/tests/http/test_metadata_mutations.py"
+        ],
+        "plugins_autoload": false,
+        "clear_inherited_addopts": true,
+        "shared_output": "Only separately scanned, allowlisted evidence; never upload raw logs by glob."
+      },
+      "missing": [
+        "Reviewed hosted profile adapter, prerequisite producer and execution evidence.",
+        "HF9 requires actual attributes exactly SYNTHETIC-keep and nonempty ip before last-attribute removal; retain the expected500 after mutation."
+      ]
+    },
+    {
+      "id": "alert-queries",
+      "module": "conformance/tests/http/test_alert_queries.py",
+      "module_sha256": "f1bde88620160a1f6540e30487898a2369642d484af3cb93e6847a7ff15ea412",
+      "fixture_imports": [
+        "conformance/tests/http/test_metadata_edges.py"
+      ],
+      "contract": "conformance/alert-queries.md",
+      "gate_required": true,
+      "execution_enabled": false,
+      "hosted_runnable_as_is": false,
+      "hosted_result": "NOT_RUN",
+      "test_changes_proposed": false,
+      "adapter_class": "standard",
+      "credential_profile": "four-role-synthetic",
+      "settings_base": "baseline_settings",
+      "settings_overrides": {},
+      "target": "http://127.0.0.1:18081",
+      "environment_inputs": [
+        "ALRUST_SYNTHETIC_KEYS_FILE",
+        "ALRUST_TARGET"
+      ],
+      "pytest": {
+        "cwd": "repository root",
+        "config": "conformance/pytest.ini",
+        "selection": [
+          "conformance/tests/http/test_alert_queries.py"
+        ],
+        "plugins_autoload": false,
+        "clear_inherited_addopts": true,
+        "shared_output": "Only separately scanned, allowlisted evidence; never upload raw logs by glob."
+      },
+      "missing": [
+        "Reviewed hosted profile adapter, prerequisite producer and execution evidence.",
+        "Same owned metadata fixture; benign exact-resource query scope only."
+      ]
+    },
+    {
+      "id": "alert-notes",
+      "module": "conformance/tests/http/test_alert_notes.py",
+      "module_sha256": "ea1951cf460df5ddc5380327d00f408119484b5e727873cca590f0feebb18962",
+      "fixture_imports": [
+        "conformance/tests/http/test_metadata_edges.py"
+      ],
+      "contract": "conformance/alert-notes.md",
+      "gate_required": true,
+      "execution_enabled": false,
+      "hosted_runnable_as_is": false,
+      "hosted_result": "NOT_RUN",
+      "test_changes_proposed": false,
+      "adapter_class": "standard",
+      "credential_profile": "four-role-synthetic",
+      "settings_base": "baseline_settings",
+      "settings_overrides": {},
+      "target": "http://127.0.0.1:18081",
+      "environment_inputs": [
+        "ALRUST_SYNTHETIC_KEYS_FILE",
+        "ALRUST_TARGET"
+      ],
+      "pytest": {
+        "cwd": "repository root",
+        "config": "conformance/pytest.ini",
+        "selection": [
+          "conformance/tests/http/test_alert_notes.py"
+        ],
+        "plugins_autoload": false,
+        "clear_inherited_addopts": true,
+        "shared_output": "Only separately scanned, allowlisted evidence; never upload raw logs by glob."
+      },
+      "missing": [
+        "Reviewed hosted profile adapter, prerequisite producer and execution evidence.",
+        "Same owned metadata fixture; admin username must be alrust-synthetic-admin; known-owned note cleanup."
+      ]
+    },
+    {
+      "id": "heartbeats",
+      "module": "conformance/tests/http/test_heartbeats.py",
+      "module_sha256": "f973f37175f7132c185bc6cc85e964b9254b7090b5d224909e2b333095310753",
+      "fixture_imports": [],
+      "contract": "conformance/heartbeats.md",
+      "gate_required": true,
+      "execution_enabled": false,
+      "hosted_runnable_as_is": false,
+      "hosted_result": "NOT_RUN",
+      "test_changes_proposed": false,
+      "adapter_class": "standard",
+      "credential_profile": "four-role-synthetic",
+      "settings_base": "baseline_settings",
+      "settings_overrides": {
+        "HEARTBEAT_TIMEOUT": 86400,
+        "HEARTBEAT_MAX_LATENCY": 2000
+      },
+      "target": "http://127.0.0.1:18081",
+      "environment_inputs": [
+        "ALRUST_SYNTHETIC_KEYS_FILE",
+        "ALRUST_TARGET"
+      ],
+      "pytest": {
+        "cwd": "repository root",
+        "config": "conformance/pytest.ini",
+        "selection": [
+          "conformance/tests/http/test_heartbeats.py"
+        ],
+        "plugins_autoload": false,
+        "clear_inherited_addopts": true,
+        "shared_output": "Only separately scanned, allowlisted evidence; never upload raw logs by glob."
+      },
+      "missing": [
+        "Reviewed hosted profile adapter, prerequisite producer and execution evidence.",
+        "Attest heartbeat timeout/latency and stored fixture records; owned A/B/null heartbeat identities and cleanup."
+      ]
+    },
+    {
+      "id": "heartbeat-input-query",
+      "module": "conformance/tests/http/test_heartbeat_input_query.py",
+      "module_sha256": "b7dd5cb375cfc04ce606dcb9d99a3455912f3a238baf7664a22c8b6095635786",
+      "fixture_imports": [
+        "conformance/tests/http/test_heartbeats.py"
+      ],
+      "contract": "conformance/heartbeat-input-query.md",
+      "gate_required": true,
+      "execution_enabled": false,
+      "hosted_runnable_as_is": false,
+      "hosted_result": "NOT_RUN",
+      "test_changes_proposed": false,
+      "adapter_class": "standard",
+      "credential_profile": "four-role-synthetic",
+      "settings_base": "baseline_settings",
+      "settings_overrides": {
+        "HEARTBEAT_TIMEOUT": 86400,
+        "HEARTBEAT_MAX_LATENCY": 2000
+      },
+      "target": "http://127.0.0.1:18081",
+      "environment_inputs": [
+        "ALRUST_SYNTHETIC_KEYS_FILE",
+        "ALRUST_TARGET"
+      ],
+      "pytest": {
+        "cwd": "repository root",
+        "config": "conformance/pytest.ini",
+        "selection": [
+          "conformance/tests/http/test_heartbeat_input_query.py"
+        ],
+        "plugins_autoload": false,
+        "clear_inherited_addopts": true,
+        "shared_output": "Only separately scanned, allowlisted evidence; never upload raw logs by glob."
+      },
+      "missing": [
+        "Reviewed hosted profile adapter, prerequisite producer and execution evidence.",
+        "Attest heartbeat timeout/latency; actual clock well before2100; preserve raw slow/ok and page-total outcomes."
+      ]
+    },
+    {
+      "id": "blackouts",
+      "module": "conformance/tests/http/test_blackouts.py",
+      "module_sha256": "b2264e134c2b1f6e1835d7e06172ddf2703b5009a357226fae7c376035de9e9a",
+      "fixture_imports": [],
+      "contract": "conformance/blackouts.md",
+      "gate_required": true,
+      "execution_enabled": false,
+      "hosted_runnable_as_is": false,
+      "hosted_result": "NOT_RUN",
+      "test_changes_proposed": false,
+      "adapter_class": "standard",
+      "credential_profile": "four-role-synthetic",
+      "settings_base": "baseline_settings",
+      "settings_overrides": {},
+      "target": "http://127.0.0.1:18081",
+      "environment_inputs": [
+        "ALRUST_SYNTHETIC_KEYS_FILE",
+        "ALRUST_TARGET"
+      ],
+      "pytest": {
+        "cwd": "repository root",
+        "config": "conformance/pytest.ini",
+        "selection": [
+          "conformance/tests/http/test_blackouts.py"
+        ],
+        "plugins_autoload": false,
+        "clear_inherited_addopts": true,
+        "shared_output": "Only separately scanned, allowlisted evidence; never upload raw logs by glob."
+      },
+      "missing": [
+        "Reviewed hosted profile adapter, prerequisite producer and execution evidence.",
+        "Only owned expired-period blackouts, no active matching/housekeeping; confirm all owned IDs cleaned."
+      ]
+    },
+    {
+      "id": "api-keys",
+      "module": "conformance/tests/http/test_api_keys.py",
+      "module_sha256": "e44bee654c8030aa56ec362bca3667a958d330e8741c6a18f36838cd1e5e5f09",
+      "fixture_imports": [],
+      "contract": "conformance/api-keys.md",
+      "gate_required": true,
+      "execution_enabled": false,
+      "hosted_runnable_as_is": false,
+      "hosted_result": "NOT_RUN",
+      "test_changes_proposed": false,
+      "adapter_class": "private-key",
+      "credential_profile": "four-role-synthetic",
+      "settings_base": "baseline_settings",
+      "settings_overrides": {},
+      "target": "http://127.0.0.1:18081",
+      "environment_inputs": [
+        "ALRUST_PRIVATE_EVIDENCE_DIR",
+        "ALRUST_SYNTHETIC_KEYS_FILE",
+        "ALRUST_TARGET"
+      ],
+      "pytest": {
+        "cwd": "repository root",
+        "config": "conformance/api-keys-pytest.ini",
+        "selection": [
+          "conformance/tests/http/test_api_keys.py"
+        ],
+        "plugins_autoload": false,
+        "clear_inherited_addopts": true,
+        "shared_output": "Only separately scanned, allowlisted evidence; never upload raw logs by glob."
+      },
+      "missing": [
+        "Reviewed hosted profile adapter, prerequisite producer and execution evidence.",
+        "Dedicated private0700 evidence directory; capture the test-generated fifth key for exclusion scanning; owned-key cleanup and credential-free fixed summaries."
+      ]
+    },
+    {
+      "id": "config",
+      "module": "conformance/tests/http/test_config.py",
+      "module_sha256": "b25e98112fdbcf0c878c584f7c80d47036b8076515ecbd39321d6754af795262",
+      "fixture_imports": [],
+      "contract": "conformance/CONFIG-READONLY.md",
+      "gate_required": true,
+      "execution_enabled": false,
+      "hosted_runnable_as_is": false,
+      "hosted_result": "NOT_RUN",
+      "test_changes_proposed": false,
+      "adapter_class": "served-config",
+      "credential_profile": "four-role-synthetic",
+      "settings_base": "baseline_settings",
+      "settings_overrides": {},
+      "target": "http://127.0.0.1:18081",
+      "environment_inputs": [
+        "ALRUST_CONFIG_ATTESTATION_FILE",
+        "ALRUST_SYNTHETIC_KEYS_FILE",
+        "ALRUST_TARGET"
+      ],
+      "pytest": {
+        "cwd": "repository root",
+        "config": "conformance/config-pytest.ini",
+        "selection": [
+          "conformance/tests/http/test_config.py"
+        ],
+        "plugins_autoload": false,
+        "clear_inherited_addopts": true,
+        "shared_output": "Only separately scanned, allowlisted evidence; never upload raw logs by glob."
+      },
+      "missing": [
+        "Reviewed hosted profile adapter, prerequisite producer and execution evidence.",
+        "Seven-field effective-config observation plus actual served binding; no response/config-body export."
+      ]
+    },
+    {
+      "id": "groups",
+      "module": "conformance/tests/http/test_groups.py",
+      "module_sha256": "5be6aa84cde6666f882bb0b096e9eb3da2424335f91ae4f4119fdafddb0963f4",
+      "fixture_imports": [],
+      "contract": "conformance/GROUPS-READONLY.md",
+      "gate_required": true,
+      "execution_enabled": false,
+      "hosted_runnable_as_is": false,
+      "hosted_result": "NOT_RUN",
+      "test_changes_proposed": false,
+      "adapter_class": "served-count",
+      "credential_profile": "four-role-synthetic",
+      "settings_base": "baseline_settings",
+      "settings_overrides": {},
+      "target": "http://127.0.0.1:18081",
+      "environment_inputs": [
+        "ALRUST_CONFIG_ATTESTATION_FILE",
+        "ALRUST_GROUPS_ATTESTATION_FILE",
+        "ALRUST_GROUPS_SERVER_PID",
+        "ALRUST_GROUPS_WINDOW_ID",
+        "ALRUST_SYNTHETIC_KEYS_FILE",
+        "ALRUST_TARGET"
+      ],
+      "pytest": {
+        "cwd": "repository root",
+        "config": "conformance/groups-pytest.ini",
+        "selection": [
+          "conformance/tests/http/test_groups.py"
+        ],
+        "plugins_autoload": false,
+        "clear_inherited_addopts": true,
+        "shared_output": "Only separately scanned, allowlisted evidence; never upload raw logs by glob."
+      },
+      "missing": [
+        "Reviewed hosted profile adapter, prerequisite producer and execution evidence.",
+        "Actual served database groups count0 after readiness, bound to source/task/window/PID/config/connection."
+      ]
+    },
+    {
+      "id": "permissions",
+      "module": "conformance/tests/http/test_permissions.py",
+      "module_sha256": "c3c55d7a8fde5c57d59b88904f002c9bfd2b508bf584ea47ed2e2c8e6b723149",
+      "fixture_imports": [],
+      "contract": "conformance/PERMISSIONS-READONLY.md",
+      "gate_required": true,
+      "execution_enabled": false,
+      "hosted_runnable_as_is": false,
+      "hosted_result": "NOT_RUN",
+      "test_changes_proposed": false,
+      "adapter_class": "served-count",
+      "credential_profile": "four-role-synthetic",
+      "settings_base": "baseline_settings",
+      "settings_overrides": {},
+      "target": "http://127.0.0.1:18081",
+      "environment_inputs": [
+        "ALRUST_CONFIG_ATTESTATION_FILE",
+        "ALRUST_PERMISSIONS_ATTESTATION_FILE",
+        "ALRUST_PERMISSIONS_SERVER_PID",
+        "ALRUST_PERMISSIONS_WINDOW_ID",
+        "ALRUST_SYNTHETIC_KEYS_FILE",
+        "ALRUST_TARGET"
+      ],
+      "pytest": {
+        "cwd": "repository root",
+        "config": "conformance/permissions-pytest.ini",
+        "selection": [
+          "conformance/tests/http/test_permissions.py"
+        ],
+        "plugins_autoload": false,
+        "clear_inherited_addopts": true,
+        "shared_output": "Only separately scanned, allowlisted evidence; never upload raw logs by glob."
+      },
+      "missing": [
+        "Reviewed hosted profile adapter, prerequisite producer and execution evidence.",
+        "Actual served permissions count0 plus actual user/guest role scopes and default role names; ADMIN_SCOPES is the pinned code constant."
+      ]
+    },
+    {
+      "id": "management-health",
+      "module": "conformance/tests/http/test_management_health.py",
+      "module_sha256": "7942c1fe05785ad3c196c2dc095f5b97366bd2b39c583c626e319940e777b2ce",
+      "fixture_imports": [],
+      "contract": "conformance/MANAGEMENT-HEALTH-READONLY.md",
+      "gate_required": true,
+      "execution_enabled": false,
+      "hosted_runnable_as_is": false,
+      "hosted_result": "NOT_RUN",
+      "test_changes_proposed": false,
+      "adapter_class": "served-count",
+      "credential_profile": "four-role-synthetic",
+      "settings_base": "baseline_settings",
+      "settings_overrides": {},
+      "target": "http://127.0.0.1:18081",
+      "environment_inputs": [
+        "ALRUST_CONFIG_ATTESTATION_FILE",
+        "ALRUST_HEALTH_ATTESTATION_FILE",
+        "ALRUST_HEALTH_SERVER_PID",
+        "ALRUST_HEALTH_WINDOW_ID",
+        "ALRUST_SYNTHETIC_KEYS_FILE",
+        "ALRUST_TARGET"
+      ],
+      "pytest": {
+        "cwd": "repository root",
+        "config": "conformance/management-health-pytest.ini",
+        "selection": [
+          "conformance/tests/http/test_management_health.py"
+        ],
+        "plugins_autoload": false,
+        "clear_inherited_addopts": true,
+        "shared_output": "Only separately scanned, allowlisted evidence; never upload raw logs by glob."
+      },
+      "missing": [
+        "Reviewed hosted profile adapter, prerequisite producer and execution evidence.",
+        "Actual served heartbeats count0 after readiness; explicit test healthcheck is distinct from setup/readiness calls."
+      ]
+    },
+    {
+      "id": "management-gtg",
+      "module": "conformance/tests/http/test_management_gtg.py",
+      "module_sha256": "11ef3ea089e8c2e9addb73f407fc6755cc0bcfd730c1d181f7b6d6d455a0f7b8",
+      "fixture_imports": [],
+      "contract": "conformance/MANAGEMENT-GTG-READONLY.md",
+      "gate_required": true,
+      "execution_enabled": false,
+      "hosted_runnable_as_is": false,
+      "hosted_result": "NOT_RUN",
+      "test_changes_proposed": false,
+      "adapter_class": "served-connection",
+      "credential_profile": "four-role-synthetic",
+      "settings_base": "baseline_settings",
+      "settings_overrides": {},
+      "target": "http://127.0.0.1:18081",
+      "environment_inputs": [
+        "ALRUST_CONFIG_ATTESTATION_FILE",
+        "ALRUST_GTG_ATTESTATION_FILE",
+        "ALRUST_GTG_PROVENANCE_FILE",
+        "ALRUST_GTG_READINESS_FILE",
+        "ALRUST_GTG_SERVER_PID",
+        "ALRUST_GTG_WINDOW_ID",
+        "ALRUST_SERVED_CONFIG_ATTESTATION_FILE",
+        "ALRUST_SYNTHETIC_KEYS_FILE",
+        "ALRUST_TARGET"
+      ],
+      "pytest": {
+        "cwd": "repository root",
+        "config": "conformance/management-gtg-pytest.ini",
+        "selection": [
+          "conformance/tests/http/test_management_gtg.py"
+        ],
+        "plugins_autoload": false,
+        "clear_inherited_addopts": true,
+        "shared_output": "Only separately scanned, allowlisted evidence; never upload raw logs by glob."
+      },
+      "missing": [
+        "Reviewed hosted profile adapter, prerequisite producer and execution evidence.",
+        "After-readiness served PostgreSQL connection identity and complete-byte provenance/config/readiness chain; no GTG request used as readiness."
+      ]
+    },
+    {
+      "id": "root-debug",
+      "module": "conformance/tests/http/test_root_debug.py",
+      "module_sha256": "79c0cbd377fc0b9f29315b364adb7e0a907ceb37d347292ebd46c6740dc455ed",
+      "fixture_imports": [],
+      "contract": "conformance/ROOT-DEBUG-READONLY.md",
+      "gate_required": true,
+      "execution_enabled": false,
+      "hosted_runnable_as_is": false,
+      "hosted_result": "NOT_RUN",
+      "test_changes_proposed": false,
+      "adapter_class": "served-connection",
+      "credential_profile": "four-role-synthetic",
+      "settings_base": "baseline_settings",
+      "settings_overrides": {},
+      "target": "http://127.0.0.1:18081",
+      "environment_inputs": [
+        "ALRUST_CONFIG_ATTESTATION_FILE",
+        "ALRUST_ROOT_DEBUG_ATTESTATION_FILE",
+        "ALRUST_ROOT_DEBUG_PROVENANCE_FILE",
+        "ALRUST_ROOT_DEBUG_READINESS_FILE",
+        "ALRUST_ROOT_DEBUG_SERVER_PID",
+        "ALRUST_ROOT_DEBUG_WINDOW_ID",
+        "ALRUST_SERVED_CONFIG_ATTESTATION_FILE",
+        "ALRUST_SYNTHETIC_KEYS_FILE",
+        "ALRUST_TARGET"
+      ],
+      "pytest": {
+        "cwd": "repository root",
+        "config": "conformance/root-debug-pytest.ini",
+        "selection": [
+          "conformance/tests/http/test_root_debug.py"
+        ],
+        "plugins_autoload": false,
+        "clear_inherited_addopts": true,
+        "shared_output": "Only separately scanned, allowlisted evidence; never upload raw logs by glob."
+      },
+      "missing": [
+        "Reviewed hosted profile adapter, prerequisite producer and execution evidence.",
+        "Fresh task-specific connection/provenance/config/readiness chain; recheck actual request connection/config before original handler without hook SQL."
+      ]
+    },
+    {
+      "id": "root-index",
+      "module": "conformance/tests/http/test_root_index.py",
+      "module_sha256": "b7bd773a7d129afc25e1508e8e3a038044e159f2192fc0ad098998d38cba71d0",
+      "fixture_imports": [],
+      "contract": "conformance/ROOT-INDEX-READONLY.md",
+      "gate_required": true,
+      "execution_enabled": false,
+      "hosted_runnable_as_is": false,
+      "hosted_result": "NOT_RUN",
+      "test_changes_proposed": false,
+      "adapter_class": "served-inventory",
+      "credential_profile": "four-role-synthetic",
+      "settings_base": "baseline_settings",
+      "settings_overrides": {},
+      "target": "http://127.0.0.1:18081",
+      "environment_inputs": [
+        "ALRUST_CONFIG_ATTESTATION_FILE",
+        "ALRUST_ROOT_INDEX_ATTESTATION_FILE",
+        "ALRUST_ROOT_INDEX_INVENTORY_FILE",
+        "ALRUST_ROOT_INDEX_PROVENANCE_FILE",
+        "ALRUST_ROOT_INDEX_READINESS_FILE",
+        "ALRUST_ROOT_INDEX_SERVER_PID",
+        "ALRUST_ROOT_INDEX_WINDOW_ID",
+        "ALRUST_SERVED_CONFIG_ATTESTATION_FILE",
+        "ALRUST_SYNTHETIC_KEYS_FILE",
+        "ALRUST_TARGET"
+      ],
+      "pytest": {
+        "cwd": "repository root",
+        "config": "conformance/root-index-pytest.ini",
+        "selection": [
+          "conformance/tests/http/test_root_index.py"
+        ],
+        "plugins_autoload": false,
+        "clear_inherited_addopts": true,
+        "shared_output": "Only separately scanned, allowlisted evidence; never upload raw logs by glob."
+      },
+      "missing": [
+        "Reviewed hosted profile adapter, prerequisite producer and execution evidence.",
+        "Freeze actual served url_map and successfully loaded custom registry after readiness, never from response; retain duplicate rows and iteration order; pre-handler recheck without SQL."
+      ]
+    },
+    {
+      "id": "webhook-unknown",
+      "module": "conformance/tests/http/test_webhook_unknown.py",
+      "module_sha256": "cf5c16b9f882a2576244ab93c948e636cdeb8135aeead4aa591dfa087c3c1177",
+      "fixture_imports": [],
+      "contract": "conformance/webhook-unknown.md",
+      "gate_required": true,
+      "execution_enabled": false,
+      "hosted_runnable_as_is": false,
+      "hosted_result": "NOT_RUN",
+      "test_changes_proposed": false,
+      "adapter_class": "served-logging",
+      "credential_profile": "four-role-synthetic",
+      "settings_base": "baseline_settings",
+      "settings_overrides": {
+        "LOG_CONFIG_FILE": "",
+        "LOG_LEVEL": "ERROR",
+        "LOG_HANDLERS": [
+          "console"
+        ]
+      },
+      "target": "http://127.0.0.1:18081",
+      "environment_inputs": [
+        "ALRUST_SYNTHETIC_KEYS_FILE",
+        "ALRUST_TARGET",
+        "ALRUST_WEBHOOK_UNKNOWN_CONFIG_FILE",
+        "ALRUST_WEBHOOK_UNKNOWN_CONNECTION_FILE",
+        "ALRUST_WEBHOOK_UNKNOWN_KEYPROOF_FILE",
+        "ALRUST_WEBHOOK_UNKNOWN_LOGGING_FILE",
+        "ALRUST_WEBHOOK_UNKNOWN_PROVENANCE_FILE",
+        "ALRUST_WEBHOOK_UNKNOWN_READY_FILE",
+        "ALRUST_WEBHOOK_UNKNOWN_REGISTRY_FILE",
+        "ALRUST_WEBHOOK_UNKNOWN_SERVER_PID",
+        "ALRUST_WEBHOOK_UNKNOWN_WINDOW_ID"
+      ],
+      "pytest": {
+        "cwd": "repository root",
+        "config": "conformance/webhook-unknown-pytest.ini",
+        "selection": [
+          "conformance/tests/http/test_webhook_unknown.py"
+        ],
+        "plugins_autoload": false,
+        "clear_inherited_addopts": true,
+        "shared_output": "Only separately scanned, allowlisted evidence; never upload raw logs by glob."
+      },
+      "missing": [
+        "Reviewed hosted profile adapter, prerequisite producer and execution evidence.",
+        "New producer/runner/cleanup-verifier needed; seven records: connection,ready,config,registry,logging,keyproof,provenance; exact actual logger/handler/filter identity and pre-case keyproof; pre-handler/post-case live rechecks; expected key-usage UPDATE."
+      ]
+    }
+  ]
+}

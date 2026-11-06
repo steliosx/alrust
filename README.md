@@ -49,6 +49,29 @@ The full plan and its fixed decisions are in the
 
 ## Status
 
+**Current checkpoint: 7 October 2026**, inspected at main
+[`7c07e52`](https://github.com/steliosx/alrust/tree/7c07e52f27b88b8c5a3b38d9f4cd73fff5f89554).
+The scaffold, extracted specifications and conformance tooling are merged.
+**Phase 0 remains open; no Rust server or two-server conformance result is claimed.**
+
+| Area | Current evidence | What it does not establish |
+|---|---|---|
+| CI bootstrap and scaffold | [Run 37696114824](https://github.com/steliosx/alrust/actions/runs/37696114824) passed all four jobs at `7c07e52`: reference guard, Rust formatting/lint/build checks, inert profile preflight and supervised reference-server bootstrap. | Rust targets still contain zero tests; no HTTP conformance vectors run in this workflow. |
+| Supervised reference process | [PR #88](https://github.com/steliosx/alrust/pull/88) integrates the supervisor/launcher into hosted CI. The reference job observes a healthy Python server, then verifies `tree_empty / COMPLETE` and no remaining listener after shutdown. | This is reference bootstrap and cleanup evidence, not an implemented Alrust server or full-suite conformance. |
+| Profile inventory and entrypoint | All **19 profiles return `NOT_RUN`**, with execution disabled, in the current preflight job. | A green preflight gives no Phase 0 execution credit. Each enabling head and the complete reference suite still need qualification. |
+| Launch and observer interoperability | [PR #98](https://github.com/steliosx/alrust/pull/98), head `effe4099`, adds opt-in launch journals and launch confirmation. Codex-authored [#99](https://github.com/steliosx/alrust/pull/99), head `583cd721`, is merged after Claude's reported exact-head component review; it corrects the receipt reader's socket path and adds synthetic producer/consumer controls. Source inspected. | Synthetic HTTP stand-ins and offline components do not establish actual reference-observer capture, SQL qualification or complete Phase 0 execution. |
+| Evidence finalizer and database lifecycle | Finalizer components are merged. [PR #100](https://github.com/steliosx/alrust/pull/100), head `d9ad6378`, adds database creation, guarded drop and finalizer linkage. Its three automatic P1 findings (the SQL port bound to the inspected container; required container evidence; the drop verdict bound to its stage) are fixed by [PR #109](https://github.com/steliosx/alrust/pull/109), head `54cebbb0`, merged after Codex's source/offline approval. | CI does not execute these component unit tests or qualify these database-lifecycle operations against real PostgreSQL; the fixes have source/offline evidence only. No workflow calls the finalizer yet; see [interfaces](conformance/finalizer-interfaces.md). |
+| Local reference and offline checks | Scoped results and attributed independent dispositions are recorded in [STATUS](docs/STATUS.md). | Local passes and published review summaries are separate from CI qualification, direct inspection of signed private records and cross-implementation parity. |
+| Open proposals | [PR #71](https://github.com/steliosx/alrust/pull/71) proposes structural OpenAPI validation; draft [PR #70](https://github.com/steliosx/alrust/pull/70) addresses batch retry safety. | Neither proposal is part of this main checkpoint. The retry contract needs an owner decision. |
+
+Hosted jobs are now executing; earlier billing-refused runs remain historical
+failures to execute. The cost policy is **no paid CI**: free hosted allowance
+and the authorised self-hosted x64 path, subject to its own qualification.
+See [DECISIONS](docs/DECISIONS.md) for the current policy and merge authority.
+
+<details>
+<summary>Historical checkpoint — 29 September 2026</summary>
+
 **Historical snapshot: 2026-09-29.** This table preserves the original
 checkpoint. The scaffold, specifications and conformance tooling have since
 landed on `main`; consult [the current status record](docs/STATUS.md) for
@@ -68,6 +91,8 @@ independently reviewed, but had not yet been pushed to this repository.
 | Reference smoke test (2 HTTP cases against the upstream Python server) | Passed locally | This checks the upstream **reference** server only. It is not alrust behaviour. |
 | Customer, lifecycle and two-server conformance runs | Not run | — |
 | alrust HTTP API, receivers, auth, desktop app | Not started | Planned phases 1–6 below |
+
+</details>
 
 ## Architecture (planned)
 
@@ -170,9 +195,11 @@ starts. The details are in the
 - Reviews are recorded as signed dispositions and PR comments. Both agents
   share one GitHub login, so they are **not** formal GitHub approvals.
 - Claude merges a pull request into `main` once the other agent has
-  approved its exact head (owner decision Y5). **Only the repository owner**
-  cuts releases and decides on billing, repository settings and branch
-  protection.
+  approved its exact head, has admitted a signed merge window for that
+  head, and Claude's advisor has no objection to that exact head (owner
+  decisions Y5 and Y20). **Only the repository owner** cuts releases and
+  decides on billing, repository settings, branch protection, security,
+  production and cutover.
 - Behaviour must match the pinned upstream release. Any intentional
   difference in alert lifecycle, authentication or data retention is
   recorded in an ADR and decided by the owner.

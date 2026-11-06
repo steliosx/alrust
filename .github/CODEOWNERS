@@ -1,5 +1,9 @@
 /reference/ @steliosx
 /.gitmodules @steliosx
-/.github/scripts/reference-guard.sh @steliosx
-/.github/scripts/test-reference-guard.sh @steliosx
-/.github/workflows/ @steliosx
+/.github/ @steliosx
+/conformance/scripts/ @steliosx
+/conformance/scaffold-scripts/ @steliosx
+/conformance/alrust_conformance/ @steliosx
+/conformance/requirements.lock @steliosx
+/conformance/hosted-profiles.json @steliosx
+/scripts/ @steliosx

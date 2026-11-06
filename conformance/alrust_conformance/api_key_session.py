@@ -26,8 +26,8 @@ def shared_evidence_safe(data, private_keys=()):
         raise ValueError('credential pattern found in proposed shared evidence')
 
 
-def persist_private_material(directory, identifier, secret):
-    """Keep the generated key available for the runner's exclusion check only."""
+def validate_private_directory(directory):
+    """Check private placement without allocating a credential file."""
     path = Path(directory)
     try:
         info = path.lstat()
@@ -46,6 +46,15 @@ def persist_private_material(directory, identifier, secret):
                         or parent.name.endswith('-mailbox')
                         for parent in (path, *path.parents)),
                 'private material must stay outside Git and mailboxes')
+        return path
+    except Exception:
+        raise AssertionError('private material directory invalid') from None
+
+
+def persist_private_material(directory, identifier, secret):
+    """Legacy standalone runner exclusion file; captured mode uses its writer."""
+    try:
+        path = validate_private_directory(directory)
         destination = path / 'owned-api-key-material.json'
         fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, 'w') as handle:
@@ -67,7 +76,13 @@ class ApiKeySession:
                 'ordinary key requires a clock before the explicit expiry')
         self.identifier = str(uuid.uuid4())
         self._secret = 'SYNTHETIC-' + secrets.token_hex(24)
+        self._persist_material(private_directory)
+
+    def _persist_material(self, private_directory):
         persist_private_material(private_directory, self.identifier, self._secret)
+
+    def _send_request(self, method, path, payload, expected):
+        return self.client.request(method, path, payload)
 
     def _request(self, method, path, payload=None, expected=(200,)):
         require((method == 'POST' and path == '/key') or
@@ -75,7 +90,7 @@ class ApiKeySession:
                  path in {'/key/' + identifier for identifier in self.owned_ids | {self.identifier}}),
                 'ordinary key request is outside its owned endpoint scope')
         try:
-            response = self.client.request(method, path, payload)
+            response = self._send_request(method, path, payload, expected)
         except Exception:
             raise AssertionError('ordinary key HTTP request failed') from None
         # No body, payload, actual path, URL, headers or exception text emitted.

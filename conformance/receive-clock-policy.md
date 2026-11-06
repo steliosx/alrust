@@ -53,8 +53,16 @@ preconditions, normal transitions to closed and the supported non-normal
 states transition to open. This prediction runs before any status-change hook
 (`models/alert.py:288-303,344-361`). Custom status hooks, operator actions,
 heartbeat/housekeeping, additional states, multi-row matching and malformed,
-tied or non-descending history fail closed here; none is silently normalized.
+tied or non-ascending history fail closed here; none is silently normalized.
 Fixtures with those semantics require their own reviewed policy.
+
+The API serializes history in ascending `updateTime` order
+(`models/alert.py:149`, reference `f4312727783dad64198b62ed778bbca98a5144a3`;
+`spec/lifecycle.md` R7.3b), so the newest ordinary entry is last. Storage prepend
+order is not API response order. SCLOCK-HISTORY-1 corrects the earlier descending
+assumption in the oracle and synthetic fixtures; prior evidence is retained.
+This changed source needs independent affected review and separate runtime
+authorization. Pure controls establish no reference HTTP or Phase 0 pass.
 
 Projection does not mutate response objects. Reports retain raw responses and
 per-response branch/clock observations. Known API-key echoes are redacted only

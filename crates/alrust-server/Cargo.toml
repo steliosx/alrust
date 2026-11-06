@@ -1,0 +1,37 @@
+[package]
+name = "alrust-server"
+description = "The alrust server binary: configuration, database setup and the HTTP listener."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "alrust"
+path = "src/main.rs"
+
+[dependencies]
+alrust-api = { path = "../alrust-api" }
+alrust-domain = { path = "../alrust-domain" }
+alrust-store-pg = { path = "../alrust-store-pg" }
+anyhow = { workspace = true }
+axum = { workspace = true }
+chrono = { workspace = true }
+getrandom = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+base64 = { workspace = true }
+hmac = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tower = { version = "0.5", features = ["util"] }
+
+[lints]
+workspace = true

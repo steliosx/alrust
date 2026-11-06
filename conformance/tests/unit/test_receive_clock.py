@@ -37,8 +37,9 @@ def body(req, previous=None, *, second=0, offset=0):
                  attributes={'ip': '127.0.0.1', 'userTime': clock(0)})
     history = deepcopy(previous['alert']['history']) if previous else []
     if not duplicate or changed:
-        history.insert(0, {'status': status, 'updateTime': payload['createTime'],
-                           'severity': payload['severity']})
+        # Match the reference API serialization, not its internal prepend order.
+        history.append({'status': status, 'updateTime': payload['createTime'],
+                        'severity': payload['severity']})
     alert['history'] = history
     return {'status': 'ok', 'id': alert['id'], 'alert': alert}
 
@@ -96,6 +97,37 @@ def test_invalid_clock_or_branch_cannot_be_projected_to_a_pass(fault):
         alert['status'] = 'closed'
     with pytest.raises(ClockError):
         oracle.project(req, changed, 'http://left')
+
+
+def test_api_history_order_and_latest_status_follow_reference_serialization():
+    oracle = ReceiveClock()
+    previous = None
+    observations = []
+    for index, severity in enumerate(['major', 'normal', 'normal', 'major']):
+        req = request(index, severity)
+        response = body(req, previous, second=index)
+        _, observation = oracle.project(req, response, 'http://left')
+        observations.append(observation)
+        previous = response
+    history = previous['alert']['history']
+    assert [row['status'] for row in history] == ['open', 'closed', 'open']
+    assert [row['updateTime'] for row in history] == [request(i)['payload']['createTime'] for i in [0, 1, 3]]
+    assert [row['history_current_status'] for row in observations] == ['open', 'open', 'closed', 'closed']
+    assert observations[2]['update_refreshed'] is False
+    assert observations[3]['update_refreshed'] is True
+
+
+def test_storage_order_history_is_rejected_without_reordering_response():
+    oracle = ReceiveClock()
+    initial = body(request(0))
+    oracle.project(request(0), initial, 'http://left')
+    req = request(1, 'normal')
+    response = body(req, initial, second=1)
+    response['alert']['history'].reverse()
+    saved = deepcopy(response)
+    with pytest.raises(ClockError, match='non-ascending'):
+        oracle.project(req, response, 'http://left')
+    assert response == saved
 
 
 @pytest.mark.parametrize('field', ['customer', 'unknown', 'createTime', 'attributes', 'history'])

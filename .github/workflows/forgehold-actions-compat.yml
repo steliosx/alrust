@@ -1,0 +1,70 @@
+name: Forgehold action compatibility (Node.js 24 pins)
+
+# Forgehold lane profile for PR #166 (FH-ALRUST-COMPAT-1): one dispatch-only
+# job that runs the action pins ci.yml and executing.yml now use, in the
+# with: variants those workflows use, inside one Forgehold micro-VM. It
+# builds nothing, starts no service and runs no project tests. Each check is
+# a script; its RQ_JSON line comes from forgehold-stage.sh after the command
+# succeeds. Variants (paths under compat/):
+#   v1  shallow, submodules, persisted credentials, 2-minute step deadline:
+#       ci.yml rust and conformance-reference; executing.yml (S0 deadline)
+#   v2  shallow, no submodules, persist-credentials false:
+#       ci.yml hosted-profiles-preflight, conformance-unit, alpha-smoke
+#   v3  explicit ref, submodules, persist-credentials false:
+#       ci.yml store-generate (there the ref is the pull request head)
+#   v4  full history, no submodules, persisted credentials:
+#       ci.yml reference-guard
+#   python  setup-python 3.12: ci.yml hosted-profiles-preflight,
+#       conformance-reference, conformance-unit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  forgehold-actions-compat:
+    name: forgehold-actions-compat
+    runs-on: [self-hosted, Linux, X64, forgehold]
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
+        with:
+          fetch-depth: 0
+          submodules: false
+          persist-credentials: false
+      - name: Bind the checkout to the dispatched commit (GITHUB_SHA must equal HEAD)
+        run: .github/scripts/forgehold-bind.sh forgehold-actions-compat
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
+        timeout-minutes: 2
+        with:
+          path: compat/v1
+          submodules: true
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
+        with:
+          path: compat/v2
+          submodules: false
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
+        with:
+          path: compat/v3
+          ref: ${{ github.sha }}
+          submodules: true
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
+        with:
+          path: compat/v4
+          fetch-depth: 0
+          submodules: false
+      - name: Checkout variants
+        run: |
+          .github/scripts/forgehold-stage.sh forgehold-actions-compat checkout-v1 .github/scripts/forgehold-compat-check.sh compat/v1 true yes yes
+          .github/scripts/forgehold-stage.sh forgehold-actions-compat checkout-v2 .github/scripts/forgehold-compat-check.sh compat/v2 true no no
+          .github/scripts/forgehold-stage.sh forgehold-actions-compat checkout-v3 .github/scripts/forgehold-compat-check.sh compat/v3 true yes no
+          .github/scripts/forgehold-stage.sh forgehold-actions-compat checkout-v4 .github/scripts/forgehold-compat-check.sh compat/v4 false no yes
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0 (Node24)
+        with:
+          python-version: "3.12"
+      - name: Python 3.12
+        run: .github/scripts/forgehold-stage.sh forgehold-actions-compat python-3-12 .github/scripts/forgehold-python-check.sh

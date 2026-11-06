@@ -8,6 +8,22 @@ license.workspace = true
 publish = false
 
 [dependencies]
+alrust-domain = { path = "../alrust-domain" }
+alrust-engine = { path = "../alrust-engine" }
+alrust-store-pg = { path = "../alrust-store-pg" }
+axum = { workspace = true }
+chrono = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+base64 = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true }
+tower = { version = "0.5", features = ["util"] }
 
 [lints]
 workspace = true

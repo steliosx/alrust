@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -37,11 +40,13 @@ jobs:
   reference-guard:
     name: reference/ is read-only
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
         with:
           fetch-depth: 0
           submodules: false
+          persist-credentials: false
       - name: Reference policy (ADR-0001)
         env:
           EVENT: ${{ github.event_name }}
@@ -57,60 +62,361 @@ jobs:
   rust:
     name: fmt / clippy / test
     runs-on: ubuntu-24.04
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: alrust
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
+    timeout-minutes: 30
     env:
-      DATABASE_URL: postgres://postgres:postgres@localhost:5432/alrust
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/alrust
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
+        with:
+          # The store tests apply the pinned reference schema.sql (ADR-0005).
+          submodules: true
+          persist-credentials: false
+      - name: PostgreSQL 18.6 (PGDG apt, no container registry)
+        timeout-minutes: 5
+        run: .github/scripts/start-postgres18.sh alrust
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master resolved 2026-11-06
         with:
           toolchain: "1.98.1"
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2 resolved 2026-11-06
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo test --locked --workspace
+      - name: Stop PostgreSQL 18.6
+        if: always()
+        timeout-minutes: 2
+        run: .github/scripts/stop-postgres18.sh
+
+  hosted-profiles-preflight:
+    # Phase 0 hosted conformance, INERT stage (docs/ci-phase0-conformance-plan.md).
+    # Runs only Codex's offline preflight (conformance/alrust_conformance/ci.py) for every
+    # profile of the reviewed inventory. Every profile is disabled, so each must answer
+    # NOT_RUN (exit 2). No PostgreSQL service, no reference server, no HTTP, no pytest and
+    # no artifact upload. Any other answer, or a profile list or manifest that differs from
+    # the reviewed one, fails the job. NOT_RUN gives no Phase 0 gate credit.
+    name: hosted profiles (inert preflight, all NOT_RUN)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      MANIFEST_SHA256: b50ab8fc325416b4e91e8bed5da28c42845d8910f86264c6517cac27dfb1c113
+      PROFILES: >-
+        scaffold customer-mapping operator-actions metadata-edges metadata-mutations alert-queries alert-notes heartbeats heartbeat-input-query blackouts api-keys config groups permissions management-health management-gtg root-debug root-index webhook-unknown
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
+        with:
+          submodules: false
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0 (Node24)
+        with:
+          python-version: "3.12"
+      - name: Preflight every profile (expects NOT_RUN for all)
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          py="$pythonLocation/bin/python3"
+          listed=$(env -i PATH=/usr/bin:/bin "$py" -E -s -B -c 'import json,sys; print(" ".join(p["id"] for p in json.load(open(sys.argv[1]))["profiles"]))' conformance/hosted-profiles.json)
+          [[ "$listed" == "$PROFILES" ]] || { echo "profile list differs from the reviewed list" >&2; exit 1; }
+          { echo "| profile | status | reason |"; echo "|---|---|---|"; } >> "$GITHUB_STEP_SUMMARY"
+          fail=0
+          for p in $PROFILES; do
+            rc=0
+            out=$(cd conformance && env -i PATH=/usr/bin:/bin timeout 20 "$py" -E -s -B -m alrust_conformance.ci \
+                    --profile "$p" --manifest-sha256 "$MANIFEST_SHA256") || rc=$?
+            status=$(printf '%s' "$out" | env -i "$py" -E -s -B -c 'import json,sys; d=json.load(sys.stdin); print(d["status"], d["reason"], d["execution_started"], len(d["artifact_allowlist"]))' 2>/dev/null || echo "UNPARSEABLE - - -")
+            read -r st reason started allow <<<"$status"
+            echo "$p rc=$rc $st $reason started=$started allowlist=$allow"
+            echo "| $p | $st | $reason |" >> "$GITHUB_STEP_SUMMARY"
+            if [[ $rc != 2 || $st != NOT_RUN || $started != False || $allow != 0 ]]; then fail=1; fi
+          done
+          (( fail == 0 )) || { echo "a profile did not answer NOT_RUN; enabling needs its own reviewed head" >&2; exit 1; }
 
   conformance-reference:
     name: conformance vs reference alerta
     runs-on: ubuntu-24.04
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: alerta
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
         with:
           submodules: true
-      - uses: actions/setup-python@v5
+          persist-credentials: false
+      - name: PostgreSQL 18.6 (PGDG apt, no container registry)
+        timeout-minutes: 5
+        run: .github/scripts/start-postgres18.sh alerta
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0 (Node24)
         with:
           python-version: "3.12"
-      - name: Boot reference server
-        env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/alerta
-        run: conformance/scripts/run-reference.sh
+      - name: libpq development files (psycopg2 builds from its hashed sdist)
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          if ! command -v pg_config >/dev/null; then
+            sudo apt-get update -q
+            sudo apt-get install -y -q --no-install-recommends libpq-dev
+          fi
+          pg_config --version
+      # Supervised mode (docs/ci-launch-attestation-contract.md, sections 4-5):
+      # a private job root, a cleared environment, the subreaper supervisor
+      # and a pidfd-only stop with a proven cleanup verdict. Scaffold scope
+      # only: one healthcheck, no conformance vectors.
+      - name: Prepare a private job root
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          job="$RUNNER_TEMP/alrust-job"
+          mkdir -m 700 -- "$job"
+          mkdir -m 700 -- "$job/home"
+          echo "JOB_ROOT=$job" >> "$GITHUB_ENV"
+      - name: Boot reference server under the supervisor (fresh hash-locked environment, AX64-G1)
+        id: boot
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          secret=$("$pythonLocation/bin/python3" -I -c 'import secrets; print(secrets.token_hex(32))')
+          echo "::add-mask::$secret"
+          env -i PATH=/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 HOME="$JOB_ROOT/home" \
+            JOB_ROOT="$JOB_ROOT" PORT=18081 READY_TIMEOUT=60 \
+            REFERENCE_PYTHON="$pythonLocation/bin/python3" SECRET_KEY="$secret" \
+            DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/alerta \
+            conformance/scripts/run-reference.sh | tee "$JOB_ROOT/boot.out"
+          # The launcher's single ready line is the only trusted receipt
+          # binding: exactly one matching line, or the step fails.
+          ready='^reference alerta [^ ]+ up on :18081 \(supervisor [0-9]+, child [0-9]+, receipt [^ ]+ sha256 [0-9a-f]{64}\)$'
+          count=$(grep -cE "$ready" "$JOB_ROOT/boot.out" || true)
+          [[ $count == 1 ]] || { echo "expected exactly one ready line, found ${count:-none}" >&2; exit 1; }
+          line=$(grep -E "$ready" "$JOB_ROOT/boot.out")
+          receipt=$(sed -E 's/.* receipt ([^ ]+) sha256 .*/\1/' <<<"$line")
+          digest=$(sed -E 's/.* sha256 ([0-9a-f]{64})\)$/\1/' <<<"$line")
+          [[ $receipt == "$JOB_ROOT/reference/launch.json" && $digest =~ ^[0-9a-f]{64}$ ]] \
+            || { echo "unexpected receipt binding" >&2; exit 1; }
+          echo "receipt=$receipt" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
       - name: Smoke check
-        run: curl -fsS http://127.0.0.1:8080/management/healthcheck
-      # Phase 0: the black-box suite runs here against ALRUST_TARGET=http://127.0.0.1:8080
-      # once conformance/ has one (language pending ADR-0002).
+        timeout-minutes: 1
+        run: curl -fsS --max-time 30 http://127.0.0.1:18081/management/healthcheck
+      # Phase 0: the black-box suite runs here against http://127.0.0.1:18081
+      # once a profile is enabled by its own reviewed head.
+      - name: Cleanup NOT_RUN without a trusted receipt
+        if: always() && steps.boot.outputs.digest == ''
+        timeout-minutes: 1
+        run: |
+          # Without the launcher's ready line there is no trusted receipt, so
+          # nothing is signalled here; the launcher stops its own child on its
+          # failures. Discarding the runner is not cleanup proof.
+          echo "cleanup NOT_RUN: the boot step produced no trusted receipt" >&2
+          exit 1
+      - name: Stop the supervised server and prove cleanup
+        if: always() && steps.boot.outputs.digest != ''
+        timeout-minutes: 2
+        env:
+          RECEIPT: ${{ steps.boot.outputs.receipt }}
+          DIGEST: ${{ steps.boot.outputs.digest }}
+        run: |
+          set -euo pipefail
+          env -i PATH=/usr/bin:/bin LANG=C.UTF-8 "$pythonLocation/bin/python3" -I -S -B \
+            conformance/scripts/stop-reference.py "$RECEIPT" "$DIGEST" "$JOB_ROOT" \
+            | tee "$JOB_ROOT/stop.out"
+          grep -qx '{"reason": "tree_empty", "verdict": "COMPLETE"}' "$JOB_ROOT/stop.out" \
+            || { echo "cleanup not proven COMPLETE" >&2; exit 1; }
+          # The listener check must itself succeed: a failed inspection is
+          # never read as absence.
+          listeners=$(ss -ltnH 'sport = :18081') \
+            || { echo "cleanup UNPROVEN: cannot inspect listeners on :18081" >&2; exit 1; }
+          if [[ -n $listeners ]]; then
+            echo "a listener remains on :18081 after the proven stop" >&2
+            exit 1
+          fi
+          echo "cleanup COMPLETE: the supervisor's whole tree ended (ECHILD) and nothing listens on :18081"
+      - name: Stop PostgreSQL 18.6
+        if: always()
+        timeout-minutes: 2
+        run: .github/scripts/stop-postgres18.sh
+
+  conformance-unit:
+    # The conformance harness's own unit tests, which no job ran before
+    # (CONF-UNIT-ROT-1). No PostgreSQL or upstream reference server; synthetic
+    # subprocesses and loopback HTTP fixtures after locked wheel installation.
+    name: conformance unit tests (Python 3.12)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
+        with:
+          submodules: false
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0 (Node24)
+        with:
+          python-version: "3.12"
+      - name: Locked test environment
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/conformance-venv"
+          "$RUNNER_TEMP/conformance-venv/bin/python" -m pip install -q --require-hashes \
+            --only-binary=:all: -r conformance/requirements.lock
+      - name: Unit tests
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$PWD/conformance:$PWD/conformance/tests/unit" \
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONDONTWRITEBYTECODE=1 \
+            "$RUNNER_TEMP/conformance-venv/bin/python" -m pytest -c conformance/pytest.ini \
+            -p no:cacheprovider -q --basetemp="$RUNNER_TEMP/pytest" conformance/tests/unit
+      - name: Forgehold shards cover exactly this suite
+        run: .github/scripts/conformance-unit.sh check-shards
+      - name: Forgehold tmpfs reaper regression cases
+        run: '"$RUNNER_TEMP/conformance-venv/bin/python" .github/scripts/test-cu-tmp-reaper.py'
+
+  alpha-smoke:
+    # The alpha server end to end: build the binary, start it on PostgreSQL
+    # 18.6 and run scripts/alpha-smoke.py against it.
+    name: alpha server smoke (PostgreSQL 18.6)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
+        with:
+          submodules: false
+          persist-credentials: false
+      - name: PostgreSQL 18.6 (PGDG apt, no container registry)
+        timeout-minutes: 5
+        run: .github/scripts/start-postgres18.sh alrust alrust alrust
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master resolved 2026-11-06
+        with:
+          toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2 resolved 2026-11-06
+      - name: Build
+        run: cargo build --locked --bin alrust
+      - name: Start alrust
+        run: |
+          set -euo pipefail
+          key=$(python3 -c 'import secrets; print(secrets.token_hex(20))')
+          echo "::add-mask::$key"
+          echo "ALPHA_KEY=$key" >> "$GITHUB_ENV"
+          .github/scripts/alpha-server.py start http://127.0.0.1:8080/management/gtg -- \
+            env DATABASE_URL=postgres://alrust:alrust@127.0.0.1:5432/alrust ALRUST_BIND=127.0.0.1:8080 \
+            ALRUST_ADMIN_KEY="$key" target/debug/alrust
+      - name: Smoke test
+        # The job's database and server are created here and discarded after it.
+        run: python3 scripts/alpha-smoke.py http://127.0.0.1:8080 "$ALPHA_KEY" --disposable-target
+      - name: Server log
+        if: always()
+        run: |
+          if [[ -n "${ALRUST_ROOT:-}" ]]; then cat "$ALRUST_ROOT/alrust.log" || true; else echo "no server was started"; fi
+      - name: Stop alrust and PostgreSQL 18.6
+        if: always()
+        timeout-minutes: 2
+        run: |
+          set -uo pipefail
+          fail=0
+          .github/scripts/alpha-server.py stop || fail=1
+          .github/scripts/stop-postgres18.sh || fail=1
+          exit $fail
+
+  store-generate:
+    # ADR-0005 generation step, draft pull requests only: run the two
+    # ignored generators against this job's throwaway PostgreSQL 18.6,
+    # regenerate 0002, prove no test database remains, stop and remove the
+    # cluster, and only then upload the three generated files with a
+    # manifest and a cleanup record. A successful upload therefore implies
+    # completed cleanup. Nothing is committed or pushed from here.
+    name: store catalog generation (PostgreSQL 18.6, draft PRs only)
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      # The pull request's head commit itself, not the synthetic merge commit.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          submodules: true
+          persist-credentials: false
+      - name: Checked-out source is the pull request head
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          actual=$(git rev-parse HEAD)
+          [ "$actual" = "$HEAD_SHA" ] || { echo "HEAD $actual is not the PR head $HEAD_SHA"; exit 1; }
+          [ -z "$(git status --porcelain --untracked-files=all)" ] || { echo "the checkout is not clean"; exit 1; }
+          echo "HEAD $actual tree $(git rev-parse 'HEAD^{tree}') reference $(git -C reference/alerta rev-parse HEAD)"
+      - name: PostgreSQL 18.6 (PGDG apt, no container registry)
+        timeout-minutes: 5
+        run: .github/scripts/start-postgres18.sh alrust
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master resolved 2026-11-06
+        with:
+          toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2 resolved 2026-11-06
+      - name: Build the store tests
+        timeout-minutes: 12
+        run: cargo test --locked -p alrust-store-pg --no-run
+      - name: Generate reference-catalog.json and alpha_shape.expected
+        timeout-minutes: 3
+        env:
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/alrust
+          ALRUST_TEST_DB_PREFIX: alrust_t_ci_
+        run: |
+          cargo test --locked -p alrust-store-pg --test reference_layout -- \
+            --ignored --exact generate_reference_catalog generate_alpha_shape --test-threads=1
+      - name: Regenerate 0002
+        timeout-minutes: 1
+        run: python3 scripts/gen-0002.py
+      - name: No test database remains
+        timeout-minutes: 1
+        env:
+          PGPASSWORD: postgres
+        run: |
+          set -euo pipefail
+          left=$(/usr/lib/postgresql/18/bin/psql -X -qAt -h 127.0.0.1 -U postgres -d alrust \
+            -c "SELECT count(*) FROM pg_database WHERE datname LIKE 'alrust\_t\_ci\_%'")
+          [ "$left" = 0 ] || { echo "test databases remain: $left"; exit 1; }
+          echo "test databases under alrust_t_ci_: 0 (successful query)"
+      - name: Stop and remove PostgreSQL 18.6
+        id: stop
+        timeout-minutes: 2
+        run: .github/scripts/stop-postgres18.sh
+      - name: Manifest and cleanup record
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/store-generated"
+          mkdir -p "$out"
+          files="crates/alrust-store-pg/reference-catalog.json crates/alrust-store-pg/src/verify/alpha_shape.expected crates/alrust-store-pg/migrations/0002_reference_layout.sql"
+          {
+            echo "head $(git rev-parse HEAD)"
+            echo "tree $(git rev-parse 'HEAD^{tree}')"
+            echo "reference $(git -C reference/alerta rev-parse HEAD)"
+            echo "run ${{ github.run_id }} attempt ${{ github.run_attempt }}"
+            for f in $files; do
+              echo "$(sha256sum < "$f" | cut -c1-64) $(wc -c < "$f") $f"
+            done
+          } > "$out/manifest.txt"
+          {
+            echo "test databases under alrust_t_ci_ after generation: 0"
+            echo "PostgreSQL cluster stop and removal: ${{ steps.stop.outcome }}"
+            [ -z "${PG18_ROOT:-}" ] || [ ! -e "$PG18_ROOT" ] || { echo "cluster directory remains"; exit 1; }
+            echo "cluster directory removed: yes"
+          } > "$out/cleanup.txt"
+          for f in $files; do install -D -m 644 "$f" "$out/$f"; done
+          cat "$out/manifest.txt" "$out/cleanup.txt"
+          echo "STORE_GENERATED=$out" >> "$GITHUB_ENV"
+      - name: Upload the generated files (7-day artifact)
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: store-generated-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.STORE_GENERATED }}
+          retention-days: 7
+          if-no-files-found: error
+          overwrite: false
+          include-hidden-files: false
+      - name: Stop PostgreSQL 18.6 (only if the normal stop did not succeed)
+        if: always() && steps.stop.outcome != 'success'
+        timeout-minutes: 2
+        run: .github/scripts/stop-postgres18.sh
