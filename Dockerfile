@@ -13,6 +13,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --no-create-home alrust
 COPY --from=build /src/target/release/alrust /usr/local/bin/alrust
+COPY third_party/alerta /usr/share/licenses/alrust/alerta/
+COPY THIRD_PARTY_NOTICES.md /usr/share/licenses/alrust/THIRD_PARTY_NOTICES.md
 USER alrust
 EXPOSE 8080
 ENV ALRUST_BIND=0.0.0.0:8080

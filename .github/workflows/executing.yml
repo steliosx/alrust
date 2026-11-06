@@ -62,6 +62,7 @@ jobs:
         timeout-minutes: 2
         with:
           submodules: true
+          persist-credentials: false
       - name: Preconditions (refuse before any allocation)
         id: preconditions
         timeout-minutes: 1
