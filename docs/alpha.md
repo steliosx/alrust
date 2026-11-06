@@ -106,10 +106,21 @@ it. At start-up it decides what it was pointed at:
 
 ## Configuration
 
+These are variables read by the server process, including native startup.
+The Compose disposable trial above uses API keys; its service environment
+does not forward `SECRET_KEY`, `OAUTH2_CLIENT_ID`, `SAML2_ENTITY_ID` or
+`AUTH_PROVIDER`, so exporting them on the host alone does not configure the
+container verifier or set up operator login. Persistent key/provider wiring
+for a container remains separate reviewed configuration and an owner step.
+
 | Variable | Default | Meaning |
 |---|---|---|
 | `DATABASE_URL` | (required) | PostgreSQL connection URL |
 | `ALRUST_ADMIN_KEY` | (unset) | Ensures an admin API key with this value |
+| `SECRET_KEY` | Random 256-bit key per start | HS256 Bearer verification key. Unset, empty or exactly `changeme` generates a new key; any other value is used unchanged as UTF-8 bytes, with a warning below 32 characters. |
+| `OAUTH2_CLIENT_ID` | (unset) | First non-empty expected Bearer audience; takes precedence over `SAML2_ENTITY_ID`. |
+| `SAML2_ENTITY_ID` | (unset) | Expected Bearer audience when `OAUTH2_CLIENT_ID` is unset or empty. If both audience variables are unset or empty, the effective `ALRUST_BASE_URL` (with trailing `/` removed) is used, never the request host. |
+| `AUTH_PROVIDER` | Empty | Exact provider-claim match for optional hook-only operator facts; an empty or mismatching provider leaves those facts absent without rejecting an otherwise valid token. |
 | `ALRUST_AUTH_REQUIRED` | `true` | `false` (the reference default) skips route permission checks for requests without a key; such requests hold no scopes, so they cannot name a customer or mint keys. Any value other than true/false/1/0/yes/no/on/off stops start-up |
 | `ALRUST_BIND` | `0.0.0.0:8080` | Listen address |
 | `ALRUST_BASE_URL` | `http://localhost:8080` | Used in `href` fields |
@@ -118,6 +129,35 @@ it. At start-up it decides what it was pointed at:
 | `ALRUST_ACK_TIMEOUT` / `ALRUST_SHELVE_TIMEOUT` | `0` / `7200` | Seconds, at most 2147483647 |
 | `ALRUST_HISTORY_LIMIT` | `100` | History entries kept per alert |
 | `ALRUST_HOUSEKEEPING_INTERVAL` | `0` (off) | Seconds between automatic housekeeping runs. The reference never schedules it; with it on, closed and expired alerts older than 2 h and informational alerts older than 12 h are **deleted**. |
+
+### Bearer verification only
+
+The server process installs a settings-backed HS256 Bearer verifier at startup
+(including native startup). The four Bearer variables use their exact reference
+names, without an `ALRUST_` prefix. Audience and provider values are not trimmed or case-normalized.
+Arbitrary UTF-8 audience/provider strings are accepted at startup; this does
+not validate a provider or prove that tokens will match. Non-UTF-8 values in
+any of these four variables stop startup, as does failure to generate a needed
+random key. `AUTH_PROVIDER` does not start discovery or a provider exchange.
+
+API-key carriers take precedence: `Authorization: Key …`, then `X-API-Key`,
+then the first `api-key` query parameter, including a selected empty value;
+a selected invalid key does not fall back to Bearer. Only without an API-key
+carrier is a recognized Bearer header verified. Recognition requires exactly
+`Bearer` and one space followed immediately by a non-whitespace token; the
+first non-whitespace run is used and trailing content is ignored. A recognized
+invalid token returns 401 even with `ALRUST_AUTH_REQUIRED=false`. An
+unrecognized scheme or header form supplies no Bearer credential; without an
+API-key carrier it follows the no-credential path, anonymous only when
+authentication is disabled.
+
+Verification does not issue operator login tokens. The login stage (including
+the OIDC exchange) and downstream hook adapters remain unimplemented; enabling
+these settings establishes neither login nor integration qualification. A
+random default key is regenerated on each start, so tokens verified with the
+previous key will no longer verify. Persistent and multiple-instance key
+custody remains an owner step; these instructions do not supply a token issuer
+or a key-management procedure.
 
 ## Alpha limitations
 
