@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-05T23:04Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-06T07:35Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -728,6 +728,32 @@ binding and the operator-capture path. The question as shown also named
 "new login records on the server" as a cost of that choice, wording added
 without Codex's review; Y53 records it and leaves the login-transaction
 design unresolved. Nothing of L is implemented.
+
+**Public-beta preparation (2026-11-06).** Codex reports (`623c87e2`; Claude
+did not witness it) that the owner asked for alrust to be prepared for
+public GitHub-hosted CI, with the Omarchy host kept for private lab tests.
+This is preparation only: no visibility, settings, runner or VM change is
+approved. #201 (`4b3b450b`) updates Tokio 1.53.2 to 1.53.3
+(RUSTSEC-2026-0386) in `Cargo.lock`, and certifi 2026.7.22 to 2026.10.19
+(GHSA-6q48-6c7w-9gw2) in the conformance lock, its wheel manifest and
+`.github/reference-requirements.lock`; it also re-pins those two Python lock
+files in the dispatch-only executing workflow. Its first head failed the
+workflow's pin test, and Codex approved the corrected head `d65fe607`. The
+reference Python environment now differs from its AX64-G1 derivation by
+certifi only; qualification evidence recorded before that change does not
+carry over to it. #202 (`82557ccc`) pins every third-party action by
+commit, sets read-only workflow permissions, unpersisted checkout
+credentials, job timeouts and `--locked` Cargo runs, widens the CODEOWNERS
+review paths, and adds Alerta's Apache-2.0 `LICENSE` and `NOTICE` with
+`THIRD_PARTY_NOTICES.md` (also copied into the image). Each merged after
+Codex's approval of the exact head, all seven hosted jobs green and the
+advisor's no objection; the push run on `main` after each merge was
+green.
+Still open, all owner decisions: public visibility, the license for
+alrust's own code, how to handle the repository history (session links,
+home paths) and the security-reporting contact. Before any visibility
+change, self-hosted runners must be unreachable from fork pull requests
+(PUB-F2).
 
 ## Work in flight
 
