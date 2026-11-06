@@ -16,6 +16,33 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  openapi:
+    name: OpenAPI structure
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0, Node24
+        with:
+          submodules: false
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6 resolved 2026-11-06, Node24
+        with:
+          node-version: "24.22.2"
+          cache: npm
+          cache-dependency-path: .github/openapi/package-lock.json
+      - name: Install OpenAPI validator
+        run: npm ci --ignore-scripts --no-audit --no-fund --prefix .github/openapi
+      - name: Validate OpenAPI structure
+        env:
+          REDOCLY_TELEMETRY: "off"
+        run: >-
+          .github/openapi/node_modules/.bin/redocly
+          lint spec/openapi.yaml
+          --config redocly.yaml
+          --format github-actions
+
   reference-guard:
     name: reference/ is read-only
     runs-on: ubuntu-24.04
