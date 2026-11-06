@@ -426,3 +426,24 @@ jobs:
         if: always() && steps.stop.outcome != 'success'
         timeout-minutes: 2
         run: .github/scripts/stop-postgres18.sh
+
+  compose-smoke:
+    # Alpha Compose packaging check only; no Phase 0 profile qualification.
+    # Publication/execution still needs the applicable owner/resource/$0 gates
+    # and public/private controller isolation review. Runner guards are only
+    # accident protection, not proof of isolation from untrusted fork code.
+    # Prepare public CI without running this new job on the private repository.
+    # Require explicit boolean false; missing/unknown privacy metadata skips.
+    if: ${{ github.repository == 'steliosx/alrust' && toJSON(github.event.repository.private) == 'false' }}
+    name: alpha Compose smoke (GitHub-hosted x64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
+        with:
+          submodules: false
+          persist-credentials: false
+      - name: Disposable Compose smoke and scoped cleanup
+        run: bash .github/scripts/compose-smoke.sh
