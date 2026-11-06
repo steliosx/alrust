@@ -176,11 +176,12 @@ def test_identity_mismatch_leaves_the_resource(root):
     f = root / "settings.py"
     f.write_text("x")
     rec = record(f, "file")
-    f.unlink()
-    f.write_text("replacement")  # a new inode at the same path
-    rec_now = record(f, "file")
-    if rec_now["ino"] == rec["ino"]:
-        pytest.skip("filesystem reused the inode")
+    # A new inode at the same path: the replacement is created while the
+    # original still exists, so no filesystem can reuse its inode.
+    fresh = root / "settings.py.new"
+    fresh.write_text("replacement")
+    os.replace(fresh, f)
+    assert record(f, "file")["ino"] != rec["ino"]
     out = fz.remove_owned(str(root), rec, ident(root))
     assert (out["outcome"], out["reason"]) == ("UNPROVEN", "identity_mismatch")
     assert f.read_text() == "replacement"

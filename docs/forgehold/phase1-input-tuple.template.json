@@ -1,0 +1,22 @@
+{
+  "schema": "FH_LANE_INPUT_1",
+  "repository": "alrust",
+  "ref": "<bare branch name at admission, e.g. claude/forgehold-phase1; the lane rejects refs/...>",
+  "commit": "<40-hex commit; must equal the live GitHub head of ref at launch>",
+  "workflow": "forgehold-reference-guard.yml",
+  "workflow_sha256": "<sha256 of .github/workflows/forgehold-reference-guard.yml at that commit>",
+  "job": "forgehold-reference-guard",
+  "ok_lines": 0,
+  "log_required": [
+    "RQ_JSON {\"job\":\"forgehold-reference-guard\",\"stage\":\"checkout\",\"result\":\"PASS\",\"commit\":\"<the same 40-hex commit as the commit field>\"",
+    "RQ_JSON {\"job\":\"forgehold-reference-guard\",\"stage\":\"reference-policy\",\"result\":\"PASS\"}",
+    "RQ_JSON {\"job\":\"forgehold-reference-guard\",\"stage\":\"guard-regressions\",\"result\":\"PASS\"}"
+  ],
+  "log_forbidden": [
+    "::error::",
+    "the checkout is not clean",
+    "\"result\":\"FAIL\""
+  ],
+  "expiry_epoch": "<INTEGER unix epoch seconds in the real tuple (not a string): agreement end minus margin; launch is refused within 600 s of it>",
+  "note": "alrust Forgehold phase 1: reference guard only (no apt, pip, cargo or PostgreSQL); owner decision 2026-10-28; alrust-side proposal under Codex review. ok_lines is the lane's count of OK markers (0 here, as in the Zabalack quality job); every line in log_required is emitted by the workflow itself, the checkout line only when GITHUB_SHA equals HEAD and equals the tuple's commit"
+}

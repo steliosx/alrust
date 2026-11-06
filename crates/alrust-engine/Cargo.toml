@@ -8,6 +8,11 @@ license.workspace = true
 publish = false
 
 [dependencies]
+alrust-domain = { path = "../alrust-domain" }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+chrono = { workspace = true }
 
 [lints]
 workspace = true

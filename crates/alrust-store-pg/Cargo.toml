@@ -8,6 +8,16 @@ license.workspace = true
 publish = false
 
 [dependencies]
+alrust-domain = { path = "../alrust-domain" }
+alrust-engine = { path = "../alrust-engine" }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
 
 [lints]
 workspace = true

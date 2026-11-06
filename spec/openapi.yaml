@@ -999,7 +999,7 @@ components:
         status: {type: string, description: "any string: PUT status stores it unvalidated (A1.2)"}
         service: {type: array, items: {type: string}}
         group: {type: string}
-        value: {description: "as sent, except that JSON integers and booleans become strings (R0.3)"}
+        value: {description: "as sent, except that JSON integers and booleans become strings (R0.3) and floats, arrays and objects become their jsonb text (ADR-0005 decision 8)"}
         text: {type: string}
         tags: {type: array, items: {type: string}}
         attributes: {type: object}
@@ -5648,9 +5648,16 @@ paths:
            empty Content-Type reaches the 415. Whether a WSGI server omits
            the key is NOT_RUN. A JSON
            Content-Type passes the check, and then step 2 fails (400).
-        2. `RelayState` and `SAMLResponse` are read from the form
-           (`saml.py:73`, `:76`); a missing one is a BadRequestKeyError
-           (`datastructures/structures.py:226-238`), so 400.
+        2. `RelayState` is read from the form first (`saml.py:73`); a
+           missing one is a BadRequestKeyError
+           (`datastructures/structures.py:226-238`), so 400, before any SAML
+           client work. `saml_client()` (`saml.py:75`), which builds the
+           client from the configured metadata, is evaluated before the
+           `SAMLResponse` argument is read (`:76`). So a missing
+           `SAMLResponse` gives the same 400 only after the client was
+           built successfully; a construction failure (for example
+           unreadable metadata) happens first, and its outcome is
+           dependency-specific and NOT_RUN.
         3. `parse_authn_request_response(SAMLResponse, HTTP-POST)` with no
            outstanding requests (`saml.py:75-78`; pysaml2
            `client_base.py:759-811`). It returns None for an empty response,
