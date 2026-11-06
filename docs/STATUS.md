@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-06T10:18Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-06T12:34Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -762,6 +762,24 @@ qualification line in `docs/alpha.md`, and moves the Compose database
 password out of the URL into `PGPASSWORD`, with `.env` files kept out of
 Git and the image build context. No CI job runs Compose: the Compose
 setup, its database connection and the documented commands are NOT_RUN.
+Five more followed on 2026-11-06 the same way. #205 (`b07c95ca`) recorded
+the merges above in this file. #206 (`db04837a`) documents the four Bearer
+verification settings in `docs/alpha.md`. #207 (`4e987b70`) adds an alpha
+Compose smoke job that runs only when the repository is public, so it is
+skipped while the repository is private and Compose stays NOT_RUN. #208
+(`c6a2689a`) adds `third_party/rust/`: the legal texts and attributed
+source excerpts of the 157 crates in the server's x86_64 build selection,
+bound to `Cargo.lock` and the manifests by `SHA256SUMS`. Its Dockerfile
+change checks them and copies them, with the toolchain's standard-library
+notices, into the image. No CI job builds the image, so that change is
+reviewed, not run; no license is chosen for alrust's own code. #209
+(`25fc20d4`) adds a read-only CI job that fails when that corpus no longer
+matches `Cargo.lock`, the manifests, the toolchain file or its own
+checksums; its first runs, on its pull request and on `main`, passed
+with 300 checksummed paths. A dependency change now needs a regenerated and
+reviewed corpus. Two
+follow-ups are deferred: a regeneration tool (R-NOTICE-2) and a small
+hardening of how that check reads the repository root.
 Still open, all owner decisions: public visibility, the license for
 alrust's own code, how to handle the repository history (session links,
 home paths) and the security-reporting contact. Before any visibility
