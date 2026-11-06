@@ -65,6 +65,23 @@ jobs:
       - name: Guard regression cases
         run: .github/scripts/test-reference-guard.sh
 
+  notice-corpus:
+    # R-NOTICE-1: fails when the Rust notice corpus no longer matches
+    # Cargo.lock, the manifests, the toolchain file or its own SHA256SUMS.
+    # Read-only; no build, Docker or network.
+    name: Rust notice corpus checksums
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
+        with:
+          submodules: false
+          persist-credentials: false
+      - name: Verify third_party/rust/SHA256SUMS
+        run: .github/scripts/check-notice-corpus.sh
+
   rust:
     name: fmt / clippy / test
     runs-on: ubuntu-24.04
