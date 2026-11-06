@@ -36,6 +36,16 @@ Add `--disposable-target` only against a server and database you are about
 to throw away: it also runs the housekeeping checks, and housekeeping is
 global (it can expire or delete any alert).
 
+Compose uses the same `ALRUST_DB_PASSWORD` value for PostgreSQL's initial
+password and SQLx's `PGPASSWORD`; it is passed separately from the connection
+URL, so reserved URL characters do not need encoding. The default `alrust`
+password is for this disposable local trial. Compose does not publish the
+database port to the host. Changing the environment variable is not a password
+rotation for an already initialized volume.
+
+Local `.env` and `.env.*` files are excluded from Git and the Docker build
+context. Keep real credentials out of issues, logs and build inputs.
+
 Stop with `docker compose down`; add `-v` to delete the database volume.
 
 ### Without Docker

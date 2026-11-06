@@ -1,5 +1,6 @@
 # alrust alpha: the API server on PostgreSQL 18.6.
-#   ALRUST_ADMIN_KEY=$(openssl rand -hex 20) docker compose up --build
+#   export ALRUST_ADMIN_KEY="$(openssl rand -hex 20)"
+#   docker compose up --build -d
 # Then: curl -H "Authorization: Key $ALRUST_ADMIN_KEY" http://localhost:8080/alerts
 services:
   db:
@@ -27,7 +28,9 @@ services:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgres://alrust:${ALRUST_DB_PASSWORD:-alrust}@db:5432/alrust
+      # SQLx reads PGPASSWORD separately; password delimiters are not URL syntax.
+      DATABASE_URL: postgres://alrust@db:5432/alrust
+      PGPASSWORD: ${ALRUST_DB_PASSWORD:-alrust}
       ALRUST_BASE_URL: ${ALRUST_BASE_URL:-http://localhost:8080}
       ALRUST_ADMIN_KEY: ${ALRUST_ADMIN_KEY:?set ALRUST_ADMIN_KEY to an admin API key of your choice}
       ALRUST_AUTH_REQUIRED: ${ALRUST_AUTH_REQUIRED:-true}
