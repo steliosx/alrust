@@ -1,0 +1,6 @@
+/// This is derived from [Finagle][finagle], which is distributed under the Apache V2
+/// license. Copyright 2017, Twitter Inc.
+///
+/// [finagle]:
+/// https://github.com/twitter/finagle/blob/9cc08d15216497bb03a1cafda96b7266cfbbcff1/finagle-core/src/main/scala/com/twitter/finagle/loadbalancer/PeakEwma.scala
+#[derive(Debug)]
