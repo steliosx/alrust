@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -13,14 +16,43 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  openapi:
+    name: OpenAPI structure
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0, Node24
+        with:
+          submodules: false
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6 resolved 2026-11-06, Node24
+        with:
+          node-version: "24.22.2"
+          cache: npm
+          cache-dependency-path: .github/openapi/package-lock.json
+      - name: Install OpenAPI validator
+        run: npm ci --ignore-scripts --no-audit --no-fund --prefix .github/openapi
+      - name: Validate OpenAPI structure
+        env:
+          REDOCLY_TELEMETRY: "off"
+        run: >-
+          .github/openapi/node_modules/.bin/redocly
+          lint spec/openapi.yaml
+          --config redocly.yaml
+          --format github-actions
+
   reference-guard:
     name: reference/ is read-only
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
         with:
           fetch-depth: 0
           submodules: false
+          persist-credentials: false
       - name: Reference policy (ADR-0001)
         env:
           EVENT: ${{ github.event_name }}
@@ -33,9 +65,27 @@ jobs:
       - name: Guard regression cases
         run: .github/scripts/test-reference-guard.sh
 
+  notice-corpus:
+    # R-NOTICE-1: fails when the Rust notice corpus no longer matches
+    # Cargo.lock, the manifests, the toolchain file or its own SHA256SUMS.
+    # Read-only; no build, Docker or network.
+    name: Rust notice corpus checksums
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
+        with:
+          submodules: false
+          persist-credentials: false
+      - name: Verify third_party/rust/SHA256SUMS
+        run: .github/scripts/check-notice-corpus.sh
+
   rust:
     name: fmt / clippy / test
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     env:
       DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/alrust
     steps:
@@ -43,17 +93,18 @@ jobs:
         with:
           # The store tests apply the pinned reference schema.sql (ADR-0005).
           submodules: true
+          persist-credentials: false
       - name: PostgreSQL 18.6 (PGDG apt, no container registry)
         timeout-minutes: 5
         run: .github/scripts/start-postgres18.sh alrust
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master resolved 2026-11-06
         with:
           toolchain: "1.98.1"
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2 resolved 2026-11-06
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo test --locked --workspace
       - name: Stop PostgreSQL 18.6
         if: always()
         timeout-minutes: 2
@@ -112,6 +163,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
         with:
           submodules: true
+          persist-credentials: false
       - name: PostgreSQL 18.6 (PGDG apt, no container registry)
         timeout-minutes: 5
         run: .github/scripts/start-postgres18.sh alerta
@@ -255,10 +307,10 @@ jobs:
       - name: PostgreSQL 18.6 (PGDG apt, no container registry)
         timeout-minutes: 5
         run: .github/scripts/start-postgres18.sh alrust alrust alrust
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master resolved 2026-11-06
         with:
           toolchain: "1.98.1"
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2 resolved 2026-11-06
       - name: Build
         run: cargo build --locked --bin alrust
       - name: Start alrust
@@ -320,10 +372,10 @@ jobs:
       - name: PostgreSQL 18.6 (PGDG apt, no container registry)
         timeout-minutes: 5
         run: .github/scripts/start-postgres18.sh alrust
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master resolved 2026-11-06
         with:
           toolchain: "1.98.1"
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2 resolved 2026-11-06
       - name: Build the store tests
         timeout-minutes: 12
         run: cargo test --locked -p alrust-store-pg --no-run
@@ -391,3 +443,24 @@ jobs:
         if: always() && steps.stop.outcome != 'success'
         timeout-minutes: 2
         run: .github/scripts/stop-postgres18.sh
+
+  compose-smoke:
+    # Alpha Compose packaging check only; no Phase 0 profile qualification.
+    # Publication/execution still needs the applicable owner/resource/$0 gates
+    # and public/private controller isolation review. Runner guards are only
+    # accident protection, not proof of isolation from untrusted fork code.
+    # Prepare public CI without running this new job on the private repository.
+    # Require explicit boolean false; missing/unknown privacy metadata skips.
+    if: ${{ github.repository == 'steliosx/alrust' && toJSON(github.event.repository.private) == 'false' }}
+    name: alpha Compose smoke (GitHub-hosted x64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
+        with:
+          submodules: false
+          persist-credentials: false
+      - name: Disposable Compose smoke and scoped cleanup
+        run: bash .github/scripts/compose-smoke.sh

@@ -4,3 +4,7 @@ reference
 webui
 desktop
 conformance
+
+# Local runtime credentials never belong in the build context.
+**/.env
+**/.env.*

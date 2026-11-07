@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-05T23:04Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-06T12:34Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -729,6 +729,63 @@ binding and the operator-capture path. The question as shown also named
 without Codex's review; Y53 records it and leaves the login-transaction
 design unresolved. Nothing of L is implemented.
 
+**Public-beta preparation (2026-11-06).** Codex reports (`623c87e2`; Claude
+did not witness it) that the owner asked for alrust to be prepared for
+public GitHub-hosted CI, with the Omarchy host kept for private lab tests.
+This is preparation only: no visibility, settings, runner or VM change is
+approved. #201 (`4b3b450b`) updates Tokio 1.53.2 to 1.53.3
+(RUSTSEC-2026-0386) in `Cargo.lock`, and certifi 2026.7.22 to 2026.10.19
+(GHSA-6q48-6c7w-9gw2) in the conformance lock, its wheel manifest and
+`.github/reference-requirements.lock`; it also re-pins those two Python lock
+files in the dispatch-only executing workflow. Its first head failed the
+workflow's pin test, and Codex approved the corrected head `d65fe607`. The
+reference Python environment now differs from its AX64-G1 derivation by
+certifi only; qualification evidence recorded before that change does not
+carry over to it. #202 (`82557ccc`) pins every third-party action by
+commit, sets read-only workflow permissions, unpersisted checkout
+credentials, job timeouts and `--locked` Cargo runs, widens the CODEOWNERS
+review paths, and adds Alerta's Apache-2.0 `LICENSE` and `NOTICE` with
+`THIRD_PARTY_NOTICES.md` (also copied into the image). Each merged after
+Codex's approval of the exact head, all seven hosted jobs green and the
+advisor's no objection; the push run on `main` after each merge was
+green. Three more merged the same way on 2026-11-06, each after Codex's
+approval of the exact head, green hosted jobs on it and the advisor's no
+objection. #136 (`9faf06b1`, SCLOCK-HISTORY-1) makes the receive-clock
+oracle read history in the reference API's ascending order
+(`models/alert.py:149`, spec R7.3b); main was merged into the existing
+branch so its history was kept, and the push run on that merge was
+cancelled when the next merge started its own run, which passed. #71
+(`69bfb16b`) adds an `OpenAPI structure` job that lints `spec/openapi.yaml`
+with Redocly CLI 2.57.0 on Node 24.22.2 (two warnings, no errors). #204
+(`40766683`) adds `CONTRIBUTING.md`, corrects the native setup and the
+qualification line in `docs/alpha.md`, and moves the Compose database
+password out of the URL into `PGPASSWORD`, with `.env` files kept out of
+Git and the image build context. No CI job runs Compose: the Compose
+setup, its database connection and the documented commands are NOT_RUN.
+Five more followed on 2026-11-06 the same way. #205 (`b07c95ca`) recorded
+the merges above in this file. #206 (`db04837a`) documents the four Bearer
+verification settings in `docs/alpha.md`. #207 (`4e987b70`) adds an alpha
+Compose smoke job that runs only when the repository is public, so it is
+skipped while the repository is private and Compose stays NOT_RUN. #208
+(`c6a2689a`) adds `third_party/rust/`: the legal texts and attributed
+source excerpts of the 157 crates in the server's x86_64 build selection,
+bound to `Cargo.lock` and the manifests by `SHA256SUMS`. Its Dockerfile
+change checks them and copies them, with the toolchain's standard-library
+notices, into the image. No CI job builds the image, so that change is
+reviewed, not run; no license is chosen for alrust's own code. #209
+(`25fc20d4`) adds a read-only CI job that fails when that corpus no longer
+matches `Cargo.lock`, the manifests, the toolchain file or its own
+checksums; its first runs, on its pull request and on `main`, passed
+with 300 checksummed paths. A dependency change now needs a regenerated and
+reviewed corpus. Two
+follow-ups are deferred: a regeneration tool (R-NOTICE-2) and a small
+hardening of how that check reads the repository root.
+Still open, all owner decisions: public visibility, the license for
+alrust's own code, how to handle the repository history (session links,
+home paths) and the security-reporting contact. Before any visibility
+change, self-hosted runners must be unreachable from fork pull requests
+(PUB-F2).
+
 ## Work in flight
 
 Each disposition is bound to the exact head listed. A new head needs its own
@@ -1305,7 +1362,8 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
     need an agreed resource window each.
   - Next features (owner-agreed): notes, after decision (1).
   - A corrected A3B pairing (after #147) needs a new agreed window.
-  - Open: Codex's PR #136 (`codex/receive-clock-history-1`).
+  - Codex's PR #136 (`codex/receive-clock-history-1`) merged on
+    2026-11-06 as `9faf06b1`.
 
 - **codex-alrust** (current task `01a0f3d9`): review this STATUS head. The
   broker is approved at c7 for source/offline scope; the next Alrust

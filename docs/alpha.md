@@ -36,12 +36,36 @@ Add `--disposable-target` only against a server and database you are about
 to throw away: it also runs the housekeeping checks, and housekeeping is
 global (it can expire or delete any alert).
 
+Compose uses the same `ALRUST_DB_PASSWORD` value for PostgreSQL's initial
+password and SQLx's `PGPASSWORD`; it is passed separately from the connection
+URL, so reserved URL characters do not need encoding. The default `alrust`
+password is for this disposable local trial. Compose does not publish the
+database port to the host. Changing the environment variable is not a password
+rotation for an already initialized volume.
+
+Local `.env` and `.env.*` files are excluded from Git and the Docker build
+context. Keep real credentials out of issues, logs and build inputs.
+
 Stop with `docker compose down`; add `-v` to delete the database volume.
 
 ### Without Docker
 
-Build with `cargo build --release --bin alrust`, point `DATABASE_URL` at a
-PostgreSQL 18.6 database, and run `target/release/alrust`.
+Use a disposable PostgreSQL 18.6 development database. Set its connection
+URL privately; do not commit real connection strings or credentials. The native
+server defaults to listening on all interfaces, so bind it to loopback explicitly
+for a local trial. Authentication is enabled by default; bootstrap a local admin
+key before using the authenticated examples above:
+
+```sh
+export DATABASE_URL='<your disposable PostgreSQL 18.6 connection URL>'
+export ALRUST_ADMIN_KEY="$(openssl rand -hex 20)"
+export ALRUST_BIND=127.0.0.1:8080
+cargo build --locked --release --bin alrust
+target/release/alrust
+```
+
+These are setup instructions, not a recorded successful native or Compose run.
+Start with a disposable database rather than an existing deployment.
 
 ### The database
 
@@ -54,11 +78,14 @@ it. At start-up it decides what it was pointed at:
   place, in one transaction, checking every copied value. On any problem it
   stops with the reason and changes nothing. A database with other objects
   attached to its tables (views, triggers, foreign keys, grants) is refused.
-- **An existing Alerta 9.1.0 database:** adopts it unchanged if its schema
-  matches the reference exactly, otherwise stops and lists the differences.
-  An older Alerta database must first be upgraded by starting Alerta 9.1.0.
-  API keys there with no expiry or no scopes cannot authenticate until
-  edited.
+- **An existing Alerta 9.1.0 database:** accepts it at the schema-adoption
+  step if its schema matches the reference exactly, otherwise stops and lists
+  the differences. An older Alerta database must first be upgraded by starting
+  Alerta 9.1.0. Schema adoption does not make server startup or operation
+  read-only: a nonempty `ALRUST_ADMIN_KEY` inserts a bootstrap key or updates
+  the matching key's scopes and expiry. Authenticated key use records usage;
+  API writes and enabled housekeeping can change or delete data. API keys
+  with no expiry or no scopes cannot authenticate until edited.
 - **Anything else:** stops with nothing written.
 
 ## What works
@@ -79,10 +106,21 @@ it. At start-up it decides what it was pointed at:
 
 ## Configuration
 
+These are variables read by the server process, including native startup.
+The Compose disposable trial above uses API keys; its service environment
+does not forward `SECRET_KEY`, `OAUTH2_CLIENT_ID`, `SAML2_ENTITY_ID` or
+`AUTH_PROVIDER`, so exporting them on the host alone does not configure the
+container verifier or set up operator login. Persistent key/provider wiring
+for a container remains separate reviewed configuration and an owner step.
+
 | Variable | Default | Meaning |
 |---|---|---|
 | `DATABASE_URL` | (required) | PostgreSQL connection URL |
 | `ALRUST_ADMIN_KEY` | (unset) | Ensures an admin API key with this value |
+| `SECRET_KEY` | Random 256-bit key per start | HS256 Bearer verification key. Unset, empty or exactly `changeme` generates a new key; any other value is used unchanged as UTF-8 bytes, with a warning below 32 characters. |
+| `OAUTH2_CLIENT_ID` | (unset) | First non-empty expected Bearer audience; takes precedence over `SAML2_ENTITY_ID`. |
+| `SAML2_ENTITY_ID` | (unset) | Expected Bearer audience when `OAUTH2_CLIENT_ID` is unset or empty. If both audience variables are unset or empty, the effective `ALRUST_BASE_URL` (with trailing `/` removed) is used, never the request host. |
+| `AUTH_PROVIDER` | Empty | Exact provider-claim match for optional hook-only operator facts; an empty or mismatching provider leaves those facts absent without rejecting an otherwise valid token. |
 | `ALRUST_AUTH_REQUIRED` | `true` | `false` (the reference default) skips route permission checks for requests without a key; such requests hold no scopes, so they cannot name a customer or mint keys. Any value other than true/false/1/0/yes/no/on/off stops start-up |
 | `ALRUST_BIND` | `0.0.0.0:8080` | Listen address |
 | `ALRUST_BASE_URL` | `http://localhost:8080` | Used in `href` fields |
@@ -91,6 +129,35 @@ it. At start-up it decides what it was pointed at:
 | `ALRUST_ACK_TIMEOUT` / `ALRUST_SHELVE_TIMEOUT` | `0` / `7200` | Seconds, at most 2147483647 |
 | `ALRUST_HISTORY_LIMIT` | `100` | History entries kept per alert |
 | `ALRUST_HOUSEKEEPING_INTERVAL` | `0` (off) | Seconds between automatic housekeeping runs. The reference never schedules it; with it on, closed and expired alerts older than 2 h and informational alerts older than 12 h are **deleted**. |
+
+### Bearer verification only
+
+The server process installs a settings-backed HS256 Bearer verifier at startup
+(including native startup). The four Bearer variables use their exact reference
+names, without an `ALRUST_` prefix. Audience and provider values are not trimmed or case-normalized.
+Arbitrary UTF-8 audience/provider strings are accepted at startup; this does
+not validate a provider or prove that tokens will match. Non-UTF-8 values in
+any of these four variables stop startup, as does failure to generate a needed
+random key. `AUTH_PROVIDER` does not start discovery or a provider exchange.
+
+API-key carriers take precedence: `Authorization: Key …`, then `X-API-Key`,
+then the first `api-key` query parameter, including a selected empty value;
+a selected invalid key does not fall back to Bearer. Only without an API-key
+carrier is a recognized Bearer header verified. Recognition requires exactly
+`Bearer` and one space followed immediately by a non-whitespace token; the
+first non-whitespace run is used and trailing content is ignored. A recognized
+invalid token returns 401 even with `ALRUST_AUTH_REQUIRED=false`. An
+unrecognized scheme or header form supplies no Bearer credential; without an
+API-key carrier it follows the no-credential path, anonymous only when
+authentication is disabled.
+
+Verification does not issue operator login tokens. The login stage (including
+the OIDC exchange) and downstream hook adapters remain unimplemented; enabling
+these settings establishes neither login nor integration qualification. A
+random default key is regenerated on each start, so tokens verified with the
+previous key will no longer verify. Persistent and multiple-instance key
+custody remains an owner step; these instructions do not supply a token issuer
+or a key-management procedure.
 
 ## Alpha limitations
 
@@ -116,5 +183,9 @@ it. At start-up it decides what it was pointed at:
   the matching reads. Customer assignment follows `assign_customer`
   (customer-mapping C5–C11). Roles, users and the reference's full
   permission model are not implemented.
-- The conformance suite has not yet been run against alrust; differences
-  found there will be tracked as issues.
+- **Qualification:** the ten selected A3B cases at historical candidate
+  `ff7bc55a` passed 9 of 10, versus 10 of 10 for the pinned reference. The
+  `event!=` failure was fixed in #147, but the corrected pairing has not been
+  re-run. This selected local evidence is not full parity, Compose or hosted
+  qualification. All 19 runtime profiles remain `NOT_RUN`; see
+  [STATUS](STATUS.md) for the exact scope and retained deviations.
