@@ -11,7 +11,7 @@ import time
 
 import httpx
 
-from .client import Client, Response
+from .client import Client, Response, parse_json
 
 
 class BoundedClientError(ValueError):
@@ -143,7 +143,7 @@ class BoundedCaptureClient(Client):
                 buffered = httpx.Response(response.status_code, headers=response.headers,
                                           content=b"".join(pieces))
                 media = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-                body = (buffered.json() if not text_only and
+                body = (parse_json(buffered.content) if not text_only and
                         (media == "application/json" or media.endswith("+json"))
                         else buffered.text)
                 self._deadline_check()

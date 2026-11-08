@@ -271,3 +271,44 @@ def test_interruption_keeps_partial_effects_and_is_not_not_run(monkeypatch, tmp_
     assert evidence['cleanup']
     assert evidence['runner_error_type'] == 'KeyboardInterrupt'
     assert len(closed) == 2
+
+
+def test_replay_tells_json_types_apart():
+    identifier = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+    for left_value, right_value in [(True, 1), (86400, 86400.0), (0, False)]:
+        def handler(request, left_value=left_value, right_value=right_value):
+            if request.method == 'DELETE':
+                return httpx.Response(200, json={'status': 'ok'})
+            value = left_value if request.url.host == 'left' else right_value
+            return httpx.Response(201, json={'status': 'ok', 'id': identifier, 'alert': {
+                'id': identifier, 'resource': json.loads(request.content)['resource'],
+                'timeout': value}})
+        clients = [Client(url, transport=httpx.MockTransport(handler)) for url in ['http://left', 'http://right']]
+        try:
+            result = replay(*clients, list(sequence(0, 1, 'alrust-synthetic-unit', '2026-09-29T20:00:00Z')))
+            assert result['status'] == 'FAIL', (left_value, right_value)
+            assert result['requests'][0]['equal'] is False, (left_value, right_value)
+        finally:
+            for client in clients:
+                client.close()
+
+
+def test_a_record_href_without_the_target_base_url_is_refused():
+    for href in ['/alert/a', 'http://other/alert/a', 'alert/a']:
+        with pytest.raises(ValueError):
+            normalize({'alert': {'id': 'a', 'href': href}}, 'http://left')
+        with pytest.raises(ValueError):
+            normalize({'alert': {'id': 'a', 'history': [{'id': 'a', 'href': href}]}}, 'http://left')
+    assert normalize({'alert': {'id': 'a'}}, 'http://left') == {'alert': {'id': 'a'}}
+
+
+def test_declared_json_with_duplicate_keys_or_nan_is_refused():
+    bodies = iter(['{"status": "error", "status": "ok"}', '{"timeout": NaN}', '{"timeout": Infinity}'])
+    client = Client('http://localhost', transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, text=next(bodies), headers={'content-type': 'application/json'})))
+    try:
+        for _ in range(3):
+            with pytest.raises(ValueError):
+                client.request('GET', '/alert/synthetic')
+    finally:
+        client.close()

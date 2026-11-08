@@ -8,7 +8,7 @@ from copy import deepcopy
 from datetime import datetime
 import re
 
-from .normalize import normalize
+from .normalize import canonical, normalize
 
 
 POLICY = 'receive-clock-v1; checked alert receiveTime,lastReceiveTime,updateTime; selected href bases'
@@ -90,7 +90,7 @@ class ReceiveClock:
         if branch != 'dedup' or changed:
             if history[-1]['updateTime'] != payload['createTime'] or history[-1]['status'] != expected_status:
                 raise ClockError('receive history must retain the client timestamp and transition')
-        elif history != previous['history']:
+        elif canonical(history) != canonical(previous['history']):
             raise ClockError('unchanged duplicate unexpectedly changed history')
         if previous and timestamp(alert['lastReceiveTime']) <= timestamp(previous['lastReceiveTime']):
             raise ClockError('required fresh clock did not advance despite request spacing')

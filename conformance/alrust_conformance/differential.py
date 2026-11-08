@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 import uuid
 
 from .client import Client, redact_secrets
-from .normalize import POLICY, normalize
+from .normalize import POLICY, canonical, normalize
 from .receive_clock import POLICY as CLOCK_POLICY, ReceiveClock
 
 
@@ -85,7 +85,7 @@ def replay(reference, candidate, requests, *, checked_clocks=False, on_progress=
                     projections.append(normalize(response.body, client.base_url))
             left, right = row['responses']
             row['equal'] = (left['status'] == right['status']
-                            and projections[0] == projections[1])
+                            and canonical(projections[0]) == canonical(projections[1]))
             row['successful'] = left['status'] == right['status'] == 201
             if not row['equal'] or not row['successful']:
                 failure = True
