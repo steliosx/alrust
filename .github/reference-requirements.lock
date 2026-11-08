@@ -1,10 +1,12 @@
+# SECURITY-REFRESH CANDIDATE: not runtime-qualified or an unchanged resolution
+# of the pinned reference requirements.txt. See conformance/reference-environment.md.
+# The original resolution provenance below is retained; listed security pins override it.
 # Runtime dependencies of the pinned reference server reference/alerta 9.1.0 (f4312727):
 # the full transitive closure of reference/alerta/requirements.txt (stage 2).
 # psycopg2 is source-only: it is built from its hashed sdist with --no-build-isolation
 # against libpq (pg_config) on the host, using the stage 1 build tools.
 # Derived 2026-10-01 by claude-alrust with pip 25.0.1 on CPython 3.12.14, Linux x86_64:
 #   pip install --dry-run --ignore-installed --report <report.json> -r reference/alerta/requirements.txt
-# Later security refresh: certifi 2026.10.19 replaces 2026.7.22 for GHSA-6q48-6c7w-9gw2.
 # Every distribution is pinned to the exact file pip selected, with its PyPI sha256.
 # Install with --require-hashes --no-deps (AX64-G1). Wheel tags assume CPython 3.12 on
 # glibc x86_64 >= 2.34; another interpreter or platform must fail the hash check, not resolve.
@@ -14,8 +16,8 @@ bcrypt==5.0.0 --hash=sha256:611f0a17aa4a25a69362dcc299fda5c8a3d4f160e2abb3831041
     # bcrypt-5.0.0-cp39-abi3-manylinux_2_34_x86_64.whl
 blinker==1.9.0 --hash=sha256:ba0efaa9080b619ff2f3459d1d500c57bddea4a6b424b60a91141db6fd2f08bc
     # blinker-1.9.0-py3-none-any.whl
-brotli==1.2.0 --hash=sha256:072e7624b1fc4d601036ab3f4f27942ef772887e876beff0301d261210bca97f
-    # brotli-1.2.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
+brotli==1.2.1 --hash=sha256:4b9dd0173ca5e01d1eb307d3c184fe8c09bdc168ede560889b1018d216d38c61
+    # brotli-1.2.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
 certifi==2026.10.19 --hash=sha256:42d35340cc5b9ba78e818ddbff0c5b1c2b779de448a340fd1b989f5fa8670e1b
     # certifi-2026.10.19-py3-none-any.whl
 cffi==2.1.1 --hash=sha256:c1453022f490d2459a11819d83ad1d586e9ff65a12ac3e705ffebd46d3685dcf
@@ -24,12 +26,12 @@ charset-normalizer==3.5.2 --hash=sha256:3d31298449090ab8d47b7b1b2a555ff73cac7ed4
     # charset_normalizer-3.5.2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
 click==8.5.0 --hash=sha256:255bc9599cf7748b4b1a446ccc735421bd08a2ae529a8b88597d3de5664ee360
     # click-8.5.0-py3-none-any.whl
-cryptography==46.0.6 --hash=sha256:d4e4aadb7fc1f88687f47ca20bb7227981b03afaae69287029da08096853b738
-    # cryptography-46.0.6-cp311-abi3-manylinux_2_34_x86_64.whl
+cryptography==50.0.0 --hash=sha256:82148ec5bddac30b51a5b3c1945075f896fa022cb93f8e4a01e9f6ee95292c5f
+    # cryptography-50.0.0-cp311-abi3-manylinux_2_34_x86_64.whl
 defusedxml==0.7.1 --hash=sha256:a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61
     # defusedxml-0.7.1-py2.py3-none-any.whl
-dnspython==2.8.0 --hash=sha256:01d9bbc4a2d76bf0db7c1f729812ded6d912bd318d3b1cf81d30c0f845dbf3af
-    # dnspython-2.8.0-py3-none-any.whl
+dnspython==2.9.0 --hash=sha256:9a4aedb833c3c1b49214d04d44d3032ab7a9135f7c1d29a549b4ff78fd82fda9
+    # dnspython-2.9.0-py3-none-any.whl
 Flask==3.1.3 --hash=sha256:f4bcbefc124291925f1a26446da31a5178f9483862233b23c0c96a20701f670c
     # flask-3.1.3-py3-none-any.whl
 Flask-Compress==1.23 --hash=sha256:52108afb4d133a5aab9809e6ac3c085ed7b9c788c75c6846c129faa28468f08c
@@ -50,10 +52,10 @@ psycopg2==2.9.11 --hash=sha256:964d31caf728e217c697ff77ea69c2ba0865fa41ec20bb00f
     # psycopg2-2.9.11.tar.gz
 pycparser==3.0 --hash=sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992
     # pycparser-3.0-py3-none-any.whl
-PyJWT==2.12.1 --hash=sha256:28ca37c070cad8ba8cd9790cd940535d40274d22f80ab87f3ac6a713e6e8454c
-    # pyjwt-2.12.1-py3-none-any.whl
-pymongo==4.16.0 --hash=sha256:dabbf3c14de75a20cc3c30bf0c6527157224a93dfb605838eabb1a2ee3be008d
-    # pymongo-4.16.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
+PyJWT==2.15.0 --hash=sha256:7a3742debf6b879e912dbb9819ceec1594be812452b78c5f2e2dfc56564954f8
+    # pyjwt-2.15.0-py3-none-any.whl
+pymongo==4.18.3 --hash=sha256:aa6f363ff648bf061335d2190dd580cbf465b1308a7e6acb992d128d6a16a3bd
+    # pymongo-4.18.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
 pyparsing==3.3.2 --hash=sha256:850ba148bd908d7e2411587e247a1e4f0327839c40e2e5e6d05a007ecc69911d
     # pyparsing-3.3.2-py3-none-any.whl
 python-dateutil==2.9.0.post0 --hash=sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427
@@ -62,8 +64,8 @@ pytz==2026.1.post1 --hash=sha256:f2fd16142fda348286a75e1a524be810bb05d444e5a081f
     # pytz-2026.1.post1-py2.py3-none-any.whl
 PyYAML==6.0.3 --hash=sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc
     # pyyaml-6.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
-requests==2.32.5 --hash=sha256:2462f94637a34fd532264295e186976db0f5d453d1cdd31473c85a6a161affb6
-    # requests-2.32.5-py3-none-any.whl
+requests==2.33.0 --hash=sha256:3324635456fa185245e24865e810cecec7b4caf933d7eb133dcde67d48cee69b
+    # requests-2.33.0-py3-none-any.whl
 requests-hawk==1.2.1 --hash=sha256:afe8add3c72a21405543a07464b62e36a5f378585e5cf3b54b1307e884f67324
     # requests_hawk-1.2.1-py2.py3-none-any.whl
 sentry-sdk==2.56.0 --hash=sha256:5afafb744ceb91d22f4cc650c6bd048ac6af5f7412dcc6c59305a2e36f4dbc02
@@ -74,5 +76,5 @@ StrEnum==0.4.15 --hash=sha256:a30cda4af7cc6b5bf52c8055bc4bf4b2b6b14a93b574626da3
     # StrEnum-0.4.15-py3-none-any.whl
 urllib3==2.8.0 --hash=sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3
     # urllib3-2.8.0-py3-none-any.whl
-Werkzeug==3.1.7 --hash=sha256:4b314d81163a3e1a169b6a0be2a000a0e204e8873c5de6586f453c55688d422f
-    # werkzeug-3.1.7-py3-none-any.whl
+Werkzeug==3.1.9 --hash=sha256:6392e50c78460ba618e5b21f08a71f59c99ce99cdc6cf6e3dd7e6ccca8754fab
+    # werkzeug-3.1.9-py3-none-any.whl
