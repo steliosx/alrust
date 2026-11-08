@@ -815,4 +815,9 @@ The model ignores the `latency` and `since` columns the SQL returns
   contract change**, and would go to the owner.
 - **L3 (R2.3):** the multi-row UPDATE behavior. alrust should either
   reproduce it or prove the case unreachable under its constraints. Codex to
-  review.
+  review. One case is reachable: the correlate lookup can match both a row
+  with the same event and another severity, and a row that lists the event in
+  its correlate list. The reference's UPDATE then hits both rows and fails on
+  its unique index. Since 2026-11-08 (owner-directed audit fix; ADR-0005)
+  alrust orders the same-event row first and correlates onto it, a
+  deliberate difference from the reference's failure.

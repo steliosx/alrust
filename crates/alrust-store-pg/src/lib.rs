@@ -13,8 +13,8 @@ pub mod startup;
 use std::sync::Arc;
 
 use alrust_domain::{
-    Alert, ApiKey, DEFAULT_PREVIOUS_SEVERITY, Heartbeat, HistoryEntry, INFORM_SEVERITY,
-    NORMAL_SEVERITY, change_type, status, trend, truncate_ms,
+    Alert, ApiKey, DEFAULT_PREVIOUS_SEVERITY, Heartbeat, HistoryEntry, HistoryOutput,
+    INFORM_SEVERITY, NORMAL_SEVERITY, change_type, status, trend, truncate_ms,
 };
 use alrust_engine::{
     HistInfo, Timeouts, Transition, TransitionError, TransitionInput, action_timeout, hist_info,
@@ -526,6 +526,14 @@ impl Col {
 }
 
 /// `dedup_alert` (`postgres/base.py:218-226`).
+/// Every `alerts` column of the reference layout but `history`, which a list
+/// without `show-history` would read and then discard.
+const ALERTS_WITHOUT_HISTORY: &str = "SELECT id, resource, event, environment, severity,
+    correlate, status, service, \"group\", value, text, tags, attributes, origin, type,
+    create_time, timeout, raw_data, customer, duplicate_count, repeat, previous_severity,
+    trend_indication, receive_time, last_receive_id, last_receive_time, update_time,
+    NULL::history[] AS history FROM alerts";
+
 const DEDUP_COLS: &[Col] = &[
     Col::Status,
     Col::Service,
@@ -876,10 +884,15 @@ impl Store {
             return Ok((a, ReceiveKind::Duplicate));
         }
 
+        // When a same-event row and a row correlating this event both match,
+        // the same-event row wins: rewriting the other row's event to this
+        // one would violate the unique index (ADR-0005, R2.3). The reference
+        // fails in that case; alrust picks one row deterministically.
         let corr = sqlx::query(
             "SELECT * FROM alerts WHERE environment=$1 AND resource=$2
                AND ((event=$3 AND severity<>$4) OR (event<>$3 AND $3=ANY(correlate)))
-               AND customer IS NOT DISTINCT FROM $5 LIMIT 1 FOR UPDATE",
+               AND customer IS NOT DISTINCT FROM $5
+               ORDER BY (event=$3) DESC LIMIT 1 FOR UPDATE",
         )
         .bind(&n.environment)
         .bind(&n.resource)
@@ -1154,11 +1167,15 @@ impl Store {
             customers: customers.map(<[String]>::to_vec),
             ..CallerFacts::default()
         };
-        self.take_action_with(id, act, text, timeout, &caller).await
+        self.take_action_with(id, customers, act, text, timeout, &caller)
+            .await
     }
 
     /// `take_action` with the caller's facts, which the acknowledgement
-    /// hooks receive (spec/integration-hooks.md sections 2 and 3). Without a
+    /// hooks receive (spec/integration-hooks.md sections 2 and 3). The alert
+    /// lookup uses `customers`, the caller's own customer filter, never the
+    /// facts' customer list: for an operator that list is the token's
+    /// hook-only claim (spec/oidc-caller-facts.md section 5). Without a
     /// registered integration, or for any action but `ack`, this is exactly
     /// the unhooked path.
     ///
@@ -1173,13 +1190,13 @@ impl Store {
     pub async fn take_action_with(
         &self,
         id: &str,
+        customers: Option<&[String]>,
         act: &str,
         text: &str,
         timeout: Option<i64>,
         caller: &CallerFacts,
     ) -> Result<Alert, StoreError> {
         let login = caller.login.as_deref().unwrap_or("");
-        let customers = caller.customers.as_deref();
         let mut tx = self.pool.begin().await?;
         if act != "ack" || self.hooks.is_empty() {
             let a = Self::lock_alert(&mut tx, id, customers).await?;
@@ -1424,7 +1441,9 @@ impl Store {
         }
     }
 
-    /// `GET /alerts`: newest `lastReceiveTime` first.
+    /// `GET /alerts`: newest `lastReceiveTime` first. With
+    /// `HistoryOutput::Omit` the `history` column is not read, and every
+    /// returned alert has an empty history.
     ///
     /// # Errors
     ///
@@ -1434,6 +1453,7 @@ impl Store {
         q: &AlertQuery,
         page: i64,
         page_size: i64,
+        history: HistoryOutput,
     ) -> Result<AlertPage, StoreError> {
         let mut counts = QueryBuilder::new("SELECT severity, status, count(*) AS n FROM alerts");
         Self::push_filters(&mut counts, q);
@@ -1452,7 +1472,10 @@ impl Store {
             let e = status_counts.entry(st).or_insert(Value::from(0));
             *e = Value::from(e.as_i64().unwrap_or(0) + n);
         }
-        let mut sel = QueryBuilder::new("SELECT * FROM alerts");
+        let mut sel = QueryBuilder::new(match history {
+            HistoryOutput::Include => "SELECT * FROM alerts",
+            HistoryOutput::Omit => ALERTS_WITHOUT_HISTORY,
+        });
         Self::push_filters(&mut sel, q);
         sel.push(" ORDER BY last_receive_time DESC, id LIMIT ")
             .push_bind(page_size)
@@ -1592,16 +1615,26 @@ impl Store {
         Ok(row_to_key(&row)?)
     }
 
-    /// Ensure a bootstrap key exists with exactly these scopes.
+    /// Ensure the key with this id holds exactly this value, scopes and
+    /// expiry. A different value stored under the same id is replaced, so a
+    /// changed bootstrap value revokes the previous one. A row that already
+    /// holds this value under another id is adopted under this id.
     ///
     /// # Errors
     ///
     /// The database error.
     pub async fn ensure_key(&self, k: &ApiKey) -> Result<(), StoreError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM keys WHERE id = $1 AND key <> $2")
+            .bind(&k.id)
+            .bind(&k.key)
+            .execute(&mut *tx)
+            .await?;
         sqlx::query(
             r#"INSERT INTO keys (id, key, "user", scopes, text, expire_time, count, last_used_time, customer)
                VALUES ($1,$2,$3,$4,$5,$6,0,NULL,$7)
-               ON CONFLICT (key) DO UPDATE SET scopes=EXCLUDED.scopes, expire_time=EXCLUDED.expire_time"#,
+               ON CONFLICT (key) DO UPDATE SET id=EXCLUDED.id, scopes=EXCLUDED.scopes,
+                 expire_time=EXCLUDED.expire_time"#,
         )
         .bind(&k.id)
         .bind(&k.key)
@@ -1610,8 +1643,9 @@ impl Store {
         .bind(&k.text)
         .bind(k.expire_time.map(naive))
         .bind(&k.customer)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
         Ok(())
     }
 

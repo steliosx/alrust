@@ -374,6 +374,167 @@ async fn bearer_operators_through_the_router() {
     }
 }
 
+/// The token's hook-only customer claim never filters which alert an
+/// operator acts on (spec/oidc-caller-facts.md section 5): an operator whose
+/// claim is `["acme"]`, or empty, acknowledges a globex alert.
+#[tokio::test]
+async fn a_bearer_operator_acts_on_any_customers_alert() {
+    let Some(db) = test_db().await else { return };
+    let app = app(store(&db).await, AuthRequired::Yes, Some(bearer_cfg()));
+    let admin = format!("Key {ADMIN_KEY}");
+    let mut ids = Vec::new();
+    for resource in ["r-globex-1", "r-globex-2"] {
+        let (code, body) = call(
+            &app,
+            "POST",
+            "/alert",
+            &[("authorization", &admin)],
+            Some(alert(resource, "globex")),
+        )
+        .await;
+        assert_eq!(code, StatusCode::CREATED, "{resource}");
+        ids.push(body["id"].as_str().unwrap().to_owned());
+    }
+    let empty_claim = mint(&json!({
+        "sub": "user-1", "preferred_username": "ops@example.test", "provider": PROVIDER,
+        "scope": "read write:alerts", "aud": AUD, "exp": NOW + 3600,
+        "alrust_hook_customers": [],
+    }));
+    for (id, token) in ids.iter().zip([operator("read write:alerts"), empty_claim]) {
+        let op = format!("Bearer {token}");
+        let (code, body) = call(
+            &app,
+            "PUT",
+            &format!("/alert/{id}/action"),
+            &[("authorization", &op)],
+            Some(json!({"action": "ack", "text": "seen"})),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK, "{body}");
+        let (code, body) = call(
+            &app,
+            "GET",
+            &format!("/alert/{id}"),
+            &[("authorization", &admin)],
+            None,
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(body["alert"]["status"], "ack");
+    }
+}
+
+/// Numeric inputs that would overflow i64 are a 400, never a wrapped value:
+/// housekeeping hours (a wrapped threshold of seconds would delete recent
+/// closed alerts) and paging (a wrapped OFFSET or page count).
+#[tokio::test]
+async fn overflowing_numeric_inputs_are_refused() {
+    let Some(db) = test_db().await else { return };
+    let app = app(store(&db).await, AuthRequired::Yes, Some(bearer_cfg()));
+    let admin = format!("Key {ADMIN_KEY}");
+    let (code, body) = call(
+        &app,
+        "POST",
+        "/alert",
+        &[("authorization", &admin)],
+        Some(alert("r-closed", "acme")),
+    )
+    .await;
+    assert_eq!(code, StatusCode::CREATED);
+    let id = body["id"].as_str().unwrap().to_owned();
+    let (code, _) = call(
+        &app,
+        "PUT",
+        &format!("/alert/{id}/status"),
+        &[("authorization", &admin)],
+        Some(json!({"status": "closed"})),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+
+    // 1147797409030816545 * 3600 wraps to 16 seconds in a release build.
+    for query in ["expired=1147797409030816545", "info=9223372036854775807"] {
+        let (code, body) = call(
+            &app,
+            "POST",
+            &format!("/management/housekeeping?{query}"),
+            &[("authorization", &admin)],
+            None,
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST, "{query}: {body}");
+    }
+    let (code, body) = call(
+        &app,
+        "GET",
+        &format!("/alert/{id}"),
+        &[("authorization", &admin)],
+        None,
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "the closed alert survives: {body}");
+
+    for query in [
+        "page=3&page-size=9223372036854775807",
+        "page=4611686018427387904&page-size=4",
+    ] {
+        let (code, body) = call(
+            &app,
+            "GET",
+            &format!("/alerts?{query}"),
+            &[("authorization", &admin)],
+            None,
+        )
+        .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST, "{query}: {body}");
+    }
+    // A page-size near i64::MAX on page 1 is valid and counts one page.
+    let (code, body) = call(
+        &app,
+        "GET",
+        "/alerts?page-size=9223372036854775807",
+        &[("authorization", &admin)],
+        None,
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{body}");
+    assert_eq!(body["pages"], 1);
+}
+
+/// Only `ok`, `slow` and `expired` filter heartbeats; the reference ignores
+/// any other `status` value, so `status=foo` lists every heartbeat.
+#[tokio::test]
+async fn unknown_heartbeat_statuses_are_ignored() {
+    let Some(db) = test_db().await else { return };
+    let app = app(store(&db).await, AuthRequired::Yes, Some(bearer_cfg()));
+    let admin = format!("Key {ADMIN_KEY}");
+    let (code, body) = call(
+        &app,
+        "POST",
+        "/heartbeat",
+        &[("authorization", &admin)],
+        Some(json!({"origin": "hb-test", "timeout": 3600})),
+    )
+    .await;
+    assert_eq!(code, StatusCode::CREATED, "{body}");
+    for (query, expected) in [("status=foo", 1), ("status=OK", 1), ("status=expired", 0)] {
+        let (code, body) = call(
+            &app,
+            "GET",
+            &format!("/heartbeats?{query}"),
+            &[("authorization", &admin)],
+            None,
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK, "{query}");
+        assert_eq!(
+            body["heartbeats"].as_array().unwrap().len(),
+            expected,
+            "{query}: {body}"
+        );
+    }
+}
+
 fn claims_for(changes: &[(&str, Value)], removed: &[&str]) -> Value {
     let mut c = json!({
         "sub": "user-1", "preferred_username": "ops@example.test", "provider": PROVIDER,

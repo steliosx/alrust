@@ -838,7 +838,14 @@ async fn take_action(
         v => Some(parse_timeout(v, 0)?),
     };
     st.store
-        .take_action_with(&id, &action, text, timeout, &caller.facts(&st))
+        .take_action_with(
+            &id,
+            caller.customers().as_deref(),
+            &action,
+            text,
+            timeout,
+            &caller.facts(&st),
+        )
         .await?;
     Ok(Json(json!({"status": "ok"})))
 }
@@ -946,6 +953,10 @@ fn parse_search(st: &AppState, caller: &Caller, params: &[(String, String)]) -> 
     if page_size < 1 {
         return Err(ApiError::bad("page-size must be greater than 0"));
     }
+    // The store's OFFSET is (page - 1) * page-size; it must not overflow.
+    if (page - 1).checked_mul(page_size).is_none() {
+        return Err(ApiError::bad("page is out of range for this page-size"));
+    }
     Ok(Search {
         q,
         page,
@@ -962,7 +973,10 @@ async fn count_alerts(
     let caller = authenticate(&st, &headers, &params).await?;
     caller.require("read:alerts")?;
     let s = parse_search(&st, &caller, &params)?;
-    let r = st.store.find_alerts(&s.q, 1, 1).await?;
+    let r = st
+        .store
+        .find_alerts(&s.q, 1, 1, HistoryOutput::Omit)
+        .await?;
     Ok(Json(json!({
         "status": "ok",
         "total": r.total,
@@ -985,8 +999,12 @@ async fn search_alerts(
         page_size,
         show_history,
     } = parse_search(&st, &caller, &params)?;
-    let r = st.store.find_alerts(&q, page, page_size).await?;
-    let pages = (r.total + page_size - 1) / page_size;
+    let r = st
+        .store
+        .find_alerts(&q, page, page_size, show_history)
+        .await?;
+    // Rounded up without `total + page_size - 1`, which overflows.
+    let pages = r.total / page_size + i64::from(r.total % page_size != 0);
     let alert_timeout = st.store.config().alert_timeout;
     let alerts: Vec<Value> = r
         .alerts
@@ -1092,9 +1110,11 @@ async fn list_heartbeats(
 ) -> ApiResult<Json<Value>> {
     let caller = authenticate(&st, &headers, &params).await?;
     caller.require("read:heartbeats")?;
+    // Only these three values filter, case-sensitively; the reference ignores
+    // any other `status` value (`postgres/base.py:886-907`).
     let wanted: Vec<&str> = params
         .iter()
-        .filter(|(k, _)| k == "status")
+        .filter(|(k, v)| k == "status" && matches!(v.as_str(), "ok" | "slow" | "expired"))
         .map(|(_, v)| v.as_str())
         .collect();
     let all = st
@@ -1315,12 +1335,16 @@ async fn housekeeping(
             .find(|(k, _)| k == name)
             .and_then(|(_, v)| v.parse::<i64>().ok())
     };
-    let expired_s = hours("expired")
-        .filter(|h| *h != 0)
-        .map_or(st.cfg.delete_expired_after_s, |h| h * 3600);
-    let info_s = hours("info")
-        .filter(|h| *h != 0)
-        .map_or(st.cfg.delete_info_after_s, |h| h * 3600);
+    // Hours to seconds. An unchecked multiply wraps in a release build, and a
+    // wrapped threshold of a few seconds would delete recent closed alerts.
+    let seconds = |name: &str, default: i64| match hours(name).filter(|h| *h != 0) {
+        None => Ok(default),
+        Some(h) => h
+            .checked_mul(3600)
+            .ok_or_else(|| ApiError::bad(format!("'{name}' is out of range"))),
+    };
+    let expired_s = seconds("expired", st.cfg.delete_expired_after_s)?;
+    let info_s = seconds("info", st.cfg.delete_info_after_s)?;
     let expired = st.store.housekeeping(expired_s, info_s).await?;
     let count = expired.len();
     Ok(Json(

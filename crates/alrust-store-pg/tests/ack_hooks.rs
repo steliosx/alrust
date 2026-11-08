@@ -377,7 +377,7 @@ async fn phases_run_once_in_order_and_the_owner_stages() {
     let s = setup(&db, hooks).await;
 
     let a = s
-        .take_action_with("a1", "ack", "seen", None, &caller())
+        .take_action_with("a1", None, "ack", "seen", None, &caller())
         .await
         .unwrap();
     assert_eq!(
@@ -432,7 +432,7 @@ async fn two_claimants_refuse_with_503_and_change_nothing() {
     .await;
     let before = snapshot(&db.pool).await;
     let e = s
-        .take_action_with("a1", "ack", "seen", None, &caller())
+        .take_action_with("a1", None, "ack", "seen", None, &caller())
         .await
         .unwrap_err();
     assert!(
@@ -472,7 +472,7 @@ async fn a_refusal_at_any_phase_rolls_everything_back_and_stops() {
         let s = setup(&db, vec![hook(fake)]).await;
         let before = snapshot(&db.pool).await;
         let e = s
-            .take_action_with("a1", "ack", "seen", None, &caller())
+            .take_action_with("a1", None, "ack", "seen", None, &caller())
             .await
             .unwrap_err();
         assert!(
@@ -494,7 +494,7 @@ async fn pre_lookup_refuses_before_the_alert_is_looked_up() {
     let s = setup(&db, vec![hook(fake)]).await;
     // An id that does not exist: the refusal, not "not found".
     let e = s
-        .take_action_with("no-such-alert", "ack", "x", None, &caller())
+        .take_action_with("no-such-alert", None, "ack", "x", None, &caller())
         .await
         .unwrap_err();
     assert!(matches!(&e, StoreError::Hook(h) if h.status == 409), "{e}");
@@ -509,7 +509,7 @@ async fn a_declining_gate_skips_staging_and_carries_its_writes() {
     fake.skip = true;
     let s = setup(&db, vec![hook(fake)]).await;
     let a = s
-        .take_action_with("a1", "ack", "seen", None, &caller())
+        .take_action_with("a1", None, "ack", "seen", None, &caller())
         .await
         .unwrap();
     assert_eq!(
@@ -528,7 +528,7 @@ async fn unclaimed_alerts_and_other_actions_run_as_without_hooks() {
     let log = Arc::new(Mutex::new(Vec::new()));
     let s = setup(&db, vec![hook(Fake::new("A", &log, &db.pool))]).await;
     let a = s
-        .take_action_with("a1", "ack", "seen", None, &caller())
+        .take_action_with("a1", None, "ack", "seen", None, &caller())
         .await
         .unwrap();
     assert_eq!(calls(&log), ["A:pre_lookup", "A:claims"]);
@@ -544,7 +544,7 @@ async fn unclaimed_alerts_and_other_actions_run_as_without_hooks() {
     let s2 = s
         .clone()
         .with_integrations(vec![hook(Fake::new("B", &log2, &db.pool).claiming())]);
-    s2.take_action_with("a1", "unack", "back", None, &caller())
+    s2.take_action_with("a1", None, "unack", "back", None, &caller())
         .await
         .unwrap();
     assert!(calls(&log2).is_empty(), "{:?}", calls(&log2));
