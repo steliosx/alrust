@@ -475,7 +475,7 @@ async fn overflowing_numeric_inputs_are_refused() {
     assert_eq!(code, StatusCode::OK, "the closed alert survives: {body}");
 
     for query in [
-        "page=2&page-size=9223372036854775807",
+        "page=3&page-size=9223372036854775807",
         "page=4611686018427387904&page-size=4",
     ] {
         let (code, body) = call(
