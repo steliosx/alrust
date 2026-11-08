@@ -5,9 +5,9 @@
 # runs' directories are never adopted. Data is removed only after pg_ctl
 # positively reports no server (status 3, or 4 for a partial initdb); an
 # unavailable pg_ctl or a server that will not stop keeps everything and
-# fails. PG_BIN overrides the server binaries (for the scripts' own tests).
+# fails.
 set -uo pipefail
-bin=${PG_BIN:-/usr/lib/postgresql/18/bin}
+bin=/usr/lib/postgresql/18/bin
 root=${PG18_ROOT:-}
 token=${PG18_TOKEN:-}
 

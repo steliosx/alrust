@@ -20,10 +20,6 @@ evidence that the child is gone (never launched, pid free or held by another
 process, or the pidfd reports exit). A missing or malformed record, or a
 process that cannot be inspected or will not stop, keeps the directory and
 fails as UNPROVEN.
-
-Test hooks: ALRUST_PROC replaces /proc for start-time reads, and
-ALRUST_TEST_BEFORE_SIGNAL names a command run with the pid after the identity
-check and before the first signal.
 """
 import os
 import secrets
@@ -35,7 +31,7 @@ import tempfile
 import time
 import urllib.request
 
-PROC = os.environ.get("ALRUST_PROC", "/proc")
+PROC = "/proc"
 
 
 def start_time(pid):
@@ -183,8 +179,6 @@ def stop():
                       f"{'free' if now is None else 'another process'}); not signalled")
 
     # pidfd is now bound to the recorded child; signals go only through it.
-    if os.environ.get("ALRUST_TEST_BEFORE_SIGNAL"):
-        subprocess.run([os.environ["ALRUST_TEST_BEFORE_SIGNAL"], str(pid)], check=False)
     for sig, wait in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
         if exited(pidfd, 0):
             break

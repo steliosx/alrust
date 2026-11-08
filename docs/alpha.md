@@ -7,7 +7,8 @@ tried, not yet to replace the reference server. Behaviour follows
 
 ## Run it
 
-You need Docker with the compose plugin.
+You need Docker with the compose plugin on an x86_64 (amd64) host. The image
+build refuses other hosts; ARM64 is deferred.
 
 ```sh
 export ALRUST_ADMIN_KEY=$(openssl rand -hex 20)   # your admin API key

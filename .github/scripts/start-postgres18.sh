@@ -10,8 +10,7 @@
 # writes a random token into it. The directory and token are exported to
 # later steps of this job only (PG18_ROOT, PG18_TOKEN via $GITHUB_ENV), and
 # .github/scripts/stop-postgres18.sh acts only on that pair. No pre-existing
-# path is ever adopted. PG_BIN overrides the server binaries (for the
-# scripts' own tests, which also read PG18_ROOT/PG18_TOKEN from stdout).
+# path is ever adopted.
 # The server listens on 127.0.0.1 only and runs as the runner user.
 set -euo pipefail
 
@@ -39,7 +38,7 @@ echo "PG18_ROOT=$root"
 echo "PG18_TOKEN=$token"
 data="$root/data"
 
-if [[ -z "${PG_BIN:-}" ]]; then
+{
   # The PGDG signing key (fingerprint B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8).
   sudo install -d /usr/share/postgresql-common/pgdg
   sudo curl -fsSL --retry 3 -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
@@ -47,16 +46,20 @@ if [[ -z "${PG_BIN:-}" ]]; then
   gpg --show-keys --with-colons /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
     | grep -q '^fpr:::::::::B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8:' \
     || { echo "unexpected PGDG key fingerprint" >&2; exit 1; }
-  echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" \
+  # The main suite keeps only the newest build of each package; older builds,
+  # including this pin once it is superseded, move to the archive suite.
+  printf '%s\n' \
+    "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main" \
+    "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt-archive.postgresql.org/pub/repos/apt noble-pgdg-archive main" \
     | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
   # Do not let the package create and start its own "18 main" cluster.
   sudo install -d /etc/postgresql-common/createcluster.d
   echo 'create_main_cluster = false' | sudo tee /etc/postgresql-common/createcluster.d/alrust-ci.conf >/dev/null
   sudo apt-get update -q
   sudo apt-get install -y -q --no-install-recommends "postgresql-18=$version" "postgresql-client-18=$version"
-fi
+}
 
-bin=${PG_BIN:-/usr/lib/postgresql/18/bin}
+bin=/usr/lib/postgresql/18/bin
 "$bin/postgres" -V
 pwfile="$root/pwfile"
 trap 'rm -f "$pwfile"' EXIT

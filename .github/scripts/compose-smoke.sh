@@ -155,6 +155,10 @@ trap 'exit 143' TERM
 compose_stage pull-db 180 pull db
 compose_stage build-alrust 1200 build --pull alrust
 compose_stage up 120 up --no-build --pull never --wait --wait-timeout 90
+# The alrust service has no healthcheck, so --wait returns once its container
+# runs, possibly before the server listens. Wait for /management/gtg first.
+run_stage ready 100 env -i PATH=/usr/bin:/bin /usr/bin/curl --retry 30 \
+  --retry-connrefused --retry-delay 2 --max-time 5 -fsS "$base/management/gtg"
 run_stage smoke 180 env -i PATH=/usr/bin:/bin HOME="$private/home" \
   python3 -I scripts/alpha-smoke.py "$base" "$ALRUST_ADMIN_KEY" --disposable-target
 # An exit-zero process alone is insufficient: require real PASS cases and the
