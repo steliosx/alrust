@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-06T12:34Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-08T11:24Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -779,7 +779,13 @@ checksums; its first runs, on its pull request and on `main`, passed
 with 300 checksummed paths. A dependency change now needs a regenerated and
 reviewed corpus. Two
 follow-ups are deferred: a regeneration tool (R-NOTICE-2) and a small
-hardening of how that check reads the repository root.
+hardening of how that check reads the repository root; #211 (`247ae9d7`)
+has since done the second. The owner then chose the reference oracle
+(DECISIONS Y54, 2026-11-08): the refreshed Python environment, with
+PyJWT 2.15.0 in place of 2.12.1, becomes the future reference baseline,
+but only after an exact source review, a reviewed list of behaviour
+differences and qualification; until then the current environment stays
+the reference, and alrust's own auth rules (Y50, Y51) do not change.
 Still open, all owner decisions: public visibility, the license for
 alrust's own code, how to handle the repository history (session links,
 home paths) and the security-reporting contact. Before any visibility
