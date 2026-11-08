@@ -1266,6 +1266,97 @@ async fn times_round_trip_exactly_whatever_the_session_time_zone() {
     assert_eq!(s.housekeeping(0, 0).await.unwrap(), ["t1"]);
 }
 
+/// Two rows match the correlate lookup: `y1` has the same event with another
+/// severity, `x1` lists the event in its correlate list. The same-event row
+/// must win whatever the scan order; rewriting `x1`'s event would violate the
+/// unique index. `y1` is moved after `x1` in the heap so that a plain
+/// sequential scan meets `x1` first.
+#[tokio::test]
+async fn correlate_prefers_the_same_event_row() {
+    let Some(db) = test_db().await else { return };
+    let s = store(&db.pool);
+    s.prepare().await.unwrap();
+    let mut same_event = new_alert("y1", 60);
+    same_event.event = "C".into();
+    same_event.severity = "minor".into();
+    s.receive(same_event, "alice").await.unwrap();
+    let mut listing = new_alert("x1", 60);
+    listing.event = "A".into();
+    listing.correlate = vec!["A".into(), "C".into()];
+    let (_, kind) = s.receive(listing, "alice").await.unwrap();
+    assert_eq!(kind, ReceiveKind::Created);
+    sqlx::query("UPDATE alerts SET text = text || '' WHERE id = 'y1'")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let mut incoming = new_alert("c1", 60);
+    incoming.event = "C".into();
+    incoming.severity = "major".into();
+    let (correlated, kind) = s.receive(incoming, "alice").await.unwrap();
+    assert_eq!(kind, ReceiveKind::Correlated);
+    assert_eq!(correlated.id, "y1");
+    let x_event: String = sqlx::query_scalar("SELECT event FROM alerts WHERE id = 'x1'")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(x_event, "A");
+}
+
+/// `ensure_key` keeps one row per id: a new value under the same id replaces
+/// the old one, which then no longer authenticates, and a row already
+/// holding the value under another id is adopted under this id.
+#[tokio::test]
+async fn ensure_key_replaces_the_value_under_its_id() {
+    let Some(db) = test_db().await else { return };
+    let s = store(&db.pool);
+    s.prepare().await.unwrap();
+    let key = |id: &str, value: &str| alrust_domain::ApiKey {
+        id: id.into(),
+        key: value.into(),
+        user: "admin".into(),
+        scopes: Some(vec!["admin".into()]),
+        text: "Bootstrap admin key".into(),
+        expire_time: Some(Utc::now() + chrono::Duration::days(1)),
+        count: 0,
+        last_used_time: None,
+        customer: None,
+    };
+    let rows = |pool: PgPool| async move {
+        sqlx::query_as::<_, (String, String)>("SELECT id, key FROM keys ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+    };
+    s.ensure_key(&key("fixed", "value-a-0123456789"))
+        .await
+        .unwrap();
+    s.ensure_key(&key("fixed", "value-a-0123456789"))
+        .await
+        .unwrap();
+    assert_eq!(
+        rows(db.pool.clone()).await,
+        [("fixed".into(), "value-a-0123456789".into())]
+    );
+    s.ensure_key(&key("fixed", "value-b-0123456789"))
+        .await
+        .unwrap();
+    assert_eq!(
+        rows(db.pool.clone()).await,
+        [("fixed".into(), "value-b-0123456789".into())]
+    );
+    // An older row holding the next value under a random id is adopted.
+    s.ensure_key(&key("legacy-random-id", "value-c-0123456789"))
+        .await
+        .unwrap();
+    s.ensure_key(&key("fixed", "value-c-0123456789"))
+        .await
+        .unwrap();
+    assert_eq!(
+        rows(db.pool.clone()).await,
+        [("fixed".into(), "value-c-0123456789".into())]
+    );
+}
+
 #[tokio::test]
 async fn duplicate_count_at_the_integer_maximum_rolls_back() {
     let Some(db) = test_db().await else { return };
@@ -1329,7 +1420,12 @@ async fn adopted_empty_strings_and_null_metadata_read_like_the_reference() {
     assert_eq!(a.last_receive_id, None);
     assert_eq!(a.last_receive_time, None);
     let page = s
-        .find_alerts(&AlertQuery::default(), 1, 100)
+        .find_alerts(
+            &AlertQuery::default(),
+            1,
+            100,
+            alrust_domain::HistoryOutput::Include,
+        )
         .await
         .expect("listing includes NULL-metadata rows");
     assert!(page.alerts.iter().any(|a| a.id == "r3"));

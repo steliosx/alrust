@@ -116,7 +116,7 @@ for a container remains separate reviewed configuration and an owner step.
 | Variable | Default | Meaning |
 |---|---|---|
 | `DATABASE_URL` | (required) | PostgreSQL connection URL |
-| `ALRUST_ADMIN_KEY` | (unset) | Ensures an admin API key with this value |
+| `ALRUST_ADMIN_KEY` | (unset) | Ensures an admin API key with this value. A changed value replaces the previous bootstrap key, which then stops working. A bootstrap key created before 2026-11-08 under another value stays valid until you delete it once by hand. |
 | `SECRET_KEY` | Random 256-bit key per start | HS256 Bearer verification key. Unset, empty or exactly `changeme` generates a new key; any other value is used unchanged as UTF-8 bytes, with a warning below 32 characters. |
 | `OAUTH2_CLIENT_ID` | (unset) | First non-empty expected Bearer audience; takes precedence over `SAML2_ENTITY_ID`. |
 | `SAML2_ENTITY_ID` | (unset) | Expected Bearer audience when `OAUTH2_CLIENT_ID` is unset or empty. If both audience variables are unset or empty, the effective `ALRUST_BASE_URL` (with trailing `/` removed) is used, never the request host. |

@@ -364,7 +364,14 @@ by column:
   lock, so it can only turn a race into a refusal: a retryable 500, never a
   merge.
 - Heartbeat upserts keep their current semantics under `org_cust_key`.
-- The alpha limitation "multiple matching rows (R2.3)" goes away.
+- The alpha limitation "multiple matching rows (R2.3)" goes away for the
+  duplicate lookup. It does not for the correlate lookup: a row with the
+  same event and another severity, and a row listing the event in its
+  correlate list, can both match. Rewriting the second row's event would
+  violate this index. Since 2026-11-08 (the owner-directed audit fix) the
+  correlate lookup orders the same-event row first, so the same input always
+  correlates onto that row. The reference fails in this case; this is a
+  deliberate difference (spec/lifecycle.md L3).
 
 ### 8. `value`: option (b), JSON text (ADR5-VALUE-1; DECISIONS Y38)
 

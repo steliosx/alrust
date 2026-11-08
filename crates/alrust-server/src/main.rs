@@ -87,6 +87,10 @@ fn env_bool(name: &str, default: bool) -> anyhow::Result<bool> {
     }
 }
 
+/// The fixed id of the `ALRUST_ADMIN_KEY` bootstrap key. Because the id never
+/// changes, a new value replaces the previous one, which stops authenticating.
+const BOOTSTRAP_KEY_ID: &str = "a1a7b007-5a1e-4b00-8000-000000000001";
+
 async fn connect(url: &str) -> anyhow::Result<sqlx::PgPool> {
     // Pin search_path to the reference objects and TimeZone to UTC on every
     // session (ADR-0005 decisions 4 and 5).
@@ -220,7 +224,7 @@ async fn run() -> anyhow::Result<()> {
         if !key.is_empty() {
             store
                 .ensure_key(&ApiKey {
-                    id: uuid::Uuid::new_v4().to_string(),
+                    id: BOOTSTRAP_KEY_ID.to_owned(),
                     key,
                     user: "admin".into(),
                     scopes: Some(vec!["admin".into(), "read".into(), "write".into()]),
@@ -271,7 +275,12 @@ async fn run() -> anyhow::Result<()> {
         cfg: api_cfg,
     }))
     .layer(CorsLayer::permissive())
-    .layer(TraceLayer::new_for_http());
+    // The span records the path only: a query string can carry `api-key`.
+    .layer(
+        TraceLayer::new_for_http().make_span_with(|req: &axum::http::Request<_>| {
+            tracing::debug_span!("request", method = %req.method(), path = %req.uri().path())
+        }),
+    );
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .with_context(|| format!("cannot bind {bind}"))?;
