@@ -1357,6 +1357,53 @@ async fn ensure_key_replaces_the_value_under_its_id() {
     );
 }
 
+/// Housekeeping deletes exactly the closed or expired alerts older than the
+/// expired threshold and the informational alerts older than the info
+/// threshold (spec K1), and nothing else.
+#[tokio::test]
+async fn housekeeping_deletes_only_old_closed_and_old_informational_alerts() {
+    let Some(db) = test_db().await else { return };
+    let s = store(&db.pool);
+    s.prepare().await.unwrap();
+    for (id, severity) in [
+        ("hk-old-closed", "major"),
+        ("hk-new-closed", "major"),
+        ("hk-old-open", "major"),
+        ("hk-old-info", "informational"),
+        ("hk-new-info", "informational"),
+    ] {
+        let mut alert = new_alert(id, 86400);
+        alert.resource = id.into();
+        alert.severity = severity.into();
+        s.receive(alert, "alice").await.unwrap();
+    }
+    for (id, status, age) in [
+        ("hk-old-closed", "closed", "3 hours"),
+        ("hk-new-closed", "closed", "10 minutes"),
+        ("hk-old-open", "open", "3 hours"),
+        ("hk-old-info", "open", "13 hours"),
+        ("hk-new-info", "open", "1 hour"),
+    ] {
+        sqlx::query(
+            "UPDATE alerts SET status = $2,
+               last_receive_time = timezone('UTC', now()) - $3::interval WHERE id = $1",
+        )
+        .bind(id)
+        .bind(status)
+        .bind(age)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+    let expired = s.housekeeping(2 * 3600, 12 * 3600).await.unwrap();
+    assert!(expired.is_empty(), "{expired:?}");
+    let left: Vec<String> = sqlx::query_scalar("SELECT id FROM alerts ORDER BY id")
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(left, ["hk-new-closed", "hk-new-info", "hk-old-open"]);
+}
+
 #[tokio::test]
 async fn duplicate_count_at_the_integer_maximum_rolls_back() {
     let Some(db) = test_db().await else { return };
