@@ -1,8 +1,28 @@
 from dataclasses import dataclass
+import json
 from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
+
+
+def _unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError('duplicate JSON field')
+        result[key] = value
+    return result
+
+
+def _no_constant(_):
+    raise ValueError('non-JSON number')
+
+
+def parse_json(content: bytes):
+    """Parse a response body strictly: a duplicate key or NaN/Infinity raises
+    ValueError instead of silently keeping the last key or a float."""
+    return json.loads(content, object_pairs_hook=_unique_object, parse_constant=_no_constant)
 
 
 @dataclass(frozen=True)
@@ -47,7 +67,7 @@ class Client:
         media_type = response.headers.get('content-type', '').split(';', 1)[0].strip().lower()
         # Alerta's healthcheck returns plain "OK", not JSON. Malformed declared
         # JSON still fails; non-JSON bodies are preserved verbatim for comparison.
-        body = response.json() if media_type == 'application/json' or media_type.endswith('+json') else response.text
+        body = parse_json(response.content) if media_type == 'application/json' or media_type.endswith('+json') else response.text
         return Response(response.status_code, body)
 
     def request_text(self, method: str, path: str, payload=None) -> Response:
