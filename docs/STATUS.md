@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-08T11:24Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-09T00:01Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -786,9 +786,27 @@ PyJWT 2.15.0 in place of 2.12.1, becomes the future reference baseline,
 but only after an exact source review, a reviewed list of behaviour
 differences and qualification; until then the current environment stays
 the reference, and alrust's own auth rules (Y50, Y51) do not change.
+DECISIONS Y54 merged as #212 (`a86aa445`). On the owner's request the same
+day, Claude ran a read-only Ponytail-format audit of `247ae9d7` (18
+findings), and the owner directed "Fix them all". After Codex's exact-head
+approvals they merged as #213 (`c0669021`: an operator's hook-only
+customer claim no longer filters actions; overflowing housekeeping hours
+and paging are a 400; correlate prefers the same-event row, DECISIONS Y55;
+a changed `ALRUST_ADMIN_KEY` revokes the old bootstrap key; request logs
+omit query strings; heartbeat status filtering and history-free lists as
+the reference), #215 (`397767eb`: stricter harness comparisons) and #214
+(`3e3380c6`: Compose readiness wait, one CI concurrency group per push to
+`main`, the PGDG archive source, x86_64 note, unused script hooks
+removed). Each push run on `main` was green; the Compose job stays skipped
+while the repository is private. The Y54 candidate is draft PR #216
+(`95908fb6`): its CI installed the refreshed locks, built psycopg2 and
+booted Alerta 9.1.0, whose health check answered OK; that is a first
+qualification step only, so the PR waits for a qualification ruling before
+it can merge.
 Still open, all owner decisions: public visibility, the license for
 alrust's own code, how to handle the repository history (session links,
-home paths) and the security-reporting contact. Before any visibility
+home paths), the security-reporting contact, and whether housekeeping
+should refuse negative hours (the reference accepts them). Before any visibility
 change, self-hosted runners must be unreachable from fork pull requests
 (PUB-F2).
 
