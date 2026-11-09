@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-09T18:10Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-09T18:36Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -811,7 +811,8 @@ Y56). Each project has its own Grok session (`grok-alrust`,
 enrollment is complete on both sides. On the owner's direct word, Codex
 assigned R-NOTICE-2 (the notice-corpus regenerator) to grok-alrust; Grok's
 acceptance is pending. grok-alrust has an hourly daytime timer and may merge
-its own assigned-task PR with Codex's signed exact-head AGREE (Y57). The
+its own assigned-task PR with Codex's signed exact-head AGREE (Y57); timer
+runs stop at PR-ready until a first clean timer-run task. The
 timer's first turn (09:30 EST) failed before acting (exit 2), so no Grok
 work has started; claude-chief is following it up. #217 merged as
 `8a30c19f`.
