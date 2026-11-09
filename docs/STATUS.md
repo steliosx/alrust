@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-09T03:19Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-09T18:10Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -806,12 +806,15 @@ it can merge.
 On 2026-11-08 the owner made Grok the primary implementation worker for
 Alrust, Zabalack, Voalack and Forgehold, with Codex reviewing; on 2026-11-09
 the coordinator role went to a dedicated session, claude-chief (DECISIONS
-Y56). Each project has its own Grok session (`grok-build` for Alrust,
-`grok-zabalack`, `grok-voalack`, `grok-forgehold`). The Alrust Claude-Grok
-round trip is verified, and Codex recorded her trust in Grok's key; her
-admission of Grok tasks, the seat snapshot and the first Grok task
-(R-NOTICE-2) are pending. grok-alrust has an hourly daytime timer and may
-merge its own assigned-task PR with Codex's signed exact-head AGREE (Y57).
+Y56). Each project has its own Grok session (`grok-alrust`,
+`grok-zabalack`, `grok-voalack`, `grok-forgehold`). The Alrust Grok
+enrollment is complete on both sides. On the owner's direct word, Codex
+assigned R-NOTICE-2 (the notice-corpus regenerator) to grok-alrust; Grok's
+acceptance is pending. grok-alrust has an hourly daytime timer and may merge
+its own assigned-task PR with Codex's signed exact-head AGREE (Y57). The
+timer's first turn (09:30 EST) failed before acting (exit 2), so no Grok
+work has started; claude-chief is following it up. #217 merged as
+`8a30c19f`.
 Still open, all owner decisions: public visibility, the license for
 alrust's own code, how to handle the repository history (session links,
 home paths), the security-reporting contact, and whether housekeeping

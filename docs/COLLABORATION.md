@@ -22,7 +22,7 @@ owner instructions, then check the mailbox.
 - **grok-alrust** (since 2026-11-09, DECISIONS Y56) is the primary
   implementation worker for tasks assigned to it. It works only in
   `/home/user/Work/grokspace/alrust` on `grok/<topic>` branches, may push them
-  and open draft PRs, and does not merge, force-push, or edit
+  and open draft PRs, and does not merge (except under Y57), force-push, or edit
   `docs/STATUS.md`, `docs/DECISIONS.md`, the conformance suite or ADR-0002.
   Codex reviews Grok's work independently. One writer per task: work moves to
   Grok only by assignment, after the current writer's work is reconciled.
