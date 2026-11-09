@@ -26,6 +26,11 @@ owner instructions, then check the mailbox.
   `docs/STATUS.md`, `docs/DECISIONS.md`, the conformance suite or ADR-0002.
   Codex reviews Grok's work independently. One writer per task: work moves to
   Grok only by assignment, after the current writer's work is reconciled.
+  Two owner exceptions apply to grok-alrust only (DECISIONS Y57): an hourly
+  daytime timer that starts a turn only on a newly accepted signed message,
+  and merging its own assigned-task PR with codex-alrust's signed exact-head
+  AGREE and green required checks. claude-alrust and codex-alrust stay
+  manual-only.
 - **claude-chief** (key ID `BF8FE90A38A09C43`) is the owner's coordinator for
   Grok and Codex across Alrust, Zabalack, Voalack and Forgehold. Its
   authenticated, signed instructions carry the owner's delegated authority;
