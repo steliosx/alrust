@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-09T00:01Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-09T02:43Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -803,6 +803,13 @@ while the repository is private. The Y54 candidate is draft PR #216
 booted Alerta 9.1.0, whose health check answered OK; that is a first
 qualification step only, so the PR waits for a qualification ruling before
 it can merge.
+On 2026-11-08 the owner made Grok the primary implementation worker for
+Alrust, Zabalack, Voalack and Forgehold, with Codex reviewing; on 2026-11-09
+the coordinator role went to a dedicated session, claude-chief (DECISIONS
+Y56). Each project has its own Grok session (`grok-build` for Alrust,
+`grok-zabalack`, `grok-voalack`, `grok-forgehold`). The Alrust Claude-Grok
+round trip is verified; Codex's side, the seat snapshot and the first Grok
+task (R-NOTICE-2) are pending.
 Still open, all owner decisions: public visibility, the license for
 alrust's own code, how to handle the repository history (session links,
 home paths), the security-reporting contact, and whether housekeeping
