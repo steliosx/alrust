@@ -129,6 +129,9 @@ for a container remains separate reviewed configuration and an owner step.
 | `ALRUST_ALERT_TIMEOUT` | `86400` | Seconds, at most 2147483647 (the reference's `integer` columns) |
 | `ALRUST_ACK_TIMEOUT` / `ALRUST_SHELVE_TIMEOUT` | `0` / `7200` | Seconds, at most 2147483647 |
 | `ALRUST_HISTORY_LIMIT` | `100` | History entries kept per alert |
+| `ALRUST_REQUEST_TIMEOUT` | `30` | Seconds a request may run before it is answered 503 `request timed out`; `0` turns the limit off. A long `/management/housekeeping` run is cut off the same way and continues at the next call |
+| `ALRUST_DB_ACQUIRE_TIMEOUT` | `10` | Seconds a request waits for a free database connection (pool of 16) before it fails with 500 |
+| `ALRUST_DB_LOCK_TIMEOUT` / `ALRUST_DB_STATEMENT_TIMEOUT` | `10` / `0` (off) | PostgreSQL `lock_timeout` and `statement_timeout`, in seconds, on serving connections; a statement that exceeds one fails with 500. Start-up (migration, adoption) runs without them |
 | `ALRUST_HOUSEKEEPING_INTERVAL` | `0` (off) | Seconds between automatic housekeeping runs. The reference never schedules it; with it on, closed and expired alerts older than 2 h and informational alerts older than 12 h are **deleted**. |
 
 ### Bearer verification only
