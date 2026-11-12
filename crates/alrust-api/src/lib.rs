@@ -1305,7 +1305,7 @@ async fn gtg(State(st): State<Shared>) -> Response {
     match st.store.ping().await {
         Ok(()) => "OK".into_response(),
         Err(e) => {
-            tracing::warn!(error = %e, "gtg: the database did not answer");
+            tracing::warn!(error = %redact_diagnostic(e.to_string()), "gtg: the database did not answer");
             (StatusCode::SERVICE_UNAVAILABLE, "FAILED").into_response()
         }
     }
