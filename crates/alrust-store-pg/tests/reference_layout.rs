@@ -367,8 +367,11 @@ async fn fresh_database_gets_the_reference_layout_and_repeat_start_is_a_no_op() 
     let s = store(&db.pool);
     let r = s.prepare().await.expect("fresh start");
     assert_eq!(r.outcome, Outcome::Fresh);
-    assert!(r.triggers.is_empty());
-    assert!(catalog::diff(&catalog::expected(), &catalog_of(&db.pool).await).is_empty());
+    assert_eq!(r.triggers, Vec::<String>::new());
+    assert_eq!(
+        catalog::diff(&catalog::expected(), &catalog_of(&db.pool).await),
+        Vec::<String>::new()
+    );
     let before: Vec<(i64, String, chrono::DateTime<Utc>)> = sqlx::query_as(
         "SELECT version, description, installed_on FROM _sqlx_migrations ORDER BY 1",
     )
@@ -396,7 +399,10 @@ async fn alpha_upgrade_converts_every_field_as_declared() {
         s.prepare().await.expect("upgrade").outcome,
         Outcome::Migrated
     );
-    assert!(catalog::diff(&catalog::expected(), &catalog_of(&db.pool).await).is_empty());
+    assert_eq!(
+        catalog::diff(&catalog::expected(), &catalog_of(&db.pool).await),
+        Vec::<String>::new()
+    );
 
     // Independent expectations, written out by hand (not derived from 0002).
     let r = sqlx::query(
@@ -419,7 +425,7 @@ async fn alpha_upgrade_converts_every_field_as_declared() {
         r.get::<Vec<String>, _>("correlate"),
         ["HttpError", "HttpOK"]
     );
-    assert!(r.get::<Vec<String>, _>("tags").is_empty());
+    assert_eq!(r.get::<Vec<String>, _>("tags"), Vec::<String>::new());
     assert_eq!(r.get::<String, _>("attrs"), r#"{"n": 1, "region": "eu"}"#);
     assert_eq!(r.get::<Option<String>, _>("raw_data"), None);
     assert_eq!(r.get::<Option<String>, _>("customer"), None);

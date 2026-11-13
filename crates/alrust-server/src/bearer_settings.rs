@@ -388,7 +388,7 @@ mod tests {
         )
         .expect("installed");
         assert_eq!(*read.borrow(), super::VARIABLES.map(str::to_owned));
-        assert!(warned.is_empty());
+        assert_eq!(warned, Vec::<&str>::new());
         let bearer = cfg.bearer.as_ref().expect("verifier installed");
         assert_eq!(bearer.key, key.as_bytes());
         assert_eq!(bearer.audience, "client-1");
