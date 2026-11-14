@@ -54,20 +54,19 @@ assumption.
 | Group | `field:(a OR b)` | the inner query with the default field replaced (205-214) |
 | Operators | `AND`/`&&`, `OR`/`||`, `NOT`/`!`, `+`, `-` | `infixNotation`, precedence `+ -`, `NOT`, `AND`, `OR` (271-277); **no operator between clauses means OR** (`Optional(OR)`, 276) |
 
-Quirks to characterise before copying (each may be a reference defect; a
-deliberate difference needs a DECISIONS entry, as for Y33 and Y34):
-
-- `a OR NOT b` becomes `a AND NOT b` (`SearchOr`, 54-57).
-- `+x` and `-x` emit the literal `+`/`-` in front of a boolean expression
-  (`SearchModifier`, 34-35); PostgreSQL likely rejects that, so the real
-  answer is probably a 500.
-- The field name is used as a quoted column name (`"{field}"`), so any column
-  of `alerts` can be searched, including `raw_data` and `history`; an unknown
-  name is a database error, probably 500, not 400.
-- `%` and `_` inside a term are not escaped, so they act as `LIKE`
-  wildcards.
-- A caller-supplied regex runs in PostgreSQL. The request deadline and the
-  optional statement limit of draft #220 (not merged) would bound its cost.
+The reference's own parser has now been run on 56 `q` strings:
+[`spec/search-q.md`](../../spec/search-q.md) lists 18 findings (F1 to F18)
+with the exact SQL, and `spec/search-q-reference-sql.jsonl` holds the
+output. The ones that need a decision before copying (Q-S2): unparsed input
+is silently dropped (F1); `a OR NOT b` becomes `a AND NOT b` (F4); `+` and
+`-` emit a literal sign (F5); field names are column names as written, so
+camelCase API names fail and any column, `raw_data` included, can be
+searched (F6); an upper-case wildcard such as `Dis*` matches nearly every
+alert (F12); `history` and `q.df=attributes` searches produce invalid SQL
+(F16). `%` and `_` act as `LIKE` wildcards (F7), and phrases and wildcards
+are unescaped regexes (F10, F11). A caller-supplied regex runs in
+PostgreSQL (F13); the request deadline and optional statement limit of
+draft #220 (not merged) would bound its cost.
 
 **Implementation sketch.** A hand-written recursive-descent parser in
 `alrust-api` (no new crate: a new dependency changes the manifests and the

@@ -1,0 +1,56 @@
+# `q=` in the reference: characterised SQL
+
+Status: **characterisation of the pinned reference, 14 November 2026.**
+Source: Alerta 9.1.0 (`reference/alerta` at `f4312727`),
+`alerta/database/backends/postgres/queryparser.py` (sha256 prefix
+`d9c13317bb36208b`) with pyparsing 3.3.2 from
+`.github/reference-requirements.lock`. The reference's own parser was run on
+56 `q` strings by `scripts/characterise-q.py`; its output, one JSON line per
+string, is `spec/search-q-reference-sql.jsonl`. That file is the reference's
+SQL text and parameters only. What each statement selects, and which ones
+fail in PostgreSQL, is **not yet observed**: that needs a recording run
+against the reference with a database (the record-once corpus of
+`docs/performance/search-design.md`, Codex's harness). Lines below marked
+*expected* are inferences from the SQL, to be confirmed by that run.
+
+How `q` is used (`utils.py:144-155`): only when `q` is non-empty. The parsed
+SQL is the first condition of the `WHERE` clause; customers and the other
+filters follow with `AND`. A `ParseException` becomes 400 "Failed to parse
+query string."; any other error (a database error) is not caught there.
+`q.df` replaces the default field `text`.
+
+## Findings
+
+| # | Finding | Example (`q` → reference SQL) |
+|---|---|---|
+| F1 | **Unparsed input is silently dropped.** `parseString` runs without `parseAll`, so the parser stops at the first text it cannot continue with and ignores the rest | `a:b:c` → `"a" ILIKE '%b%'`; `web\-01` → `"text" ILIKE '%web%'` |
+| F2 | **No operator means OR**, and a trailing operator word is a term | `disk full` → `text ILIKE '%disk%' OR text ILIKE '%full%'`; `disk AND` → `… '%disk%' OR … '%AND%'` |
+| F3 | `AND` binds tighter than `OR`; parentheses group | `a OR b AND c` → `a OR (b AND c)` |
+| F4 | **`a OR NOT b` becomes `a AND NOT b`** | `disk OR NOT full` → `("text" ILIKE '%disk%' AND NOT ("text" ILIKE '%full%'))` |
+| F5 | **`+` and `-` emit a literal sign** in the SQL. *Expected:* a database error, not a filter | `+disk` → `+ "text" ILIKE …` |
+| F6 | **The field name is the column name, quoted as written.** API names that differ from the column (`rawData`, `duplicateCount`, `createTime`, `lastReceiveTime`, `type`, …) are not columns: *expected* database error. Column names written directly (`raw_data`, `duplicate_count`, `event_type`, …) work, so any column can be searched | `rawData:secret` → `"rawData" ILIKE …`; `nosuchcolumn:x` → `"nosuchcolumn" ILIKE …` |
+| F7 | Terms are substring matches with `ILIKE '%term%'`, case-insensitive; **`%` and `_` in a term are not escaped** and act as wildcards | `100%` → `'%100%%'`; `a_b` → `'%a_b%'` |
+| F8 | `service`, `tags` and `correlate` are exact, case-sensitive array membership, for a term and for a phrase | `service:"Web App"` → `'Web App'=ANY("service")` |
+| F9 | Attributes: `attributes.k:v` and `_.k:v` are a substring match on the key's text value (key bound as a parameter); `_exists_:k` is the `?` operator | `_.region:eu` → `"attributes"::jsonb ->> 'region' ILIKE '%eu%'` |
+| F10 | **A phrase is a word-bounded regex, not escaped**: regex characters inside quotes keep their meaning | `"disk full"` → `"text" ~* '\ydisk full\y'` |
+| F11 | Wildcards: `*` → `.*`, `?` → `.?` (zero or one, not exactly one), word-bounded regex. **Only lower-case letters and digits** form a wildcard token | `d?sk` → `~* '\yd.?sk\y'` |
+| F12 | **An upper-case wildcard splits into a term and a lone `*`**, and the lone `*` is the regex `\y.*\y`, which *expectedly* matches every alert whose text has a word character | `Dis*` → `("text" ILIKE '%Dis%' OR "text" ~* '\y.*\y')` |
+| F13 | `/…/` is a caller-supplied case-insensitive regex on the field | `resource:/^web[0-9]+$/` → `"resource" ~* '^web[0-9]+$'` |
+| F14 | Ranges compare the column with **text** parameters; `*` is open. Combined with F6, ranges on camelCase fields fail; `timeout:<60` works | `duplicateCount:[2 TO 5]` → `("duplicateCount" >= '2' AND "duplicateCount" <= '5')` |
+| F15 | `field:(a OR b)` applies the inner query to the field | `resource:(web01 OR web02)` → `("resource" ILIKE '%web01%' OR "resource" ILIKE '%web02%')` |
+| F16 | `history:x` and `q.df=attributes` produce `ILIKE` on a composite array or on `jsonb`: *expected* database error | `x` with `q.df=attributes` → `"attributes" ILIKE '%x%'` |
+| F17 | Parse errors (400): an unclosed parenthesis or quote, a leading operator | `(disk`, `"unterminated` |
+| F18 | Restricted-attribute forms parse normally in the reference; Zabalack's query guard refuses them on Alerta, and alrust refuses them (`spec/integration-hooks.md` 4.2) | `_exists_:zabbix_ack_sync_intent` |
+
+## What this means for alrust
+
+- F1, F4, F5, F6, F12 and F16 look like reference defects. Each is a choice
+  for Codex's review and, where alrust would differ, a DECISIONS entry
+  (`docs/performance/search-design.md`, question Q-S2). Copying F12 makes a
+  common search (`Dis*`) return nearly everything; copying F5, F6 and F16
+  turns a typing mistake into a server error.
+- F7, F10, F11 and F13 must be reproduced byte for byte in the generated
+  pattern, or the result sets differ.
+- F6's "any column" includes `raw_data`, which can hold source payloads; the
+  privacy rules of 4.2 cover only the restricted attribute today. Whether
+  `raw_data` and `history` stay searchable is part of Q-S2.
