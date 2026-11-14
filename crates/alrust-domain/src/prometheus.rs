@@ -214,7 +214,7 @@ fn dumps_str(s: &str, out: &mut String) {
             '\u{8}' => out.push_str("\\b"),
             '\u{c}' => out.push_str("\\f"),
             // ensure_ascii escapes everything outside ' '..='~', DEL included.
-            c if c < ' ' || c > '~' => {
+            c if !(' '..='~').contains(&c) => {
                 let mut units = [0u16; 2];
                 for u in c.encode_utf16(&mut units) {
                     let _ = write!(out, "\\u{u:04x}");
@@ -959,7 +959,7 @@ mod tests {
         }
     }
 
-    /// Expected text from the pinned CPython 3.12.14: `str(v)` of the
+    /// Expected text from the pinned Python 3.12.14: `str(v)` of the
     /// `json.loads` value below (see the PR for the command).
     #[test]
     fn python_str_of_lists_and_dicts() {
