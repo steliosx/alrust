@@ -220,7 +220,8 @@ fn dumps_str(s: &str, out: &mut String) {
             '\t' => out.push_str("\\t"),
             '\u{8}' => out.push_str("\\b"),
             '\u{c}' => out.push_str("\\f"),
-            c if c < ' ' || !c.is_ascii() => {
+            // ensure_ascii escapes everything outside ' '..='~', DEL included.
+            c if c < ' ' || c > '~' => {
                 let mut units = [0u16; 2];
                 for u in c.encode_utf16(&mut units) {
                     let _ = write!(out, "\\u{u:04x}");
@@ -1027,5 +1028,9 @@ mod tests {
         let mut s = String::new();
         v.dumps(&mut s);
         assert_eq!(s, r#"["\u00e9\n\"x\"\u0001", "\ud83d\ude00", 1.0, 2.5]"#);
+        let v: PyVal = serde_json::from_str(r#""a\u007fb""#).unwrap();
+        let mut s = String::new();
+        v.dumps(&mut s);
+        assert_eq!(s, r#""a\u007fb""#);
     }
 }
