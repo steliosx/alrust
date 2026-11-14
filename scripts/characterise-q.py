@@ -4,9 +4,10 @@
 Runs Alerta 9.1.0's own QueryParser, read-only, so spec/search-q.md can
 state the reference's grammar from its behaviour, not from memory:
 
+    grep -A1 '^pyparsing==' .github/reference-requirements.lock > /path/to/pyparsing.txt
     python3 -m venv /path/to/venv
     /path/to/venv/bin/pip install --require-hashes --only-binary=:all: --no-deps \
-        'pyparsing==3.3.2 --hash=sha256:<hash in .github/reference-requirements.lock>'
+        -r /path/to/pyparsing.txt
     /path/to/venv/bin/python -I -B scripts/characterise-q.py \
         reference/alerta/alerta/database/backends/postgres > spec/search-q-reference-sql.jsonl
 

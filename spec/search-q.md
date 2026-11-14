@@ -45,19 +45,19 @@ query string."; any other error (a database error) is not caught there.
 | F17 | Parse errors (400): an unclosed parenthesis or quote, a leading operator | `(disk`, `"unterminated` |
 | F18 | Restricted-attribute forms parse normally in the reference; Zabalack's query guard refuses them on Alerta, and alrust refuses them (`spec/integration-hooks.md` 4.2) | `_exists_:zabbix_ack_sync_intent` |
 
-## What this means for alrust
+## What alrust does with these
 
-- F19 is the most serious: any search with three or more terms joined by
-  the same operator silently ignores all but the first two, so `disk full
-  error` returns alerts that match neither `error` nor anything after it.
-  Reproducing it exactly is possible but would carry the defect into alrust.
-- F1, F4, F5, F6, F12, F16 and F19 look like reference defects. Each is a choice
-  for Codex's review and, where alrust would differ, a DECISIONS entry
-  (`docs/performance/search-design.md`, question Q-S2). Copying F12 makes a
-  common search (`Dis*`) return nearly everything; copying F5, F6 and F16
-  turns a typing mistake into a server error.
-- F7, F10, F11 and F13 must be reproduced byte for byte in the generated
-  pattern, or the result sets differ.
-- F6's "any column" includes `raw_data`, which can hold source payloads; the
-  privacy rules of 4.2 cover only the restricted attribute today. Whether
-  `raw_data` and `history` stay searchable is part of Q-S2.
+Decided by DECISIONS Y3 and `spec/security-fixes.md` SF-QUERY (which already
+describes F19 as its reference item 6), not by this page:
+- F19 and F20: chains are folded to the left, so every operand is kept;
+  with two operands the result is exactly the reference's.
+- F6 and F16 (the `q.df=attributes` case): an unknown search field or
+  default field is a 400 naming it, instead of a database error. A listed
+  column whose type does not support the operator (for example
+  `history:x`) keeps the reference's outcome.
+- F1, F4, F5, F7 and F10 to F13: unchanged from the reference, so the
+  generated patterns must match it byte for byte.
+- F18: alrust refuses restricted-attribute forms (spec 4.2).
+
+The DB outcomes marked *expected* above (F5, F12, F16) are inferences from
+the SQL text; they become facts only when recorded against a database.

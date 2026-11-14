@@ -55,19 +55,26 @@ assumption.
 | Operators | `AND`/`&&`, `OR`/`||`, `NOT`/`!`, `+`, `-` | `infixNotation`, precedence `+ -`, `NOT`, `AND`, `OR` (271-277); **no operator between clauses means OR** (`Optional(OR)`, 276) |
 
 The reference's own parser has now been run on 69 `q` strings:
-[`spec/search-q.md`](../../spec/search-q.md) lists 21 findings (F1 to F21)
-with the exact SQL, and `spec/search-q-reference-sql.jsonl` holds the
-output. The ones that need a decision before copying (Q-S2): unparsed input
-is silently dropped (F1); `a OR NOT b` becomes `a AND NOT b` (F4); `+` and
-`-` emit a literal sign (F5); field names are column names as written, so
-camelCase API names fail and any column, `raw_data` included, can be
-searched (F6); only the first two operands of an `AND` or `OR` chain are
-kept, so `a b c` searches for `a` or `b` only (F19); an upper-case wildcard such as `Dis*` matches nearly every
-alert (F12); `history` and `q.df=attributes` searches produce invalid SQL
-(F16). `%` and `_` act as `LIKE` wildcards (F7), and phrases and wildcards
-are unescaped regexes (F10, F11). A caller-supplied regex runs in
-PostgreSQL (F13); the request deadline and optional statement limit of
-draft #220 (not merged) would bound its cost.
+[`spec/search-q.md`](../../spec/search-q.md) lists 21 observations (F1 to
+F21) with the exact SQL text, and `spec/search-q-reference-sql.jsonl` holds
+the output. **What alrust does with them is already decided** by DECISIONS
+Y3 and `spec/security-fixes.md` SF-QUERY, which this design follows and does
+not reopen:
+- chains of three or more operands (F19) are folded to the left,
+  `((x1 op x2) op x3) …`, each pair translated as the reference does,
+  including `a OR NOT b` → `a AND NOT b` (F4) (SF-QUERY alrust item 6);
+- a search field must be a column of the queried table, or an attribute
+  path resolving to a `jsonb` column, else 400 `Search field '<field>' not
+  supported.` (F6; item 4), and `q.df` likewise (item 3);
+- the `+` and `-` modifiers (F5), ignored trailing input (F1) and the term
+  translations, including the upper-case wildcard split (F12), the
+  unescaped `%`, `_`, phrases and wildcards (F7, F10, F11) and the
+  caller's regex (F13), stay as in the reference (item 4);
+- every value is a bound parameter (the SF-QUERY principle).
+What each statement then selects, or which ones fail in PostgreSQL (F5,
+F16), is inferred from the SQL and not yet recorded against a database.
+A caller-supplied regex runs in PostgreSQL; the request deadline and
+optional statement limit of draft #220 (not merged) would bound its cost.
 
 **Implementation sketch.** A hand-written recursive-descent parser in
 `alrust-api` (no new crate: a new dependency changes the manifests and the
@@ -87,8 +94,11 @@ its harness are Codex's; alrust adds the replay test.
 
 ## Step 2: faster without changing results
 
-Every reference form is a `ILIKE '%…%'` or `~*` match, which a B-tree cannot
-serve, so each `q` scans `alerts`. The reference catalog has only two indexes
+The common text forms (a term, a phrase, a wildcard, a regex) become
+`ILIKE '%…%'` or `~*` matches, which a plain B-tree cannot serve. Other
+forms can: array membership (`'x' = ANY(service)`), the `jsonb` `?` test and
+ranges on indexed columns. Which searches scan `alerts` is therefore a plan
+question for the measurement below, not a general rule. The reference catalog has only two indexes
 on `alerts` (the primary key and `env_res_evt_cust_key`).
 
 | Option | Serves | Cost and gates |
@@ -145,7 +155,6 @@ a draft PR or in a Codex lab window:
 | ID | Question | Who |
 |---|---|---|
 | Q-S1 | Refuse a non-empty `q` with 400 until step 1 lands | Codex, then owner |
-| Q-S2 | Copy each reference quirk, or diverge with a DECISIONS entry | Codex review, owner for divergences |
 | Q-S3 | `pg_trgm` on adopted databases (option b1) or a side schema (a) | Owner (extension, catalog rule) |
 | Q-S4 | Ranked search as new API surface (step 3) | Owner |
 
