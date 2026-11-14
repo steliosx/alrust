@@ -1,39 +1,35 @@
-//! Prometheus Alertmanager webhook (DECISIONS Y27): a port of the reference's
-//! `parse_prometheus` and `PrometheusWebhook.incoming`
-//! (`reference/alerta/alerta/webhooks/prometheus.py`, lines 16-116).
+//! Prometheus Alertmanager webhook (DECISIONS Y27), as `spec/security-fixes.md`
+//! SF-WEBHOOKS requires: the reference mapping (`reference/alerta/alerta/
+//! webhooks/prometheus.py`, lines 16-116) with the owner's fixes Y10 (every
+//! item is mapped and processed on its own), Y11 (`moreInfo` is the plain
+//! URL) and Y12 (the placeholder rules below).
 //!
-//! [`parse`] turns one notification body into the `POST /alert` objects the
-//! reference would build, so the API runs each through its normal receive
-//! path. Behaviour kept from the reference, line by line:
+//! [`parse`] checks the envelope and maps each item to the `POST /alert`
+//! object the reference would build, or to [`Item::Invalid`] when the
+//! reference's mapping would fail for it. The API then processes the mapped
+//! items one by one.
 //!
-//! - label values are formatted with Python `str.format` against the raw
-//!   labels, annotation values against the formatted labels, and a value
-//!   that fails to format is kept as it is (lines 24-36);
-//! - the `alertname` annotation, when set, replaces the label (39-40);
-//! - severity, resource, event, environment, customer, correlate, service,
-//!   group, origin and timeout are popped from the labels in the reference's
-//!   order, and every label left over becomes a `k=v` tag in payload order
-//!   (42-64);
-//! - text is the `description` or `summary` annotation, else
-//!   `"<SEVERITY>: <resource> is <event>"` (67-70);
-//! - attributes are `startsAt`, `endsAt` and the remaining annotations, with
-//!   `externalUrl` and `moreInfo` (72-82);
-//! - `rawData` is the alert object as Python's `json.dumps` writes it (the
-//!   reference stores the dict through psycopg2's `Json` adapter): key order
-//!   kept, `", "` and `": "` separators, non-ASCII escaped.
+//! Kept from the reference: the pop order of labels (so the same labels are
+//! left over as `k=v` tags, in payload order), the alertname annotation
+//! override, text, attributes, origin, timeout through Python `int()`, and
+//! `rawData` as Python's `json.dumps` writes the alert.
 //!
-//! Differences, each a refusal or a narrower result, never a different
-//! stored alert for the same accepted input:
+//! Placeholders (Y12, SF-WEBHOOKS alrust item 3): label values expand against
+//! the original labels, annotation values against the expanded labels. A
+//! non-string value is kept as it is. A value is read as literal text, `{{`,
+//! `}}` and groups from a `{` to the next `}`; it is kept unchanged on an
+//! unmatched `{` or lone `}`, an empty or all-digit group, or a plain-name
+//! group (none of `:`, `!`, `.`, `[`) whose name is missing or names a list
+//! or object; otherwise a plain-name group becomes the value (a string as is,
+//! a number, boolean or null as Python's `str()`), and every other group is
+//! copied as written. Output over 65,536 UTF-8 bytes keeps the original.
 //!
-//! - a non-string label or annotation value, and a non-object alert,
-//!   labels or annotations, are refused with 400 and alrust's own message
-//!   (the reference would format or store them in Python-specific ways);
-//! - Python format features beyond `{name}` (`!r`, `!a`, a non-empty format
-//!   spec, `.attr`, `[index]`) are not reproduced: such a value is kept
-//!   unformatted;
-//! - a float anywhere in the alert object is written in `rawData` by
-//!   `serde_json`, which can differ from Python's `repr` (Alertmanager sends
-//!   no floats).
+//! Not reproduced (the item becomes invalid instead): a label used as an
+//! alert field (resource, event, severity, environment, customer, group,
+//! text) whose value is not a string or an integer, a leftover label whose
+//! value is a list or an object (the reference writes Python's `repr` into
+//! the tag), and a non-string `correlate`, `service` or `monitor` label (an
+//! exception in the reference too).
 
 use std::fmt::Write as _;
 
@@ -41,25 +37,24 @@ use serde::Deserialize;
 use serde::de::{self, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Value};
 
-/// A refusal: the HTTP status and the message.
+/// The envelope refusal (`no alerts in Prometheus notification payload`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebhookError {
     pub status: u16,
     pub message: String,
 }
 
-fn bad(message: impl Into<String>) -> WebhookError {
-    WebhookError {
-        status: 400,
-        message: message.into(),
-    }
+/// One notification item after mapping.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Item {
+    /// The `POST /alert` object for the item.
+    Mapped(Map<String, Value>),
+    /// The reference's mapping would fail for this item (SF-WEBHOOKS 2).
+    Invalid,
 }
 
-/// A Python `KeyError`'s text, as the reference's `ApiError(str(e), 400)`
-/// reports a missing key.
-fn key_error(key: &str) -> WebhookError {
-    bad(format!("'{key}'"))
-}
+/// Placeholder output limit, in UTF-8 bytes (SF-WEBHOOKS alrust item 3.5).
+const EXPANSION_CAP: usize = 65_536;
 
 /// A JSON value that keeps object key order, as a Python `dict` from
 /// `json.loads` does. A repeated key keeps its first position and its last
@@ -232,60 +227,102 @@ fn dumps_str(s: &str, out: &mut String) {
     out.push('"');
 }
 
-/// Python `template.format(**args)` for the subset alrust reproduces:
-/// `{{`, `}}`, `{name}`, `{name!s}` and `{name:}`. `None` when Python
-/// raises (an unknown name, a positional field, an unbalanced brace, a bad
-/// conversion) or when the template uses a feature not reproduced; the
-/// caller then keeps the template unformatted, as the reference does on an
-/// exception.
-fn py_format(template: &str, args: &[(String, String)]) -> Option<String> {
+/// Python `str()` of a scalar: `None`, `True`, `False`, integers as digits,
+/// floats as Python writes them. `None` for a list or an object.
+fn py_str(v: &PyVal) -> Option<String> {
+    match v {
+        PyVal::Null => Some("None".into()),
+        PyVal::Bool(true) => Some("True".into()),
+        PyVal::Bool(false) => Some("False".into()),
+        PyVal::Str(s) => Some(s.clone()),
+        PyVal::Num(n) if n.is_i64() || n.is_u64() => Some(n.to_string()),
+        PyVal::Num(n) => n.as_f64().map(py_float),
+        PyVal::List(_) | PyVal::Obj(_) => None,
+    }
+}
+
+/// Python's `repr` of a finite float: the shortest digits, with an exponent
+/// below 1e-4 or from 1e16, as `1e+16` / `2.5e-05`; `1.0` for whole numbers.
+fn py_float(f: f64) -> String {
+    let a = f.abs();
+    if a > 0.0 && !(1e-4..1e16).contains(&a) {
+        let e = format!("{f:e}");
+        let (mant, exp) = e.split_once('e').unwrap_or((e.as_str(), "0"));
+        let exp: i32 = exp.parse().unwrap_or(0);
+        let sign = if exp < 0 { '-' } else { '+' };
+        format!("{mant}e{sign}{:02}", exp.unsigned_abs())
+    } else if f.fract().abs() < f64::EPSILON {
+        format!("{f:.1}")
+    } else {
+        format!("{f}")
+    }
+}
+
+/// SF-WEBHOOKS alrust item 3: the expanded value, or `None` to keep the
+/// original.
+fn expand(template: &str, args: &[(String, PyVal)]) -> Option<String> {
     let mut out = String::new();
-    let mut chars = template.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '{' if chars.peek() == Some(&'{') => {
-                chars.next();
-                out.push('{');
-            }
-            '}' if chars.peek() == Some(&'}') => {
-                chars.next();
-                out.push('}');
-            }
-            '}' => return None,
-            '{' => {
-                let mut field = String::new();
-                loop {
-                    match chars.next()? {
-                        '}' => break,
-                        '{' => return None,
-                        ch => field.push(ch),
-                    }
-                }
-                let (name, rest) = match field.find(['!', ':']) {
-                    Some(i) => field.split_at(i),
-                    None => (field.as_str(), ""),
-                };
-                if !matches!(rest, "" | "!s" | ":" | "!s:") {
+    let push = |out: &mut String, piece: &str| -> Option<()> {
+        (out.len().checked_add(piece.len())? <= EXPANSION_CAP).then(|| out.push_str(piece))
+    };
+    let mut rest = template;
+    while let Some(c) = rest.chars().next() {
+        if let Some(r) = rest.strip_prefix("{{") {
+            push(&mut out, "{")?;
+            rest = r;
+        } else if let Some(r) = rest.strip_prefix("}}") {
+            push(&mut out, "}")?;
+            rest = r;
+        } else if c == '}' {
+            return None;
+        } else if let Some(r) = rest.strip_prefix('{') {
+            let end = r.find('}')?;
+            let group = &r[..end];
+            if group.contains([':', '!', '.', '[']) {
+                push(&mut out, &rest[..end + 2])?;
+            } else {
+                if group.is_empty() || group.chars().all(|ch| ch.is_ascii_digit()) {
                     return None;
                 }
-                if name.is_empty()
-                    || name.chars().all(|ch| ch.is_ascii_digit())
-                    || name.contains(['.', '['])
-                {
-                    return None;
-                }
-                let (_, v) = args.iter().find(|(k, _)| k == name)?;
-                out.push_str(v);
+                let (_, v) = args.iter().find(|(k, _)| k == group)?;
+                push(&mut out, &py_str(v)?)?;
             }
-            c => out.push(c),
+            rest = &r[end + 1..];
+        } else {
+            let end = rest.find(['{', '}']).unwrap_or(rest.len());
+            push(&mut out, &rest[..end])?;
+            rest = &rest[end..];
         }
     }
     Some(out)
 }
 
-/// Python `int(text)` for the forms Alertmanager labels use: surrounding
-/// whitespace, an optional sign, ASCII digits with single `_` between them.
-fn py_int(text: &str) -> Option<i64> {
+/// Python `int(x)` on a label value: `Some(Some(n))`, `Some(None)` for the
+/// `ValueError` the reference catches, `None` for a `TypeError` (invalid).
+fn py_int(v: &PyVal) -> Option<Option<i64>> {
+    match v {
+        PyVal::Str(text) => Some(py_int_text(text)),
+        PyVal::Bool(b) => Some(Some(i64::from(*b))),
+        PyVal::Num(n) => Some(n.as_i64().or_else(|| {
+            n.as_f64()
+                .filter(|f| f.is_finite() && f.abs() < 9.0e18)
+                .map(|f| {
+                    #[expect(
+                        clippy::as_conversions,
+                        clippy::cast_possible_truncation,
+                        reason = "Python int() truncates toward zero; the range is checked"
+                    )]
+                    let t = f.trunc() as i64;
+                    t
+                })
+        })),
+        PyVal::Null | PyVal::List(_) | PyVal::Obj(_) => None,
+    }
+}
+
+/// Python `int(text)` for surrounding whitespace, a sign and ASCII digits
+/// with single `_` between them.
+fn py_int_text(text: &str) -> Option<i64> {
     let t = text.trim();
     let (neg, digits) = match t.as_bytes().first() {
         Some(b'-') => (true, &t[1..]),
@@ -304,209 +341,222 @@ fn py_int(text: &str) -> Option<i64> {
     Some(if neg { -n } else { n })
 }
 
-/// An ordered `str → str` map: Python's `labels` / `annotations` dicts.
-#[derive(Debug, Default)]
-struct Dict(Vec<(String, String)>);
+/// An ordered `str → value` map: Python's `labels` / `annotations` dicts.
+#[derive(Debug, Default, Clone)]
+struct Dict(Vec<(String, PyVal)>);
 
 impl Dict {
-    fn from_field(v: Option<&PyVal>, name: &str) -> Result<Self, WebhookError> {
+    fn from_field(v: Option<&PyVal>) -> Option<Self> {
         match v {
-            None => Err(key_error(name)),
-            Some(PyVal::Obj(o)) => o
-                .iter()
-                .map(|(k, v)| match v {
-                    PyVal::Str(s) => Ok((k.clone(), s.clone())),
-                    _ => Err(bad(format!("{name}.{k} must be a string"))),
-                })
-                .collect::<Result<_, _>>()
-                .map(Dict),
-            Some(_) => Err(bad(format!("{name} must be an object"))),
+            Some(PyVal::Obj(o)) => Some(Dict(o.clone())),
+            _ => None,
         }
     }
-    fn get(&self, k: &str) -> Option<&str> {
-        self.0
-            .iter()
-            .find(|(key, _)| key == k)
-            .map(|(_, v)| v.as_str())
+    fn get(&self, k: &str) -> Option<&PyVal> {
+        self.0.iter().find(|(key, _)| key == k).map(|(_, v)| v)
     }
-    fn set(&mut self, k: &str, v: String) {
+    fn set(&mut self, k: &str, v: PyVal) {
         match self.0.iter_mut().find(|(key, _)| key == k) {
             Some(slot) => slot.1 = v,
             None => self.0.push((k.to_owned(), v)),
         }
     }
-    fn pop(&mut self, k: &str) -> Option<String> {
+    fn pop(&mut self, k: &str) -> Option<PyVal> {
         let i = self.0.iter().position(|(key, _)| key == k)?;
         Some(self.0.remove(i).1)
     }
+    /// Python `d.pop(a, None) or d.pop(b, default)`.
+    fn pop_or(&mut self, first: &str, second: &str, default: PyVal) -> PyVal {
+        match self.pop(first).filter(PyVal::truthy) {
+            Some(v) => v,
+            None => self.pop(second).unwrap_or(default),
+        }
+    }
+    fn expanded(&self, args: &[(String, PyVal)]) -> Self {
+        Dict(
+            self.0
+                .iter()
+                .map(|(k, v)| match v {
+                    PyVal::Str(s) => (
+                        k.clone(),
+                        expand(s, args).map_or_else(|| v.clone(), PyVal::Str),
+                    ),
+                    _ => (k.clone(), v.clone()),
+                })
+                .collect(),
+        )
+    }
 }
 
-/// `parse_prometheus(alert, external_url)` (lines 16-101), as a `POST /alert`
-/// object.
-fn parse_alert(
+/// A label value used as an alert field: a string, or an integer as its
+/// digits (what the reference's database adapter stores).
+fn field(v: &PyVal) -> Option<String> {
+    match v {
+        PyVal::Str(s) => Some(s.clone()),
+        PyVal::Num(n) if n.is_i64() || n.is_u64() => Some(n.to_string()),
+        _ => None,
+    }
+}
+
+/// `parse_prometheus(alert, external_url)` (lines 16-101) for one item;
+/// `None` where the reference's mapping fails or alrust does not reproduce
+/// the value (module notes).
+#[expect(
+    clippy::too_many_lines,
+    reason = "one reference function, ported in order"
+)]
+fn map_item(
     alert: &PyVal,
     external_url: Option<&PyVal>,
     default_environment: &str,
-) -> Result<Map<String, Value>, WebhookError> {
-    let PyVal::Obj(_) = alert else {
-        return Err(bad("each alert must be an object"));
-    };
+) -> Option<Map<String, Value>> {
+    let PyVal::Obj(_) = alert else { return None };
+    // Only "firing" and "resolved" matter; any other value means "unknown".
     let status = match alert.get("status") {
         None => "firing".to_owned(),
         Some(PyVal::Str(s)) => s.clone(),
-        Some(_) => return Err(bad("status must be a string")),
+        Some(_) => String::new(),
     };
-    let raw_labels = Dict::from_field(alert.get("labels"), "labels")?;
-    let mut labels = Dict::default();
-    for (k, v) in &raw_labels.0 {
-        let formatted = py_format(v, &raw_labels.0).unwrap_or_else(|| v.clone());
-        labels.0.push((k.clone(), formatted));
-    }
-    let raw_annotations = Dict::from_field(alert.get("annotations"), "annotations")?;
-    let mut annotations = Dict::default();
-    for (k, v) in &raw_annotations.0 {
-        let formatted = py_format(v, &labels.0).unwrap_or_else(|| v.clone());
-        annotations.0.push((k.clone(), formatted));
-    }
-    if let Some(name) = annotations.get("alertname").filter(|n| !n.is_empty()) {
-        let name = name.to_owned();
+    let raw_labels = Dict::from_field(alert.get("labels"))?;
+    let mut labels = raw_labels.expanded(&raw_labels.0);
+    let raw_annotations = Dict::from_field(alert.get("annotations"))?;
+    let mut annotations = raw_annotations.expanded(&labels.0);
+    if let Some(name) = annotations.get("alertname").filter(|v| v.truthy()) {
+        let name = name.clone();
         labels.set("alertname", name);
     }
 
     let severity = match status.as_str() {
-        "firing" => labels.pop("severity").unwrap_or_else(|| "warning".into()),
+        "firing" => field(
+            &labels
+                .pop("severity")
+                .unwrap_or(PyVal::Str("warning".into())),
+        )?,
         "resolved" => crate::NORMAL_SEVERITY.to_owned(),
         _ => "unknown".to_owned(),
     };
-    let resource = match labels.pop("exported_instance").filter(|s| !s.is_empty()) {
-        Some(r) => r,
-        None => labels.pop("instance").unwrap_or_else(|| "n/a".into()),
+    let resource =
+        field(&labels.pop_or("exported_instance", "instance", PyVal::Str("n/a".into())))?;
+    let event = match labels.pop("event").filter(PyVal::truthy) {
+        Some(e) => field(&e)?,
+        None => field(&labels.pop("alertname")?)?,
     };
-    let event = match labels.pop("event").filter(|s| !s.is_empty()) {
-        Some(e) => e,
-        None => labels
-            .pop("alertname")
-            .ok_or_else(|| key_error("alertname"))?,
+    let environment = match labels.pop("environment") {
+        Some(e) => field(&e)?,
+        None => default_environment.to_owned(),
     };
-    let environment = labels
-        .pop("environment")
-        .unwrap_or_else(|| default_environment.to_owned());
-    let customer = labels.pop("customer");
-    let correlate: Option<Vec<String>> = labels
-        .pop("correlate")
-        .map(|c| c.split(',').map(str::to_owned).collect());
-    let service: Vec<String> = labels
-        .pop("service")
-        .unwrap_or_default()
-        .split(',')
-        .map(str::to_owned)
-        .collect();
-    let group = labels
-        .pop("group")
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| labels.pop("job").unwrap_or_else(|| "Prometheus".into()));
-    let origin = format!(
-        "prometheus/{}",
-        labels.pop("monitor").unwrap_or_else(|| "-".into())
-    );
-    let timeout = labels
-        .pop("timeout")
-        .map_or(Some(0), |t| py_int(&t))
-        .filter(|t| *t != 0);
-    let tags: Vec<String> = labels.0.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    let customer = match labels.pop("customer") {
+        Some(c) => Some(field(&c)?),
+        None => None,
+    };
+    let correlate: Option<Vec<String>> = match labels.pop("correlate") {
+        Some(PyVal::Str(c)) => Some(c.split(',').map(str::to_owned).collect()),
+        Some(_) => return None,
+        None => None,
+    };
+    let service: Vec<String> = match labels.pop("service") {
+        Some(PyVal::Str(s)) => s.split(',').map(str::to_owned).collect(),
+        Some(_) => return None,
+        None => vec![String::new()],
+    };
+    let group = field(&labels.pop_or("group", "job", PyVal::Str("Prometheus".into())))?;
+    let monitor = match labels.pop("monitor") {
+        Some(PyVal::Str(m)) => m,
+        Some(_) => return None,
+        None => "-".to_owned(),
+    };
+    let timeout = match labels.pop("timeout") {
+        Some(t) => py_int(&t)?,
+        None => None,
+    }
+    .filter(|t| *t != 0);
+    let tags = labels
+        .0
+        .iter()
+        .map(|(k, v)| py_str(v).map(|v| format!("{k}={v}")))
+        .collect::<Option<Vec<_>>>()?;
 
     let value = annotations.pop("value");
     let summary = annotations.pop("summary");
     let description = annotations.pop("description");
-    let text = description
-        .filter(|s| !s.is_empty())
-        .or_else(|| summary.filter(|s| !s.is_empty()))
-        .unwrap_or_else(|| format!("{}: {resource} is {event}", severity.to_uppercase()));
+    let text = match (
+        description.filter(PyVal::truthy),
+        summary.filter(PyVal::truthy),
+    ) {
+        (Some(d), _) => field(&d)?,
+        (None, Some(s)) => field(&s)?,
+        (None, None) => format!("{}: {resource} is {event}", severity.to_uppercase()),
+    };
 
     let mut attributes = Map::new();
     for key in ["startsAt", "endsAt"] {
-        let v = alert.get(key).ok_or_else(|| key_error(key))?;
-        attributes.insert(key.to_owned(), v.to_json());
+        attributes.insert(key.to_owned(), alert.get(key)?.to_json());
     }
     for (k, v) in &annotations.0 {
-        attributes.insert(k.clone(), Value::String(v.clone()));
+        attributes.insert(k.clone(), v.to_json());
     }
     if let Some(url) = external_url.filter(|u| u.truthy()) {
         attributes.insert("externalUrl".into(), url.to_json());
     }
     if let Some(g) = alert.get("generatorURL") {
-        let PyVal::Str(g) = g else {
-            return Err(bad("generatorURL must be a string"));
-        };
-        attributes.insert(
-            "moreInfo".into(),
-            Value::String(format!(
-                "<a href=\"{g}\" target=\"_blank\">Prometheus Graph</a>"
-            )),
-        );
+        // Y11: the plain URL, not the reference's HTML anchor.
+        attributes.insert("moreInfo".into(), g.to_json());
     }
     let mut raw = String::new();
     alert.dumps(&mut raw);
 
     let mut out = Map::new();
-    let s = Value::String;
-    out.insert("resource".into(), s(resource));
-    out.insert("event".into(), s(event));
-    out.insert("environment".into(), s(environment));
+    out.insert("resource".into(), Value::String(resource));
+    out.insert("event".into(), Value::String(event));
+    out.insert("environment".into(), Value::String(environment));
     if let Some(c) = customer {
-        out.insert("customer".into(), s(c));
+        out.insert("customer".into(), Value::String(c));
     }
-    out.insert("severity".into(), s(severity));
+    out.insert("severity".into(), Value::String(severity));
     if let Some(c) = correlate {
         out.insert("correlate".into(), Value::from(c));
     }
     out.insert("service".into(), Value::from(service));
-    out.insert("group".into(), s(group));
+    out.insert("group".into(), Value::String(group));
     if let Some(v) = value {
-        out.insert("value".into(), s(v));
+        out.insert("value".into(), v.to_json());
     }
-    out.insert("text".into(), s(text));
+    out.insert("text".into(), Value::String(text));
     out.insert("attributes".into(), Value::Object(attributes));
-    out.insert("origin".into(), s(origin));
-    out.insert("type".into(), s("prometheusAlert".into()));
+    out.insert(
+        "origin".into(),
+        Value::String(format!("prometheus/{monitor}")),
+    );
+    out.insert("type".into(), Value::String("prometheusAlert".into()));
     if let Some(t) = timeout {
         out.insert("timeout".into(), Value::from(t));
     }
-    out.insert("rawData".into(), s(raw));
+    out.insert("rawData".into(), Value::String(raw));
     out.insert("tags".into(), Value::from(tags));
-    Ok(out)
+    Some(out)
 }
 
-/// `PrometheusWebhook.incoming` (lines 110-116): one `POST /alert` object
-/// per alert in the notification, in order.
+/// The envelope check and the per-item mapping (SF-WEBHOOKS alrust item 2).
 ///
 /// # Errors
 ///
-/// 400 "no alerts in Prometheus notification payload" when the body is not
-/// a JSON object with an `alerts` key (or is empty), and 400 for an alert
-/// the reference would refuse with an exception (for example `'alertname'`
-/// when neither an `event` nor an `alertname` label is set) or that alrust
-/// does not reproduce (see the module notes).
-pub fn parse(
-    body: &[u8],
-    default_environment: &str,
-) -> Result<Vec<Map<String, Value>>, WebhookError> {
-    let no_alerts = || bad("no alerts in Prometheus notification payload");
-    let payload: PyVal = serde_json::from_slice(body).map_err(|_| no_alerts())?;
-    if !payload.truthy() {
-        return Err(no_alerts());
-    }
-    let Some(alerts) = payload.get("alerts") else {
-        return Err(no_alerts());
+/// 400 `no alerts in Prometheus notification payload` when the body is not
+/// a JSON object whose `alerts` is a list (missing, `null`, a number, a
+/// string or an object).
+pub fn parse(body: &[u8], default_environment: &str) -> Result<Vec<Item>, WebhookError> {
+    let no_alerts = || WebhookError {
+        status: 400,
+        message: "no alerts in Prometheus notification payload".into(),
     };
-    let PyVal::List(alerts) = alerts else {
-        return Err(bad("alerts must be a list"));
+    let payload: PyVal = serde_json::from_slice(body).map_err(|_| no_alerts())?;
+    let Some(PyVal::List(alerts)) = payload.get("alerts") else {
+        return Err(no_alerts());
     };
     let external_url = payload.get("externalURL");
-    alerts
+    Ok(alerts
         .iter()
-        .map(|a| parse_alert(a, external_url, default_environment))
-        .collect()
+        .map(|a| map_item(a, external_url, default_environment).map_or(Item::Invalid, Item::Mapped))
+        .collect())
 }
 
 #[cfg(test)]
@@ -514,198 +564,269 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn items(body: &str) -> Vec<Item> {
+        parse(body.as_bytes(), "Production").unwrap()
+    }
+
     fn one(body: &str) -> Map<String, Value> {
-        let mut v = parse(body.as_bytes(), "Production").unwrap();
-        assert_eq!(v.len(), 1);
-        v.remove(0)
+        match items(body).as_slice() {
+            [Item::Mapped(m)] => m.clone(),
+            other => panic!("{other:?}"),
+        }
     }
 
-    /// For bodies whose key order does not matter (`json!` sorts keys).
-    fn one_v(body: &Value) -> Map<String, Value> {
-        one(&body.to_string())
+    /// An item in the fixture shape of SF-WEBHOOKS (labels alertname,
+    /// instance, severity; annotation summary), with extra labels and
+    /// annotations as literal JSON members.
+    fn item(n: &str, labels: &str, annotations: &str) -> String {
+        format!(
+            r#"{{"status": "firing", "labels": {{"alertname": "A-{n}", "instance": "h-{n}", "severity": "major"{labels}}}, "annotations": {{"summary": "S-{n}"{annotations}}}, "startsAt": "s", "endsAt": "e"}}"#
+        )
     }
 
-    /// The reference's own test fixture shape (a firing alert with the
-    /// common labels and annotations).
+    fn note(labels: &str, note: &str) -> Value {
+        let m = one(&format!(
+            r#"{{"alerts": [{}]}}"#,
+            item("x", labels, &format!(r#", "note": {note}"#))
+        ));
+        m["attributes"]["note"].clone()
+    }
+
     #[test]
     fn a_firing_alert_maps_like_the_reference() {
-        // Literal text: key order matters (tags, rawData).
-        let body = r#"{
-            "receiver": "alerta",
+        let body = r#"{"externalURL": "http://am:9093", "alerts": [{
             "status": "firing",
-            "externalURL": "http://am:9093",
-            "alerts": [{
-                "status": "firing",
-                "labels": {
-                    "alertname": "HighLoad", "instance": "web01:9100", "job": "node",
-                    "severity": "critical", "monitor": "codelab", "environment": "Production",
-                    "service": "Web,Node", "team": "ops", "runbook": "https://wiki/{job}/{alertname}"
-                },
-                "annotations": {
-                    "summary": "High load on {instance}", "value": "7.5",
-                    "dashboard": "https://grafana/{instance}"
-                },
-                "startsAt": "2026-11-14T05:00:00Z",
-                "endsAt": "0001-01-01T00:00:00Z",
-                "generatorURL": "http://prom:9090/graph?g0.expr=up"
-            }]
-        }"#;
+            "labels": {"alertname": "HighLoad", "instance": "web01:9100", "job": "node",
+                       "severity": "critical", "monitor": "codelab", "service": "Web,Node",
+                       "team": "ops", "runbook": "https://wiki/{job}/{alertname}"},
+            "annotations": {"summary": "High load on {instance}", "value": "7.5"},
+            "startsAt": "s1", "endsAt": "e1",
+            "generatorURL": "http://prom.test/graph?g0.expr=up"}]}"#;
         let a = one(body);
         assert_eq!(
             Value::Object(a.clone()),
             json!({
-                "resource": "web01:9100",
-                "event": "HighLoad",
-                "environment": "Production",
-                "severity": "critical",
-                "service": ["Web", "Node"],
-                "group": "node",
-                "value": "7.5",
-                "text": "High load on web01:9100",
-                "attributes": {
-                    "startsAt": "2026-11-14T05:00:00Z",
-                    "endsAt": "0001-01-01T00:00:00Z",
-                    "dashboard": "https://grafana/web01:9100",
-                    "externalUrl": "http://am:9093",
-                    "moreInfo": "<a href=\"http://prom:9090/graph?g0.expr=up\" target=\"_blank\">Prometheus Graph</a>"
-                },
-                "origin": "prometheus/codelab",
-                "type": "prometheusAlert",
+                "resource": "web01:9100", "event": "HighLoad", "environment": "Production",
+                "severity": "critical", "service": ["Web", "Node"], "group": "node",
+                "value": "7.5", "text": "High load on web01:9100",
+                "attributes": {"startsAt": "s1", "endsAt": "e1", "externalUrl": "http://am:9093",
+                               "moreInfo": "http://prom.test/graph?g0.expr=up"},
+                "origin": "prometheus/codelab", "type": "prometheusAlert",
                 "rawData": a["rawData"],
                 "tags": ["team=ops", "runbook=https://wiki/node/HighLoad"]
             })
         );
-        // json.dumps: key order, ", " and ": " separators.
-        assert!(a["rawData"].as_str().unwrap().starts_with(
-            r#"{"status": "firing", "labels": {"alertname": "HighLoad", "instance": "#
-        ));
+        assert!(
+            a["rawData"]
+                .as_str()
+                .unwrap()
+                .starts_with(r#"{"status": "firing", "labels": {"alertname": "HighLoad", "#)
+        );
     }
 
     #[test]
-    fn resolved_and_other_statuses_and_defaults() {
-        let base = |status: &str| {
-            json!({"alerts": [{
-                "status": status,
-                "labels": {"alertname": "Down", "severity": "major"},
-                "annotations": {},
-                "startsAt": "s", "endsAt": "e"
-            }]})
-        };
-        let r = one_v(&base("resolved"));
+    fn resolved_unknown_status_and_defaults() {
+        let r = one(
+            r#"{"alerts": [{"status": "resolved", "labels": {"alertname": "Down", "severity": "major"}, "annotations": {}, "startsAt": "s", "endsAt": "e"}]}"#,
+        );
         assert_eq!(r["severity"], "normal");
-        // The severity label is not popped when resolved: it becomes a tag.
         assert_eq!(r["tags"], json!(["severity=major"]));
         assert_eq!(r["text"], "NORMAL: n/a is Down");
         assert_eq!(r["service"], json!([""]));
-        assert_eq!(r["group"], "Prometheus");
-        assert_eq!(r["origin"], "prometheus/-");
-        assert_eq!(r["environment"], "Production");
-        assert!(r.get("timeout").is_none() && r.get("value").is_none());
-        assert_eq!(one_v(&base("pending"))["severity"], "unknown");
-        let mut no_status = base("x");
-        no_status["alerts"][0]
-            .as_object_mut()
-            .unwrap()
-            .remove("status");
-        assert_eq!(one_v(&no_status)["severity"], "major");
+        assert_eq!(
+            (r["group"].clone(), r["origin"].clone()),
+            (json!("Prometheus"), json!("prometheus/-"))
+        );
+        let u = one(
+            r#"{"alerts": [{"status": 7, "labels": {"alertname": "D"}, "annotations": {}, "startsAt": "s", "endsAt": "e"}]}"#,
+        );
+        assert_eq!(u["severity"], "unknown");
     }
 
     #[test]
     fn pop_order_decides_which_labels_become_tags() {
-        let a = one(r#"{"alerts": [{
-            "labels": {"alertname": "A", "event": "E", "exported_instance": "x",
-                       "instance": "i", "group": "G", "job": "j", "timeout": " 1_200 ",
-                       "correlate": "E,F"},
-            "annotations": {"alertname": "Renamed", "description": "d"},
-            "startsAt": "s", "endsAt": "e"
-        }]}"#);
-        assert_eq!(
-            (a["resource"].clone(), a["event"].clone()),
-            (json!("x"), json!("E"))
+        let a = one(
+            r#"{"alerts": [{"labels": {"alertname": "A", "event": "E", "exported_instance": "x",
+            "instance": "i", "group": "G", "job": "j", "timeout": " 1_200 ", "correlate": "E,F", "n": 5, "b": true},
+            "annotations": {"alertname": "Renamed", "description": "d"}, "startsAt": "s", "endsAt": "e"}]}"#,
         );
-        assert_eq!(a["group"], "G");
+        assert_eq!(
+            (
+                a["resource"].clone(),
+                a["event"].clone(),
+                a["group"].clone()
+            ),
+            (json!("x"), json!("E"), json!("G"))
+        );
         assert_eq!(a["timeout"], 1200);
         assert_eq!(a["correlate"], json!(["E", "F"]));
-        // alertname (renamed by the annotation), instance and job stay as tags.
         assert_eq!(
             a["tags"],
-            json!(["alertname=Renamed", "instance=i", "job=j"])
+            json!(["alertname=Renamed", "instance=i", "job=j", "n=5", "b=True"])
         );
-        assert_eq!(a["text"], "d");
-        assert_eq!(a["attributes"]["alertname"], "Renamed");
+    }
+
+    /// SF-WEBHOOKS vectors 8, 8b, 8c, 8d and 8d2: the envelope.
+    #[test]
+    fn envelope() {
+        let no = "no alerts in Prometheus notification payload";
+        for b in [
+            r#"{"foo": 1}"#,
+            r#"{"alerts": {}}"#,
+            r#"{"alerts": ""}"#,
+            r#"{"alerts": null}"#,
+            r#"{"alerts": 5}"#,
+            r#"{"alerts": "ab"}"#,
+            r#"{"alerts": {"x": 1}}"#,
+            "",
+            "not json",
+            "[]",
+        ] {
+            assert_eq!(
+                parse(b.as_bytes(), "Production").unwrap_err().message,
+                no,
+                "{b}"
+            );
+        }
+        assert_eq!(items(r#"{"alerts": []}"#), vec![]);
+    }
+
+    /// Vectors 7, 8e and 8f: a failing item is invalid, the others map.
+    #[test]
+    fn invalid_items_do_not_stop_the_others() {
+        let body = format!(
+            r#"{{"alerts": [{}, {{"annotations": {{}}, "startsAt": "s", "endsAt": "e"}}, {}]}}"#,
+            item("7-1", "", ""),
+            item("7-3", "", "")
+        );
+        let v = items(&body);
+        assert!(
+            matches!(
+                v.as_slice(),
+                [Item::Mapped(_), Item::Invalid, Item::Mapped(_)]
+            ),
+            "{v:?}"
+        );
+        for bad in [
+            r#"{"labels": {"alertname": "A", "timeout": []}, "annotations": {}, "startsAt": "s", "endsAt": "e"}"#,
+            r#"{"labels": {}, "annotations": {}, "startsAt": "s", "endsAt": "e"}"#,
+            r#"{"labels": {"alertname": "A"}, "annotations": {}, "endsAt": "e"}"#,
+            r#"{"labels": {"alertname": "A", "x": [1]}, "annotations": {}, "startsAt": "s", "endsAt": "e"}"#,
+            r#""not an object""#,
+        ] {
+            assert_eq!(
+                items(&format!(r#"{{"alerts": [{bad}]}}"#)),
+                vec![Item::Invalid],
+                "{bad}"
+            );
+        }
+        // A ValueError from int() is caught by the reference: no timeout.
+        let t = one(
+            r#"{"alerts": [{"labels": {"alertname": "A", "timeout": "soon"}, "annotations": {}, "startsAt": "s", "endsAt": "e"}]}"#,
+        );
+        assert!(t.get("timeout").is_none());
+    }
+
+    /// Vectors 11 to 19b: placeholders.
+    #[test]
+    fn placeholders() {
+        assert_eq!(
+            note("", r#""https://wiki.test/{instance}/{alertname}""#),
+            "https://wiki.test/h-x/A-x"
+        );
+        assert_eq!(note("", r#""{{literal}} {alertname}""#), "{literal} A-x");
+        for kept in [
+            r#""{missing} {alertname}""#,
+            r#""{0}""#,
+            r#""{alertname""#,
+            r#""{}""#,
+            r#""a}""#,
+        ] {
+            let raw: Value = serde_json::from_str(kept).unwrap();
+            assert_eq!(note("", kept), raw, "{kept}");
+        }
+        assert_eq!(
+            note("", r#""x {alertname:>20} {instance}""#),
+            "x {alertname:>20} h-x"
+        );
+        assert_eq!(
+            note("", r#""{alertname.__class__}""#),
+            "{alertname.__class__}"
+        );
+        assert_eq!(note(r#", "n": 5"#, r#""v={n}""#), "v=5");
+        assert_eq!(note("", "7"), json!(7));
+        assert_eq!(
+            note(r#", "f": 2.5, "t": true, "z": null"#, r#""{f} {t} {z}""#),
+            "2.5 True None"
+        );
+        assert_eq!(
+            note(
+                r#", "x": [1]"#.replace("[1]", "\"[1]\"").as_str(),
+                r#""{x}""#
+            ),
+            "[1]"
+        );
+        let big = "a".repeat(1000);
+        let groups = "{big}".repeat(66);
+        assert_eq!(
+            note(&format!(r#", "big": "{big}""#), &format!(r#""{groups}""#)),
+            groups
+        );
+        let big = "a".repeat(1024);
+        let groups = "{big}".repeat(64);
+        assert_eq!(
+            note(&format!(r#", "big": "{big}""#), &format!(r#""{groups}""#))
+                .as_str()
+                .unwrap()
+                .len(),
+            65_536
+        );
+        assert_eq!(
+            note(&format!(r#", "big": "{big}""#), &format!(r#""{groups}x""#)),
+            format!("{groups}x")
+        );
+        let u = "ü".repeat(30_000);
+        assert_eq!(note(&format!(r#", "u": "{u}""#), r#""{u}{u}""#), "{u}{u}");
     }
 
     #[test]
-    fn python_format_subset() {
-        let args = vec![
-            ("a".to_owned(), "1".to_owned()),
-            ("b".to_owned(), "x".to_owned()),
-        ];
-        assert_eq!(py_format("{a}-{b}", &args).as_deref(), Some("1-x"));
+    fn list_and_object_placeholders_keep_the_value() {
+        // Vector 19b, checked on expand() directly: a list or object leaves
+        // the value unchanged (the label itself would make the item invalid
+        // as a tag).
+        let args = vec![("x".to_owned(), PyVal::List(vec![PyVal::Num(1.into())]))];
+        assert_eq!(expand("{x}", &args), None);
+        let args = vec![("x".to_owned(), PyVal::Obj(vec![]))];
+        assert_eq!(expand("{x}", &args), None);
+    }
+
+    #[test]
+    fn python_scalars() {
+        assert_eq!(py_float(2.5), "2.5");
+        assert_eq!(py_float(1.0), "1.0");
+        assert_eq!(py_float(1e16), "1e+16");
+        assert_eq!(py_float(2.5e-5), "2.5e-05");
+        assert_eq!(py_int_text(" +5 "), Some(5));
+        assert_eq!(py_int_text("-1_0"), Some(-10));
+        for bad in ["", "5.0", "_5", "5_", "1__0", "x"] {
+            assert_eq!(py_int_text(bad), None, "{bad}");
+        }
         assert_eq!(
-            py_format("{{a}} {a!s} {a:}", &args).as_deref(),
-            Some("{a} 1 1")
+            py_int(&PyVal::Num(serde_json::Number::from_f64(5.7).unwrap())),
+            Some(Some(5))
         );
-        for raises_or_unsupported in [
-            "{c}", "{}", "{0}", "{a", "a}", "{a!r}", "{a:>3}", "{a.b}", "{a[0]}", "{a!}", "{a{b}}",
-        ] {
-            assert_eq!(
-                py_format(raises_or_unsupported, &args),
-                None,
-                "{raises_or_unsupported}"
-            );
-        }
-        assert_eq!(py_int(" +5 "), Some(5));
-        assert_eq!(py_int("-1_0"), Some(-10));
-        for bad_int in ["", "5.0", "_5", "5_", "1__0", "x"] {
-            assert_eq!(py_int(bad_int), None, "{bad_int}");
-        }
+        assert_eq!(py_int(&PyVal::Null), None);
     }
 
     #[test]
     fn json_dumps_matches_python() {
-        let v: PyVal =
-            serde_json::from_str(r#"{"b": [1, true, null, "é\n\"x\"", "😀"], "a": {}, "b": 2}"#)
-                .unwrap();
+        let v: PyVal = serde_json::from_str(r#"{"b": [1, true, null], "a": {}, "b": 2}"#).unwrap();
         let mut s = String::new();
         v.dumps(&mut s);
-        // Python: json.dumps(json.loads(...)) keeps the first position of a
-        // repeated key with its last value.
         assert_eq!(s, r#"{"b": 2, "a": {}}"#);
         let v: PyVal = serde_json::from_str(r#"["é\n\"x\"\u0001", "😀", 1.0, 2.5]"#).unwrap();
         let mut s = String::new();
         v.dumps(&mut s);
         assert_eq!(s, r#"["é\n\"x\"\u0001", "😀", 1.0, 2.5]"#);
-    }
-
-    #[test]
-    fn refusals() {
-        let err = |body: &str| parse(body.as_bytes(), "Production").unwrap_err();
-        let no = "no alerts in Prometheus notification payload";
-        for b in ["", "not json", "{}", "[]", "{\"x\": 1}"] {
-            assert_eq!(err(b).message, no, "{b}");
-        }
-        assert_eq!(parse(br#"{"alerts": []}"#, "Production").unwrap().len(), 0);
-        let alert = |a: &str| format!("{{\"alerts\": [{a}]}}");
-        assert_eq!(err(&alert(r#"{"annotations": {}}"#)).message, "'labels'");
-        assert_eq!(err(&alert(r#"{"labels": {}}"#)).message, "'annotations'");
-        assert_eq!(
-            err(&alert(
-                r#"{"labels": {}, "annotations": {}, "startsAt": "s", "endsAt": "e"}"#
-            ))
-            .message,
-            "'alertname'"
-        );
-        assert_eq!(
-            err(&alert(
-                r#"{"labels": {"alertname": "A"}, "annotations": {}, "endsAt": "e"}"#
-            ))
-            .message,
-            "'startsAt'"
-        );
-        assert_eq!(
-            err(&alert(r#"{"labels": {"a": 1}, "annotations": {}}"#)).status,
-            400
-        );
     }
 }
