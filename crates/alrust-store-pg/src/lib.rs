@@ -198,6 +198,15 @@ pub struct AlertQuery {
     pub customers: Option<Vec<String>>,
 }
 
+/// The grouped counts of the alerts a query selects (`/alerts/count`, and
+/// the totals of `/alerts`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AlertCounts {
+    pub total: i64,
+    pub severity_counts: Map<String, Value>,
+    pub status_counts: Map<String, Value>,
+}
+
 #[derive(Debug)]
 pub struct AlertPage {
     pub alerts: Vec<Alert>,
@@ -1502,23 +1511,11 @@ impl Store {
         page_size: i64,
         history: HistoryOutput,
     ) -> Result<AlertPage, StoreError> {
-        let mut counts = QueryBuilder::new("SELECT severity, status, count(*) AS n FROM alerts");
-        Self::push_filters(&mut counts, q);
-        counts.push(" GROUP BY severity, status");
-        let rows = counts.build().fetch_all(&self.pool).await?;
-        let mut severity_counts = Map::new();
-        let mut status_counts = Map::new();
-        let mut total = 0i64;
-        for r in rows {
-            let sev = or_default(&r, "severity", NORMAL_SEVERITY)?;
-            let st = or_default(&r, "status", status::OPEN)?;
-            let n: i64 = r.try_get("n")?;
-            total += n;
-            let e = severity_counts.entry(sev).or_insert(Value::from(0));
-            *e = Value::from(e.as_i64().unwrap_or(0) + n);
-            let e = status_counts.entry(st).or_insert(Value::from(0));
-            *e = Value::from(e.as_i64().unwrap_or(0) + n);
-        }
+        let AlertCounts {
+            total,
+            severity_counts,
+            status_counts,
+        } = self.count_alerts(q).await?;
         let mut sel = QueryBuilder::new(match history {
             HistoryOutput::Include => "SELECT * FROM alerts",
             HistoryOutput::Omit => ALERTS_WITHOUT_HISTORY,
@@ -1535,6 +1532,43 @@ impl Store {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(AlertPage {
             alerts,
+            total,
+            severity_counts,
+            status_counts,
+        })
+    }
+
+    /// The one grouped-count statement of a query, with the same filters as
+    /// the alert list.
+    fn counts_query(q: &AlertQuery) -> QueryBuilder<'_, Postgres> {
+        let mut counts = QueryBuilder::new("SELECT severity, status, count(*) AS n FROM alerts");
+        Self::push_filters(&mut counts, q);
+        counts.push(" GROUP BY severity, status");
+        counts
+    }
+
+    /// `GET /alerts/count`: the total and the per-severity and per-status
+    /// counts of the alerts `q` selects. One statement; no alert row is read.
+    ///
+    /// # Errors
+    ///
+    /// The database error.
+    pub async fn count_alerts(&self, q: &AlertQuery) -> Result<AlertCounts, StoreError> {
+        let rows = Self::counts_query(q).build().fetch_all(&self.pool).await?;
+        let mut severity_counts = Map::new();
+        let mut status_counts = Map::new();
+        let mut total = 0i64;
+        for r in rows {
+            let sev = or_default(&r, "severity", NORMAL_SEVERITY)?;
+            let st = or_default(&r, "status", status::OPEN)?;
+            let n: i64 = r.try_get("n")?;
+            total += n;
+            let e = severity_counts.entry(sev).or_insert(Value::from(0));
+            *e = Value::from(e.as_i64().unwrap_or(0) + n);
+            let e = status_counts.entry(st).or_insert(Value::from(0));
+            *e = Value::from(e.as_i64().unwrap_or(0) + n);
+        }
+        Ok(AlertCounts {
             total,
             severity_counts,
             status_counts,
@@ -1837,6 +1871,36 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `/alerts/count` runs only the grouped count: one statement, the list's
+    /// filters, no row fetch, ordering or paging.
+    #[test]
+    fn the_count_path_is_one_grouped_statement_with_the_list_filters() {
+        let q = AlertQuery {
+            events: vec!["HttpError".into()],
+            not_statuses: vec!["closed".into()],
+            tags: vec!["t".into()],
+            customers: Some(vec!["acme".into()]),
+            ..AlertQuery::default()
+        };
+        let mut list = QueryBuilder::new("");
+        Store::push_filters(&mut list, &q);
+        let counts = Store::counts_query(&q);
+        assert_eq!(
+            counts.sql(),
+            format!(
+                "SELECT severity, status, count(*) AS n FROM alerts{} GROUP BY severity, status",
+                list.sql()
+            )
+        );
+        assert_eq!(
+            list.sql(),
+            " WHERE true AND event = ANY($1) AND NOT (status = ANY($2)) AND tags @> $3 AND customer = ANY($4)"
+        );
+        for absent in ["ORDER BY", "LIMIT", "OFFSET", "SELECT *"] {
+            assert!(!counts.sql().contains(absent), "{absent}");
+        }
+    }
 
     #[test]
     fn tags_union_keeps_first_seen_order() {

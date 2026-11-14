@@ -1159,10 +1159,7 @@ async fn count_alerts(
     let caller = authenticate(&st, &headers, &params).await?;
     caller.require("read:alerts")?;
     let s = parse_search(&st, &caller, &params)?;
-    let r = st
-        .store
-        .find_alerts(&s.q, 1, 1, HistoryOutput::Omit)
-        .await?;
+    let r = st.store.count_alerts(&s.q).await?;
     Ok(Json(json!({
         "status": "ok",
         "total": r.total,
