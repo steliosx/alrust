@@ -49,6 +49,19 @@
 {"q": "attributes.zabbix_ack_sync_intent:x", "q.df": null, "sql": "\"attributes\"::jsonb ->>%(_qp_0)s ILIKE %(_qp_1)s", "params": {"_qp_0": "zabbix_ack_sync_intent", "_qp_1": "%x%"}}
 {"q": "_exists_:zabbix_ack_sync_intent", "q.df": null, "sql": "\"attributes\"::jsonb ? %(_qp_0)s", "params": {"_qp_0": "zabbix_ack_sync_intent"}}
 {"q": "x", "q.df": "attributes", "sql": "\"attributes\" ILIKE %(_qp_0)s", "params": {"_qp_0": "%x%"}}
+{"q": "a AND b AND c", "q.df": null, "sql": "(\"text\" ILIKE %(_qp_0)s AND \"text\" ILIKE %(_qp_1)s)", "params": {"_qp_0": "%a%", "_qp_1": "%b%"}}
+{"q": "a OR b OR c", "q.df": null, "sql": "(\"text\" ILIKE %(_qp_0)s OR \"text\" ILIKE %(_qp_1)s)", "params": {"_qp_0": "%a%", "_qp_1": "%b%"}}
+{"q": "a b c", "q.df": null, "sql": "(\"text\" ILIKE %(_qp_0)s OR \"text\" ILIKE %(_qp_1)s)", "params": {"_qp_0": "%a%", "_qp_1": "%b%"}}
+{"q": "a b c d", "q.df": null, "sql": "(\"text\" ILIKE %(_qp_0)s OR \"text\" ILIKE %(_qp_1)s)", "params": {"_qp_0": "%a%", "_qp_1": "%b%"}}
+{"q": "a && b && c", "q.df": null, "sql": "(\"text\" ILIKE %(_qp_0)s AND \"text\" ILIKE %(_qp_1)s)", "params": {"_qp_0": "%a%", "_qp_1": "%b%"}}
+{"q": "NOT a AND b", "q.df": null, "sql": "(NOT (\"text\" ILIKE %(_qp_0)s) AND \"text\" ILIKE %(_qp_1)s)", "params": {"_qp_0": "%a%", "_qp_1": "%b%"}}
+{"q": "a AND b OR c AND d", "q.df": null, "sql": "((\"text\" ILIKE %(_qp_0)s AND \"text\" ILIKE %(_qp_1)s) OR (\"text\" ILIKE %(_qp_2)s AND \"text\" ILIKE %(_qp_3)s))", "params": {"_qp_0": "%a%", "_qp_1": "%b%", "_qp_2": "%c%", "_qp_3": "%d%"}}
+{"q": "resource:(a OR b OR c)", "q.df": null, "sql": "(\"resource\" ILIKE %(_qp_0)s OR \"resource\" ILIKE %(_qp_1)s)", "params": {"_qp_0": "%a%", "_qp_1": "%b%"}}
+{"q": "a-b", "q.df": null, "sql": "\"text\" ILIKE %(_qp_0)s", "params": {"_qp_0": "%a-b%"}}
+{"q": "disk!", "q.df": null, "sql": "\"text\" ILIKE %(_qp_0)s", "params": {"_qp_0": "%disk!%"}}
+{"q": "ANDROID", "q.df": null, "sql": "\"text\" ILIKE %(_qp_0)s", "params": {"_qp_0": "%ANDROID%"}}
+{"q": "web01 OR", "q.df": null, "sql": "\"text\" ILIKE %(_qp_0)s", "params": {"_qp_0": "%web01%"}}
+{"q": "-a -b", "q.df": null, "sql": "(- \"text\" ILIKE %(_qp_0)s OR - \"text\" ILIKE %(_qp_1)s)", "params": {"_qp_0": "%a%", "_qp_1": "%b%"}}
 {"q": "", "q.df": null, "error": "ParseException", "message": "Expected ['OR' | '||'] operations  (at char 0), (line:1, col:1)"}
 {"q": "disk AND", "q.df": null, "sql": "(\"text\" ILIKE %(_qp_0)s OR \"text\" ILIKE %(_qp_1)s)", "params": {"_qp_0": "%disk%", "_qp_1": "%AND%"}}
 {"q": "(disk", "q.df": null, "error": "ParseException", "message": "Expected ')', found end of text  (at char 5), (line:1, col:6)"}

@@ -5,7 +5,7 @@ Source: Alerta 9.1.0 (`reference/alerta` at `f4312727`),
 `alerta/database/backends/postgres/queryparser.py` (sha256 prefix
 `d9c13317bb36208b`) with pyparsing 3.3.2 from
 `.github/reference-requirements.lock`. The reference's own parser was run on
-56 `q` strings by `scripts/characterise-q.py`; its output, one JSON line per
+69 `q` strings by `scripts/characterise-q.py`; its output, one JSON line per
 string, is `spec/search-q-reference-sql.jsonl`. That file is the reference's
 SQL text and parameters only. What each statement selects, and which ones
 fail in PostgreSQL, is **not yet observed**: that needs a recording run
@@ -24,6 +24,9 @@ query string."; any other error (a database error) is not caught there.
 | # | Finding | Example (`q` → reference SQL) |
 |---|---|---|
 | F1 | **Unparsed input is silently dropped.** `parseString` runs without `parseAll`, so the parser stops at the first text it cannot continue with and ignores the rest | `a:b:c` → `"a" ILIKE '%b%'`; `web\-01` → `"text" ILIKE '%web%'` |
+| F19 | **Only the first two operands of an `AND` or `OR` chain are kept; the rest are silently dropped.** pyparsing groups `a AND b AND c` as one list, and the reference's `BinaryOperation` reads only items 0 to 2. This applies to implicit OR and inside field groups | `a AND b AND c` → `(a AND b)`; `a b c d` → `(a OR b)`; `resource:(a OR b OR c)` → `("resource" ILIKE '%a%' OR "resource" ILIKE '%b%')` |
+| F20 | Mixed chains keep two operands per level: `a AND b OR c AND d` keeps all four, because each `AND` pair is one operand of the `OR` | `a AND b OR c AND d` → `((a AND b) OR (c AND d))` |
+| F21 | `-`, `+` and `!` inside a word are part of the word; `AND`, `OR` and `NOT` are operators only as whole words. A trailing `OR` is dropped, a trailing `AND` becomes a term | `a-b` → `'%a-b%'`; `ANDROID` → `'%ANDROID%'`; `web01 OR` → `'%web01%'` |
 | F2 | **No operator means OR**, and a trailing operator word is a term | `disk full` → `text ILIKE '%disk%' OR text ILIKE '%full%'`; `disk AND` → `… '%disk%' OR … '%AND%'` |
 | F3 | `AND` binds tighter than `OR`; parentheses group | `a OR b AND c` → `a OR (b AND c)` |
 | F4 | **`a OR NOT b` becomes `a AND NOT b`** | `disk OR NOT full` → `("text" ILIKE '%disk%' AND NOT ("text" ILIKE '%full%'))` |
@@ -44,7 +47,11 @@ query string."; any other error (a database error) is not caught there.
 
 ## What this means for alrust
 
-- F1, F4, F5, F6, F12 and F16 look like reference defects. Each is a choice
+- F19 is the most serious: any search with three or more terms joined by
+  the same operator silently ignores all but the first two, so `disk full
+  error` returns alerts that match neither `error` nor anything after it.
+  Reproducing it exactly is possible but would carry the defect into alrust.
+- F1, F4, F5, F6, F12, F16 and F19 look like reference defects. Each is a choice
   for Codex's review and, where alrust would differ, a DECISIONS entry
   (`docs/performance/search-design.md`, question Q-S2). Copying F12 makes a
   common search (`Dis*`) return nearly everything; copying F5, F6 and F16

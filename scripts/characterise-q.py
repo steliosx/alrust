@@ -41,6 +41,10 @@ CORPUS = [
     ("100%", None), ("a_b", None), ("web\\-01", None),
     ("attributes.zabbix_ack_sync_intent:x", None), ("_exists_:zabbix_ack_sync_intent", None),
     ("x", "attributes"),
+    ("a AND b AND c", None), ("a OR b OR c", None), ("a b c", None), ("a b c d", None),
+    ("a && b && c", None), ("NOT a AND b", None), ("a AND b OR c AND d", None),
+    ("resource:(a OR b OR c)", None), ("a-b", None), ("disk!", None), ("ANDROID", None),
+    ("web01 OR", None), ("-a -b", None),
     ("", None), ("disk AND", None), ("(disk", None), ('"unterminated', None), ("a:b:c", None),
 ]
 

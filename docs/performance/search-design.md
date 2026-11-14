@@ -54,14 +54,15 @@ assumption.
 | Group | `field:(a OR b)` | the inner query with the default field replaced (205-214) |
 | Operators | `AND`/`&&`, `OR`/`||`, `NOT`/`!`, `+`, `-` | `infixNotation`, precedence `+ -`, `NOT`, `AND`, `OR` (271-277); **no operator between clauses means OR** (`Optional(OR)`, 276) |
 
-The reference's own parser has now been run on 56 `q` strings:
-[`spec/search-q.md`](../../spec/search-q.md) lists 18 findings (F1 to F18)
+The reference's own parser has now been run on 69 `q` strings:
+[`spec/search-q.md`](../../spec/search-q.md) lists 21 findings (F1 to F21)
 with the exact SQL, and `spec/search-q-reference-sql.jsonl` holds the
 output. The ones that need a decision before copying (Q-S2): unparsed input
 is silently dropped (F1); `a OR NOT b` becomes `a AND NOT b` (F4); `+` and
 `-` emit a literal sign (F5); field names are column names as written, so
 camelCase API names fail and any column, `raw_data` included, can be
-searched (F6); an upper-case wildcard such as `Dis*` matches nearly every
+searched (F6); only the first two operands of an `AND` or `OR` chain are
+kept, so `a b c` searches for `a` or `b` only (F19); an upper-case wildcard such as `Dis*` matches nearly every
 alert (F12); `history` and `q.df=attributes` searches produce invalid SQL
 (F16). `%` and `_` act as `LIKE` wildcards (F7), and phrases and wildcards
 are unescaped regexes (F10, F11). A caller-supplied regex runs in
