@@ -22,8 +22,8 @@
 
 use alrust_store_pg::catalog;
 use alrust_store_pg::{
-    AlertQuery, NewAlert, Outcome, ReceiveKind, StartupError, Store, StoreConfig, StoreError,
-    session_options, value_text,
+    AlertCounts, AlertQuery, NewAlert, Outcome, ReceiveKind, StartupError, Store, StoreConfig,
+    StoreError, session_options, value_text,
 };
 use chrono::{TimeZone, Utc};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
@@ -1213,6 +1213,88 @@ async fn unrecognised_states_are_refused_without_writing() {
         );
         assert_eq!(catalog_of(&db.pool).await, before, "{setup}");
     }
+}
+
+/// `count_alerts` gives exactly the totals and grouped counts of
+/// `find_alerts` for the same query: empty, matching, excluding,
+/// customer-restricted and unrestricted selections.
+#[tokio::test]
+async fn count_alerts_matches_the_list_totals() {
+    let Some(db) = test_db().await else { return };
+    let s = store(&db.pool);
+    s.prepare().await.expect("fresh start");
+    for (id, resource, event, severity, customer) in [
+        ("c1", "web01", "HttpError", "major", None),
+        ("c2", "web02", "HttpError", "critical", None),
+        ("c3", "db01", "DiskFull", "critical", Some("acme")),
+        ("c4", "db02", "DiskFull", "minor", Some("other")),
+    ] {
+        let mut n = new_alert(id, 3600);
+        n.resource = resource.into();
+        n.event = event.into();
+        n.severity = severity.into();
+        n.customer = customer.map(Into::into);
+        s.receive(n, "alice").await.expect("receive");
+    }
+    s.take_action("c2", None, "ack", "seen", None, "alice")
+        .await
+        .expect("ack");
+    let queries = [
+        AlertQuery::default(),
+        AlertQuery {
+            events: vec!["HttpError".into()],
+            ..AlertQuery::default()
+        },
+        AlertQuery {
+            not_events: vec!["HttpError".into()],
+            ..AlertQuery::default()
+        },
+        AlertQuery {
+            severities: vec!["critical".into()],
+            not_statuses: vec!["ack".into()],
+            ..AlertQuery::default()
+        },
+        AlertQuery {
+            events: vec!["NoSuchEvent".into()],
+            ..AlertQuery::default()
+        },
+        AlertQuery {
+            customers: Some(vec!["acme".into()]),
+            ..AlertQuery::default()
+        },
+        AlertQuery {
+            customers: Some(vec![]),
+            ..AlertQuery::default()
+        },
+    ];
+    let mut totals = Vec::new();
+    for q in &queries {
+        let c = s.count_alerts(q).await.expect("count");
+        let p = s
+            .find_alerts(q, 1, 1, alrust_domain::HistoryOutput::Omit)
+            .await
+            .expect("list");
+        assert_eq!(
+            c,
+            AlertCounts {
+                total: p.total,
+                severity_counts: p.severity_counts,
+                status_counts: p.status_counts,
+            },
+            "{q:?}"
+        );
+        totals.push(c.total);
+    }
+    assert_eq!(totals, [4, 2, 2, 1, 0, 1, 0]);
+    let all = s.count_alerts(&AlertQuery::default()).await.unwrap();
+    assert_eq!(
+        serde_json::Value::Object(all.severity_counts),
+        serde_json::json!({"critical": 2, "major": 1, "minor": 1})
+    );
+    assert_eq!(
+        serde_json::Value::Object(all.status_counts),
+        serde_json::json!({"ack": 1, "open": 3})
+    );
 }
 
 fn new_alert(id: &str, timeout: i64) -> NewAlert {
