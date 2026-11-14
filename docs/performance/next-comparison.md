@@ -43,12 +43,15 @@ arm, plus:
 |---|---|---|
 | Count, filtered | `GET /alerts/count?severity=critical` | C against M |
 | Get by full id | `GET /alert/{full id}` | L against M |
-| Get by short prefix | `GET /alert/{first 8 chars}` | No change expected (prefix path unchanged): a control |
-| Get by lastReceiveId | `GET /alert/{a duplicate's id}` | No change expected: a control |
-| Ack by full id | `PUT /alert/{id}/action` `ack`, then `unack` | L against M (row lock held for a shorter time) |
+| Get by short prefix | `GET /alert/{first 8 chars}` | **Possible regression** in L: #229 first runs an exact-id query that misses, then the unchanged prefix query |
+| Get by lastReceiveId | `GET /alert/{a duplicate's id}` | **Possible regression** in L, for the same reason |
+| Ack by full id | `PUT /alert/{id}/action` `ack`, then `unack` | L against M (shorter row-lock hold) |
 
-The two control cases must not move; if they do, the environment is noisy
-and the run is not scored.
+The two prefix and `lastReceiveId` cases measure the cost #229 adds to
+every lookup that is not a full id; they are not controls. The controls are
+cases no arm changes: the pilot's list, event and severity cases, which
+must agree between M, C and L. If a control moves, the environment is
+noisy and the run is not scored.
 
 ## Rules (from the pilot, kept)
 
@@ -58,8 +61,11 @@ and the run is not scored.
 - Alternate arm order across four repetitions; five warm-ups and 25 timed
   requests per case, arm and repetition; medians of per-run medians; ratio
   as the median of paired ratios.
-- At 1,000 timed requests per case, report median and range only; p95
-  needs 1,000 samples in one arm and case, p99 10,000.
+- That gives 100 timed requests per case and arm (4 × 25), 1,000 per
+  arm across the pilot's ten-case scale. Per case and arm, report the
+  median and range only. p95 needs at least 1,000 samples in one case and
+  arm, p99 at least 10,000; this plan reaches neither, so it reports no
+  percentile.
 - Record `EXPLAIN (ANALYZE, BUFFERS)` once per case and arm after the
   timed runs, to show the plan change (an index scan on `alerts_pkey` for
   L's full-id cases; one statement instead of two for C's count).

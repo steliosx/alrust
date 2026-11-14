@@ -34,7 +34,7 @@ skip or refusal reason. Only then are times compared.
 
 Statements alrust runs today for `PUT /alert/{id}/action` with `ack` on a
 claimed alert (`take_action_with`). Each row is one database round trip
-unless stated. The row lock is held from step 3 to step 10.
+unless stated. The row lock is taken in step 4 and held through `COMMIT` (step 11).
 
 | # | Step | alrust today | Notes for the probe |
 |---|---|---|---|
