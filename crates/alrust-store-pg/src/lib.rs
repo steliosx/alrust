@@ -528,6 +528,26 @@ impl Col {
 /// `dedup_alert` (`postgres/base.py:218-226`).
 /// Every `alerts` column of the reference layout but `history`, which a list
 /// without `show-history` would read and then discard.
+/// One alert whose `id` equals `$1` exactly, within the customers `$2`
+/// (`NULL` for no restriction). Served by the primary key `alerts_pkey`.
+/// Public so that tests can check the plan of this exact text.
+pub const ALERT_BY_EXACT_ID: &str =
+    "SELECT * FROM alerts WHERE id = $1 AND ($2::text[] IS NULL OR customer = ANY($2))";
+
+/// [`ALERT_BY_EXACT_ID`], locking the row.
+pub const ALERT_BY_EXACT_ID_FOR_UPDATE: &str =
+    "SELECT * FROM alerts WHERE id = $1 AND ($2::text[] IS NULL OR customer = ANY($2)) FOR UPDATE";
+
+/// The reference-compatible match: an `id` or `last_receive_id` that starts
+/// with `$1` (a `like_prefix` pattern), within the customers `$2`. A plain
+/// B-tree cannot serve it under a non-`C` collation, so it scans `alerts`.
+const ALERT_BY_PREFIX: &str = "SELECT * FROM alerts WHERE (id LIKE $1 OR last_receive_id LIKE $1)
+               AND ($2::text[] IS NULL OR customer = ANY($2)) LIMIT 1";
+
+const ALERT_BY_PREFIX_FOR_UPDATE: &str =
+    "SELECT * FROM alerts WHERE (id LIKE $1 OR last_receive_id LIKE $1)
+               AND ($2::text[] IS NULL OR customer = ANY($2)) LIMIT 1 FOR UPDATE";
+
 const ALERTS_WITHOUT_HISTORY: &str = "SELECT id, resource, event, environment, severity,
     correlate, status, service, \"group\", value, text, tags, attributes, origin, type,
     create_time, timeout, raw_data, customer, duplicate_count, repeat, previous_severity,
@@ -1020,24 +1040,35 @@ impl Store {
         }
     }
 
+    /// Locks the alert `id` names: the row whose `id` equals it exactly when
+    /// there is one (an index lookup), else the reference's prefix match on
+    /// `id` or `last_receive_id`. The reference returns any one matching row
+    /// (no `ORDER BY`), and an exact match is always one of them, so taking
+    /// it first stays within the reference's results.
     async fn lock_alert(
         tx: &mut Transaction<'_, Postgres>,
         id: &str,
         customers: Option<&[String]>,
     ) -> Result<Alert, StoreError> {
-        let row = sqlx::query(
-            "SELECT * FROM alerts WHERE (id LIKE $1 OR last_receive_id LIKE $1)
-               AND ($2::text[] IS NULL OR customer = ANY($2)) LIMIT 1 FOR UPDATE",
-        )
-        .bind(like_prefix(id))
-        .bind(customers)
-        .fetch_optional(&mut **tx)
-        .await?
-        .ok_or(StoreError::NotFound)?;
+        let exact = sqlx::query(ALERT_BY_EXACT_ID_FOR_UPDATE)
+            .bind(id)
+            .bind(customers)
+            .fetch_optional(&mut **tx)
+            .await?;
+        let row = match exact {
+            Some(row) => row,
+            None => sqlx::query(ALERT_BY_PREFIX_FOR_UPDATE)
+                .bind(like_prefix(id))
+                .bind(customers)
+                .fetch_optional(&mut **tx)
+                .await?
+                .ok_or(StoreError::NotFound)?,
+        };
         Ok(row_to_alert(&row)?)
     }
 
     /// Look an alert up by id or id prefix, or by `lastReceiveId` (spec C17).
+    /// An exact id is looked up first (see `lock_alert`).
     ///
     /// # Errors
     ///
@@ -1047,15 +1078,20 @@ impl Store {
         id: &str,
         customers: Option<&[String]>,
     ) -> Result<Alert, StoreError> {
-        let row = sqlx::query(
-            "SELECT * FROM alerts WHERE (id LIKE $1 OR last_receive_id LIKE $1)
-               AND ($2::text[] IS NULL OR customer = ANY($2)) LIMIT 1",
-        )
-        .bind(like_prefix(id))
-        .bind(customers)
-        .fetch_optional(&self.pool)
-        .await?
-        .ok_or(StoreError::NotFound)?;
+        let exact = sqlx::query(ALERT_BY_EXACT_ID)
+            .bind(id)
+            .bind(customers)
+            .fetch_optional(&self.pool)
+            .await?;
+        let row = match exact {
+            Some(row) => row,
+            None => sqlx::query(ALERT_BY_PREFIX)
+                .bind(like_prefix(id))
+                .bind(customers)
+                .fetch_optional(&self.pool)
+                .await?
+                .ok_or(StoreError::NotFound)?,
+        };
         Ok(row_to_alert(&row)?)
     }
 
@@ -1369,6 +1405,7 @@ impl Store {
     }
 
     /// `DELETE /alert/<id>`: one alert by id or id prefix, or by `lastReceiveId`.
+    /// An exact id is deleted first (see `lock_alert`).
     ///
     /// # Errors
     ///
@@ -1378,6 +1415,16 @@ impl Store {
         id: &str,
         customers: Option<&[String]>,
     ) -> Result<(), StoreError> {
+        let exact = sqlx::query(
+            "DELETE FROM alerts WHERE id = $1 AND ($2::text[] IS NULL OR customer = ANY($2))",
+        )
+        .bind(id)
+        .bind(customers)
+        .execute(&self.pool)
+        .await?;
+        if exact.rows_affected() > 0 {
+            return Ok(());
+        }
         let r = sqlx::query(
             "DELETE FROM alerts WHERE id IN (SELECT id FROM alerts WHERE (id LIKE $1 OR last_receive_id LIKE $1)
                AND ($2::text[] IS NULL OR customer = ANY($2)) LIMIT 1)",
