@@ -9,12 +9,19 @@ any code.
 
 ## What Alerta does today
 
-Alerta 9.1.0 has no outbound webhook in its core: notifications are
-plugins (`post_receive`, `status_change`, `take_action` hooks), each sending
-from the request thread, so a slow or failing receiver slows or fails the
-request path, and nothing is retried after a crash. alrust has no Python
-plugins (KICKOFF), so the forwarder is alrust's own, and it does not need to
-copy that delivery behaviour.
+Alerta 9.1.0's core ships one outbound sender, the `forwarder` plugin
+(`reference/alerta/alerta/plugins/forwarder.py`), for federating Alerta
+servers: in `post_receive` it sends the alert body (without history, with
+`id` set to `lastReceiveId`) to each `FWD_DESTINATIONS` entry whose action
+list includes `alerts`, from the request thread, through Alerta's API
+client. A failure is logged and skipped, with no retry, and a crash after
+commit loses the send. Loops are prevented with an `X-Alerta-Loop` header
+listing the servers already passed; an incoming alert that names this
+server is refused (`ForwardingLoop`). Other notifications (Slack, email and
+so on) are external plugins. alrust runs no Python plugins (KICKOFF), so
+its forwarder is its own and does not need to copy the synchronous,
+lose-on-failure delivery; it should keep the loop header if it is to
+federate with Alerta servers.
 
 ## Proposal
 
@@ -48,7 +55,11 @@ copy that delivery behaviour.
    `alrust`), not in `public`: ADR-0005 decision 2 excludes other schemas
    from the reference catalog check, so the reference layout and its
    adoption stay exact. Its own migrations, separate from `0002`.
-7. **Bounds.** A maximum outbox size and age; past them, new events are
+7. **Loops.** Each send carries `X-Alerta-Loop` (the reference's header,
+   so mixed alrust and Alerta federations interoperate); a destination
+   already named in an incoming alert's header is skipped, and an incoming
+   alert naming this server is refused, as the reference does.
+8. **Bounds.** A maximum outbox size and age; past them, new events are
    dropped and counted, never blocking alert writes. Metrics: queued,
    sent, retried, failed, dropped, per destination (the Phase 5 metrics
    endpoint).
@@ -61,6 +72,7 @@ copy that delivery behaviour.
 | OUT-2 | An alrust-owned schema for alrust's own tables (item 6) | Yes; it also gives the search side tables (search design option (a)) a home | Codex (ADR-0005), owner |
 | OUT-3 | Where routing rules and destination secrets come from: environment and files, or a table managed by an admin API | Files first (no new admin surface, secrets stay out of the database); an API later | Owner (key custody, as X1) |
 | OUT-4 | Which events send by default, and whether duplicates may | Item 1; duplicates off | Owner |
+| OUT-6 | Federation with Alerta servers (the reference `forwarder`: same body and loop header) in addition to generic webhooks | Yes, as one destination kind | Owner |
 | OUT-5 | Body format: alrust's API JSON, or a provider format (Slack, Teams, PagerDuty) | Generic JSON first; provider formats as later templates | Owner |
 
 ## Tests (when built)
