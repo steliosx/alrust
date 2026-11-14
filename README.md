@@ -151,8 +151,9 @@ the repository owner.
 
 ## Licensing
 
-- No licence has been chosen for alrust itself yet. That is the owner's
-  decision, and no licence is implied by this repository.
+- alrust is licensed under the [Apache License, Version 2.0](LICENSE)
+  (owner decision, DECISIONS Y58). See [NOTICE](NOTICE) for the parts
+  derived from Alerta and their attribution.
 - Third-party Rust dependencies keep their own licences; see
   [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md).
 - The upstream Alerta sources that alrust is checked against keep their own
