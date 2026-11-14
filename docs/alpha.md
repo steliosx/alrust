@@ -174,8 +174,11 @@ or a key-management procedure.
   segment, which a URI-normalizing client may remove; ids are not validated.
 - **Query parameters:** an unknown filter parameter is ignored; the reference answers 400
   "Invalid filter parameter". `~` (regex) values are not supported.
-- **Id lookup:** a prefix match on `id` or `lastReceiveId`; the reference
-  uses a case-insensitive unanchored regex.
+- **Id lookup:** a full id is looked up exactly first (an index lookup);
+  otherwise a case-sensitive prefix match on `id` or `lastReceiveId`. The
+  reference reads with a case-insensitive regex anchored at the start, with
+  the id not escaped, and updates by `id` or `id` prefix; it returns any one
+  matching row, and an exact match is always one of them.
 - **Not yet implemented:** blackouts, notes,
   customers, users, groups, permissions, auth logins (basic, LDAP, OIDC,
   SAML), webhooks, bulk routes, the top-N counts, auto-unshelve and auto-unack
