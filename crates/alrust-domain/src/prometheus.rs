@@ -948,7 +948,7 @@ mod tests {
     /// becomes a tag with Python's `str()` of the value.
     #[test]
     fn list_and_object_labels_vector_19b() {
-        for (label, tag) in [(r#"[1]"#, "x=[1]"), (r#"{"k": "v"}"#, "x={'k': 'v'}")] {
+        for (label, tag) in [("[1]", "x=[1]"), (r#"{"k": "v"}"#, "x={'k': 'v'}")] {
             let m = one(&format!(
                 r#"{{"alerts": [{}]}}"#,
                 item("x", &format!(r#", "x": {label}"#), r#", "note": "{x}""#)
