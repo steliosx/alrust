@@ -66,8 +66,8 @@ deliberate difference needs a DECISIONS entry, as for Y33 and Y34):
   name is a database error, probably 500, not 400.
 - `%` and `_` inside a term are not escaped, so they act as `LIKE`
   wildcards.
-- A caller-supplied regex runs in PostgreSQL. #220's request deadline and the
-  optional statement limit bound its cost.
+- A caller-supplied regex runs in PostgreSQL. The request deadline and the
+  optional statement limit of draft #220 (not merged) would bound its cost.
 
 **Implementation sketch.** A hand-written recursive-descent parser in
 `alrust-api` (no new crate: a new dependency changes the manifests and the
@@ -104,7 +104,8 @@ and the catalog check updated by a reviewed change, never by regenerating the
 committed file to hide a difference.
 
 **Write cost.** Alerts are updated on every duplicate, and the duplicate
-update rewrites `text`. A GIN index on `text` makes each such update maintain
+update sets `text` (the reference's `dedup_alert`,
+`reference/alerta/alerta/database/backends/postgres/base.py:218-224`). A GIN index on `text` makes each such update maintain
 the index and prevents heap-only-tuple updates when `text` changes. The
 measurement must include receive-path latency and WAL with and without the
 index, not only search latency.
