@@ -630,7 +630,7 @@ async fn receive(
 
 /// What the receive path did with one incoming alert.
 enum Received {
-    Alert(Alert),
+    Alert(Box<Alert>),
     /// A heartbeat event became this heartbeat (spec HB3.1).
     Heartbeat(String),
 }
@@ -699,7 +699,7 @@ async fn process_alert(st: &AppState, caller: &Caller, mut n: NewAlert) -> ApiRe
     }
 
     let (alert, _kind) = st.store.receive_with(n, &caller.facts(st)).await?;
-    Ok(Received::Alert(alert))
+    Ok(Received::Alert(Box::new(alert)))
 }
 
 /// The reference's `DEFAULT_ENVIRONMENT` (`settings.py:298`), used by the
@@ -803,7 +803,7 @@ async fn webhook(
                 code: StatusCode::CREATED,
                 message: None,
                 response: json!({"status": "ok", "id": a.id, "alert": alert_json(&st, &a)}),
-                alert: Some(a),
+                alert: Some(*a),
             },
             Ok(Received::Heartbeat(id)) => ItemOutcome {
                 index,
