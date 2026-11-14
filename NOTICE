@@ -1,0 +1,29 @@
+alrust
+Copyright 2026 the alrust authors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product includes software derived from Alerta
+(https://github.com/alerta/alerta, release v9.1.0, commit
+f4312727783dad64198b62ed778bbca98a5144a3), which carries this notice:
+
+   Alerta monitoring system and console
+   Copyright 2012-2019 Nick Satterly
+
+   Licensed under the Apache License, Version 2.0.
+
+Parts of alrust derived from Alerta, changed for Rust and PostgreSQL:
+- the alert lifecycle state machine (crates/alrust-engine), ported from
+  alerta/models/alarms/alerta.py;
+- the reference PostgreSQL schema embedded in
+  crates/alrust-store-pg/migrations/0002_reference_layout.sql and
+  crates/alrust-store-pg/reference-catalog.json, from
+  alerta/database/backends/postgres/schema.sql;
+- the API behaviour, query handling and webhook mappings specified in spec/
+  and implemented in crates/, from the Alerta server sources.
+
+The Alerta sources are kept unchanged, for reference only, under
+reference/alerta and reference/alerta-webui (both Apache-2.0).
+
+Third-party Rust crates keep their own licences; their texts and notices are
+under third_party/rust.
