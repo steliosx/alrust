@@ -47,6 +47,26 @@ assumed. Any failure is explained, never hidden by regenerating a file.
 | Acknowledgement hooks, receive, actions | `ack_hooks.rs`, unit tests, alpha smoke | Planner fixes must not change results |
 | Compose smoke | skipped on draft PRs | The new image is **not** exercised until a non-draft run |
 
+**Result at head `677d2880`, hosted run `43553977417` (2026-11-14):** the
+installed packages were `postgresql-18` and `postgresql-client-18`
+`18.7-1.pgdg24.04+2` in both the test job and the alpha smoke job. Passed
+on 18.7: `reference_schema_matches_the_committed_catalog`,
+`fresh_database_gets_the_reference_layout_and_repeat_start_is_a_no_op`,
+`alpha_upgrade_converts_every_field_as_declared`,
+`alpha_upgrade_refusals_change_nothing`,
+`copy_verification_detects_any_changed_field`, the five `adoption_*` tests,
+`owned_sequences_are_refused_and_unowned_ones_survive`,
+`unrecognised_states_are_refused_without_writing`,
+`non_string_values_become_jsonb_text_the_same_way_everywhere`,
+`times_round_trip_exactly_whatever_the_session_time_zone`,
+`alter_type_history_does_not_wait_for_the_alerts_lock` (the characterisation
+measured on 18.6 still holds), the hook tests, and the alpha smoke. No test
+failed; two catalog generators stay ignored, as on main. The catalog
+generation job ran and uploaded its output; the committed catalog file was
+not changed. The Compose smoke was skipped (draft), so the 18.7 image is
+still not exercised. This is compatibility evidence only, not a speed
+result.
+
 Release-note items checked against alrust (from the
 [18.7 notes](https://www.postgresql.org/docs/release/18.7/)):
 
