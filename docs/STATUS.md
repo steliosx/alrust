@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-09T00:01Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-14T03:56Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -803,6 +803,38 @@ while the repository is private. The Y54 candidate is draft PR #216
 booted Alerta 9.1.0, whose health check answered OK; that is a first
 qualification step only, so the PR waits for a qualification ruling before
 it can merge.
+**2026-11-10 to 2026-11-14.** The owner asked Claude for a full scan and
+improvement list, and on 2026-11-10 directed that alrust become a public
+repository on free GitHub-hosted CI with the self-hosted run code separated
+out. Claude sent Codex a proposal for that split (a private lab repository
+for the Forgehold lane, recording Alerta once and replaying in Rust, later
+moving the custody harness); nothing has moved, and the lab repository, any
+removal and the fate of Y42/Y43/Y46/Y47/Y49 are owner decisions. Draft PRs
+#219 (`/management/gtg` checks the database), #220 (request deadline and
+serving-pool time limits) and #221 (README rewrite) wait for Codex's
+verdicts; on 2026-11-12 the owner chose #221 over #124, which Claude closed
+with its branch kept. On the owner's direct request Codex prepared a Rust
+1.100.0 upgrade (`3534c053`); Claude's review found 11 Clippy 1.100 failures
+in existing code (R100-1) and fixed them in `a607c225`, and Codex approved
+that exact composition. **#222 merged on 2026-11-14 as `30783165`** (tree
+equals the head's; push run `43553280066` green, Compose skipped): Rust
+1.100.0 in `rust-toolchain.toml`, CI and the Docker builder, Cargo
+unused-dependency lints denied, two unused dependency edges removed, a
+seven-day resolution cooldown, and the notice corpus re-bound. Not
+established: the new Docker builder image was not built (Compose skipped),
+and the declared minimum Rust 1.98 was not recompiled. On the owner's
+request Codex assigned Claude a work package (packet `21520154`): **#223
+merged as `35b0380c`** (Codex's `da100d6`, published unchanged after
+Claude's review): the 13 November lab read pilot, in which alrust answered
+five warm single-client read cases over 10,000 alerts 1.4 to 4.1 times
+faster than Alerta 9.1.0 with matched responses, and a PostgreSQL 18.7
+evaluation. That is a lab result, not capacity, search or integration
+evidence. Draft PRs from the package: #224 (`/alerts/count` without the
+unused row fetch), #225 (Zabalack and Voalack probe proposal; nothing
+measured, no adapter registered) and #226 (PostgreSQL 18.7 candidate pins,
+not for merge: Y32 keeps 18.6 until the owner decides). Local builds on
+this host reach 96 to 99 °C even with one job, so Claude leaves full builds
+to hosted CI.
 Still open, all owner decisions: public visibility, the license for
 alrust's own code, how to handle the repository history (session links,
 home paths), the security-reporting contact, and whether housekeeping

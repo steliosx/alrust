@@ -88,7 +88,7 @@
 | alerta-webui (`reference/alerta-webui`) | v8.7.1 | `2687e4afa93b41c4fa1d46201bba9ea38be0d491` | 2024-04-11 | 2026-09-29 |
 | Zabbix | ≥ 7.0.25 (7.0 LTS) | — | — | 2026-09-29 |
 | Veeam ONE | _not yet consulted_ (Phase 4) | — | — | — |
-| Rust toolchain | 1.98.1 | — | 2026-09-01 | 2026-09-29 |
+| Rust toolchain | 1.100.0 (declared minimum 1.98, not requalified) | — | — | 2026-11-14 (PR #222, owner request in Codex's session; was 1.98.1 from 2026-09-29) |
 
 ## Dropped API surface
 
