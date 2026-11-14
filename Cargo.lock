@@ -55,7 +55,6 @@ version = "0.1.0"
 dependencies = [
  "alrust-domain",
  "chrono",
- "serde_json",
 ]
 
 [[package]]
@@ -83,7 +82,6 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]

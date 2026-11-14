@@ -619,7 +619,10 @@ async fn a_pre_receive_refusal_stores_nothing() {
         .unwrap_err();
     assert!(matches!(&e, StoreError::Hook(h) if h.status == 409), "{e}");
     assert_eq!(calls(&log), ["A:pre_receive"]);
-    assert!(stored_attributes(&db.pool).await.is_empty());
+    assert_eq!(
+        stored_attributes(&db.pool).await,
+        Vec::<serde_json::Value>::new()
+    );
 }
 
 // Nothing strips unconditionally: with no integration registered, reserved

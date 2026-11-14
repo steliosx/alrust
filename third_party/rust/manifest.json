@@ -1,7 +1,7 @@
 {
   "cargo_lock": {
-    "bytes": 54730,
-    "sha256": "dd17cc6ae00eecebc86e767329ab6382006823dc70f8b26ba21f540e881b8452"
+    "bytes": 54706,
+    "sha256": "38195e0448779c14a050fe460805ce2ac32ec7fac7a0cb84a19ffb2a0a8cce4c"
   },
   "license_policy": "Declared expressions retained literally, including AND and legacy slash forms. All selected candidate texts are retained; no OR branch or original-code license is selected.",
   "packages": [
@@ -24657,8 +24657,8 @@
     "package": "alrust-server",
     "scope": "Conservative legal-text retention for selected package archives, including inactive-feature source notices. Not a binary SBOM or complete distribution/legal clearance.",
     "static_graph_evidence": {
-      "bytes": 456062,
-      "sha256": "5ab3210bd5fabb627066b48e060cb8d071db74e043ca2ab8df690e416ab61ed9"
+      "bytes": 45063,
+      "sha256": "caf56c2e652fff4fe06a72b61ffef7ab5bb70cbbef4d9554b5b2510d6e869fd7"
     },
     "target": "x86_64-unknown-linux-gnu",
     "target_packages": 138,
@@ -24666,19 +24666,19 @@
   },
   "source_inputs": [
     {
-      "bytes": 54730,
+      "bytes": 54706,
       "path": "Cargo.lock",
-      "sha256": "dd17cc6ae00eecebc86e767329ab6382006823dc70f8b26ba21f540e881b8452"
+      "sha256": "38195e0448779c14a050fe460805ce2ac32ec7fac7a0cb84a19ffb2a0a8cce4c"
     },
     {
-      "bytes": 3534,
+      "bytes": 3785,
       "path": "Cargo.toml",
-      "sha256": "515a4d85bef7af5596f2c569558b3c42f1fbffa0c8f32c419d9c92d7b9221c45"
+      "sha256": "00934034895f22e84dff1056b9085a54f4b0682f0c1a9556fb2b7bef64c7e043"
     },
     {
-      "bytes": 86,
+      "bytes": 87,
       "path": "rust-toolchain.toml",
-      "sha256": "7553618f800829444096beea3dce84c3d07585efda504c19adb6787369bbd9e8"
+      "sha256": "2005a6440b4cf56de43085410f26315d73dece6d34a6d32920669f65f33062c4"
     },
     {
       "bytes": 778,
@@ -24691,9 +24691,9 @@
       "sha256": "e771388036a3d3239380c849ad7a12178f16ceff520eb1e37663b1d1086723cc"
     },
     {
-      "bytes": 427,
+      "bytes": 393,
       "path": "crates/alrust-engine/Cargo.toml",
-      "sha256": "4994341341b970776dc976f512bc87ace1deec695c2de9ed694fc55d7b271f0c"
+      "sha256": "803dbed91aae66783735489d462ae02e4f0f4e9d83809b072c99f67bc7738779"
     },
     {
       "bytes": 294,
@@ -24701,15 +24701,20 @@
       "sha256": "23a660d9b2e8ec6c5260448c01af603915ee6176e8f4cf2ffdc9ac95c51cf47a"
     },
     {
-      "bytes": 975,
+      "bytes": 947,
       "path": "crates/alrust-server/Cargo.toml",
-      "sha256": "76330fee54ea9bfad24bdcb95850139e36381ffa10e3d54fca46c0c486fea5f9"
+      "sha256": "defff51f618b1386494c96419c79b670b58b3f0f66b1231574290215aee0c72c"
     },
     {
       "bytes": 551,
       "path": "crates/alrust-store-pg/Cargo.toml",
       "sha256": "2bb55c053d34584c9092fd20ec4d988b4ce389b767a8916b6f5b71596414bae9"
+    },
+    {
+      "bytes": 119,
+      "path": ".cargo/config.toml",
+      "sha256": "795d1a3c779bea031369cbb2ec7cb44a234216a0c4ed5a22de8da46197b997c3"
     }
   ],
-  "source_parent": "7deab6137666d5e7c595ad4afc5be0252eb299ba"
+  "source_parent": "8a30c19fd6663c42d7fdebc9adb86de276bda7d8"
 }

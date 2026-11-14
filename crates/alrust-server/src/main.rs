@@ -177,9 +177,8 @@ async fn run() -> anyhow::Result<()> {
             anyhow::bail!("{name} must be between 0 and {MAX_TIMEOUT}, not {v}");
         }
     }
-    let hostname = std::fs::read_to_string("/etc/hostname")
-        .map(|h| h.trim().to_string())
-        .unwrap_or_default();
+    let hostname =
+        std::fs::read_to_string("/etc/hostname").map_or_default(|h| h.trim().to_string());
     let api_cfg = ApiConfig {
         base_url: env_or("ALRUST_BASE_URL", "http://localhost:8080")
             .trim_end_matches('/')
