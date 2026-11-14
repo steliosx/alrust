@@ -37,20 +37,37 @@ federate with Alerta servers.
    HMAC-SHA256 signature header over the exact body bytes with a key read
    from a file (`hmac` and `sha2` are already dependencies), a timeout, and
    a retry limit.
-4. **Body.** The alert's normal API JSON (the same serialiser as
-   `GET /alert/{id}`, so the restricted attribute is already absent, spec
-   4.2), plus `{"event": "<kind>", "previous": {severity, status}}`. No
-   `history` text by default: it can carry signed acknowledgement markers.
+4. **Body.** An envelope, so nothing collides with the alert's own
+   `event` field:
+   `{"kind": "alrust.alert.<new|severity|status|deleted>", "deliveryId":
+   "<uuid>", "sentAt": "<time>", "previous": {"severity", "status"},
+   "alert": <the alert's normal API JSON>}`. The alert JSON is the
+   `GET /alert/{id}` serialiser, so the restricted attribute is already
+   absent (spec 4.2). No `history` by default: it can carry signed
+   acknowledgement markers. **Federation** destinations (item 7) do not
+   use the envelope: they send the reference forwarder's body (the alert
+   body without history, `id` set to `lastReceiveId`) to the remote
+   `POST /alert`, as `forwarder.py` does.
 5. **Delivery: a durable outbox, written in the same transaction as the
    alert change.** A row per (event, destination) is inserted in the
-   alert's own transaction; a worker task in the server process claims
-   rows with `FOR UPDATE SKIP LOCKED`, sends outside any transaction,
-   and marks each row sent, retried with backoff, or failed after the retry
-   limit. A crash between commit and send leaves the row to send later; a
-   crash after send and before marking sends it again, so delivery is
-   **at least once**, with a stable delivery id header for receivers to
-   de-duplicate. No network call ever runs inside an alert transaction
-   (the same rule as the integration hooks, spec section 3).
+   alert's own transaction. No network call ever runs inside a database
+   transaction (the same rule as the integration hooks, spec section 3).
+   Each row moves through a fenced lease:
+   - **Claim** (one short transaction): pick due rows with
+     `FOR UPDATE SKIP LOCKED`, set `state = sending`, `lease_owner = <worker
+     id>`, `lease_token = <new uuid>`, `lease_until = now() + <lease>`,
+     increment `attempts`, commit. The row lock ends at commit; the lease
+     is what keeps other workers away.
+   - **Send** outside any transaction, with a timeout shorter than the
+     lease.
+   - **Complete** (one short transaction): `UPDATE … SET state = sent | retry
+     | failed … WHERE id = $1 AND lease_token = $2`. Zero rows updated means
+     the lease expired and another worker re-claimed the row: this worker's
+     result is discarded (the fence), never written over the newer claim.
+   - **Recover:** a row in `sending` whose `lease_until` has passed is due
+     again. So a crash after send and before completion sends again:
+     delivery is at least once, and `deliveryId` lets receivers drop
+     repeats.
 6. **Where the outbox lives.** In an alrust-owned schema (for example
    `alrust`), not in `public`: ADR-0005 decision 2 excludes other schemas
    from the reference catalog check, so the reference layout and its
@@ -59,10 +76,17 @@ federate with Alerta servers.
    so mixed alrust and Alerta federations interoperate); a destination
    already named in an incoming alert's header is skipped, and an incoming
    alert naming this server is refused, as the reference does.
-8. **Bounds.** A maximum outbox size and age; past them, new events are
-   dropped and counted, never blocking alert writes. Metrics: queued,
-   sent, retried, failed, dropped, per destination (the Phase 5 metrics
-   endpoint).
+8. **Bounds are policy choices, and each one limits "at least once".**
+   - **Retry exhaustion:** after the retry limit a row becomes `failed`
+     and is not sent again unless an operator re-queues it. That event is
+     then delivered zero times.
+   - **Capacity and age:** either refuse new events when the outbox is
+     full or too old (the alert write still succeeds; the event is lost and
+     counted), or let the outbox grow without limit (no loss, unbounded
+     storage). Blocking alert writes is never an option.
+   Which to use, and the limits, is decision OUT-7. Metrics: queued,
+   sending, sent, retried, failed, dropped, per destination (the Phase 5
+   metrics endpoint), so every loss is visible.
 
 ## Decisions needed
 
@@ -73,6 +97,7 @@ federate with Alerta servers.
 | OUT-3 | Where routing rules and destination secrets come from: environment and files, or a table managed by an admin API | Files first (no new admin surface, secrets stay out of the database); an API later | Owner (key custody, as X1) |
 | OUT-4 | Which events send by default, and whether duplicates may | Item 1; duplicates off | Owner |
 | OUT-6 | Federation with Alerta servers (the reference `forwarder`: same body and loop header) in addition to generic webhooks | Yes, as one destination kind | Owner |
+| OUT-7 | Retry limit, and on capacity or age: drop new events (counted) or grow without limit | A retry limit with a dead-letter state; grow without limit with an alarm at a size, until there is data | Owner |
 | OUT-5 | Body format: alrust's API JSON, or a provider format (Slack, Teams, PagerDuty) | Generic JSON first; provider formats as later templates | Owner |
 
 ## Tests (when built)

@@ -42,14 +42,15 @@ The documented action templates (lines 103-157) send `resource`,
 
 ## What this means for alrust
 
-- **If production uses this script, alrust already receives it:** the
-  script's output is a normal `POST /alert`, which alrust serves today. No
-  new receiver is needed for that path; the alpha smoke and conformance
-  tests of `POST /alert` cover it. What remains is to check the exact JSON
-  the Python client builds from these keyword arguments (for example
-  whether `dateTime` and `rawData` reach the body under those names): that
-  depends on the `alerta` client version on the Zabbix host, which is not
-  pinned.
+- **If production uses this script, it talks to alrust through
+  `POST /alert`,** which alrust serves today, so no new receiver is needed
+  for that path. That is not proof that the production path works: the
+  body the script sends is built by the Python Alerta client on the Zabbix
+  host, whose version is not pinned, from keyword arguments such as
+  `dateTime` and `rawData` whose handling depends on that version. alrust's
+  own `POST /alert` tests do not cover that client. Proof needs the pinned
+  client (or captured production requests, the PIN input) replayed against
+  alrust.
 - **A native receiver** (Zabbix 7.0 webhook media type posting to alrust
   directly, without the Python client on the Zabbix host) would accept the
   same `key=value` message, or JSON built from the same macros, and apply
