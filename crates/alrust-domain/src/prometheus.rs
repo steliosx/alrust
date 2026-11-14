@@ -24,12 +24,17 @@
 //! a number, boolean or null as Python's `str()`), and every other group is
 //! copied as written. Output over 65,536 UTF-8 bytes keeps the original.
 //!
-//! Not reproduced (the item becomes invalid instead): a label used as an
-//! alert field (resource, event, severity, environment, customer, group,
-//! text) whose value is not a string or an integer, and a non-string
-//! `correlate`, `service` or `monitor` label (an exception in the reference
-//! too). A leftover label becomes the tag `k=v` with Python's `str()` of the
-//! value, also for a list or an object (`x=[1]`, `x={'k': 'v'}`).
+//! A null label takes the value the reference's `Alert()` constructor
+//! stores: `customer` absent, `environment` `''` (then refused by the reject
+//! policy), `job` (as the group) `Misc`, `severity` the normal severity when a
+//! description or summary gives the text. Where the reference raises
+//! (`resource` or `event` null, `None.upper()` for the default text, a
+//! non-string `correlate`, `service` or `monitor`, `int(None)` for
+//! `timeout`), the item is invalid. A label used as an alert field whose
+//! value is a boolean, a float, a list or an object also makes the item
+//! invalid; the PR's audit table gives the reference outcome per case. A
+//! leftover label becomes the tag `k=v` with Python's `str()` of the value,
+//! also for a list or an object (`x=[1]`, `x={'k': 'v'}`).
 
 use std::fmt::Write as _;
 
@@ -519,14 +524,17 @@ fn map_item(
         labels.set("alertname", name);
     }
 
-    let severity = match status.as_str() {
-        "firing" => field(
-            &labels
-                .pop("severity")
-                .unwrap_or(PyVal::Str("warning".into())),
-        )?,
-        "resolved" => crate::NORMAL_SEVERITY.to_owned(),
-        _ => "unknown".to_owned(),
+    // `None` is Python's None: a `severity: null` label. The constructor
+    // stores the normal severity for it; only the default text's
+    // `severity.upper()` fails on it (below).
+    let severity: Option<String> = match status.as_str() {
+        "firing" => match labels.pop("severity") {
+            Some(PyVal::Null) => None,
+            Some(v) => Some(field(&v)?),
+            None => Some("warning".to_owned()),
+        },
+        "resolved" => Some(crate::NORMAL_SEVERITY.to_owned()),
+        _ => Some("unknown".to_owned()),
     };
     let resource =
         field(&labels.pop_or("exported_instance", "instance", PyVal::Str("n/a".into())))?;
@@ -534,13 +542,17 @@ fn map_item(
         Some(e) => field(&e)?,
         None => field(&labels.pop("alertname")?)?,
     };
+    // `environment: null`: the constructor stores '' (`or ''`), which the
+    // reject policy then refuses, as for any environment not allowed.
     let environment = match labels.pop("environment") {
+        Some(PyVal::Null) => String::new(),
         Some(e) => field(&e)?,
         None => default_environment.to_owned(),
     };
+    // `customer: null` is the ordinary no-customer state (Codex 7dda6a95).
     let customer = match labels.pop("customer") {
+        Some(PyVal::Null) | None => None,
         Some(c) => Some(field(&c)?),
-        None => None,
     };
     let correlate: Option<Vec<String>> = match labels.pop("correlate") {
         Some(PyVal::Str(c)) => Some(c.split(',').map(str::to_owned).collect()),
@@ -552,7 +564,12 @@ fn map_item(
         Some(_) => return None,
         None => vec![String::new()],
     };
-    let group = field(&labels.pop_or("group", "job", PyVal::Str("Prometheus".into())))?;
+    // A falsy `group` falls to `job`; `job: null` makes the constructor
+    // store 'Misc'.
+    let group = match labels.pop_or("group", "job", PyVal::Str("Prometheus".into())) {
+        PyVal::Null => "Misc".to_owned(),
+        g => field(&g)?,
+    };
     let monitor = match labels.pop("monitor") {
         Some(PyVal::Str(m)) => m,
         Some(_) => return None,
@@ -579,7 +596,11 @@ fn map_item(
     ) {
         (Some(d), _) => field(&d)?,
         (None, Some(s)) => field(&s)?,
-        (None, None) => format!("{}: {resource} is {event}", severity.to_uppercase()),
+        // `None.upper()` raises: the item fails.
+        (None, None) => format!(
+            "{}: {resource} is {event}",
+            severity.as_deref()?.to_uppercase()
+        ),
     };
 
     let mut attributes = Map::new();
@@ -606,7 +627,10 @@ fn map_item(
     if let Some(c) = customer {
         out.insert("customer".into(), Value::String(c));
     }
-    out.insert("severity".into(), Value::String(severity));
+    out.insert(
+        "severity".into(),
+        Value::String(severity.unwrap_or_else(|| crate::NORMAL_SEVERITY.to_owned())),
+    );
     if let Some(c) = correlate {
         out.insert("correlate".into(), Value::from(c));
     }
@@ -880,6 +904,36 @@ mod tests {
         );
         let u = "ü".repeat(30_000);
         assert_eq!(note(&format!(r#", "u": "{u}""#), r#""{u}{u}""#), "{u}{u}");
+    }
+
+    /// Null labels hold what the reference's `Alert()` constructor stores
+    /// (Codex 7dda6a95: `customer: null` is the no-customer state).
+    #[test]
+    fn null_labels_take_the_constructor_values() {
+        let m = one(&format!(
+            r#"{{"alerts": [{}]}}"#,
+            item(
+                "n",
+                r#", "customer": null, "environment": null, "job": null"#,
+                ""
+            )
+        ));
+        assert!(m.get("customer").is_none());
+        assert_eq!(m["environment"], "");
+        assert_eq!(m["group"], "Misc");
+        // severity null with a summary: stored as the normal severity.
+        let m = one(&format!(
+            r#"{{"alerts": [{}]}}"#,
+            item("n", "", "").replace(r#""severity": "major""#, r#""severity": null"#)
+        ));
+        assert_eq!(m["severity"], "normal");
+        assert_eq!(m["text"], "S-n");
+        // Without a description or summary, None.upper() raises.
+        let body = r#"{"alerts": [{"labels": {"alertname": "A", "severity": null}, "annotations": {}, "startsAt": "s", "endsAt": "e"}]}"#;
+        assert_eq!(items(body), vec![Item::Invalid]);
+        // instance null: resource None, a constructor ValueError.
+        let body = r#"{"alerts": [{"labels": {"alertname": "A", "instance": null}, "annotations": {}, "startsAt": "s", "endsAt": "e"}]}"#;
+        assert_eq!(items(body), vec![Item::Invalid]);
     }
 
     /// Vector 19b through `parse`: a list or object label keeps an
