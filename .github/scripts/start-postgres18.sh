@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start a throwaway PostgreSQL 18.6 cluster on a GitHub-hosted ubuntu-24.04
+# Start a throwaway PostgreSQL 18.7 cluster on a GitHub-hosted ubuntu-24.04
 # runner, from the official PostgreSQL apt repository (no container
 # registry, so no Docker Hub or ECR pull limits).
 #
@@ -18,7 +18,7 @@ db=${1:?database name}
 user=${2:-postgres}
 password=${3:-postgres}
 port=${4:-5432}
-version=18.6-1.pgdg24.04+2
+version=18.7-1.pgdg24.04+2
 : "${RUNNER_TEMP:?RUNNER_TEMP is required}"
 
 if ss -ltnH "sport = :$port" | grep -q .; then
