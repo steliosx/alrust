@@ -170,17 +170,9 @@ impl PyVal {
             PyVal::Null => out.push_str("null"),
             PyVal::Bool(true) => out.push_str("true"),
             PyVal::Bool(false) => out.push_str("false"),
-            PyVal::Num(n) => match n.as_f64() {
-                Some(f)
-                    if !n.is_i64()
-                        && !n.is_u64()
-                        && f.fract().abs() < f64::EPSILON
-                        && f.abs() < 1e16 =>
-                {
-                    let _ = write!(out, "{f:.1}");
-                }
-                _ => out.push_str(&n.to_string()),
-            },
+            // json.dumps writes a float as float.__repr__ (1e+16, 1e-05,
+            // 100.0 for 1e2) and an int as its digits.
+            PyVal::Num(n) => out.push_str(&py_number(n)),
             PyVal::Str(s) => dumps_str(s, out),
             PyVal::List(l) => {
                 out.push('[');
@@ -1028,6 +1020,13 @@ mod tests {
         let mut s = String::new();
         v.dumps(&mut s);
         assert_eq!(s, r#"["\u00e9\n\"x\"\u0001", "\ud83d\ude00", 1.0, 2.5]"#);
+        // Expected text from the pinned CPython 3.12.14:
+        // json.dumps(json.loads('[1e16, 1e-5, 1e2, 0.1, 123.0, -0.0, 1.5e300, 7]')).
+        let v: PyVal =
+            serde_json::from_str("[1e16, 1e-5, 1e2, 0.1, 123.0, -0.0, 1.5e300, 7]").unwrap();
+        let mut s = String::new();
+        v.dumps(&mut s);
+        assert_eq!(s, "[1e+16, 1e-05, 100.0, 0.1, 123.0, -0.0, 1.5e+300, 7]");
         let v: PyVal = serde_json::from_str(r#""a\u007fb""#).unwrap();
         let mut s = String::new();
         v.dumps(&mut s);
