@@ -102,6 +102,15 @@ federate with Alerta servers.
 
 ## Tests (when built)
 
+Lease and completion cases, before any implementation counts as done: two
+workers claiming at once get different rows; a row under an unexpired lease
+is not claimed again; a row whose lease expired is claimed again by another
+worker; a late completion from the first worker (stale token) changes
+nothing; retry exhaustion marks the row failed, and the event's delivery
+state is **unknown**, not "never delivered" (an attempt may have reached
+the receiver before its answer was lost). Duplicates remain possible in
+every path and are de-duplicated only by `deliveryId`.
+
 Unit: rule matching (customer isolation first), body shape, signature
 bytes against fixed vectors. Database: the outbox row commits and rolls
 back with the alert change; `SKIP LOCKED` hands one row to one worker; a
