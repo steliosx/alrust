@@ -1,3 +1,6 @@
+# SECURITY-REFRESH CANDIDATE: not runtime-qualified or an unchanged resolution
+# of the pinned reference requirements.txt. See conformance/reference-environment.md.
+# The original resolution provenance below is retained; listed security pins override it.
 # Build tools for the pinned reference server environment (reference-smoke.sh, stage 1):
 # setuptools and wheel build the psycopg2 sdist and the reference package itself.
 # Derived 2026-10-01 by claude-alrust with pip 25.0.1 on CPython 3.12.14, Linux x86_64:
@@ -7,7 +10,7 @@
 # glibc x86_64 >= 2.34; another interpreter or platform must fail the hash check, not resolve.
 packaging==26.3 --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
     # packaging-26.3-py3-none-any.whl
-setuptools==84.0.0 --hash=sha256:51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670
-    # setuptools-84.0.0-py3-none-any.whl
+setuptools==84.1.0 --hash=sha256:5231689c6ac8156cd155cfb98c3fd6fb252c3e7e9bd3d78b64d3c55f132624c9
+    # setuptools-84.1.0-py3-none-any.whl
 wheel==0.48.0 --hash=sha256:3217dcc807155e45db462d7ef2431f5ddda0d7273b700d05a67b271ceb1287ab
     # wheel-0.48.0-py3-none-any.whl
