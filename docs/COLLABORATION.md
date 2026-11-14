@@ -1,4 +1,4 @@
-# Collaboration: claude-alrust ↔ codex-alrust
+# Collaboration: claude-alrust, codex-alrust and grok-alrust
 
 The binding rules are the owner-authorized charter, with the owner's later
 direct amendments. They live outside this repo in each agent's mailbox
@@ -19,6 +19,23 @@ owner instructions, then check the mailbox.
 - **codex-alrust** coordinates, independently reviews Claude's changes, and
   owns the conformance suite and its controls (including ADR-0002) and her
   review-lane records.
+- **grok-alrust** (since 2026-11-09, DECISIONS Y56) is the primary
+  implementation worker for tasks assigned to it. It works only in
+  `/home/user/Work/grokspace/alrust` on `grok/<topic>` branches, may push them
+  and open draft PRs, and does not merge (except under Y57), force-push, or edit
+  `docs/STATUS.md`, `docs/DECISIONS.md`, the conformance suite or ADR-0002.
+  Codex reviews Grok's work independently. One writer per task: work moves to
+  Grok only by assignment, after the current writer's work is reconciled.
+  Two owner exceptions apply to grok-alrust only (DECISIONS Y57): an hourly
+  daytime timer that starts a turn only on a newly accepted signed message,
+  and merging its own assigned-task PR with codex-alrust's signed exact-head
+  AGREE and green required checks. claude-alrust and codex-alrust stay
+  manual-only.
+- **claude-chief** (key ID `BF8FE90A38A09C43`) is the owner's coordinator for
+  Grok and Codex across Alrust, Zabalack, Voalack and Forgehold. Its
+  authenticated, signed instructions carry the owner's delegated authority;
+  current direct owner directions take precedence. It does not take over
+  claude-alrust's authorship or records here.
 - Each author submits exact source and evidence for the other's review.
   Requested corrections to a document the other agent owns are sent as exact,
   reviewable proposals, never as edits to the other agent's workspace.
@@ -37,6 +54,20 @@ bootstrapped.
 |---|---|---|---|
 | codex-alrust | `/home/user/codex-alrust/repo` | `/home/user/codex-alrust-mailbox` | `21A3D921B09AC096` |
 | claude-alrust | `/home/user/claude-alrust` | `/home/user/claude-alrust-mailbox` | `BEE3EBB0B44C1B46` |
+
+grok-alrust (key ID `078F6A8CB3F929E3`, public file SHA-256 `8c74e2a1…`)
+has two separate pairwise channels, so the Claude-Codex pins above never
+change: `/home/user/grok-alrust-mailbox` with
+`/home/user/claude-alrust-mailbox-grok`, and
+`/home/user/grok-alrust-mailbox-codex` with
+`/home/user/codex-alrust-mailbox-grok`. The Claude and Codex roots sign with
+those agents' existing keys in place; no private key moves. Each agent drops
+only into a peer's inbox and runs mailbox commands only in a root whose `me`
+is itself; no Grok-to-Grok messaging and no typing into another agent's
+terminal. Grok sends signed task-start, blocker and PR-ready notes to both
+peers, naming the task, full commit SHA, branch, PR, tests actually run and
+not run, and evidence paths. The seat takes effect for these channels once
+both peers record the same rules snapshot (DECISIONS Y56).
 
 The accepted rules have SHA-256
 `abad4f687dace3fb12782a0bb23e7befa337c191e0e91c5af951b11dc84d55a3`, with one
