@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-14T03:56Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-14T14:02Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -821,8 +821,12 @@ equals the head's; push run `43553280066` green, Compose skipped): Rust
 1.100.0 in `rust-toolchain.toml`, CI and the Docker builder, Cargo
 unused-dependency lints denied, two unused dependency edges removed, a
 seven-day resolution cooldown, and the notice corpus re-bound. Not
-established: the new Docker builder image was not built (Compose skipped),
-and the declared minimum Rust 1.98 was not recompiled. On the owner's
+established at that merge: the new Docker builder image was not built
+(Compose skipped), and the declared minimum Rust 1.98 was not recompiled.
+The builder image was first built on 2026-11-14, after the repository
+became public: PR run `43597949533` (#234) and push run `43602055257` on
+`main` `79fca79c`, Compose smoke green in both. MSRV 1.98 is still not
+recompiled. On the owner's
 request Codex assigned Claude a work package (packet `21520154`): **#223
 merged as `35b0380c`** (Codex's `da100d6`, published unchanged after
 Claude's review): the 13 November lab read pilot, in which alrust answered
@@ -835,12 +839,35 @@ measured, no adapter registered) and #226 (PostgreSQL 18.7 candidate pins,
 not for merge: Y32 keeps 18.6 until the owner decides). Local builds on
 this host reach 96 to 99 °C even with one job, so Claude leaves full builds
 to hosted CI.
-Still open, all owner decisions: public visibility, the license for
-alrust's own code, how to handle the repository history (session links,
-home paths), the security-reporting contact, and whether housekeeping
-should refuse negative hours (the reference accepts them). Before any visibility
-change, self-hosted runners must be unreachable from fork pull requests
-(PUB-F2).
+**2026-11-14, later.** In an owner-requested independent block Claude
+opened drafts #228 to #233; Codex approved #229 and #231 and, later,
+#219, #220 and #230 at exact compositions, and #225 and #232 as proposals.
+At 06:04Z GitHub refused all Actions jobs: the private repository's free
+minutes were used up, after a burst of runs. The owner chose to wait, with
+no billing change. Claude ran a read-only exposure scan of every branch,
+PR ref, commit message, PR text, comment and artifact: no credentials, keys
+or private addresses; the residuals are the owner's Gmail author address,
+Claude session links and `/home/user` paths in these documents. The owner
+chose **Apache-2.0** for alrust's own code (DECISIONS Y58, PR #234) and, at
+13:04Z, directed that the repository be made **public**; Claude switched it
+after checking that no self-hosted runner was registered, then set fork
+pull-request workflows to need approval for all outside contributors. On
+the owner's request Codex enabled `main` protection (pull request, ten
+required checks, up to date, resolved conversations, admins included) and
+secret scanning with push protection. **#229 merged as `79fca79c`**
+(approved head `29ede446`, tree equal; push run `43602055257` all green).
+Its scope is the reference-compatible choice of an exact id where one
+exists; an id with regex characters (for example `a$`) is not the same as
+the reference's regex lookup, and no concurrency or speed property is
+claimed. #233 (Prometheus webhook) was withdrawn by Claude: it contradicted
+Y10, Y11 and Y12 (SF-WEBHOOKS) and is being rewritten.
+Still open, all owner decisions: the repository history (session links,
+home paths, the author address; Claude recommends keeping it, since a
+rewrite breaks the exact-head records), the security-reporting contact,
+whether housekeeping should refuse negative hours (the reference accepts
+them), and moving the Forgehold lane out (PUB-F2: with no self-hosted runner
+registered and outside-contributor approval required, a fork pull request
+cannot reach the self-hosted runners today).
 
 ## Work in flight
 
