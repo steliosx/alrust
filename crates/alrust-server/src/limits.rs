@@ -54,7 +54,14 @@ impl DbLimits {
 }
 
 /// Ends a request that outlives `limit` with 503 in the API's error shape.
-/// The handler is dropped, so a transaction it holds is rolled back.
+///
+/// The handler is dropped. That schedules a rollback of a transaction it
+/// still holds open, but it is not proof that nothing was written: a
+/// `COMMIT` already sent may still succeed, and work committed earlier in
+/// the request (for example housekeeping batches) stays. A 503 from here
+/// means the outcome of a write is unknown, so it is not safe to retry
+/// blindly. The query the database is running is not cancelled; with
+/// `statement_timeout` at 0 nothing bounds it.
 async fn deadline(State(limit): State<Duration>, req: Request, next: Next) -> Response {
     if let Ok(response) = tokio::time::timeout(limit, next.run(req)).await {
         response
