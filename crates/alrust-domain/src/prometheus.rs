@@ -297,13 +297,17 @@ fn expand(template: &str, args: &[(String, PyVal)]) -> Option<String> {
     Some(out)
 }
 
-/// Python `int(x)` on a label value: `Some(Some(n))`, `Some(None)` for the
-/// `ValueError` the reference catches, `None` for a `TypeError` (invalid).
-fn py_int(v: &PyVal) -> Option<Option<i64>> {
+/// Python's `TypeError` from `int(x)`: the item is invalid.
+#[derive(Debug, PartialEq, Eq)]
+struct TypeError;
+
+/// Python `int(x)` on a label value: `Ok(Some(n))`, `Ok(None)` for the
+/// `ValueError` the reference catches, `Err(TypeError)` otherwise.
+fn py_int(v: &PyVal) -> Result<Option<i64>, TypeError> {
     match v {
-        PyVal::Str(text) => Some(py_int_text(text)),
-        PyVal::Bool(b) => Some(Some(i64::from(*b))),
-        PyVal::Num(n) => Some(n.as_i64().or_else(|| {
+        PyVal::Str(text) => Ok(py_int_text(text)),
+        PyVal::Bool(b) => Ok(Some(i64::from(*b))),
+        PyVal::Num(n) => Ok(n.as_i64().or_else(|| {
             n.as_f64()
                 .filter(|f| f.is_finite() && f.abs() < 9.0e18)
                 .map(|f| {
@@ -316,7 +320,7 @@ fn py_int(v: &PyVal) -> Option<Option<i64>> {
                     t
                 })
         })),
-        PyVal::Null | PyVal::List(_) | PyVal::Obj(_) => None,
+        PyVal::Null | PyVal::List(_) | PyVal::Obj(_) => Err(TypeError),
     }
 }
 
@@ -466,7 +470,7 @@ fn map_item(
         None => "-".to_owned(),
     };
     let timeout = match labels.pop("timeout") {
-        Some(t) => py_int(&t)?,
+        Some(t) => py_int(&t).ok()?,
         None => None,
     }
     .filter(|t| *t != 0);
@@ -813,9 +817,9 @@ mod tests {
         }
         assert_eq!(
             py_int(&PyVal::Num(serde_json::Number::from_f64(5.7).unwrap())),
-            Some(Some(5))
+            Ok(Some(5))
         );
-        assert_eq!(py_int(&PyVal::Null), None);
+        assert_eq!(py_int(&PyVal::Null), Err(TypeError));
     }
 
     #[test]
