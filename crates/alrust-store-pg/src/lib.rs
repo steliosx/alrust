@@ -6,6 +6,7 @@
 //! simplifications are listed in the crate README section of the top-level
 //! README ("Alpha limitations").
 
+pub mod aggregates;
 pub mod catalog;
 pub mod hooks;
 pub mod startup;

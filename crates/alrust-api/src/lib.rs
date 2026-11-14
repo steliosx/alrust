@@ -13,6 +13,7 @@ use alrust_domain::{
     contains_evidence, is_restricted_attribute, iso8601, parse_time, redact_diagnostic,
     scope_allows, truncate_ms,
 };
+use alrust_store_pg::aggregates::CubeCounts;
 use alrust_store_pg::{AlertEdit, AlertQuery, CallerFacts, NewAlert, Store, StoreError};
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -456,6 +457,10 @@ pub fn router(state: Shared) -> Router {
             "/management/housekeeping",
             get(housekeeping).post(housekeeping),
         )
+        .route("/environments", get(list_environments))
+        .route("/services", get(list_services))
+        .route("/alerts/groups", get(list_alert_groups))
+        .route("/alerts/tags", get(list_alert_tags))
         .layer(axum::middleware::map_response(redact_error_body))
         .with_state(state)
 }
@@ -1037,6 +1042,150 @@ async fn search_alerts(
         body["message"] = json!("not found");
     }
     Ok(Json(body))
+}
+
+// ------------------------------------------------------ grouped alert reads
+
+/// A [`CubeCounts`] as the reference's item fields.
+fn cube_fields(item: &mut Map<String, Value>, c: &CubeCounts) {
+    item.insert(
+        "severityCounts".into(),
+        Value::Object(c.severity_counts.clone()),
+    );
+    item.insert(
+        "statusCounts".into(),
+        Value::Object(c.status_counts.clone()),
+    );
+    item.insert("count".into(), json!(c.count));
+}
+
+/// The reference's list answer: `status`, the items and `total` (their
+/// number), with `message: not found` when there are none
+/// (`views/alerts.py:529-542`, `:554-567`, `:579-593`).
+fn listed(key: &str, items: Vec<Value>) -> Json<Value> {
+    let mut body = json!({"status": "ok", "total": items.len()});
+    if items.is_empty() {
+        body["message"] = json!("not found");
+    }
+    body[key] = Value::Array(items);
+    Json(body)
+}
+
+/// `GET /environments` (`views/alerts.py:486-517`). The names are not
+/// filtered (customer-mapping C20); `total` is the filtered number of
+/// distinct environments.
+async fn list_environments(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+) -> ApiResult<Json<Value>> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("read:alerts")?;
+    let s = parse_search(&st, &caller, &params)?;
+    let total = st.store.environment_total(&s.q).await?;
+    // `Page` (`utils/paging.py`): no pages when nothing matches, and 416
+    // for a page after the last.
+    let pages = if total == 0 {
+        0
+    } else {
+        (total - 1) / s.page_size + 1
+    };
+    if total > 0 && s.page > pages {
+        return Err(ApiError::new(
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            format!("page out of range: 1-{pages}"),
+        ));
+    }
+    let environments: Vec<Value> = st
+        .store
+        .environments(&s.q, s.page, s.page_size)
+        .await?
+        .iter()
+        .map(|e| {
+            let mut item = Map::new();
+            item.insert("environment".into(), json!(e.environment));
+            cube_fields(&mut item, &e.counts);
+            Value::Object(item)
+        })
+        .collect();
+    let found = !environments.is_empty();
+    let mut body = json!({
+        "status": "ok",
+        "environments": environments,
+        "page": s.page,
+        "pageSize": s.page_size,
+        "pages": pages,
+        "more": s.page < pages,
+        "total": if found { total } else { 0 },
+    });
+    if !found {
+        body["message"] = json!("not found");
+    }
+    Ok(Json(body))
+}
+
+/// `GET /services` (`views/alerts.py:521-542`). The pairs are not filtered
+/// (customer-mapping C20).
+async fn list_services(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+) -> ApiResult<Json<Value>> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("read:alerts")?;
+    let s = parse_search(&st, &caller, &params)?;
+    let services = st
+        .store
+        .services(&s.q)
+        .await?
+        .iter()
+        .map(|v| {
+            let mut item = Map::new();
+            item.insert("environment".into(), json!(v.environment));
+            item.insert("service".into(), json!(v.service));
+            cube_fields(&mut item, &v.counts);
+            Value::Object(item)
+        })
+        .collect();
+    Ok(listed("services", services))
+}
+
+/// `GET /alerts/groups` (`views/alerts.py:546-567`).
+async fn list_alert_groups(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+) -> ApiResult<Json<Value>> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("read:alerts")?;
+    let s = parse_search(&st, &caller, &params)?;
+    let groups = st
+        .store
+        .alert_groups(&s.q)
+        .await?
+        .iter()
+        .map(|g| json!({"environment": g.environment, "group": g.group, "count": g.count}))
+        .collect();
+    Ok(listed("groups", groups))
+}
+
+/// `GET /alerts/tags` (`views/alerts.py:571-593`).
+async fn list_alert_tags(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+) -> ApiResult<Json<Value>> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("read:alerts")?;
+    let s = parse_search(&st, &caller, &params)?;
+    let tags = st
+        .store
+        .alert_tags(&s.q)
+        .await?
+        .iter()
+        .map(|t| json!({"environment": t.environment, "tag": t.tag, "count": t.count}))
+        .collect();
+    Ok(listed("tags", tags))
 }
 
 // ---------------------------------------------------------------- heartbeats
