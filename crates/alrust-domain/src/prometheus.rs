@@ -26,10 +26,10 @@
 //!
 //! Not reproduced (the item becomes invalid instead): a label used as an
 //! alert field (resource, event, severity, environment, customer, group,
-//! text) whose value is not a string or an integer, a leftover label whose
-//! value is a list or an object (the reference writes Python's `repr` into
-//! the tag), and a non-string `correlate`, `service` or `monitor` label (an
-//! exception in the reference too).
+//! text) whose value is not a string or an integer, and a non-string
+//! `correlate`, `service` or `monitor` label (an exception in the reference
+//! too). A leftover label becomes the tag `k=v` with Python's `str()` of the
+//! value, also for a list or an object (`x=[1]`, `x={'k': 'v'}`).
 
 use std::fmt::Write as _;
 
@@ -227,18 +227,107 @@ fn dumps_str(s: &str, out: &mut String) {
     out.push('"');
 }
 
-/// Python `str()` of a scalar: `None`, `True`, `False`, integers as digits,
-/// floats as Python writes them. `None` for a list or an object.
-fn py_str(v: &PyVal) -> Option<String> {
+/// A plain-name placeholder's text (SF-WEBHOOKS alrust item 3.4): a string
+/// as is; a number, boolean or null as Python's `str()`. `None` for a list
+/// or an object, which keeps the original value (Y12, item 3.3).
+fn group_text(v: &PyVal) -> Option<String> {
     match v {
-        PyVal::Null => Some("None".into()),
-        PyVal::Bool(true) => Some("True".into()),
-        PyVal::Bool(false) => Some("False".into()),
-        PyVal::Str(s) => Some(s.clone()),
-        PyVal::Num(n) if n.is_i64() || n.is_u64() => Some(n.to_string()),
-        PyVal::Num(n) => n.as_f64().map(py_float),
         PyVal::List(_) | PyVal::Obj(_) => None,
+        scalar => Some(py_str(scalar)),
     }
+}
+
+/// Python `str(v)`: a string as is, anything else as [`py_repr`].
+fn py_str(v: &PyVal) -> String {
+    match v {
+        PyVal::Str(s) => s.clone(),
+        other => {
+            let mut out = String::new();
+            py_repr(other, &mut out);
+            out
+        }
+    }
+}
+
+/// Python `repr(v)` of a value from `json.loads`: `None`, `True`, `False`,
+/// integers as digits, floats as [`py_float`], strings as [`py_repr_str`],
+/// lists as `[a, b]` and dicts as `{'k': v}`.
+fn py_repr(v: &PyVal, out: &mut String) {
+    match v {
+        PyVal::Null => out.push_str("None"),
+        PyVal::Bool(true) => out.push_str("True"),
+        PyVal::Bool(false) => out.push_str("False"),
+        PyVal::Num(n) => out.push_str(&py_number(n)),
+        PyVal::Str(s) => py_repr_str(s, out),
+        PyVal::List(l) => {
+            out.push('[');
+            for (i, e) in l.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                py_repr(e, out);
+            }
+            out.push(']');
+        }
+        PyVal::Obj(o) => {
+            out.push('{');
+            for (i, (k, e)) in o.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                py_repr_str(k, out);
+                out.push_str(": ");
+                py_repr(e, out);
+            }
+            out.push('}');
+        }
+    }
+}
+
+/// A JSON number as Python writes the `int` or `float` that `json.loads`
+/// makes of it.
+fn py_number(n: &serde_json::Number) -> String {
+    match n.as_f64() {
+        Some(f) if !n.is_i64() && !n.is_u64() => py_float(f),
+        _ => n.to_string(),
+    }
+}
+
+/// Python `repr(s)` of a string: single quotes, or double quotes when the
+/// string has a `'` and no `"`; `\\`, `\t`, `\n`, `\r` and the quote
+/// escaped; every other character that `str.isprintable()` rejects as
+/// `\xhh`, `\uhhhh` or `\Uhhhhhhhh`.
+fn py_repr_str(s: &str, out: &mut String) {
+    let quote = if s.contains('\'') && !s.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
+    out.push(quote);
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            c if c == quote => {
+                out.push('\\');
+                out.push(c);
+            }
+            c if crate::pytext::is_printable(c) => out.push(c),
+            c => {
+                let n = u32::from(c);
+                let _ = if n <= 0xFF {
+                    write!(out, "\\x{n:02x}")
+                } else if n <= 0xFFFF {
+                    write!(out, "\\u{n:04x}")
+                } else {
+                    write!(out, "\\U{n:08x}")
+                };
+            }
+        }
+    }
+    out.push(quote);
 }
 
 /// Python's `repr` of a finite float: the shortest digits, with an exponent
@@ -285,7 +374,7 @@ fn expand(template: &str, args: &[(String, PyVal)]) -> Option<String> {
                     return None;
                 }
                 let (_, v) = args.iter().find(|(k, _)| k == group)?;
-                push(&mut out, &py_str(v)?)?;
+                push(&mut out, &group_text(v)?)?;
             }
             rest = &r[end + 1..];
         } else {
@@ -474,11 +563,12 @@ fn map_item(
         None => None,
     }
     .filter(|t| *t != 0);
-    let tags = labels
+    // f'{k}={v}': Python's str() of the value, also for a list or object.
+    let tags: Vec<String> = labels
         .0
         .iter()
-        .map(|(k, v)| py_str(v).map(|v| format!("{k}={v}")))
-        .collect::<Option<Vec<_>>>()?;
+        .map(|(k, v)| format!("{k}={}", py_str(v)))
+        .collect();
 
     let value = annotations.pop("value");
     let summary = annotations.pop("summary");
@@ -715,7 +805,6 @@ mod tests {
             r#"{"labels": {"alertname": "A", "timeout": []}, "annotations": {}, "startsAt": "s", "endsAt": "e"}"#,
             r#"{"labels": {}, "annotations": {}, "startsAt": "s", "endsAt": "e"}"#,
             r#"{"labels": {"alertname": "A"}, "annotations": {}, "endsAt": "e"}"#,
-            r#"{"labels": {"alertname": "A", "x": [1]}, "annotations": {}, "startsAt": "s", "endsAt": "e"}"#,
             r#""not an object""#,
         ] {
             assert_eq!(
@@ -793,15 +882,35 @@ mod tests {
         assert_eq!(note(&format!(r#", "u": "{u}""#), r#""{u}{u}""#), "{u}{u}");
     }
 
+    /// Vector 19b through `parse`: a list or object label keeps an
+    /// annotation that names it (Y12), and the item still maps; the label
+    /// becomes a tag with Python's `str()` of the value.
     #[test]
-    fn list_and_object_placeholders_keep_the_value() {
-        // Vector 19b, checked on expand() directly: a list or object leaves
-        // the value unchanged (the label itself would make the item invalid
-        // as a tag).
-        let args = vec![("x".to_owned(), PyVal::List(vec![PyVal::Num(1.into())]))];
-        assert_eq!(expand("{x}", &args), None);
-        let args = vec![("x".to_owned(), PyVal::Obj(vec![]))];
-        assert_eq!(expand("{x}", &args), None);
+    fn list_and_object_labels_vector_19b() {
+        for (label, tag) in [(r#"[1]"#, "x=[1]"), (r#"{"k": "v"}"#, "x={'k': 'v'}")] {
+            let m = one(&format!(
+                r#"{{"alerts": [{}]}}"#,
+                item("x", &format!(r#", "x": {label}"#), r#", "note": "{x}""#)
+            ));
+            assert_eq!(m["attributes"]["note"], "{x}", "{label}");
+            // alertname, instance and severity are popped; x is left over.
+            assert_eq!(m["tags"], json!([tag]), "{label}");
+        }
+    }
+
+    /// Expected text from the pinned CPython 3.12.14: `str(v)` of the
+    /// `json.loads` value below (see the PR for the command).
+    #[test]
+    fn python_str_of_lists_and_dicts() {
+        let v: PyVal = serde_json::from_str(
+            r#"["a'b", "q\"", "both'\"", "\u007f", "\u200b", "é", "\u0085", "\t\\", 1.5, 1e16, null, true, {"n": [2.5e-05]}, "😀", "\udb40\udc01"]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            py_str(&v),
+            r#"["a'b", 'q"', 'both\'"', '\x7f', '\u200b', 'é', '\x85', '\t\\', 1.5, 1e+16, None, True, {'n': [2.5e-05]}, '😀', '\U000e0001']"#
+        );
+        assert_eq!(py_str(&PyVal::Str("plain".into())), "plain");
     }
 
     #[test]
