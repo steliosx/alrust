@@ -118,19 +118,23 @@ impl std::fmt::Display for MapError {
 
 impl std::error::Error for MapError {}
 
+/// A mapping that passed [`Mapping::check`]. Only a checked mapping can be
+/// applied, so no route can run an unchecked configuration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CheckedMapping(Mapping);
+
 impl Mapping {
     /// Parses and checks a mapping from its JSON text.
     ///
     /// # Errors
     ///
     /// [`MapError::Config`] when the text is not a valid mapping.
-    pub fn from_json(text: &str) -> Result<Self, MapError> {
+    pub fn from_json(text: &str) -> Result<CheckedMapping, MapError> {
         let m: Self = serde_json::from_str(text).map_err(|e| MapError::Config {
             mapping: "?".into(),
             reason: e.to_string(),
         })?;
-        m.check()?;
-        Ok(m)
+        m.check()
     }
 
     /// Checks field names, rule shapes, pointers and templates.
@@ -138,7 +142,12 @@ impl Mapping {
     /// # Errors
     ///
     /// [`MapError::Config`] naming the first problem found.
-    pub fn check(&self) -> Result<(), MapError> {
+    pub fn check(self) -> Result<CheckedMapping, MapError> {
+        self.problem()?;
+        Ok(CheckedMapping(self))
+    }
+
+    fn problem(&self) -> Result<(), MapError> {
         let bad = |reason: String| MapError::Config {
             mapping: self.name.clone(),
             reason,
@@ -158,6 +167,13 @@ impl Mapping {
         }
         Ok(())
     }
+}
+
+impl CheckedMapping {
+    /// The checked configuration.
+    pub fn mapping(&self) -> &Mapping {
+        &self.0
+    }
 
     /// The `POST /alert` object for one payload.
     ///
@@ -166,13 +182,14 @@ impl Mapping {
     /// [`MapError::Payload`] when a value has the wrong kind for its field
     /// (an object or array where text is needed, a non-numeric timeout).
     pub fn apply(&self, payload: &Value) -> Result<Map<String, Value>, MapError> {
+        let m = &self.0;
         let bad = |field: &str, reason: &str| MapError::Payload {
-            mapping: self.name.clone(),
+            mapping: m.name.clone(),
             field: field.to_owned(),
             reason: reason.to_owned(),
         };
         let mut out = Map::new();
-        for (field, rule) in &self.fields {
+        for (field, rule) in &m.fields {
             let Some(v) = rule.eval(payload).map_err(|r| bad(field, &r))? else {
                 continue;
             };
@@ -180,13 +197,17 @@ impl Mapping {
                 as_list(&v).ok_or_else(|| bad(field, "expected text or a list of text"))?
             } else if field == "timeout" {
                 as_integer(&v).ok_or_else(|| bad(field, "expected an integer"))?
+            } else if field == "value" {
+                // The receive contract keeps `value` as JSON (ADR-0005
+                // decision 8, Y38): parse_alert decides its stored form.
+                v
             } else {
                 Value::String(as_text(&v).ok_or_else(|| bad(field, "expected text"))?)
             };
             out.insert(field.clone(), v);
         }
         let mut attributes = Map::new();
-        for (name, rule) in &self.attributes {
+        for (name, rule) in &m.attributes {
             if let Some(v) = rule.eval(payload).map_err(|r| bad(name, &r))? {
                 attributes.insert(name.clone(), v);
             }
@@ -194,7 +215,7 @@ impl Mapping {
         if !attributes.is_empty() {
             out.insert("attributes".into(), Value::Object(attributes));
         }
-        if self.keep_raw {
+        if m.keep_raw {
             out.insert("rawData".into(), Value::String(payload.to_string()));
         }
         Ok(out)
@@ -249,14 +270,21 @@ impl Rule {
     }
 }
 
+/// RFC 6901: empty, or `/`-separated tokens in which `~` is always
+/// followed by `0` or `1`.
 fn check_pointer(p: &str) -> Result<(), String> {
-    if p.is_empty() || p.starts_with('/') {
-        Ok(())
-    } else {
-        Err(format!(
+    if !p.is_empty() && !p.starts_with('/') {
+        return Err(format!(
             "{p:?} is not a JSON pointer (it must start with /)"
-        ))
+        ));
     }
+    let mut chars = p.chars();
+    while let Some(c) = chars.next() {
+        if c == '~' && !matches!(chars.next(), Some('0' | '1')) {
+            return Err(format!("{p:?} has a ~ not followed by 0 or 1"));
+        }
+    }
+    Ok(())
 }
 
 enum Part<'a> {
@@ -353,7 +381,7 @@ mod tests {
         })
     }
 
-    fn mapping() -> Mapping {
+    fn mapping() -> CheckedMapping {
         Mapping::from_json(
             r#"{
               "name": "synthetic-veeam",
@@ -408,10 +436,11 @@ mod tests {
         assert_eq!(sev(json!("Resolved")), Some(json!("normal")));
         assert_eq!(sev(json!("Unknown")), Some(json!("indeterminate")));
         assert_eq!(sev(Value::Null), Some(json!("indeterminate")));
-        let mut no_default = m.clone();
-        if let Some(r) = no_default.fields.get_mut("severity") {
+        let mut raw = m.mapping().clone();
+        if let Some(r) = raw.fields.get_mut("severity") {
             r.default = None;
         }
+        let no_default = raw.check().unwrap();
         let mut p = synthetic_alarm();
         p["alarm"]["status"] = json!("Unknown");
         assert_eq!(
@@ -432,10 +461,32 @@ mod tests {
                 "group": "Backup"
             })
         );
-        let mut m = mapping();
-        m.keep_raw = true;
-        let raw = m.apply(&json!({"a": 1})).unwrap();
+        let mut keep = mapping().mapping().clone();
+        keep.keep_raw = true;
+        let raw = keep.check().unwrap().apply(&json!({"a": 1})).unwrap();
         assert_eq!(raw.get("rawData"), Some(&json!(r#"{"a":1}"#)));
+    }
+
+    /// `value` reaches the receive path as JSON, whatever its kind; escaped
+    /// pointer tokens resolve.
+    #[test]
+    fn value_keeps_its_json_and_escapes_resolve() {
+        let m = Mapping::from_json(
+            r#"{"name":"v","fields":{"value":{"path":"/v"},"resource":{"path":"/a~1b~0c"}}}"#,
+        )
+        .unwrap();
+        for v in [
+            json!({"k": [1, 2]}),
+            json!([1, "x"]),
+            json!(true),
+            json!(2.5),
+            json!(7),
+            json!("t"),
+        ] {
+            let out = m.apply(&json!({"v": v, "a/b~c": "r"})).unwrap();
+            assert_eq!(out.get("value"), Some(&v), "{v}");
+            assert_eq!(out.get("resource"), Some(&json!("r")));
+        }
     }
 
     #[test]
@@ -491,6 +542,18 @@ mod tests {
                 "cannot be mapped",
             ),
             (r#"{"name":"m","colour":"red"}"#, "unknown field"),
+            (
+                r#"{"name":"m","fields":{"event":{"path":"/a~2"}}}"#,
+                "not followed by 0 or 1",
+            ),
+            (
+                r#"{"name":"m","fields":{"event":{"path":"/a~"}}}"#,
+                "not followed by 0 or 1",
+            ),
+            (
+                r#"{"name":"m","fields":{"text":{"template":"{/a~x}"}}}"#,
+                "not followed by 0 or 1",
+            ),
         ] {
             let e = Mapping::from_json(text).expect_err(text).to_string();
             assert!(e.contains(needle), "{text}: {e}");
