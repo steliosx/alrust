@@ -86,19 +86,34 @@ the AST: a restricted key in an attribute term, `_exists_`, or a group whose
 field resolves to it, and `q.df=attributes`. The customer restriction is
 added after `q` with `AND`, as in the reference.
 
-**Tests.** A corpus of `q` strings (every row and quirk above, plus parse
-errors) with the reference's selected IDs recorded once against Alerta 9.1.0
-and replayed against alrust: this is the "record once, replay in Rust" idea
-of the split proposal (`6cabf649`) applied to search. The recording run and
-its harness are Codex's; alrust adds the replay test.
+**Tests.** A corpus of `q` strings (every row and observation above, plus
+parse errors), in two classes:
+- **Compatibility cases**, where SF-QUERY keeps the reference's meaning (one
+  or two operands, the term translations, modifiers, trailing input, the
+  F12 wildcard split): the expected result is the reference's selected IDs
+  or error, recorded once against Alerta 9.1.0 and replayed against alrust.
+  This is the "record once, replay in Rust" idea of the split proposal
+  (`6cabf649`) applied to search.
+- **Corrected cases**, where SF-QUERY or the privacy rules make alrust
+  differ on purpose (chains of three or more operands, unknown search or
+  default fields, restricted-attribute forms): the expected IDs or error
+  come from the approved contract (SF-QUERY items 3, 4 and 6; spec 4.2),
+  written independently of the reference run. The reference's own output
+  for these cases is still recorded and kept as evidence of the defect, but
+  it is not the expected result. For example, with rows matching only `a`
+  and `b`, `a AND b AND c` must return none in alrust although the
+  reference returns them.
+The recording run and its harness are Codex's; alrust adds the replay test.
 
 ## Step 2: faster without changing results
 
 The common text forms (a term, a phrase, a wildcard, a regex) become
 `ILIKE '%…%'` or `~*` matches, which a plain B-tree cannot serve. Other
-forms can: array membership (`'x' = ANY(service)`), the `jsonb` `?` test and
-ranges on indexed columns. Which searches scan `alerts` is therefore a plan
-question for the measurement below, not a general rule. The reference catalog has only two indexes
+forms are different operators: array membership (`'x' = ANY(service)`), the
+`jsonb` `?` test and ranges. Whether any index serves them depends on the
+index type and operator class (a plain B-tree does not serve the first two),
+so which searches scan `alerts` is a plan question for the measurement
+below, not a general rule. The reference catalog has only two indexes
 on `alerts` (the primary key and `env_res_evt_cust_key`).
 
 | Option | Serves | Cost and gates |
@@ -143,9 +158,10 @@ a draft PR or in a Codex lab window:
    `resource`, tags and services, from one generator and one seed.
 2. Query set: each grammar row above, combinations with `AND`/`OR`/`NOT`,
    field groups, a no-match query, and the refused privacy forms.
-3. Correctness first: alrust's selected IDs equal the reference's (explicit
-   `sort-by=lastReceiveTime` on both, as in the read pilot); a mismatch stops
-   timing.
+3. Correctness first: for compatibility cases, alrust's selected IDs equal
+   the reference's (explicit `sort-by=lastReceiveTime` on both, as in the
+   read pilot); for corrected cases, they equal the contract's expected IDs
+   or error. Any mismatch with the case's own expectation stops timing.
 4. Then `EXPLAIN (ANALYZE, BUFFERS)` and latency for options (c) and (b1),
    one index at a time, plus receive-path latency and WAL bytes for the
    duplicate update with and without each index.

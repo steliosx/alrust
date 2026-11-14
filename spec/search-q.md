@@ -4,9 +4,9 @@ Status: **characterisation of the pinned reference, 14 November 2026.**
 Source: Alerta 9.1.0 (`reference/alerta` at `f4312727`),
 `alerta/database/backends/postgres/queryparser.py` (sha256 prefix
 `d9c13317bb36208b`) with pyparsing 3.3.2 from
-`.github/reference-requirements.lock`. The reference's own parser was run on
+`.github/reference-requirements.lock`, under CPython 3.12.14 (the lock's interpreter). The reference's own parser was run on
 69 `q` strings by `scripts/characterise-q.py`; its output, one JSON line per
-string, is `spec/search-q-reference-sql.jsonl`. That file is the reference's
+string, is `spec/search-q-reference-sql.jsonl`; its first line records the reference commit, the module hash and the interpreter and pyparsing versions, which the script checks before it runs. That file is the reference's
 SQL text and parameters only. What each statement selects, and which ones
 fail in PostgreSQL, is **not yet observed**: that needs a recording run
 against the reference with a database (the record-once corpus of

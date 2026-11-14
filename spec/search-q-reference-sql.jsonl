@@ -1,3 +1,4 @@
+{"identity": {"reference_commit": "f4312727783dad64198b62ed778bbca98a5144a3", "module": "alerta/database/backends/postgres/queryparser.py", "module_sha256": "d9c13317bb36208bbe83bd305bed1199a9e7a586659ca8256479f6158b9d0ce6", "python": "CPython 3.12.14", "pyparsing": "3.3.2"}}
 {"q": "disk", "q.df": null, "sql": "\"text\" ILIKE %(_qp_0)s", "params": {"_qp_0": "%disk%"}}
 {"q": "disk", "q.df": "resource", "sql": "\"resource\" ILIKE %(_qp_0)s", "params": {"_qp_0": "%disk%"}}
 {"q": "resource:web01", "q.df": null, "sql": "\"resource\" ILIKE %(_qp_0)s", "params": {"_qp_0": "%web01%"}}
