@@ -418,24 +418,29 @@ fn py_int(v: &PyVal) -> Result<Option<i64>, TypeError> {
     }
 }
 
-/// Python `int(text)` for surrounding whitespace, a sign and ASCII digits
-/// with single `_` between them.
+/// Python `int(text)` (base 10): the characters `int()` strips around the
+/// number, a sign, then Unicode decimal digits (any script, as `int()`
+/// reads them) with single `_` between them. `None` where `int()` raises
+/// `ValueError`, and also beyond the `i64` range (a residual: Python's int
+/// has no limit).
 fn py_int_text(text: &str) -> Option<i64> {
-    let t = text.trim();
-    let (neg, digits) = match t.as_bytes().first() {
-        Some(b'-') => (true, &t[1..]),
-        Some(b'+') => (false, &t[1..]),
-        _ => (false, t),
+    let t = text.trim_matches(crate::pytext::is_int_space);
+    let (neg, digits) = match t.strip_prefix('-') {
+        Some(d) => (true, d),
+        None => (false, t.strip_prefix('+').unwrap_or(t)),
     };
     if digits.is_empty()
         || digits.starts_with('_')
         || digits.ends_with('_')
         || digits.contains("__")
-        || !digits.chars().all(|c| c.is_ascii_digit() || c == '_')
     {
         return None;
     }
-    let n: i64 = digits.replace('_', "").parse().ok()?;
+    let mut n: i64 = 0;
+    for c in digits.chars().filter(|&c| c != '_') {
+        let d = crate::pytext::decimal(c)?;
+        n = n.checked_mul(10)?.checked_add(i64::from(d))?;
+    }
     Some(if neg { -n } else { n })
 }
 
@@ -837,6 +842,11 @@ mod tests {
                 "{bad}"
             );
         }
+        // Python int() reads Arabic-Indic digits: timeout 12, not the default.
+        let t = one(
+            r#"{"alerts": [{"labels": {"alertname": "A", "timeout": "\u0661\u0662"}, "annotations": {}, "startsAt": "s", "endsAt": "e"}]}"#,
+        );
+        assert_eq!(t["timeout"], 12);
         // A ValueError from int() is caught by the reference: no timeout.
         let t = one(
             r#"{"alerts": [{"labels": {"alertname": "A", "timeout": "soon"}, "annotations": {}, "startsAt": "s", "endsAt": "e"}]}"#,
@@ -975,8 +985,30 @@ mod tests {
         assert_eq!(py_float(2.5e-5), "2.5e-05");
         assert_eq!(py_int_text(" +5 "), Some(5));
         assert_eq!(py_int_text("-1_0"), Some(-10));
-        for bad in ["", "5.0", "_5", "5_", "1__0", "x"] {
+        for bad in [
+            "",
+            "5.0",
+            "_5",
+            "5_",
+            "1__0",
+            "x",
+            "- 1",
+            "+-1",
+            "\u{1c}12\u{1f}",
+        ] {
             assert_eq!(py_int_text(bad), None, "{bad}");
+        }
+        // Expected values from the pinned CPython 3.12.14 int().
+        for (text, n) in [
+            ("\u{661}\u{662}", 12),
+            ("\u{ff11}_\u{ff12}", 12),
+            (" \u{966}\u{967} ", 1),
+            ("1\u{a0}", 1),
+            ("\u{661}_\u{662}", 12),
+            ("+\u{661}", 1),
+            ("0012", 12),
+        ] {
+            assert_eq!(py_int_text(text), Some(n), "{text:?}");
         }
         assert_eq!(
             py_int(&PyVal::Num(serde_json::Number::from_f64(5.7).unwrap())),
