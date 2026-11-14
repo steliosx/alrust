@@ -5,6 +5,7 @@
 //! `key.py`), so existing Alerta clients can talk to alrust unchanged.
 
 pub mod bearer;
+pub mod prometheus;
 
 use std::fmt::Write as _;
 

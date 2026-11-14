@@ -561,6 +561,53 @@ else:
     for i in (short, zero, huge, null):
         call('DELETE', f'/alert/{i}')
 
+# --- Prometheus Alertmanager webhook (DECISIONS Y27; reference webhooks/prometheus.py)
+def prom(status, *instances):
+    alerts = ', '.join(
+        '{"status": "%s", "labels": {"alertname": "PromSmoke", "instance": "%s", "job": "node", '
+        '"severity": "critical", "service": "Web", "team": "ops"}, '
+        '"annotations": {"summary": "High load on {instance}"}, '
+        '"startsAt": "2026-11-14T05:00:00Z", "endsAt": "0001-01-01T00:00:00Z"}' % (status, i)
+        for i in instances)
+    data = ('{"receiver": "alerta", "externalURL": "http://am:9093", "alerts": [%s]}' % alerts).encode()
+    code, text = call_raw('POST', '/webhooks/prometheus', data)
+    try:
+        return code, json.loads(text)
+    except ValueError:
+        return code, text
+
+
+pinst = f'prom-{RUN}'
+code, body = prom('firing', pinst)
+pa = body.get('alert', {}) if isinstance(body, dict) else {}
+check('prometheus webhook: one alert is 201 with the alert', code == 201 and pa.get('resource') == pinst, (code, body))
+check('prometheus webhook: fields as the reference maps them',
+      (pa.get('event'), pa.get('severity'), pa.get('group'), pa.get('environment'), pa.get('service'),
+       pa.get('origin'), pa.get('type'), pa.get('text'), pa.get('tags'))
+      == ('PromSmoke', 'critical', 'node', 'Production', ['Web'], 'prometheus/-', 'prometheusAlert',
+          f'High load on {pinst}', ['team=ops']), pa)
+check('prometheus webhook: attributes and json.dumps rawData',
+      pa.get('attributes', {}).get('externalUrl') == 'http://am:9093'
+      and pa.get('attributes', {}).get('startsAt') == '2026-11-14T05:00:00Z'
+      and str(pa.get('rawData', '')).startswith('{"status": "firing", "labels": {"alertname": "PromSmoke"'), pa)
+code, body = prom('resolved', pinst)
+pr = body.get('alert', {}) if isinstance(body, dict) else {}
+check('prometheus webhook: resolved closes the same alert',
+      code == 201 and pr.get('id') == pa.get('id') and pr.get('status') == 'closed'
+      and pr.get('severity') == 'normal', (code, body))
+code, body = prom('firing', f'{pinst}-a', f'{pinst}-b')
+pids = body.get('ids', []) if isinstance(body, dict) else []
+check('prometheus webhook: two alerts give 201 and two ids', code == 201 and len(pids) == 2, (code, body))
+code, text = call_raw('POST', '/webhooks/prometheus', b'{"status": "firing"}')
+check('prometheus webhook: no alerts is 400', code == 400 and 'no alerts in Prometheus' in text, (code, text))
+code, text = call_raw('POST', '/webhooks/nosuch', b'{}')
+check('unknown webhook is 404', code == 404 and "Custom webhook 'nosuch' not found." in text, (code, text))
+code, text = call_raw('POST', '/webhooks/prometheus', b'{}', key='bad-key')
+check('webhook with a bad key is 401', code == 401, (code, text))
+for i in [pa.get('id')] + pids:
+    if i:
+        call('DELETE', f'/alert/{i}')
+
 # --- delete and 404
 code, body = call('DELETE', f'/alert/{aid}')
 check('DELETE /alert/<id>', code == 200, (code, body))

@@ -104,6 +104,7 @@ it. At start-up it decides what it was pointed at:
 | `POST /key`, `GET /keys`, `DELETE /key/{id}` | API keys (`Authorization: Key …`, `X-API-Key`, or `?api-key=`). A new key's scopes must be within the creator's; the secret is shown only in the creation response; lists and `href`s use the public id. As in the reference, `POST /key` may supply its own `key` and `id`: a Python-falsy value (`null`, `false`, `0`, `""`, `[]`, `{}`) generates one, a duplicate is refused (500), and a truthy non-string is rejected with 400, an intentional divergence by the owner's ruling (DECISIONS Y33; the reference passes such values unchanged to the database adapter, and type-specific outcomes have not been qualified). `href`s percent-encode the id as one path segment |
 | `GET /management/gtg`, `/management/healthcheck` | No key needed |
 | `GET`/`POST /management/housekeeping` | Deletion and expiry (K1, K2) |
+| `POST /webhooks/prometheus` | Alertmanager notifications, mapped as the reference's `prometheus.py` (DECISIONS Y27), scope `write:webhooks`; each alert then takes the `POST /alert` path. All alerts are checked before any is stored. Differences: a non-string label or annotation value is refused with 400; Python format features beyond `{name}` leave the value unformatted; values the receive path refuses (an empty `instance` or `alertname`, a negative `timeout`) are refused. Other webhook names answer 404 |
 
 ## Configuration
 
@@ -178,7 +179,7 @@ or a key-management procedure.
   uses a case-insensitive unanchored regex.
 - **Not yet implemented:** blackouts, notes,
   customers, users, groups, permissions, auth logins (basic, LDAP, OIDC,
-  SAML), webhooks, bulk routes, the top-N counts, auto-unshelve and auto-unack
+  SAML), the webhooks other than Prometheus, bulk routes, the top-N counts, auto-unshelve and auto-unack
   in housekeeping, `q=` queries, the web UI and the desktop app.
 - **Scopes:** `admin` grants everything; `write` and `write:<resource>` grant
   the matching reads. Customer assignment follows `assign_customer`

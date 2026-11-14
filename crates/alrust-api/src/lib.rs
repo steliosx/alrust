@@ -441,6 +441,8 @@ pub fn router(state: Shared) -> Router {
         .route("/alert/{id}/attributes", put(update_attributes))
         .route("/alerts", get(search_alerts))
         .route("/alerts/count", get(count_alerts))
+        .route("/webhooks/{webhook}", get(webhook).post(webhook))
+        .route("/webhooks/{webhook}/{*path}", get(webhook).post(webhook))
         .route("/heartbeat", post(create_heartbeat))
         .route(
             "/heartbeat/{id}",
@@ -615,7 +617,37 @@ async fn receive(
 ) -> ApiResult<Response> {
     let caller = authenticate(&st, &headers, &params).await?;
     caller.require("write:alerts")?;
-    let mut n = parse_alert(&body, &st, st.store.config().alert_timeout)?;
+    let n = parse_alert(&body, &st, st.store.config().alert_timeout)?;
+    match process_alert(&st, &caller, n).await? {
+        Received::Alert(alert) => Ok((
+            StatusCode::CREATED,
+            Json(json!({"status": "ok", "id": alert.id, "alert": alert_json(&st, &alert)})),
+        )
+            .into_response()),
+        Received::Heartbeat(id) => Ok(heartbeat_accepted(&id)),
+    }
+}
+
+/// What the receive path did with one incoming alert.
+enum Received {
+    Alert(Alert),
+    /// A heartbeat event became this heartbeat (spec HB3.1).
+    Heartbeat(String),
+}
+
+/// The 202 answer for an alert converted to a heartbeat.
+fn heartbeat_accepted(id: &str) -> Response {
+    let msg = "Alert converted to Heartbeat";
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({"status": "ok", "message": msg, "id": id})),
+    )
+        .into_response()
+}
+
+/// The receive path after parsing, shared by `POST /alert` and the
+/// webhooks (the reference's `assign_customer` and `process_alert`).
+async fn process_alert(st: &AppState, caller: &Caller, mut n: NewAlert) -> ApiResult<Received> {
     n.customer = caller.assign_customer(n.customer.take(), "admin:alerts")?;
 
     // Reject policy (spec R1.2), unless the alert arrives already in blackout.
@@ -660,21 +692,63 @@ async fn receive(
                     n.customer.as_deref(),
                 )
                 .await?;
-            let msg = "Alert converted to Heartbeat";
-            return Ok((
-                StatusCode::ACCEPTED,
-                Json(json!({"status": "ok", "message": msg, "id": hb.id})),
-            )
-                .into_response());
+            return Ok(Received::Heartbeat(hb.id));
         }
     }
 
-    let (alert, _kind) = st.store.receive_with(n, &caller.facts(&st)).await?;
-    Ok((
-        StatusCode::CREATED,
-        Json(json!({"status": "ok", "id": alert.id, "alert": alert_json(&st, &alert)})),
-    )
-        .into_response())
+    let (alert, _kind) = st.store.receive_with(n, &caller.facts(st)).await?;
+    Ok(Received::Alert(alert))
+}
+
+/// The reference's `DEFAULT_ENVIRONMENT` (`settings.py:298`), used by the
+/// webhooks when a source names no environment.
+const WEBHOOK_DEFAULT_ENVIRONMENT: &str = "Production";
+
+/// `POST /webhooks/<webhook>[/<path>]` (reference `webhooks/custom.py`):
+/// only `prometheus` is implemented (DECISIONS Y27 names the four native
+/// receivers; the other three are not yet ported). Every alert of the
+/// notification is parsed and checked before any is stored; then each goes
+/// through the receive path in order, as in the reference, and a refusal
+/// stops the request with the alerts before it already stored.
+async fn webhook(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+    Path(p): Path<std::collections::HashMap<String, String>>,
+    body: axum::body::Bytes,
+) -> ApiResult<Response> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("write:webhooks")?;
+    let name = p.get("webhook").map_or("", String::as_str);
+    let objects = match name {
+        "prometheus" => alrust_domain::prometheus::parse(&body, WEBHOOK_DEFAULT_ENVIRONMENT)
+            .map_err(|e| ApiError::bad(e.message))?,
+        _ => {
+            return Err(ApiError::new(
+                StatusCode::NOT_FOUND,
+                format!("Custom webhook '{name}' not found."),
+            ));
+        }
+    };
+    let alert_timeout = st.store.config().alert_timeout;
+    let incoming = objects
+        .into_iter()
+        .map(|o| parse_alert(&Value::Object(o), &st, alert_timeout))
+        .collect::<ApiResult<Vec<_>>>()?;
+    let mut alerts = Vec::with_capacity(incoming.len());
+    for n in incoming {
+        match process_alert(&st, &caller, n).await? {
+            Received::Alert(a) => alerts.push(a),
+            Received::Heartbeat(id) => return Ok(heartbeat_accepted(&id)),
+        }
+    }
+    let body = match alerts.as_slice() {
+        [a] => json!({"status": "ok", "id": a.id, "alert": alert_json(&st, a)}),
+        _ => {
+            json!({"status": "ok", "ids": alerts.iter().map(|a| a.id.as_str()).collect::<Vec<_>>()})
+        }
+    };
+    Ok((StatusCode::CREATED, Json(body)).into_response())
 }
 
 async fn get_alert(
