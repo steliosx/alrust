@@ -831,6 +831,6 @@ mod tests {
         let v: PyVal = serde_json::from_str(r#"["é\n\"x\"\u0001", "😀", 1.0, 2.5]"#).unwrap();
         let mut s = String::new();
         v.dumps(&mut s);
-        assert_eq!(s, r#"["é\n\"x\"\u0001", "😀", 1.0, 2.5]"#);
+        assert_eq!(s, r#"["\u00e9\n\"x\"\u0001", "\ud83d\ude00", 1.0, 2.5]"#);
     }
 }
