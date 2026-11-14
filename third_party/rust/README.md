@@ -18,7 +18,8 @@ Some excerpts concern code behind inactive features (including axum WebSockets
 and uuid JavaScript randomness); retaining them is not a claim that code ships.
 
 The Docker build verifies `SHA256SUMS` from the repository root before compiling.
-It binds Cargo.lock, all seven Cargo manifests, rust-toolchain.toml, this manifest
+It binds Cargo.lock, all seven Cargo manifests, rust-toolchain.toml,
+`.cargo/config.toml`, this manifest
 and all retained texts. The Docker build selects alrust-server's default features
 and explicitly targets x86_64-unknown-linux-gnu, refusing a different builder host.
 A dependency/feature/

@@ -316,7 +316,7 @@ async fn without_a_verifier_or_a_recognised_header_nothing_changes() {
         let caller = auth(&off, &h).await.expect("auth off");
         assert!(caller.auth_off);
         assert_eq!(caller.login, None);
-        assert!(caller.scopes.is_empty());
+        assert_eq!(caller.scopes, Vec::<String>::new());
         assert_eq!(caller.facts(&off), auth_off_facts(Auth::Off));
     }
 }

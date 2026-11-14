@@ -36,6 +36,12 @@ missing_docs = "allow"                   # BeautifulRust marks this [lib]; alrus
 unreachable_pub = "warn"                 # pub items that aren't actually exported
 rust_2018_idioms = { level = "warn", priority = -1 }
 
+# Cargo 1.100 checks normal/build dependencies across the selected targets.
+# Dev-dependencies still require review; this is not a complete dependency audit.
+[workspace.lints.cargo]
+unused_dependencies = "deny"
+unused_workspace_dependencies = "deny"
+
 [workspace.lints.clippy]
 # Groups first, at lower priority so the individual settings below win.
 all = { level = "warn", priority = -1 }

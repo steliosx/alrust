@@ -18,6 +18,25 @@ Use the Rust toolchain pinned in `rust-toolchain.toml`. Initialize the read-only
 git submodule update --init
 ```
 
+Development and CI use Rust 1.100.0. The declared Rust 1.98 minimum is
+unchanged; a toolchain upgrade alone does not requalify that minimum.
+If your shell overrides `RUSTUP_TOOLCHAIN`, use `cargo +1.100.0` for these
+checks so the override does not silently select another compiler.
+Cargo's unused-dependency lints reject unused normal/build dependencies.
+They do not cover dev-dependencies, and feature-only dependencies still need
+manual review before removal.
+
+New dependency resolution uses a seven-day publication cooldown from
+`.cargo/config.toml`. Keep `Cargo.lock` committed and use `--locked` for checks;
+the cooldown does not recheck already locked versions, protect registries
+without publication timestamps, or govern `cargo install`. For an urgent
+reviewed security update, use a command-scoped
+`CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow cargo update -p <crate> --precise <version>`
+exception and document the reason and resulting lockfile diff in the PR.
+Use the pinned Cargo version for dependency updates; older Cargo versions
+do not enforce this cooldown. Dependency or toolchain changes also require
+the notice-corpus review described in `third_party/rust/README.md`.
+
 From the repository root, the Rust checks are:
 
 ```sh

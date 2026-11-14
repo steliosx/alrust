@@ -372,7 +372,7 @@ mod tests {
         assert_eq!(alerts.columns[26].name, "history");
         assert_eq!(alerts.columns[27].name, "update_time");
         assert_eq!(c.tables["heartbeats"].columns[8].name, "attributes");
-        assert!(diff(&c, &c).is_empty());
+        assert_eq!(diff(&c, &c), Vec::<String>::new());
         for (name, t) in &c.tables {
             assert!(
                 !t.state.row_security && t.state.policies.is_empty(),
