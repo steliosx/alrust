@@ -22,7 +22,9 @@ cloned per arm.
 | L | M + #229 (`29ede446`, exact-id lookup) | Measures the exact-id path |
 
 C and L are each one change on top of M, so a difference between M and C
-or M and L has one cause. If both merge before the window, add M2 (main
+or M and L has one cause. The arms are these exact compositions, and stay
+so even after #224 and #229 merge: M is `35b0380c`, L is `29ede446` (which
+main now contains as `79fca79c`), C is `bd3d674b` merged onto `35b0380c`. If both merge before the window, add M2 (main
 with both) and keep C and L as separate arms. A PostgreSQL 18.7 arm is a
 separate experiment with identical application code (see the 18.7
 candidate page), never mixed into these arms.
@@ -45,13 +47,19 @@ arm, plus:
 | Get by full id | `GET /alert/{full id}` | L against M |
 | Get by short prefix | `GET /alert/{first 8 chars}` | **Possible regression** in L: #229 first runs an exact-id query that misses, then the unchanged prefix query |
 | Get by lastReceiveId | `GET /alert/{a duplicate's id}` | **Possible regression** in L, for the same reason |
-| Ack by full id | `PUT /alert/{id}/action` `ack`, then `unack` | L against M (shorter row-lock hold) |
+| Ack by full id | `PUT /alert/{id}/action` `ack`, then `unack` | L against M. Hypothesis to measure: a shorter row-lock hold, not an established fact |
 
 The two prefix and `lastReceiveId` cases measure the cost #229 adds to
 every lookup that is not a full id; they are not controls. The controls are
-cases no arm changes: the pilot's list, event and severity cases, which
-must agree between M, C and L. If a control moves, the environment is
-noisy and the run is not scored.
+cases no arm changes: the pilot's list, event and severity cases.
+
+**Noise rule, fixed before any run.** For each control case, take the four
+per-repetition medians of M and of each other arm. The arm is scored only
+if, for every control case, the median of the four paired ratios
+(arm / M) lies within 0.90 to 1.10 and no single paired ratio lies outside
+0.80 to 1.25. If any control fails this, that arm's whole run is reported
+as NOISY and none of its cases is scored. The thresholds are a starting
+proposal for review and are not changed after seeing results.
 
 ## Rules (from the pilot, kept)
 
