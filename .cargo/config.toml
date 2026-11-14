@@ -1,0 +1,3 @@
+[registry]
+# Applies to new resolution, not versions already retained in Cargo.lock.
+global-min-publish-age = "7 days"

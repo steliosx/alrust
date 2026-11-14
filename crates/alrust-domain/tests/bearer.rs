@@ -434,7 +434,8 @@ fn hook_customers_claim_is_all_or_nothing() {
             .is_none()
     );
     let empty = ok(&with(HOOK_CUSTOMERS_CLAIM, json!([]))).operator_facts(PROVIDER);
-    assert!(empty.expect("facts").customers().is_empty());
+    let none: &[String] = &[];
+    assert_eq!(empty.expect("facts").customers(), none);
 }
 
 #[test]
