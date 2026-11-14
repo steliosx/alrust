@@ -1,0 +1,357 @@
+{
+  "schema": "alrust-lab-comparison/1",
+  "experiment_date": "2026-11-13",
+  "status": "LAB_PILOTS_ONLY",
+  "arms": [
+    {
+      "role": "merged_main",
+      "alrust_head": "8a30c19fd6663c42d7fdebc9adb86de276bda7d8",
+      "alerta_head": "f4312727783dad64198b62ed778bbca98a5144a3",
+      "dataset_rows": 10000,
+      "timed_requests": 1000,
+      "errors": 0,
+      "response_check": "ordered IDs, selected fields, totals and grouped counts match",
+      "cases": [
+        {
+          "case": "list",
+          "alerta_run_medians_ms": [
+            160.13705600016692,
+            158.6755069999981,
+            158.79152200000135,
+            152.80800200002886
+          ],
+          "alrust_run_medians_ms": [
+            80.04966499993316,
+            79.61451899996064,
+            78.66813800001182,
+            79.2570319999868
+          ],
+          "paired_alerta_over_alrust_ratios": [
+            2.000471282425737,
+            1.9930473611236232,
+            2.0184985438447454,
+            1.9280056058628883
+          ],
+          "median_paired_ratio": 1.9967593217746802,
+          "ratio_range": [
+            1.9280056058628883,
+            2.0184985438447454
+          ]
+        },
+        {
+          "case": "event",
+          "alerta_run_medians_ms": [
+            137.22011000004386,
+            130.5134750000434,
+            130.08928199997172,
+            129.49955499993848
+          ],
+          "alrust_run_medians_ms": [
+            56.964504000006855,
+            58.97303900019324,
+            54.90809999992052,
+            56.84363199998188
+          ],
+          "paired_alerta_over_alrust_ratios": [
+            2.4088704432505432,
+            2.213104110161522,
+            2.3692184213287297,
+            2.278171722031762
+          ],
+          "median_paired_ratio": 2.3236950716802456,
+          "ratio_range": [
+            2.213104110161522,
+            2.4088704432505432
+          ]
+        },
+        {
+          "case": "severity",
+          "alerta_run_medians_ms": [
+            138.67337500005306,
+            138.27486099989983,
+            134.7571500000413,
+            139.70583800005443
+          ],
+          "alrust_run_medians_ms": [
+            60.53126400001929,
+            60.01068199998372,
+            59.17602500016983,
+            59.81161900012921
+          ],
+          "paired_alerta_over_alrust_ratios": [
+            2.290938034930327,
+            2.3041707974579815,
+            2.277225447293132,
+            2.3357641932373143
+          ],
+          "median_paired_ratio": 2.2975544161941546,
+          "ratio_range": [
+            2.277225447293132,
+            2.3357641932373143
+          ]
+        },
+        {
+          "case": "count",
+          "alerta_run_medians_ms": [
+            91.38659499990354,
+            89.22739099989485,
+            89.2719109999689,
+            89.95550700001331
+          ],
+          "alrust_run_medians_ms": [
+            61.677075000034165,
+            75.94873499988353,
+            63.336779999872306,
+            63.458256000103574
+          ],
+          "paired_alerta_over_alrust_ratios": [
+            1.481694697743901,
+            1.174837092415452,
+            1.409479784102521,
+            1.4175540374110895
+          ],
+          "median_paired_ratio": 1.4135169107568053,
+          "ratio_range": [
+            1.174837092415452,
+            1.481694697743901
+          ]
+        },
+        {
+          "case": "empty",
+          "alerta_run_medians_ms": [
+            77.83450699980676,
+            71.48614400011866,
+            68.56973900016783,
+            69.83427999989544
+          ],
+          "alrust_run_medians_ms": [
+            17.706879000115805,
+            20.353984999928798,
+            18.260569999938525,
+            15.295386999923721
+          ],
+          "paired_alerta_over_alrust_ratios": [
+            4.395721402924689,
+            3.5121448699293394,
+            3.7550711177361205,
+            4.565708602223906
+          ],
+          "median_paired_ratio": 4.075396260330405,
+          "ratio_range": [
+            3.5121448699293394,
+            4.565708602223906
+          ]
+        }
+      ],
+      "run_seconds": 1558.77,
+      "peak_host_temperature_c": 100.0,
+      "cgroup_empty": true,
+      "private_evidence": {
+        "input-manifest.json": {
+          "sha256": "143c28973f1b51e91290c6333170a6e756aaa3a04e0cc25e6242439b34c70871",
+          "bytes": 1423
+        },
+        "result.json": {
+          "sha256": "199be83e10359ad5be201ce396b39e8e0684876bfec992cc8c2c220eec321a4c",
+          "bytes": 2280
+        },
+        "control/pilot-result.json": {
+          "sha256": "9ef2599aba5592c798f98f53bade359f9442a906e392577f94ef5ff5c4f1f025",
+          "bytes": 34653
+        }
+      }
+    },
+    {
+      "role": "unmerged_candidate",
+      "alrust_head": "2c5933045f053f6d1be9884e5b3dac9d72c8cb0f",
+      "alerta_head": "f4312727783dad64198b62ed778bbca98a5144a3",
+      "dataset_rows": 1000,
+      "timed_requests": 1000,
+      "errors": 0,
+      "response_check": "ordered IDs, selected fields, totals and grouped counts match",
+      "cases": [
+        {
+          "case": "list",
+          "alerta_run_medians_ms": [
+            89.52084499998136,
+            80.60361200000443,
+            91.28751000002922,
+            82.29388799998105
+          ],
+          "alrust_run_medians_ms": [
+            38.24537500003089,
+            30.55893800001286,
+            23.43644300003689,
+            21.896755000000212
+          ],
+          "paired_alerta_over_alrust_ratios": [
+            2.3406972738509966,
+            2.637644410285806,
+            3.89510942423667,
+            3.7582686567018837
+          ],
+          "median_paired_ratio": 3.197956533493845,
+          "ratio_range": [
+            2.3406972738509966,
+            3.89510942423667
+          ]
+        },
+        {
+          "case": "event",
+          "alerta_run_medians_ms": [
+            90.32900500000096,
+            81.00933899999063,
+            88.05848800000149,
+            91.57958099996222
+          ],
+          "alrust_run_medians_ms": [
+            23.108163000017612,
+            23.07670200002576,
+            21.082897999974648,
+            22.011367999994036
+          ],
+          "paired_alerta_over_alrust_ratios": [
+            3.908965199870371,
+            3.5104383199947806,
+            4.176773420812802,
+            4.160558353301214
+          ],
+          "median_paired_ratio": 4.034761776585793,
+          "ratio_range": [
+            3.5104383199947806,
+            4.176773420812802
+          ]
+        },
+        {
+          "case": "severity",
+          "alerta_run_medians_ms": [
+            91.70971999998301,
+            87.66481700001805,
+            79.84652999999753,
+            85.27916999997842
+          ],
+          "alrust_run_medians_ms": [
+            23.207253000009587,
+            23.733325000023342,
+            23.47128500002782,
+            21.809308999991117
+          ],
+          "paired_alerta_over_alrust_ratios": [
+            3.9517697333650443,
+            3.693743586283499,
+            3.4018814905065016,
+            3.910218796937269
+          ],
+          "median_paired_ratio": 3.801981191610384,
+          "ratio_range": [
+            3.4018814905065016,
+            3.9517697333650443
+          ]
+        },
+        {
+          "case": "count",
+          "alerta_run_medians_ms": [
+            66.17446700005303,
+            55.55848399995966,
+            62.49131699996724,
+            60.057745999984036
+          ],
+          "alrust_run_medians_ms": [
+            18.566351999993458,
+            19.298097999978836,
+            19.471592000002147,
+            21.681692000015573
+          ],
+          "paired_alerta_over_alrust_ratios": [
+            3.5642148226036188,
+            2.8789616468949735,
+            3.2093583821990697,
+            2.7699750554495886
+          ],
+          "median_paired_ratio": 3.0441600145470216,
+          "ratio_range": [
+            2.7699750554495886,
+            3.5642148226036188
+          ]
+        },
+        {
+          "case": "empty",
+          "alerta_run_medians_ms": [
+            64.05057599999964,
+            59.825493999994706,
+            65.68639799996845,
+            60.9494189999964
+          ],
+          "alrust_run_medians_ms": [
+            10.065617000009297,
+            11.638686999958736,
+            10.637530999986211,
+            13.890251000020726
+          ],
+          "paired_alerta_over_alrust_ratios": [
+            6.363303511343664,
+            5.1402270720234,
+            6.174966540643087,
+            4.387927835134545
+          ],
+          "median_paired_ratio": 5.657596806333244,
+          "ratio_range": [
+            4.387927835134545,
+            6.363303511343664
+          ]
+        }
+      ],
+      "run_seconds": 517.83,
+      "peak_host_temperature_c": 100.0,
+      "cgroup_empty": true,
+      "private_evidence": {
+        "input-manifest.json": {
+          "sha256": "61bd7c00b2af90e826e9dc38331b813e71c2d5403c146f8f3ffe06e6e65f52fa",
+          "bytes": 1488
+        },
+        "result.json": {
+          "sha256": "2f31fbe4ccd72d35da12be84d0cf7a74ef4e53ab9522863bd3e5d15eda095ffa",
+          "bytes": 2259
+        },
+        "control/pilot-result.json": {
+          "sha256": "1fed0afc78354c3e7d0028b0ebe1e8fefd0813e1c1aa38802a4324fba21b9285",
+          "bytes": 34570
+        }
+      }
+    }
+  ],
+  "limitations": [
+    "single client, warm reads",
+    "server/database/client share a CPU-capped VM",
+    "host background load and thermal throttling uncontrolled",
+    "different dataset sizes prohibit main-versus-candidate comparison",
+    "not throughput, reliability, search or integration qualification"
+  ],
+  "candidate_validation": {
+    "source": "784984b2fcd7856d2b2667b414bee8291c02d513",
+    "fmt": "PASS",
+    "all_target_clippy": "PASS",
+    "release_build": "PASS",
+    "distinct_executed_tests_passed": 163,
+    "ignored_generators": 2,
+    "database_cases_previously_skipped_now_executed": 39,
+    "runtime_profiles_qualified": false,
+    "release_sha256": "1419de55a5f0b9c210574ee69d64f4975345e2cca07fbf5eb61954189e7b2e57",
+    "release_bytes": 9001472,
+    "measured_candidate_binary_identical": true,
+    "private_evidence": {
+      "rust-validation-manifest.json": {
+        "sha256": "b742729ddbc7dc0377b4f87b9cf18ee3119e22a343746476ae67487931a7c323",
+        "bytes": 7788
+      },
+      "vm-database-tests-01/control/database-tests-result.json": {
+        "sha256": "83a9c4b2983c3b5ab3c682e5c8e027c3845ac179ac8ed3c38a72a85617deca8b",
+        "bytes": 707
+      },
+      "vm-database-tests-01/result.json": {
+        "sha256": "ce1c13d3642b9d69fe4a585caade8e405b2f87a8107de3e85a78864f92cb6966",
+        "bytes": 2310
+      }
+    }
+  }
+}

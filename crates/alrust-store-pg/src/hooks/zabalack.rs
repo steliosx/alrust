@@ -1129,7 +1129,7 @@ mod policy_tests {
             ),
         ] {
             let mut i = input();
-            i.cohorts = vec![c.clone()];
+            i.cohorts = vec![c];
             refuse(i, reason);
         }
         let mut i = input();

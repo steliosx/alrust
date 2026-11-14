@@ -24,6 +24,7 @@ sha256sum --check --strict --quiet -- "$sums"
 git ls-files -- third_party/rust >"$work/tracked"
 grep -vxF -- "$sums" "$work/tracked" >"$work/corpus"
 cat -- "$work/corpus" - >"$work/expected-unsorted" <<'INPUTS'
+.cargo/config.toml
 Cargo.lock
 Cargo.toml
 rust-toolchain.toml
