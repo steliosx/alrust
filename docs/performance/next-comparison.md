@@ -61,8 +61,8 @@ noisy and the run is not scored.
 - Alternate arm order across four repetitions; five warm-ups and 25 timed
   requests per case, arm and repetition; medians of per-run medians; ratio
   as the median of paired ratios.
-- That gives 100 timed requests per case and arm (4 × 25), 1,000 per
-  arm across the pilot's ten-case scale. Per case and arm, report the
+- That gives 100 timed requests per case and arm (4 × 25). Per case and
+  arm, report the
   median and range only. p95 needs at least 1,000 samples in one case and
   arm, p99 at least 10,000; this plan reaches neither, so it reports no
   percentile.
