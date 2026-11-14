@@ -36,6 +36,7 @@
 //! leftover label becomes the tag `k=v` with Python's `str()` of the value,
 //! also for a list or an object (`x=[1]`, `x={'k': 'v'}`).
 
+use std::borrow::Cow;
 use std::fmt::Write as _;
 
 use serde::Deserialize;
@@ -227,11 +228,14 @@ fn dumps_str(s: &str, out: &mut String) {
 
 /// A plain-name placeholder's text (SF-WEBHOOKS alrust item 3.4): a string
 /// as is; a number, boolean or null as Python's `str()`. `None` for a list
-/// or an object, which keeps the original value (Y12, item 3.3).
-fn group_text(v: &PyVal) -> Option<String> {
+/// or an object, which keeps the original value (Y12, item 3.3). A string
+/// is borrowed, so nothing longer than the cap is copied before the
+/// size check (item 3.5).
+fn group_text(v: &PyVal) -> Option<Cow<'_, str>> {
     match v {
+        PyVal::Str(s) => Some(Cow::Borrowed(s.as_str())),
         PyVal::List(_) | PyVal::Obj(_) => None,
-        scalar => Some(py_str(scalar)),
+        scalar => Some(Cow::Owned(py_str(scalar))),
     }
 }
 
