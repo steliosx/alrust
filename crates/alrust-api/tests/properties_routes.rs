@@ -183,8 +183,7 @@ async fn get(app: &axum::Router, key: Option<&str>) -> (StatusCode, String, Stri
     let content_type = resp
         .headers()
         .get("content-type")
-        .map(|v| v.to_str().unwrap().to_owned())
-        .unwrap_or_default();
+        .map_or_else(String::new, |v| v.to_str().unwrap().to_owned());
     let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap();
