@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-14T14:02Z by claude-alrust, the sole writer of this
+_Last updated: 2026-11-15T03:18Z by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox._
 
 ## Current phase
@@ -861,13 +861,43 @@ exists; an id with regex characters (for example `a$`) is not the same as
 the reference's regex lookup, and no concurrency or speed property is
 claimed. #233 (Prometheus webhook) was withdrawn by Claude: it contradicted
 Y10, Y11 and Y12 (SF-WEBHOOKS) and is being rewritten.
+**2026-11-14 evening to 2026-11-15.** Through Codex (packet `f66d1d56`)
+the owner asked Claude to work alone for three days, to 2026-11-17T14:38Z;
+Claude accepted at 15:32Z. Three merges, each with Codex's exact-head
+approval, the advisor's no objection and a green push run: **#224 as
+`0f8f55ac`** (head `b7488549`, run `43650253339`), **#220 as `cad79fd9`**
+(head `9c8eda38`, run `43653855526`) and **#234 as `11aede4b`** (head
+`875c7834`, run `43669716735`), so alrust's own code is Apache-2.0 on
+`main`. Codex also approved, at exact sources whose later compositions need
+their own review, #219, #230, #231, #235 and #236, and this record's
+earlier head, and approved #225, #228 and #232 as proposals. Codex declined
+Claude's proposal to skip review for a clean merge with `main`, so
+approved PRs land about one per Codex review round. New drafts: #235
+(a public reproducibility note, an evidence manifest and a check script for
+the 13 November pilot; its 136 checks are consistency checks, not
+benchmark validation), #236 (`GET /environments`, `/services`,
+`/alerts/groups`, `/alerts/tags`; customer-mapping C20 and the
+reference's 1000-row limit kept) and #237 (`spec/zabbix-inbound.md`, a
+proposal with source-derived vectors, all NOT_RUN; the session's safety
+classifier refused a harness that ran the downloaded functions, and Claude
+did not work around it). #233 was rewritten to SF-WEBHOOKS and then
+corrected twice for Codex's findings; it waits for review. The owner
+answered ZBX-1 (DECISIONS Y60). The owner approved a 30-minute inbox
+check in Claude's session through claude-chief-0a and paused it on
+2026-11-15 at about 02:45Z, and approved the deletion of a branch Claude
+had pushed by mistake (`claude/next-comparison`). On 2026-11-15 at 03:14Z
+the owner asked Claude to continue alone with the advisor for 24 hours and
+to send nothing to Codex, receipts included. Until 2026-11-16T03:14Z
+nothing merges, because no Codex approval can be read; review packets are
+kept for one consolidated send afterwards.
 Still open, all owner decisions: the repository history (session links,
 home paths, the author address; Claude recommends keeping it, since a
 rewrite breaks the exact-head records), the security-reporting contact,
 whether housekeeping should refuse negative hours (the reference accepts
 them), and moving the Forgehold lane out (PUB-F2: with no self-hosted runner
 registered and outside-contributor approval required, a fork pull request
-cannot reach the self-hosted runners today).
+cannot reach the self-hosted runners today), and the Zabbix choices ZBX-4
+and ZBX-5a to 5c (with ZBX-2 also for Codex) once Codex has reviewed #237.
 
 ## Work in flight
 
