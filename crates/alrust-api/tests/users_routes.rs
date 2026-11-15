@@ -247,7 +247,7 @@ const NOT_ROLE: &str = "role must be a non-empty string";
 /// SF-USERS update vectors, in order on one user: path, key, body, status,
 /// message (`""`: none). `helpdesk` grants `admin:users`, within the
 /// `USERS` key's ceiling.
-const VECTORS: [(&str, &str, &str, u16, &str); 22] = [
+const VECTORS: [(&str, &str, &str, u16, &str); 24] = [
     ("/user/u-bo", USERS, r#"{"role": "admin"}"#, 403, ABOVE),
     ("/user/u-bo", USERS, r#"{"role": "helpdesk"}"#, 200, ""),
     ("/user/u-bo", USERS, r#"{"roles": ["admin"]}"#, 403, ABOVE),
@@ -272,11 +272,19 @@ const VECTORS: [(&str, &str, &str, u16, &str); 22] = [
     (
         "/user/u-bo",
         USERS,
+        r#"{"roles": "admin", "role": "helpdesk"}"#,
+        400,
+        NOT_LIST,
+    ),
+    (
+        "/user/u-bo",
+        USERS,
         r#"{"roles": ["ops", 5]}"#,
         400,
         NOT_LIST,
     ),
     ("/user/u-bo", USERS, r#"{"role": null}"#, 400, NOT_ROLE),
+    ("/user/u-bo", USERS, r#"{"role": 5}"#, 400, NOT_ROLE),
     (
         "/user/u-bo",
         USERS,
@@ -325,7 +333,7 @@ const VECTORS: [(&str, &str, &str, u16, &str); 22] = [
     (
         "/user/u-bo",
         USERS,
-        r#"{"email_verified": "yes"}"#,
+        r#"{"email_verified": "maybe"}"#,
         400,
         "email_verified must be a boolean",
     ),
