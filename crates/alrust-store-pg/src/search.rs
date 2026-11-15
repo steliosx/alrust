@@ -941,6 +941,17 @@ pub enum SearchError {
     DefaultField(String),
     /// Item 4: the first unsupported search field, as written.
     Field(String),
+    /// `q.mode` is neither `alerta` nor `lucene`.
+    Mode(String),
+    /// `q.op` (`q.mode=lucene`) is neither `AND` nor `OR`.
+    DefaultOperator(String),
+    /// `q.mode=lucene` M16: `~` or `^` after a term or a phrase.
+    Operator(char),
+    /// `q.mode=lucene` M15: a value the field's type cannot hold.
+    Value { field: String, value: String },
+    /// Hook 4.2, after parsing: an attribute key the query names, once
+    /// unescaped, is a restricted one. The guard's content-free message.
+    Restricted,
 }
 
 impl SearchError {
@@ -950,6 +961,15 @@ impl SearchError {
             SearchError::Parse => "Failed to parse query string.".to_owned(),
             SearchError::DefaultField(v) => format!("Default field '{v}' not supported."),
             SearchError::Field(f) => format!("Search field '{f}' not supported."),
+            SearchError::Mode(m) => format!("Query mode '{m}' not supported."),
+            SearchError::DefaultOperator(op) => format!("Default operator '{op}' not supported."),
+            SearchError::Operator(c) => format!("Query operator '{c}' not supported."),
+            SearchError::Value { field, value } => {
+                format!("Search value '{value}' not supported for '{field}'.")
+            }
+            SearchError::Restricted => {
+                "Query selector is not permitted on restricted attributes".to_owned()
+            }
         }
     }
 }
@@ -968,6 +988,9 @@ pub fn compile(q: &str, default_field: Option<&str>) -> Result<SearchSql, Search
     if has_nul(&node) {
         return Err(SearchError::Parse);
     }
+    if names_restricted_key(&node) {
+        return Err(SearchError::Restricted);
+    }
     let df = default_field.filter(|d| !d.is_empty());
     if let Some(d) = df
         && !ALERT_COLUMNS.contains(&d)
@@ -976,6 +999,58 @@ pub fn compile(q: &str, default_field: Option<&str>) -> Result<SearchSql, Search
     }
     check_fields(&node).map_err(SearchError::Field)?;
     Ok(translate(&node, df, Chains::Fold))
+}
+
+/// Whether an attribute key the query names is a restricted one (hook 4.2).
+/// The raw-text guard already refuses every such query in this grammar,
+/// whose words have no escapes; this is the same rule on the parse tree,
+/// as `q.mode=lucene` needs it.
+fn names_restricted_key(node: &Node) -> bool {
+    match node {
+        Node::Clause { field, term } => {
+            let own = match (field, term) {
+                (
+                    Field::Named {
+                        attr: Some(a),
+                        name,
+                    },
+                    _,
+                ) => {
+                    (a == "_" || a.replace('_', "attributes") == "attributes")
+                        && alrust_domain::is_restricted_attribute(name)
+                }
+                (Field::Named { attr: None, name }, Term::Word(k) | Term::Phrase(k)) => {
+                    name == "_exists_" && alrust_domain::is_restricted_attribute(k)
+                }
+                _ => false,
+            };
+            own || matches!(term, Term::Sub(inner) if names_restricted_key(inner))
+        }
+        Node::Modifier(_, inner) | Node::Not(inner) => names_restricted_key(inner),
+        Node::And(items) | Node::Or(items) => items.iter().any(|n| names_restricted_key(n)),
+    }
+}
+
+/// `q` with `q.df`, `q.mode` and `q.op` (each the first occurrence): the
+/// default mode ([`compile`]) unless `q.mode=lucene`
+/// (`spec/search-lucene-mode.md`, [`crate::search_lucene::compile`]). An
+/// empty `q.mode` is the default.
+///
+/// # Errors
+///
+/// [`SearchError::Mode`] for any other mode, else the mode's first failed
+/// check.
+pub fn compile_mode(
+    q: &str,
+    default_field: Option<&str>,
+    mode: Option<&str>,
+    op: Option<&str>,
+) -> Result<SearchSql, SearchError> {
+    match mode.filter(|m| !m.is_empty()) {
+        None | Some("alerta") => compile(q, default_field),
+        Some("lucene") => crate::search_lucene::compile(q, default_field, op),
+        Some(other) => Err(SearchError::Mode(other.to_owned())),
+    }
 }
 
 #[cfg(test)]
