@@ -93,7 +93,7 @@ it. At start-up it decides what it was pointed at:
 
 | Route | Notes |
 |---|---|
-| `POST /alert` | Parsing and defaults (R0), the reject policy (R1.2), heartbeat diversion (HB3), duplicate / correlate / create with the reference state machine (R2–R6) |
+| `POST /alert` | Parsing and defaults (R0), the reject policy (R1.2), heartbeat diversion (HB3), blackout suppression (R1 step 3: an alert whose create time falls in a matching blackout is dropped with 202 `Suppressed alert during blackout period` and not stored; as in the reference with `CUSTOMER_VIEWS` off, any customer's blackout matches; an alert sent with `status: blackout` skips the check), duplicate / correlate / create with the reference state machine (R2–R6) |
 | `GET /alert/{id}` | Full id, id prefix or `lastReceiveId` |
 | `GET /alerts`, `GET /alerts/count` | Filters: `id`, `resource`, `event`, `environment`, `severity`, `status`, `service`, `group`, `origin`, `tag`, and the exclusions `id!`, `resource!`, `event!`, `environment!`, `severity!`, `status!`, `group!`, `origin!` (for example `event!=X`; repeated values exclude each); `page`, `page-size`, `show-history` |
 | `PUT /alert/{id}/status` | Reference semantics, including the raw timeout write (A1) |
@@ -182,7 +182,7 @@ or a key-management procedure.
   reference reads with a case-insensitive regex anchored at the start, with
   the id not escaped, and updates by `id` or `id` prefix; it returns any one
   matching row, and an exact match is always one of them.
-- **Not yet implemented:** blackouts, notes,
+- **Not yet implemented:** the blackout routes (suppression on receive works), notes,
   customers, users, groups, permissions, auth logins (basic, LDAP, OIDC,
   SAML), webhooks, bulk routes, the top-N counts, auto-unshelve and auto-unack
   in housekeeping, `q=` queries, the web UI and the desktop app.

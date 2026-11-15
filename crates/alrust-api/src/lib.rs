@@ -667,6 +667,16 @@ async fn receive(
             )
                 .into_response());
         }
+        // The blackout plugin (spec R1 step 3): an alert inside a blackout
+        // period is dropped with 202 and never stored.
+        if st.store.in_blackout(&n).await? {
+            let msg = "Suppressed alert during blackout period";
+            return Ok((
+                StatusCode::ACCEPTED,
+                Json(json!({"status": "ok", "message": msg, "id": n.id})),
+            )
+                .into_response());
+        }
     }
 
     let (alert, _kind) = st.store.receive_with(n, &caller.facts(&st)).await?;
