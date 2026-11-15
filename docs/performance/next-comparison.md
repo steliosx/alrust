@@ -53,8 +53,11 @@ The two prefix and `lastReceiveId` cases measure the cost #229 adds to
 every lookup that is not a full id; they are not controls. The controls are
 cases no arm changes: the pilot's list, event and severity cases.
 
-**Noise rule, fixed before any run.** For each control case, take the four
-per-repetition medians of M and of each other arm. The arm is scored only
+**Noise rule, fixed before any run.** The rule compares the unchanged
+alrust arms with M only: C and L (and M2 if added). It does not apply to
+Alerta (arm A), whose difference from M is what the experiment measures.
+For each control case, take the four per-repetition medians of M and of
+the alrust arm. That arm is scored only
 if, for every control case, the median of the four paired ratios
 (arm / M) lies within 0.90 to 1.10 and no single paired ratio lies outside
 0.80 to 1.25. If any control fails this, that arm's whole run is reported
