@@ -1219,12 +1219,14 @@ fn create_time_field(v: Option<&Value>) -> ApiResult<Option<chrono::DateTime<Utc
 /// `kwargs.get('duration') or BLACKOUT_DURATION`; a truthy non-integer is
 /// refused (the reference fails in `timedelta` or stores it unrounded).
 fn create_duration(v: Option<&Value>) -> ApiResult<i64> {
+    let Some(v) = v.filter(|v| !py_falsy(v)) else {
+        return Ok(alrust_store_pg::blackouts::BLACKOUT_DURATION);
+    };
     match v {
-        v if v.is_none_or(py_falsy) => Ok(alrust_store_pg::blackouts::BLACKOUT_DURATION),
-        Some(Value::Number(n)) if n.is_i64() => n
+        Value::Number(n) if n.is_i64() => n
             .as_i64()
             .ok_or_else(|| ApiError::bad("duration must be an integer")),
-        Some(_) => Err(ApiError::bad("duration must be an integer")),
+        _ => Err(ApiError::bad("duration must be an integer")),
     }
 }
 
@@ -1497,8 +1499,7 @@ fn parse_blackout_query(
             || (kind != ColumnKind::Text
                 && kind != ColumnKind::Array
                 && values.iter().any(|v| v.starts_with('~')))
-            || (values.len() > 1 && values.iter().any(String::is_empty))
-            || key.contains('.');
+            || (values.len() > 1 && values.iter().any(String::is_empty));
         if unsupported {
             return Err(refuse());
         }

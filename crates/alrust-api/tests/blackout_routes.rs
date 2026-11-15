@@ -605,3 +605,37 @@ async fn the_list_filters_sorts_and_pages() {
         (StatusCode::OK, json!("not found"), json!(0))
     );
 }
+
+/// `sort-by=remaining` orders by the number (default descending), not by
+/// its text.
+#[tokio::test]
+async fn remaining_sorts_as_a_number() {
+    let Some((_db, app)) = app().await else {
+        return;
+    };
+    let near = id_of(
+        &create(
+            &app,
+            ADMIN_KEY,
+            json!({"environment": "Production", "startTime": PAST, "endTime": SOON}),
+        )
+        .await,
+    );
+    let far = id_of(&create(&app, ADMIN_KEY, json!({"environment": "Production", "startTime": PAST, "endTime": "2031-01-01T00:00:00.000Z"})).await);
+    let soonest = id_of(
+        &create(
+            &app,
+            ADMIN_KEY,
+            json!({"environment": "Production", "duration": 9}),
+        )
+        .await,
+    );
+    let (_, _, out) = send(&app, "GET", "/blackouts?sort-by=remaining", ADMIN_KEY, None).await;
+    let ids: Vec<Value> = out["blackouts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["id"].clone())
+        .collect();
+    assert_eq!(ids, vec![json!(far), json!(near), json!(soonest)]);
+}

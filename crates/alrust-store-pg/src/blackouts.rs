@@ -24,8 +24,14 @@ use crate::{Store, StoreError, list, naive, opt_time, utc};
 /// `BLACKOUT_DURATION` (`settings.py:281`).
 pub const BLACKOUT_DURATION: i64 = 3600;
 
-/// `remaining` on reads (`postgres/base.py:758`), as text.
-const REMAINING: &str = "(GREATEST(EXTRACT(EPOCH FROM (end_time - GREATEST(start_time, NOW() AT TIME ZONE 'utc'))), 0))::text AS remaining";
+/// `remaining` on reads (`postgres/base.py:758`): a `numeric`.
+const REMAINING_EXPR: &str =
+    "GREATEST(EXTRACT(EPOCH FROM (end_time - GREATEST(start_time, NOW() AT TIME ZONE 'utc'))), 0)";
+
+/// [`REMAINING_EXPR`] as text, the form the response carries.
+fn remaining_column() -> String {
+    format!("({REMAINING_EXPR})::text AS remaining")
+}
 
 /// A stored blackout as the reference's model holds it after a read.
 #[derive(Debug, Clone, PartialEq)]
@@ -386,8 +392,9 @@ impl Store {
         id: &str,
         customers: Option<&[String]>,
     ) -> Result<Blackout, StoreError> {
+        let remaining = remaining_column();
         let row = sqlx::query(&format!(
-            "SELECT *, {REMAINING} FROM blackouts WHERE id = $1 \
+            "SELECT *, {remaining} FROM blackouts WHERE id = $1 \
              AND ($2::text[] IS NULL OR customer = ANY($2))"
         ))
         .bind(id)
@@ -423,13 +430,22 @@ impl Store {
         page: i64,
         page_size: i64,
     ) -> Result<Vec<Blackout>, StoreError> {
+        let remaining = remaining_column();
         let mut qb: QueryBuilder<'_, Postgres> =
-            QueryBuilder::new(format!("SELECT *, {REMAINING} FROM blackouts"));
+            QueryBuilder::new(format!("SELECT *, {remaining} FROM blackouts"));
         push_where(&mut qb, q);
+        // `remaining` sorts as the number, not as its text.
         let mut order: Vec<String> = q
             .sort
             .iter()
-            .map(|(col, desc)| format!("{col} {}", if *desc { "DESC" } else { "ASC" }))
+            .map(|(col, desc)| {
+                let col = if *col == "remaining" {
+                    REMAINING_EXPR
+                } else {
+                    *col
+                };
+                format!("{col} {}", if *desc { "DESC" } else { "ASC" })
+            })
             .collect();
         if order.is_empty() {
             order.push("create_time ASC".into());
@@ -459,6 +475,7 @@ impl Store {
         u: BlackoutUpdate,
     ) -> Result<Blackout, StoreError> {
         self.get_blackout(id, customers).await?;
+        let remaining = remaining_column();
         let mut qb: QueryBuilder<'_, Postgres> = QueryBuilder::new("UPDATE blackouts SET ");
         if let Some(v) = u.environment {
             qb.push("environment = ").push_bind(v).push(", ");
@@ -494,7 +511,7 @@ impl Store {
             .push_bind(u.user)
             .push(", \"user\") WHERE id = ")
             .push_bind(id.to_owned())
-            .push(format!(" RETURNING *, {REMAINING}"));
+            .push(format!(" RETURNING *, {remaining}"));
         let row = qb
             .build()
             .fetch_optional(&self.pool)

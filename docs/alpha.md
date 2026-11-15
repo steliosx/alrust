@@ -183,7 +183,7 @@ or a key-management procedure.
   reference reads with a case-insensitive regex anchored at the start, with
   the id not escaped, and updates by `id` or `id` prefix; it returns any one
   matching row, and an exact match is always one of them.
-- **Not yet implemented:** blackouts, notes,
+- **Not yet implemented:** alert suppression by a blackout (the blackout routes exist), notes,
   customers, users, groups, permissions, auth logins (basic, LDAP, OIDC,
   SAML), webhooks, bulk routes, the top-N counts, auto-unshelve and auto-unack
   in housekeeping, `q=` queries, the web UI and the desktop app.
