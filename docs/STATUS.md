@@ -1,7 +1,9 @@
 # Status
 
-_Last updated: 2026-11-15T03:18Z by claude-alrust, the sole writer of this
-file and DECISIONS.md. Codex sends corrections through the mailbox._
+_Last updated: 2026-11-15 16:17 EST by claude-alrust, the sole writer of this
+file and DECISIONS.md. Codex sends corrections through the mailbox. Times
+written from 2026-11-15 14:13 EST on are Nassau local time (DECISIONS Y63);
+earlier ones are UTC (`Z`)._
 
 ## Current phase
 
@@ -897,10 +899,59 @@ Still open, all owner decisions: the repository history (session links,
 home paths, the author address; Claude recommends keeping it, since a
 rewrite breaks the exact-head records), the security-reporting contact,
 whether housekeeping should refuse negative hours (the reference accepts
-them), and moving the Forgehold lane out (PUB-F2: with no self-hosted runner
+them), the bulk and oEmbed choices BULK-Q1, BULK-Q2 and OEMBED-Q1 (asked
+after Codex reads #251), the search proposals P1 to P5 and Q-S3 (after
+review; P3 together with #226), a daily self-check as a safety net for the
+new wake path (proposed, not decided), and moving the Forgehold lane out (PUB-F2: with no self-hosted runner
 registered and outside-contributor approval required, a fork pull request
 cannot reach the self-hosted runners today), and the Zabbix choices ZBX-4
 and ZBX-5a to 5c (with ZBX-2 also for Codex) once Codex has reviewed #237.
+
+**2026-11-15, the solo window (to 22:14 EST).** The owner's rule held all
+day: Claude neither read nor wrote the mailbox, and nothing merged. Two Codex
+messages wait unread. Every review packet is queued for one consolidated
+send after the window. New draft PRs, on `main` unless stated, with CI 10/10
+at the head named unless stated:
+- #238 top-N lists (`76463649`); #239 alert notes, SF-NOTES (`e2eaed7f`);
+  #240 `GET /config` (`f42bf038`); #241 blackout routes (`71609a09`, 9/10:
+  a Compose flake); #242 blackout suppression (`d9482054`); #243 customer
+  mappings (`ffb4f6f9`); #244 the management manifest and status
+  (`355fae14`); #246 `GET /management/properties`, redacted (`0c3e11d1`).
+- Search (Y61): #245 the reference-faithful `q=` (`879cbd10`); #248 the
+  opt-in `q.mode=lucene` (`d2694370`, on #245); #247 the measurement
+  harness and `docs/performance/search-v2.md` with the proposals P1 to P5
+  (`09e7639b`, on #245); #256 a measurement-only PR on #248, not for merge.
+- The owner's picks (Y62): #249 permissions (`e080252d`); #252 groups
+  (`99ffc039`, on #249); #253 users (`4194523d`, on #252). `POST /user`
+  and password changes wait on the hashing gate. Also #250 auto-unshelve
+  and auto-unack (`a1f8ba03`); #251 the spec entries SF-BULK and SF-OEMBED
+  (`5bd6e9b6`, 9/10, see below); and #254 the four bulk routes that need
+  no owner choice (`ca429946`, 9/10, see below).
+A self-review by three read-only reviewers found defects in five PRs:
+- #248: six value and order checks;
+- #249: three, one of them in `alrust-domain`'s scope check and older than
+  the PR (a held `delete:alerts` did not grant itself);
+- #250: two concurrency cases;
+- #252: one;
+- #253: missing tests.
+All were fixed in new commits, and every new head passed CI with its new
+tests run.
+
+Apart from failures on Claude's own first heads, each fixed by the next
+commit, five CI failures today were the PGDG signing-key download in
+`start-postgres18.sh`, not the code. That script's `--retry 3` does not
+cover curl exit 56. They leave #251 and #254 at 9/10. On #254 the required
+`fmt / clippy / test` job never reached cargo, so the bulk code has no clippy
+or test verdict yet; its rerun waits for the end of the window.
+
+Other events of the day:
+- #255, a performance comparison on PostgreSQL 18.7 run on a Grok VM and
+  opened under the owner's account, is not Claude's.
+- claude-chief-0a, on the owner's instruction, restricted GitHub Actions and
+  enabled two security features (Y65). It also held the laptop quiet for
+  Forgehold lane-35; nothing of Claude's runs locally.
+- Times in records are now EST (Y63).
+- Claude's wake path moves to claude-chief-0a at 22:45 EST (Y64).
 
 ## Work in flight
 
