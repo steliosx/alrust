@@ -205,11 +205,14 @@ async fn the_manifest_names_alrust_and_its_build() {
         out["revision"],
         option_env!("ALRUST_VCS_REVISION").unwrap_or("HEAD")
     );
-    let date = out["date"].as_str().unwrap();
-    assert!(
-        chrono::NaiveDateTime::parse_from_str(date, "%Y-%m-%dT%H:%M:%SZ").is_ok(),
-        "{date}"
-    );
+    // The fallback date's format; a build may set ALRUST_BUILD_DATE to anything.
+    if option_env!("ALRUST_BUILD_DATE").is_none() {
+        let date = out["date"].as_str().unwrap();
+        assert!(
+            chrono::NaiveDateTime::parse_from_str(date, "%Y-%m-%dT%H:%M:%SZ").is_ok(),
+            "{date}"
+        );
+    }
     let (code, _, _) = send(&app, "GET", "/management/manifest", ALERTS_KEY, None).await;
     assert_eq!(code, StatusCode::FORBIDDEN);
 }
