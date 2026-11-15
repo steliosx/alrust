@@ -156,8 +156,17 @@ fn blank(row: &PgRow, column: &str) -> Result<Option<String>, sqlx::Error> {
         .filter(|v| !v.is_empty()))
 }
 
-fn row_to_blackout(row: &PgRow, created: bool) -> Result<Blackout, sqlx::Error> {
-    let remaining = if created {
+/// Which `remaining` a row carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Read {
+    /// `RETURNING *, duration AS remaining`: the stored duration.
+    Created,
+    /// The [`REMAINING_EXPR`] text.
+    Stored,
+}
+
+fn row_to_blackout(row: &PgRow, read: Read) -> Result<Blackout, sqlx::Error> {
+    let remaining = if read == Read::Created {
         row.try_get::<Option<i32>, _>("duration")?
             .map_or(Value::Null, Value::from)
     } else {
@@ -274,7 +283,7 @@ fn push_where(qb: &mut QueryBuilder<'_, Postgres>, q: &BlackoutQuery) {
     for s in &q.statuses {
         match s.as_str() {
             "active" => {
-                states.push("(start_time <= NOW() AT TIME ZONE 'utc' AND end_time > NOW())")
+                states.push("(start_time <= NOW() AT TIME ZONE 'utc' AND end_time > NOW())");
             }
             "pending" => states.push("start_time > NOW() AT TIME ZONE 'utc'"),
             "expired" => states.push("end_time <= NOW() AT TIME ZONE 'utc'"),
@@ -379,7 +388,7 @@ impl Store {
         .bind(&b.text)
         .fetch_one(&self.pool)
         .await?;
-        Ok(row_to_blackout(&row, true)?)
+        Ok(row_to_blackout(&row, Read::Created)?)
     }
 
     /// One blackout by exact id, optionally limited to `customers`.
@@ -402,7 +411,7 @@ impl Store {
         .fetch_optional(&self.pool)
         .await?
         .ok_or(StoreError::NotFound)?;
-        Ok(row_to_blackout(&row, false)?)
+        Ok(row_to_blackout(&row, Read::Stored)?)
     }
 
     /// `GET /blackouts` total.
@@ -458,7 +467,7 @@ impl Store {
         let rows = qb.build().fetch_all(&self.pool).await?;
         Ok(rows
             .iter()
-            .map(|r| row_to_blackout(r, false))
+            .map(|r| row_to_blackout(r, Read::Stored))
             .collect::<Result<Vec<_>, sqlx::Error>>()?)
     }
 
@@ -517,7 +526,7 @@ impl Store {
             .fetch_optional(&self.pool)
             .await?
             .ok_or(StoreError::NotFound)?;
-        Ok(row_to_blackout(&row, false)?)
+        Ok(row_to_blackout(&row, Read::Stored)?)
     }
 
     /// `DELETE /blackout/{id}`, with no customer filter (customer-mapping
