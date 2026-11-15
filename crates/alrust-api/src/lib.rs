@@ -7,6 +7,8 @@
 use std::fmt;
 use std::sync::Arc;
 
+pub mod properties;
+
 use alrust_domain::bearer::{OperatorFacts, VerifiedToken, verify_bearer};
 use alrust_domain::{
     Alert, ApiKey, HistoryOutput, KeySecret, REDACTED_ERROR, RESTRICTED_ATTRIBUTES,
@@ -27,6 +29,10 @@ use serde_json::{Map, Value, json};
 pub struct ApiConfig {
     /// Absolute base URL used in `href` fields.
     pub base_url: String,
+    /// The `GET /management/properties` page (SF-MGMT alrust item 1), which
+    /// the server renders once at start-up with [`properties::render`];
+    /// empty unless set.
+    pub properties: String,
     /// Require an API key on every route except health checks.
     pub auth_required: bool,
     /// `ALLOWED_ENVIRONMENTS`: exact (full-match) environment names.
@@ -82,6 +88,7 @@ impl Default for ApiConfig {
     fn default() -> Self {
         ApiConfig {
             base_url: "http://localhost:8080".into(),
+            properties: String::new(),
             auth_required: true,
             allowed_environments: vec!["Production".into(), "Development".into()],
             heartbeat_max_latency_ms: 2000,
@@ -436,6 +443,7 @@ pub fn router(state: Shared) -> Router {
         .route("/alert/{id}", get(get_alert).delete(delete_alert))
         .route("/alert/{id}/status", put(set_status))
         .route("/alert/{id}/action", put(take_action))
+        .route("/management/properties", get(management_properties))
         .route("/alert/{id}/tag", put(tag_alert))
         .route("/alert/{id}/untag", put(untag_alert))
         .route("/alert/{id}/attributes", put(update_attributes))
@@ -1317,6 +1325,23 @@ async fn healthcheck(State(st): State<Shared>) -> Response {
         }
     }
     "OK".into_response()
+}
+
+/// `GET /management/properties` (SF-MGMT alrust item 1; Y8): the redacted
+/// settings page, `text/plain` as the reference's `Response(...,
+/// content_type='text/plain')` (`management/views.py:82-100`).
+async fn management_properties(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+) -> ApiResult<Response> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("admin:management")?;
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "text/plain")],
+        st.cfg.properties.clone(),
+    )
+        .into_response())
 }
 
 async fn housekeeping(
