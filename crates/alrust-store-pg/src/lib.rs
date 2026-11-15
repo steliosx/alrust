@@ -9,6 +9,7 @@
 pub mod catalog;
 pub mod hooks;
 pub mod search;
+pub mod search_lucene;
 pub mod startup;
 
 use std::sync::Arc;

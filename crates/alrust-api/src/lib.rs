@@ -900,7 +900,9 @@ fn parse_search(st: &AppState, caller: &Caller, params: &[(String, String)]) -> 
     refuse_restricted_selectors(params)?;
     // `q` and `q.df` are the first occurrences (`MultiDict.get`), and an
     // empty first `q` is no search (`postgres/utils.py:144-155`). They are
-    // checked before every other parameter (SF-QUERY item 7).
+    // checked before every other parameter (SF-QUERY item 7). `q.mode` and
+    // `q.op` (`spec/search-lucene-mode.md`) are read the same way, and only
+    // with a search.
     let first = |name: &str| {
         params
             .iter()
@@ -909,8 +911,13 @@ fn parse_search(st: &AppState, caller: &Caller, params: &[(String, String)]) -> 
     };
     let search = match first("q") {
         Some(text) if !text.is_empty() => Some(
-            alrust_store_pg::search::compile(text, first("q.df"))
-                .map_err(|e| ApiError::bad(e.message()))?,
+            alrust_store_pg::search::compile_mode(
+                text,
+                first("q.df"),
+                first("q.mode"),
+                first("q.op"),
+            )
+            .map_err(|e| ApiError::bad(e.message()))?,
         ),
         _ => None,
     };
