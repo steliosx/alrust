@@ -23,9 +23,8 @@
 //! `summary.md` and one plan file per case in that directory.
 #![expect(
     clippy::unwrap_used,
-    clippy::print_stdout,
     clippy::print_stderr,
-    reason = "measurement: helpers unwrap, the summary is printed, skips are printed"
+    reason = "measurement: helpers unwrap, skips are printed"
 )]
 
 use std::fmt::Write as _;
@@ -218,7 +217,7 @@ struct Candidate {
     drop: &'static [&'static str],
 }
 
-const CANDIDATES: [Candidate; 7] = [
+const CANDIDATES: [Candidate; 8] = [
     Candidate {
         name: "none",
         create: &[],
@@ -233,6 +232,11 @@ const CANDIDATES: [Candidate; 7] = [
         name: "btree status, environment, last_receive_time",
         create: &["CREATE INDEX m_sel ON alerts (status, environment, last_receive_time DESC, id)"],
         drop: &["DROP INDEX m_sel"],
+    },
+    Candidate {
+        name: "btree severity, status",
+        create: &["CREATE INDEX m_sevst ON alerts (severity, status)"],
+        drop: &["DROP INDEX m_sevst"],
     },
     Candidate {
         name: "btree environment, resource",
@@ -335,6 +339,19 @@ async fn select(store: &Store, q: &AlertQuery) -> (Selected, Duration) {
     (selected, took)
 }
 
+/// One warm-up, then [`RUNS`] timed reads: the selection and the times.
+async fn timed(store: &Store, q: &AlertQuery) -> (Selected, Vec<Duration>) {
+    let _ = select(store, q).await;
+    let mut times = Vec::with_capacity(RUNS);
+    let mut got = None;
+    for _ in 0..RUNS {
+        let (s, t) = select(store, q).await;
+        times.push(t);
+        got = Some(s);
+    }
+    (got.unwrap(), times)
+}
+
 fn median(mut v: Vec<Duration>) -> Duration {
     v.sort();
     v[v.len() / 2]
@@ -385,7 +402,7 @@ const DUPLICATES: u32 = 200;
 
 /// The first `count` seeded rows from `start` on whose status is `open`
 /// (`(g / 11) % 5 == 0` in [`seed_sql`]): 11 in every 55, so 200 fit in
-/// 1,100 rows, and seven candidates fit in the 10,000-row size.
+/// 1,100 rows, and eight candidates fit in the 10,000-row size.
 fn open_rows(start: u32, count: u32) -> Vec<u32> {
     (start..)
         .filter(|g| (g / 11) % 5 == 0)
@@ -415,9 +432,26 @@ async fn measure_search_and_alert_reads() {
         };
         let store = Store::new(db.pool.clone(), StoreConfig::default());
         store.prepare().await.unwrap();
+        // The same statements on sessions that always plan with the bound
+        // values: sqlx prepares every statement, and after five executions
+        // PostgreSQL may switch to a generic plan that ignores them.
+        let custom = Store::new(
+            PgPoolOptions::new().max_connections(4).connect_lazy_with(
+                db.base
+                    .clone()
+                    .options([
+                        ("search_path", alrust_store_pg::SEARCH_PATH),
+                        ("plan_cache_mode", "force_custom_plan"),
+                    ])
+                    .database(&db.name),
+            ),
+            StoreConfig::default(),
+        );
         let start = Instant::now();
         db.pool.execute(seed_sql(n).as_str()).await.unwrap();
-        db.pool.execute("ANALYZE alerts").await.unwrap();
+        // VACUUM sets the visibility map, as autovacuum would, so an
+        // index-only scan is possible.
+        db.pool.execute("VACUUM (ANALYZE) alerts").await.unwrap();
         let trgm = db
             .pool
             .execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
@@ -436,7 +470,7 @@ async fn measure_search_and_alert_reads() {
         .unwrap();
         writeln!(
             summary,
-            "| candidate | index KB | build ms | read | median ms | plan node | servable by an index |\n|---|---|---|---|---|---|---|"
+            "| candidate | index KB | build ms | read | median ms | median ms, custom plans | plan node | servable by an index |\n|---|---|---|---|---|---|---|---|"
         )
         .unwrap();
         let cases = cases();
@@ -466,15 +500,11 @@ async fn measure_search_and_alert_reads() {
             }
             let size_kb = size_bytes / 1024;
             for (qi, (label, q)) in cases.iter().enumerate() {
-                let _ = select(&store, q).await;
-                let mut times = Vec::with_capacity(RUNS);
-                let mut got = None;
-                for _ in 0..RUNS {
-                    let (s, t) = select(&store, q).await;
-                    times.push(t);
-                    got = Some(s);
+                let (got, times) = timed(&store, q).await;
+                let (got_custom, times_custom) = timed(&custom, q).await;
+                if got_custom != got {
+                    mismatches.push(format!("{n} alerts, {}, {label}, custom plans", cand.name));
                 }
-                let got = got.unwrap();
                 if ci == 0 {
                     baseline.push(got);
                 } else if baseline[qi] != got {
@@ -500,11 +530,12 @@ async fn measure_search_and_alert_reads() {
                 };
                 writeln!(
                     summary,
-                    "| {} | {size_kb} | {} | `{}` | {} | {} | {servable} |",
+                    "| {} | {size_kb} | {} | `{}` | {} | {} | {} | {servable} |",
                     cand.name,
                     ms(build),
                     label.replace('|', "\\|"),
                     ms(median(times)),
+                    ms(median(times_custom)),
                     plan_node(&analyzed[0], &names).replace('|', "\\|"),
                 )
                 .unwrap();
