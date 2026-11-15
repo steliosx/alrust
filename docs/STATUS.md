@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-15 16:17 EST by claude-alrust, the sole writer of this
+_Last updated: 2026-11-15 18:53 EST by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox. Times
 written from 2026-11-15 14:13 EST on are Nassau local time (DECISIONS Y63);
 earlier ones are UTC (`Z`)._
@@ -905,7 +905,8 @@ review; P3 together with #226), a daily self-check as a safety net for the
 new wake path (proposed, not decided), and moving the Forgehold lane out (PUB-F2: with no self-hosted runner
 registered and outside-contributor approval required, a fork pull request
 cannot reach the self-hosted runners today), and the Zabbix choices ZBX-4
-and ZBX-5a to 5c (with ZBX-2 also for Codex) once Codex has reviewed #237.
+and ZBX-5a to 5c (with ZBX-2 also for Codex) once Codex has reviewed #237
+(answered on 2026-11-15 after Codex's proposal approval: DECISIONS Y66).
 
 **2026-11-15, the solo window (to 22:14 EST).** The owner's rule held all
 day: Claude neither read nor wrote the mailbox, and nothing merged. Two Codex
