@@ -1268,15 +1268,14 @@ fn parse_new_blackout(
     let origin = field("origin")?;
     let now = truncate_ms(Utc::now());
     let start_time = start.unwrap_or(now);
-    let (end_time, duration) = match end {
-        Some(end) => (end, (end - start_time).num_seconds()),
-        None => {
-            let d = create_duration(obj.get("duration"))?;
-            let end = Duration::try_seconds(d)
-                .and_then(|span| start_time.checked_add_signed(span))
-                .ok_or_else(|| ApiError::bad("duration is out of range"))?;
-            (end, d)
-        }
+    let (end_time, duration) = if let Some(end) = end {
+        (end, (end - start_time).num_seconds())
+    } else {
+        let d = create_duration(obj.get("duration"))?;
+        let end = Duration::try_seconds(d)
+            .and_then(|span| start_time.checked_add_signed(span))
+            .ok_or_else(|| ApiError::bad("duration is out of range"))?;
+        (end, d)
     };
     let id = supplied(obj, "id")?.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let user = if admin_blackouts(caller) {
