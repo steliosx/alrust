@@ -10,6 +10,7 @@ pub mod aggregates;
 pub mod catalog;
 pub mod hooks;
 pub mod startup;
+pub mod topn;
 
 use std::sync::Arc;
 
