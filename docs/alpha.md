@@ -102,6 +102,7 @@ it. At start-up it decides what it was pointed at:
 | `PUT /alert/{id}/tag`, `/untag`, `/attributes` | Add or remove tags; merge attributes (a `null` value removes the key). No history entry, `updateTime` unchanged, as in the reference. Divergences (DECISIONS Y34): `tags` must be a non-empty list of strings and `attributes` a non-empty object, else 400; an update that leaves no attributes is 200 (the reference stores it and answers 500); untagging every tag stores `[]` (the reference stores NULL; both read back as `[]`) |
 | `POST /heartbeat`, `GET /heartbeats`, `GET`/`DELETE /heartbeat/{id}` | Upsert by origin and customer; derived latency, since and status |
 | `POST /key`, `GET /keys`, `DELETE /key/{id}` | API keys (`Authorization: Key …`, `X-API-Key`, or `?api-key=`). A new key's scopes must be within the creator's; the secret is shown only in the creation response; lists and `href`s use the public id. As in the reference, `POST /key` may supply its own `key` and `id`: a Python-falsy value (`null`, `false`, `0`, `""`, `[]`, `{}`) generates one, a duplicate is refused (500), and a truthy non-string is rejected with 400, an intentional divergence by the owner's ruling (DECISIONS Y33; the reference passes such values unchanged to the database adapter, and type-specific outcomes have not been qualified). `href`s percent-encode the id as one path segment |
+| `POST /customer`, `GET`/`PUT`/`DELETE /customer/{id}`, `GET /customers` | Customer mappings (`match` to `customer`), scopes `admin:customers` and `read:customers`. alrust stores and serves them for the web UI's Customers page; nothing in alrust reads them yet (there is no login). A mapping is visible to `admin`, `admin:customers` or a key of the same customer. As in the reference, the list's `total` and `pages` count every matching row before that visibility filter; filters `match` and `customer` (`field`, `field!`, `~`), `sort-by` on them, `Invalid filter parameter: <name>` for others, 416 after the last page. SF-CUSTOMERS applies only with `CUSTOMER_VIEWS` on, which alrust is not, so any caller with `admin:customers` may map to any customer, `*` included. Differences, all 400 or 404 where the reference fails: a missing id on `GET` (404; the reference 500s), a missing or null `match`, non-string values, a non-object body, a body key `id` or `self` on `PUT` |
 | `GET /management/gtg`, `/management/healthcheck` | No key needed |
 | `GET`/`POST /management/housekeeping` | Deletion and expiry (K1, K2) |
 
@@ -183,7 +184,7 @@ or a key-management procedure.
   the id not escaped, and updates by `id` or `id` prefix; it returns any one
   matching row, and an exact match is always one of them.
 - **Not yet implemented:** blackouts, notes,
-  customers, users, groups, permissions, auth logins (basic, LDAP, OIDC,
+  users, groups, permissions, auth logins (basic, LDAP, OIDC,
   SAML), webhooks, bulk routes, the top-N counts, auto-unshelve and auto-unack
   in housekeeping, `q=` queries, the web UI and the desktop app.
 - **Scopes:** `admin` grants everything; `write` and `write:<resource>` grant

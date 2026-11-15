@@ -7,6 +7,7 @@
 //! README ("Alpha limitations").
 
 pub mod catalog;
+pub mod customers;
 pub mod hooks;
 pub mod startup;
 
