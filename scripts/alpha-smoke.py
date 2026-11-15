@@ -221,6 +221,18 @@ c, b = call('GET', f'/alerts?resource={NR}')
 for a_ in b.get('alerts', []):
     call('DELETE', f"/alert/{a_.get('id')}")
 
+# --- blackout routes [views/blackouts.py; SF-BLACKOUTS]
+code, body = call('POST', '/blackout', {'environment': 'Production', 'resource': f'blk-{RUN}'})
+bid = body.get('id', '') if isinstance(body, dict) else ''
+check('POST /blackout is 201 with priority 2 and the default hour',
+      code == 201 and body.get('blackout', {}).get('priority') == 2 and body.get('blackout', {}).get('duration') == 3600, (code, body))
+code, body = call('GET', f'/blackouts?resource=blk-{RUN}')
+check('GET /blackouts lists it as active', code == 200 and [b.get('status') for b in body.get('blackouts', [])] == ['active'], (code, body))
+code, body = call('PUT', f'/blackout/{bid}', {'text': 'smoke'})
+check('PUT /blackout/<id> updates the text', code == 200 and body.get('blackout', {}).get('text') == 'smoke', (code, body))
+code, body = call('DELETE', f'/blackout/{bid}')
+check('DELETE /blackout/<id>', code == 200, (code, body))
+
 # --- heartbeats [HB]
 origin = f'smoke/{RUN}'
 code, body = call('POST', '/heartbeat', {'origin': origin, 'timeout': 60, 'tags': ['smoke']})

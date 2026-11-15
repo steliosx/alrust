@@ -13,6 +13,7 @@ use alrust_domain::{
     contains_evidence, is_restricted_attribute, iso8601, parse_time, redact_diagnostic,
     scope_allows, truncate_ms,
 };
+use alrust_store_pg::blackouts::Change;
 use alrust_store_pg::{AlertEdit, AlertQuery, CallerFacts, NewAlert, Store, StoreError};
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -447,6 +448,14 @@ pub fn router(state: Shared) -> Router {
             get(get_heartbeat).delete(delete_heartbeat),
         )
         .route("/heartbeats", get(list_heartbeats))
+        .route("/blackout", post(create_blackout))
+        .route(
+            "/blackout/{id}",
+            get(get_blackout)
+                .put(update_blackout)
+                .delete(delete_blackout),
+        )
+        .route("/blackouts", get(list_blackouts))
         .route("/key", post(create_key))
         .route("/keys", get(list_keys))
         .route("/key/{id}", axum::routing::delete(delete_key))
@@ -1145,6 +1154,533 @@ async fn delete_heartbeat(
     let caller = authenticate(&st, &headers, &params).await?;
     caller.require("write:heartbeats")?;
     st.store.delete_heartbeat(&id).await?;
+    Ok(Json(json!({"status": "ok"})))
+}
+
+// ---------------------------------------------------------------- blackouts
+
+/// `admin` or `admin:blackouts` by exact list membership, as the
+/// reference's views test it (`Scope.admin in g.scopes or ...`).
+fn admin_blackouts(caller: &Caller) -> bool {
+    caller
+        .scopes
+        .iter()
+        .any(|s| s == "admin" || s == "admin:blackouts")
+}
+
+const DATES: &str = "dates must be ISO 8601 date format YYYY-MM-DDThh:mm:ss.sssZ";
+
+/// Python's falsiness of a JSON value.
+fn py_falsy(v: &Value) -> bool {
+    match v {
+        Value::Null | Value::Bool(false) => true,
+        Value::Number(n) => n.as_f64() == Some(0.0),
+        Value::String(s) => s.is_empty(),
+        Value::Array(a) => a.is_empty(),
+        Value::Object(o) => o.is_empty(),
+        Value::Bool(true) => false,
+    }
+}
+
+/// A list of strings (`Blackout.parse`: `service must be a list`). A list
+/// with a non-string is refused too (the reference's outcome is not
+/// established).
+fn string_list(v: Option<&Value>, key: &str) -> ApiResult<Vec<String>> {
+    match v {
+        None => Ok(Vec::new()),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|i| i.as_str().map(str::to_owned))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| ApiError::bad(format!("{key} must be a list of strings"))),
+        Some(_) => Err(ApiError::bad(format!("{key} must be a list"))),
+    }
+}
+
+/// An optional string: absent or null is none; another type is refused
+/// (not established in the reference).
+fn opt_string(v: Option<&Value>, key: &str) -> ApiResult<Option<String>> {
+    match v {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s.clone())),
+        Some(_) => Err(ApiError::bad(format!("{key} must be a string"))),
+    }
+}
+
+/// `DateTime.parse` on create: a malformed string is the reference's 400;
+/// a non-string or null is none.
+fn create_time_field(v: Option<&Value>) -> ApiResult<Option<chrono::DateTime<Utc>>> {
+    match v {
+        Some(Value::String(s)) => parse_time(s).map(Some).ok_or_else(|| ApiError::bad(DATES)),
+        _ => Ok(None),
+    }
+}
+
+/// `kwargs.get('duration') or BLACKOUT_DURATION`; a truthy non-integer is
+/// refused (the reference fails in `timedelta` or stores it unrounded).
+fn create_duration(v: Option<&Value>) -> ApiResult<i64> {
+    match v {
+        v if v.is_none_or(py_falsy) => Ok(alrust_store_pg::blackouts::BLACKOUT_DURATION),
+        Some(Value::Number(n)) if n.is_i64() => n
+            .as_i64()
+            .ok_or_else(|| ApiError::bad("duration must be an integer")),
+        Some(_) => Err(ApiError::bad("duration must be an integer")),
+    }
+}
+
+/// `Blackout.parse` and `Blackout.__init__` (`models/blackout.py:25-112`),
+/// in their order of checks, then the view's user and customer rules
+/// (`views/blackouts.py:17-45`).
+fn parse_new_blackout(
+    body: &Value,
+    caller: &Caller,
+) -> ApiResult<alrust_store_pg::blackouts::NewBlackout> {
+    let Value::Object(obj) = body else {
+        return Err(ApiError::bad("blackout must be a JSON object"));
+    };
+    let service = string_list(obj.get("service"), "service")?;
+    let tags = string_list(obj.get("tags"), "tags")?;
+    // `json['environment']`: a missing key is Python's KeyError text.
+    let environment = obj
+        .get("environment")
+        .ok_or_else(|| ApiError::bad("'environment'"))?;
+    let start = create_time_field(obj.get("startTime"))?;
+    let end = create_time_field(obj.get("endTime"))?;
+    let environment = match environment {
+        v if py_falsy(v) => {
+            return Err(ApiError::bad("Missing mandatory value for \"environment\""));
+        }
+        Value::String(s) => s.clone(),
+        _ => return Err(ApiError::bad("environment must be a string")),
+    };
+    let field = |key: &str| -> ApiResult<Option<String>> {
+        let v = opt_string(obj.get(key), key)?;
+        if v.as_deref() == Some("") {
+            return Err(ApiError::bad(format!("{key} can not be an empty string")));
+        }
+        Ok(v)
+    };
+    let resource = field("resource")?;
+    let event = field("event")?;
+    let group = field("group")?;
+    let origin = field("origin")?;
+    let now = truncate_ms(Utc::now());
+    let start_time = start.unwrap_or(now);
+    let (end_time, duration) = match end {
+        Some(end) => (end, (end - start_time).num_seconds()),
+        None => {
+            let d = create_duration(obj.get("duration"))?;
+            let end = Duration::try_seconds(d)
+                .and_then(|span| start_time.checked_add_signed(span))
+                .ok_or_else(|| ApiError::bad("duration is out of range"))?;
+            (end, d)
+        }
+    };
+    let id = supplied(obj, "id")?.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let user = if admin_blackouts(caller) {
+        supplied(obj, "user")?.or_else(|| caller.login.clone())
+    } else {
+        caller.login.clone()
+    };
+    let customer = caller.assign_customer(opt_str(obj.get("customer")), "admin:blackouts")?;
+    Ok(alrust_store_pg::blackouts::NewBlackout {
+        id,
+        environment,
+        service,
+        resource,
+        event,
+        group,
+        tags,
+        origin,
+        customer,
+        start_time,
+        end_time,
+        duration,
+        user,
+        create_time: now,
+        text: opt_string(obj.get("text"), "text")?,
+    })
+}
+
+/// `startTime`/`endTime` on update (`models/blackout.py:237-240`): only a
+/// truthy value is parsed; a truthy non-string parses to none and is
+/// skipped. A malformed string (a 500 in the reference) and a falsy
+/// non-null value (written raw there, outcome not established) are 400.
+fn update_time_field(
+    obj: &Map<String, Value>,
+    key: &str,
+) -> ApiResult<Option<chrono::DateTime<Utc>>> {
+    match obj.get(key) {
+        Some(Value::String(s)) if !s.is_empty() => {
+            parse_time(s).map(Some).ok_or_else(|| ApiError::bad(DATES))
+        }
+        Some(v) if !v.is_null() && py_falsy(v) => Err(ApiError::bad(DATES)),
+        _ => Ok(None),
+    }
+}
+
+/// The body of `PUT /blackout/{id}` as `update_blackout` writes it
+/// (`postgres/base.py:803-839`), with SF-BLACKOUTS for `customer`.
+fn parse_blackout_update(
+    body: &Value,
+    caller: &Caller,
+) -> ApiResult<alrust_store_pg::blackouts::BlackoutUpdate> {
+    let obj = match body {
+        Value::Object(o) if !o.is_empty() => o,
+        _ => return Err(ApiError::bad("nothing to change")),
+    };
+    // `update(self, **kwargs)`: these keys collide with its arguments (an
+    // inferred TypeError, a 500 in the reference).
+    for key in ["id", "self"] {
+        if obj.contains_key(key) {
+            return Err(ApiError::bad(format!("{key} cannot be changed")));
+        }
+    }
+    let present = |key: &str| -> ApiResult<Change<Option<String>>> {
+        match obj.get(key) {
+            None => Ok(Change::Keep),
+            v => opt_string(v, key).map(Change::Set),
+        }
+    };
+    // `None` becomes `[]` (`models/blackout.py:242-245`).
+    let list_field = |key: &str| -> ApiResult<Option<Vec<String>>> {
+        match obj.get(key) {
+            None => Ok(None),
+            Some(Value::Null) => Ok(Some(Vec::new())),
+            v => string_list(v, key).map(Some),
+        }
+    };
+    let duration = match obj.get("duration") {
+        None => Change::Keep,
+        Some(Value::Null) => Change::Set(None),
+        Some(v) => Change::Set(Some(
+            v.as_i64()
+                .and_then(|d| i32::try_from(d).ok())
+                .ok_or_else(|| ApiError::bad("duration must be an integer"))?,
+        )),
+    };
+    let customer = match obj.get("customer") {
+        None => Change::Keep,
+        Some(v) => Change::Set(caller.assign_customer(opt_str(Some(v)), "admin:blackouts")?),
+    };
+    Ok(alrust_store_pg::blackouts::BlackoutUpdate {
+        environment: opt_string(obj.get("environment"), "environment")?,
+        service: list_field("service")?,
+        resource: present("resource")?,
+        event: present("event")?,
+        group: present("group")?,
+        tags: list_field("tags")?,
+        origin: present("origin")?,
+        customer,
+        start_time: update_time_field(obj, "startTime")?,
+        end_time: update_time_field(obj, "endTime")?,
+        duration,
+        text: present("text")?,
+        user: caller.login.clone(),
+    })
+}
+
+/// Parameters `filter_query` skips (`postgres/utils.py:19-22`).
+const NOT_FILTERS: [&str; 16] = [
+    "_",
+    "callback",
+    "token",
+    "api-key",
+    "q",
+    "q.df",
+    "id",
+    "from-date",
+    "to-date",
+    "sort-by",
+    "group-by",
+    "page",
+    "page-size",
+    "limit",
+    "show-raw-data",
+    "show-history",
+];
+
+/// A `Blackouts.VALID_PARAMS` filter name.
+enum BlackoutFilterName {
+    Column(&'static str, alrust_store_pg::blackouts::ColumnKind),
+    /// Accepted by the reference but its SQL fails (`tag` compares a
+    /// `text[]` with a string; `remaining` is a SELECT alias): a 400 here.
+    Refused,
+}
+
+/// `Blackouts.VALID_PARAMS` filter columns; `None` for an unknown name.
+fn blackout_filter_column(name: &str) -> Option<BlackoutFilterName> {
+    use alrust_store_pg::blackouts::ColumnKind::{Array, Integer, Text, Timestamp};
+    let (column, kind) = match name {
+        "priority" => ("priority", Integer),
+        "environment" => ("environment", Text),
+        "service" => ("service", Array),
+        "resource" => ("resource", Text),
+        "event" => ("event", Text),
+        "group" => ("\"group\"", Text),
+        "customer" => ("customer", Text),
+        "startTime" => ("start_time", Timestamp),
+        "endTime" => ("end_time", Timestamp),
+        "duration" => ("duration", Integer),
+        "user" => ("\"user\"", Text),
+        "createTime" => ("create_time", Timestamp),
+        "text" => ("text", Text),
+        "tag" | "remaining" => return Some(BlackoutFilterName::Refused),
+        _ => return None,
+    };
+    Some(BlackoutFilterName::Column(column, kind))
+}
+
+/// `Blackouts.VALID_PARAMS` sort columns with their default direction
+/// (`1` ascending). `status` is listed there but is no column (a 500 in
+/// the reference); alrust refuses it like an unknown name.
+fn blackout_sort_column(name: &str) -> Option<(&'static str, i8)> {
+    Some(match name {
+        "priority" => ("priority", 1),
+        "environment" => ("environment", 1),
+        "service" => ("service", 1),
+        "resource" => ("resource", 1),
+        "event" => ("event", 1),
+        "group" => ("\"group\"", 1),
+        "tags" => ("tags", 1),
+        "customer" => ("customer", 1),
+        "startTime" => ("start_time", -1),
+        "endTime" => ("end_time", -1),
+        "duration" => ("duration", 1),
+        "remaining" => ("remaining", -1),
+        "user" => ("\"user\"", 1),
+        "createTime" => ("create_time", -1),
+        "text" => ("text", 1),
+        _ => return None,
+    })
+}
+
+/// `Blackouts.from_params` (`postgres/utils.py:226-268`): customers,
+/// `status`, the filters in order of first appearance, then `sort-by`.
+fn parse_blackout_query(
+    caller: &Caller,
+    params: &[(String, String)],
+) -> ApiResult<alrust_store_pg::blackouts::BlackoutQuery> {
+    use alrust_store_pg::blackouts::{BlackoutFilter, ColumnKind};
+    let mut q = alrust_store_pg::blackouts::BlackoutQuery {
+        customers: caller.customers(),
+        ..Default::default()
+    };
+    let mut seen: Vec<&str> = Vec::new();
+    for (key, value) in params {
+        if key == "status" {
+            q.statuses.push(value.clone());
+            continue;
+        }
+        if NOT_FILTERS.contains(&key.as_str()) || seen.contains(&key.as_str()) {
+            continue;
+        }
+        seen.push(key);
+        let base = key.replace('!', "");
+        let base = base.split('.').next().unwrap_or_default();
+        let refuse = || ApiError::bad(format!("Filtering by '{key}' field not supported."));
+        let (column, kind) = match blackout_filter_column(base) {
+            Some(BlackoutFilterName::Column(column, kind)) => (column, kind),
+            Some(BlackoutFilterName::Refused) => return Err(refuse()),
+            None => return Err(ApiError::bad(format!("Invalid filter parameter: {key}"))),
+        };
+        let values: Vec<String> = params
+            .iter()
+            .filter(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+            .collect();
+        let negated = key.ends_with('!');
+        // Only `service` exactly overlaps; `service!` compares a `text[]`
+        // with a string. `~` matches text only, and an empty value among
+        // several fails `v[0]` (both errors in the reference).
+        let unsupported = (kind == ColumnKind::Array && key != "service")
+            || (kind != ColumnKind::Text
+                && kind != ColumnKind::Array
+                && values.iter().any(|v| v.starts_with('~')))
+            || (values.len() > 1 && values.iter().any(String::is_empty))
+            || key.contains('.');
+        if unsupported {
+            return Err(refuse());
+        }
+        q.filters.push(BlackoutFilter {
+            column,
+            kind,
+            negated,
+            values,
+        });
+    }
+    for (_, value) in params.iter().filter(|(k, _)| k == "sort-by") {
+        let (reverse, name) = match value.strip_prefix('-') {
+            Some(n) => (-1_i8, n),
+            None => (1_i8, value.as_str()),
+        };
+        let name = if name.starts_with("attributes.") {
+            "attributes"
+        } else {
+            name
+        };
+        let (column, direction) = blackout_sort_column(name)
+            .ok_or_else(|| ApiError::bad(format!("Sorting by '{name}' field not supported.")))?;
+        q.sort.push((column, direction * reverse != 1));
+    }
+    Ok(q)
+}
+
+/// `page` and `page-size` (or the deprecated `limit`), as `parse_search`
+/// reads them for `/alerts`.
+fn blackout_paging(st: &AppState, params: &[(String, String)]) -> ApiResult<(i64, i64)> {
+    let int = |key: &str| -> ApiResult<Option<i64>> {
+        params
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| {
+                v.parse()
+                    .map_err(|_| ApiError::bad(format!("{key} must be an integer")))
+            })
+            .transpose()
+    };
+    let page = int("page")?.unwrap_or(1);
+    let page_size = match int("page-size")? {
+        Some(s) => s,
+        None => int("limit")?
+            .filter(|l| *l != 0)
+            .unwrap_or(st.cfg.default_page_size),
+    };
+    if page < 1 {
+        return Err(ApiError::bad("page must be greater than 0"));
+    }
+    if page_size < 1 {
+        return Err(ApiError::bad("page-size must be greater than 0"));
+    }
+    if (page - 1).checked_mul(page_size).is_none() {
+        return Err(ApiError::bad("page is out of range for this page-size"));
+    }
+    Ok((page, page_size))
+}
+
+/// `POST /blackout` (`views/blackouts.py:17-45`).
+async fn create_blackout(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+    Json(body): Json<Value>,
+) -> ApiResult<Response> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("write:blackouts")?;
+    let new = parse_new_blackout(&body, &caller)?;
+    let b = st.store.create_blackout(&new).await?;
+    let location = format!(
+        "{}/blackout/{}",
+        st.cfg.base_url,
+        alrust_domain::path_segment(&b.id)
+    );
+    Ok((
+        StatusCode::CREATED,
+        [(axum::http::header::LOCATION, location)],
+        Json(json!({"status": "ok", "id": b.id, "blackout": b.body(&st.cfg.base_url, Utc::now())})),
+    )
+        .into_response())
+}
+
+/// `GET /blackout/{id}`: no customer filter (customer-mapping C19, the
+/// reference contract).
+async fn get_blackout(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("read:blackouts")?;
+    let b = st.store.get_blackout(&id, None).await?;
+    Ok(Json(
+        json!({"status": "ok", "total": 1, "blackout": b.body(&st.cfg.base_url, Utc::now())}),
+    ))
+}
+
+/// `GET /blackouts` (`views/blackouts.py:61-91`).
+async fn list_blackouts(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+) -> ApiResult<Json<Value>> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("read:blackouts")?;
+    let q = parse_blackout_query(&caller, &params)?;
+    let (page, page_size) = blackout_paging(&st, &params)?;
+    let total = st.store.count_blackouts(&q).await?;
+    let pages = if total == 0 {
+        0
+    } else {
+        (total - 1) / page_size + 1
+    };
+    if total > 0 && page > pages {
+        return Err(ApiError::new(
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            format!("page out of range: 1-{pages}"),
+        ));
+    }
+    let now = Utc::now();
+    let blackouts: Vec<Value> = st
+        .store
+        .list_blackouts(&q, page, page_size)
+        .await?
+        .iter()
+        .map(|b| b.body(&st.cfg.base_url, now))
+        .collect();
+    let found = !blackouts.is_empty();
+    let mut body = json!({
+        "status": "ok",
+        "page": page,
+        "pageSize": page_size,
+        "pages": pages,
+        "more": page < pages,
+        "blackouts": blackouts,
+        "total": if found { total } else { 0 },
+    });
+    if !found {
+        body["message"] = json!("not found");
+    }
+    Ok(Json(body))
+}
+
+/// `PUT /blackout/{id}` (`views/blackouts.py:94-124`; SF-BLACKOUTS). The
+/// lookup is unfiltered without `auth_required` or for `admin` and
+/// `admin:blackouts`, else limited to the caller's customers.
+async fn update_blackout(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> ApiResult<Json<Value>> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("write:blackouts")?;
+    let update = parse_blackout_update(&body, &caller)?;
+    let customers = if !st.cfg.auth_required || admin_blackouts(&caller) {
+        None
+    } else {
+        caller.customers()
+    };
+    let b = st
+        .store
+        .update_blackout(&id, customers.as_deref(), update)
+        .await?;
+    Ok(Json(
+        json!({"status": "ok", "blackout": b.body(&st.cfg.base_url, Utc::now())}),
+    ))
+}
+
+/// `DELETE /blackout/{id}`: no customer filter (customer-mapping C19).
+async fn delete_blackout(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("write:blackouts")?;
+    st.store.delete_blackout(&id).await?;
     Ok(Json(json!({"status": "ok"})))
 }
 
