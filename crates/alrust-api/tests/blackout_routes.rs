@@ -130,10 +130,17 @@ async fn app() -> Option<(TestDb, axum::Router)> {
             "k-acme",
             ACME_KEY,
             "acme-writer",
-            vec!["write:alerts"],
+            vec!["write:blackouts"],
             Some("acme"),
         ),
         ("k-reader", READER_KEY, "reader", vec!["read"], None),
+        (
+            "k-blk",
+            BLK_ADMIN_KEY,
+            "blk-admin",
+            vec!["admin:blackouts"],
+            Some("acme"),
+        ),
     ] {
         store
             .ensure_key(&ApiKey {
