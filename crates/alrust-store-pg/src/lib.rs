@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use alrust_domain::{
     Alert, ApiKey, DEFAULT_PREVIOUS_SEVERITY, Heartbeat, HistoryEntry, HistoryOutput,
-    INFORM_SEVERITY, NORMAL_SEVERITY, change_type, status, trend, truncate_ms,
+    INFORM_SEVERITY, NORMAL_SEVERITY, action, change_type, status, trend, truncate_ms,
 };
 use alrust_engine::{
     HistInfo, Timeouts, Transition, TransitionError, TransitionInput, action_timeout, hist_info,
@@ -1805,7 +1805,7 @@ impl Store {
         &self,
         expired_after_s: i64,
         info_after_s: i64,
-    ) -> Result<Vec<String>, StoreError> {
+    ) -> Result<Housekeeping, StoreError> {
         // K2.1: elapsed seconds since last_receive_time, compared numerically
         // with the raw timeout. A NULL timeout never expires (K2.2), and 0
         // never expires (K2.3).
@@ -1844,6 +1844,18 @@ impl Store {
                 .bind(now)
                 .fetch_all(&self.pool)
                 .await?;
+        // K0.3: every list is selected before any action runs.
+        let unshelve = self
+            .timed_out(
+                status::SHELVED,
+                action::SHELVE,
+                self.cfg.shelve_timeout,
+                now,
+            )
+            .await?;
+        let unack = self
+            .timed_out(status::ACK, action::ACK, self.cfg.ack_timeout, now)
+            .await?;
         for id in &ids {
             let mut tx = self.pool.begin().await?;
             // Re-check under the row lock: a receive or action since the
@@ -1863,9 +1875,77 @@ impl Store {
             }
             tx.commit().await?;
         }
+        for (wanted, list) in [(status::SHELVED, &unshelve), (status::ACK, &unack)] {
+            for id in list {
+                self.time_out(id, wanted, &ids).await?;
+            }
+        }
         // The response lists the ids selected before processing (K4.1).
-        Ok(ids)
+        Ok(Housekeeping {
+            expired: ids,
+            unshelve,
+            unack,
+        })
     }
+
+    /// K3.1: the alerts in `state` with any history entry of `kind` in that
+    /// state whose timeout has passed since the row's `update_time`
+    /// (`pg.py:1508-1534`). `COALESCE` appears only in the `!= 0` test, so a
+    /// NULL entry timeout never fires (K3.2). Sorted by id, as `DISTINCT ON
+    /// (a.id)` returns them.
+    async fn timed_out(
+        &self,
+        state: &str,
+        kind: &str,
+        default_timeout: i64,
+        now: NaiveDateTime,
+    ) -> Result<Vec<String>, StoreError> {
+        Ok(sqlx::query_scalar(
+            "SELECT DISTINCT a.id FROM alerts a, UNNEST(a.history) h
+              WHERE a.status = $1 AND h.type = $2 AND h.status = $1
+                AND COALESCE(h.timeout, $3) <> 0
+                AND EXTRACT(EPOCH FROM ($4 - a.update_time)) > h.timeout
+              ORDER BY a.id",
+        )
+        .bind(state)
+        .bind(kind)
+        .bind(default_timeout)
+        .bind(now)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    /// K3.4: the `timeout` action on one selected alert, under its row lock.
+    /// It runs when the row is still in the selected state, or was expired
+    /// by this same run (K3.5: it then ends `open` or `ack`, not `expired`).
+    /// An alert a concurrent request has changed otherwise is left alone;
+    /// the reference applies the action to the alert as it was selected.
+    async fn time_out(&self, id: &str, state: &str, expired: &[String]) -> Result<(), StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query("SELECT * FROM alerts WHERE id = $1 FOR UPDATE")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?;
+        if let Some(row) = row {
+            let a = row_to_alert(&row)?;
+            let expired_now = a.status == status::EXPIRED && expired.iter().any(|e| e == id);
+            if a.status == state || expired_now {
+                self.apply_action(&mut tx, a, action::TIMEOUT, "", None, "housekeeping")
+                    .await?;
+            }
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+}
+
+/// What `POST /management/housekeeping` reports (K4.1): the ids selected
+/// for each action, before any ran. Deletions are not listed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Housekeeping {
+    pub expired: Vec<String>,
+    pub unshelve: Vec<String>,
+    pub unack: Vec<String>,
 }
 
 #[cfg(test)]

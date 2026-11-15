@@ -302,8 +302,13 @@ async fn run() -> anyhow::Result<()> {
             loop {
                 tick.tick().await;
                 match store.housekeeping(expired_s, info_s).await {
-                    Ok(ids) if !ids.is_empty() => {
-                        tracing::info!(expired = ids.len(), "housekeeping");
+                    Ok(done) if done != alrust_store_pg::Housekeeping::default() => {
+                        tracing::info!(
+                            expired = done.expired.len(),
+                            unshelve = done.unshelve.len(),
+                            unack = done.unack.len(),
+                            "housekeeping"
+                        );
                     }
                     Ok(_) => {}
                     Err(e) => {
