@@ -14,7 +14,8 @@ therefore supports three paths:
    section 3).
 
 The analysis of where the mapping lives is in
-`docs/design/zabbix-inbound.md` (#232). This file fixes the contract and
+`docs/design/zabbix-inbound.md`, which is in pending PR #232 and not yet on
+`main`; the link works once #232 merges. This file fixes the contract and
 the vectors.
 
 ## Sources
@@ -55,8 +56,10 @@ For each line of `message.split('\n')`:
   classified `indeterminate`; anything else `indeterminate`.
 - `timeout`: `int(value)`. A value that `int()` refuses raises
   `ValueError`, which `cli` turns into an abort: **no alert is sent**.
-- `attributes.<k>`: `attributes[k] = value` (only the first
-  `attributes.` is relevant: `replace` removes every occurrence).
+- A macro for which `macro.startswith('attributes.')` is true:
+  `attributes[macro.replace('attributes.', '')] = value`. `replace`
+  removes **every** occurrence of `attributes.`, so `attributes.a.attributes.b`
+  gives the key `a.b`.
 - Every line also sets `alert[macro] = value`; a repeated macro keeps
   the last value.
 
@@ -73,15 +76,22 @@ Then:
 
 ### send_alert (client v8.5.3)
 
-The body has exactly these keys: `id`, `resource`, `event`,
-`environment`, `severity`, `correlate` (`or []`), `service` (`or []`),
-`group`, `value`, `text`, `tags` (`or []`), `attributes` (`or {}`),
-`origin`, `type`, `createTime` (the client's clock), `timeout`, `rawData`
-(read from the keyword **`raw_data`**), `customer`. A missing key is
+`send_alert(self, resource, event, **kwargs)` takes `resource` and `event`
+as required arguments. **If the message has no `resource` or no `event`
+line, the call raises `TypeError` before any request is built; the script
+aborts and sends nothing.** Otherwise the body has exactly these keys:
+`id`, `resource`, `event`, `environment`, `severity`, `correlate`
+(`or []`), `service` (`or []`), `group`, `value`, `text`, `tags`
+(`or []`), `attributes` (`or {}`), `origin`, `type`, `createTime` (the
+client's clock), `timeout`, `rawData` (read from the keyword
+**`raw_data`**), `customer`. An optional key the message does not give is
 `null`. So, with this client:
 
-- **`rawData` is always null.** `parse_zabbix` sets `rawData`, but the
-  client reads `raw_data`.
+- **The `rawData` that `parse_zabbix` builds is lost.** It is stored
+  under the key `rawData`, but the client reads `raw_data`. Because
+  `parse_zabbix` keeps every macro name, a `raw_data=<text>` line does
+  reach the client, which then sends `rawData` `<text>`. Without such a
+  line, `rawData` is null.
 - **`status` is not sent**, so `ack=Yes` does not acknowledge the alert.
 - `dateTime` and the `attributes.<k>` macros as top-level keys are not
   sent; the `attributes` dict is.
@@ -109,11 +119,13 @@ templates stay as they are:
   apply.
 - **Mapping:** `parse_zabbix` exactly as section 1, then the
   `send_alert` projection, then normal `POST /alert` processing (reject
-  policy, blackouts, hooks). The body is refused with 400 when it is not
-  a JSON object or `subject` or `message` is not a string.
+  policy, blackouts, hooks). Refused with 400, storing nothing: a body
+  that is not a JSON object, a `subject` or `message` that is not a
+  string, and a message without a `resource` or an `event` line (where
+  the script aborts on `TypeError`).
 - **Origin:** the script uses the Zabbix host's name, which the receiver
   cannot know. ZBX-4 below.
-- **Differences from the script path:** ZBX-5 below. Without an owner
+- **Differences from the script path:** ZBX-5a to ZBX-5c below. Without an owner
   choice the native path produces what the script path produces with
   client v8.5.3, so one Zabbix action gives the same alert either way.
 - **`timeout` that `int()` refuses:** the script sends nothing; the
@@ -136,7 +148,9 @@ Zabalack session to state (ZBX-6).
 |---|---|---|---|
 | ZBX-2 | Pin `zabbix-alerta` `b6ed6bc7` read-only as the mapping reference | Owner, Codex | Pin it; until then the SHA256 above |
 | ZBX-4 | Native origin: a fixed `zabbix/webhook`, a media-type parameter `origin` in the body, or the API key's user | Owner | Optional body field `origin`, default `zabbix/webhook` |
-| ZBX-5 | Native path: copy the client's losses (no `rawData`, no `ack`), or keep `rawData` and apply `ack=Yes` | Owner | Keep `rawData` (subject and message) and apply `ack=Yes`: both are what the script intends. The native path then differs from the script path in these two fields only |
+| ZBX-5a | Native path, `rawData`: copy the client (only an explicit `raw_data=` line, else null), or store the generated subject and message | Owner | Store the generated subject and message, as the script intends |
+| ZBX-5b | Native path, when ZBX-5a keeps the generated text and the message also has a `raw_data=` line: which one wins | Owner | The explicit `raw_data=` line, because the Zabbix action asked for it |
+| ZBX-5c | Native path, `ack=Yes`: copy the client (ignored) or acknowledge | Owner | Acknowledge, as the script intends |
 | ZBX-6 | Zabalack's own Zabbix sender, if any: its exact request | Zabalack session | Ask once the native path is reviewed |
 | Z-PIN | Client version on each Zabbix host, or captured requests | Owner | Captured requests are the stronger evidence |
 
@@ -145,8 +159,8 @@ Zabalack session to state (ZBX-6).
 Source-derived from the two files above, **NOT_RUN**. "Body" lists the
 non-null keys of the script path's request (client v8.5.3); every body
 also has `correlate []`, `createTime`, and `origin zabbix/<host>`, and
-`rawData` null. The native path gives the same body, with the ZBX-4
-origin, unless ZBX-5 changes it.
+`rawData` null unless the row says otherwise. The native path gives the
+same body, with the ZBX-4 origin, unless ZBX-5a to ZBX-5c change it.
 
 | # | Message lines (subject `s`) | Body (script path) |
 |---|---|---|
@@ -165,9 +179,13 @@ origin, unless ZBX-5 changes it.
 | Z13 | `resource=r`, `event=e`, `id=abc`, `customer=acme` | `id abc`, `customer acme` |
 | Z14 | `resource=r`, `event=e`, `attributes.source_system=zabbix` | `attributes {"source_system":"zabbix"}` (Zabalack claims it) |
 | Z15 | `resource=a`, `resource=b`, `event=e` | `resource b` |
-| Z16 | `event=e` | `resource` null: the server refuses it (missing resource) |
+| Z16 | `event=e` | nothing sent (`send_alert` lacks `resource`: `TypeError`; the script aborts) |
+| Z17 | `resource=r` | nothing sent (no `event`: `TypeError`) |
+| Z18 | `resource=r`, `event=e`, `raw_data=payload` | `rawData "payload"` |
+| Z19 | `resource=r`, `event=e`, `attributes.a.attributes.b=v` | `attributes {"a.b":"v"}`; the server then refuses it (`Alert()` allows no `.` in an attribute key) |
 
 Native-path-only vectors (NOT_RUN): N1 body `{"subject": "s"}` (no
 `message`) gives 400; N2 a key without `write:webhooks` gives 403; N3 the
 Z1 message gives 201 with the Z1 body and the ZBX-4 origin; N4 the Z10
-message gives 400 and stores nothing.
+message gives 400 and stores nothing; N5 the Z16 and Z17 messages give
+400 and store nothing.
