@@ -206,8 +206,9 @@ starts. The details are in the
 
 ## Licensing
 
-- No licence has been chosen for alrust itself yet. That is the owner's
-  decision, and no licence is implied by this repository.
+- alrust is licensed under the [Apache License, Version 2.0](LICENSE)
+  (owner decision, DECISIONS Y58). See [NOTICE](NOTICE) for the parts
+  derived from Alerta and their attribution.
 - The upstream Alerta sources that alrust is checked against keep their own
   licences, and vendored code keeps its notices:
   - Alerta server:
