@@ -172,6 +172,17 @@ pub enum ReceiveKind {
     Correlated,
 }
 
+/// How [`Store::explain_alert_reads`] explains (measurement only).
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Explain {
+    /// `EXPLAIN (ANALYZE, BUFFERS)`: the statements run.
+    Analyze,
+    /// `EXPLAIN (COSTS OFF)` with `enable_seqscan` off, in a transaction
+    /// that is rolled back: whether any index can serve the statement.
+    PlanWithoutSeqScan,
+}
+
 /// Query filters for `GET /alerts`. Each list is OR-ed within a field and
 /// AND-ed across fields, as the reference query builder does.
 #[derive(Debug, Clone, Default)]
@@ -1526,15 +1537,7 @@ impl Store {
             severity_counts,
             status_counts,
         } = self.count_alerts(q).await?;
-        let mut sel = QueryBuilder::new(match history {
-            HistoryOutput::Include => "SELECT * FROM alerts",
-            HistoryOutput::Omit => ALERTS_WITHOUT_HISTORY,
-        });
-        Self::push_filters(&mut sel, q);
-        sel.push(" ORDER BY last_receive_time DESC, id LIMIT ")
-            .push_bind(page_size)
-            .push(" OFFSET ")
-            .push_bind((page - 1) * page_size);
+        let mut sel = Self::page_query("", q, history, page, page_size);
         let rows = sel.build().fetch_all(&self.pool).await?;
         let alerts = rows
             .iter()
@@ -1548,13 +1551,82 @@ impl Store {
         })
     }
 
+    /// The page statement of `find_alerts`, after `prefix` (empty, or an
+    /// `EXPLAIN` for [`Store::explain_alert_reads`]).
+    fn page_query<'q>(
+        prefix: &str,
+        q: &'q AlertQuery,
+        history: HistoryOutput,
+        page: i64,
+        page_size: i64,
+    ) -> QueryBuilder<'q, Postgres> {
+        let mut sel = QueryBuilder::new(format!(
+            "{prefix}{}",
+            match history {
+                HistoryOutput::Include => "SELECT * FROM alerts",
+                HistoryOutput::Omit => ALERTS_WITHOUT_HISTORY,
+            }
+        ));
+        Self::push_filters(&mut sel, q);
+        sel.push(" ORDER BY last_receive_time DESC, id LIMIT ")
+            .push_bind(page_size)
+            .push(" OFFSET ")
+            .push_bind((page - 1) * page_size);
+        sel
+    }
+
     /// The one grouped-count statement of a query, with the same filters as
     /// the alert list.
     fn counts_query(q: &AlertQuery) -> QueryBuilder<'_, Postgres> {
-        let mut counts = QueryBuilder::new("SELECT severity, status, count(*) AS n FROM alerts");
+        Self::counts_query_after("", q)
+    }
+
+    fn counts_query_after<'q>(prefix: &str, q: &'q AlertQuery) -> QueryBuilder<'q, Postgres> {
+        let mut counts = QueryBuilder::new(format!(
+            "{prefix}SELECT severity, status, count(*) AS n FROM alerts"
+        ));
         Self::push_filters(&mut counts, q);
         counts.push(" GROUP BY severity, status");
         counts
+    }
+
+    /// Measurement only (`tests/search_measure.rs`; not routed): the plans of
+    /// the two statements `find_alerts` runs for page 1 without history, the
+    /// grouped counts and then the page, with the same filters and binds.
+    ///
+    /// # Errors
+    ///
+    /// The database error.
+    #[doc(hidden)]
+    pub async fn explain_alert_reads(
+        &self,
+        q: &AlertQuery,
+        page_size: i64,
+        mode: Explain,
+    ) -> Result<[String; 2], StoreError> {
+        let prefix = match mode {
+            Explain::Analyze => "EXPLAIN (ANALYZE, BUFFERS) ",
+            Explain::PlanWithoutSeqScan => "EXPLAIN (COSTS OFF) ",
+        };
+        let mut tx = self.pool.begin().await?;
+        if mode == Explain::PlanWithoutSeqScan {
+            sqlx::query("SET LOCAL enable_seqscan = off")
+                .execute(&mut *tx)
+                .await?;
+        }
+        let mut out = [String::new(), String::new()];
+        let mut counts = Self::counts_query_after(prefix, q);
+        let mut page = Self::page_query(prefix, q, HistoryOutput::Omit, 1, page_size);
+        for (slot, qb) in out.iter_mut().zip([&mut counts, &mut page]) {
+            let rows = qb.build().fetch_all(&mut *tx).await?;
+            let lines = rows
+                .iter()
+                .map(|r| r.try_get::<String, _>(0))
+                .collect::<Result<Vec<_>, _>>()?;
+            *slot = lines.join("\n");
+        }
+        tx.rollback().await?;
+        Ok(out)
     }
 
     /// `GET /alerts/count`: the total and the per-severity and per-status
