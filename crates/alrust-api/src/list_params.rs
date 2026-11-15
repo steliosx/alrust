@@ -55,12 +55,17 @@ pub(crate) fn parse(params: &[(String, String)], spec: &ListSpec) -> ApiResult<L
     let mut q = ListQuery::default();
     let mut seen: Vec<&str> = Vec::new();
     for (key, _) in params {
-        if EXCLUDED.contains(&key.as_str()) || seen.contains(&key.as_str()) {
+        if seen.contains(&key.as_str()) {
             continue;
         }
         seen.push(key);
         let base = key.replace('!', "");
         let name = base.split('.').next().unwrap_or_default();
+        // The base name is checked (`utils.py:57-58`), so `id!` and `q.x`
+        // are skipped as well.
+        if EXCLUDED.contains(&name) {
+            continue;
+        }
         let Some(&(_, column, kind)) = spec.filters.iter().find(|(n, _, _)| *n == name) else {
             return Err(ApiError::bad(format!("Invalid filter parameter: {key}")));
         };
@@ -82,7 +87,17 @@ pub(crate) fn parse(params: &[(String, String)], spec: &ListSpec) -> ApiResult<L
             values,
         });
     }
-    for (_, value) in params.iter().filter(|(k, _)| k == "sort-by") {
+    // No order at all when the first `sort-by` is empty (`utils.py:31`,
+    // `params.get`); after a non-empty first one, an empty one is 400.
+    let mut sorts = params
+        .iter()
+        .filter(|(k, _)| k == "sort-by")
+        .map(|(_, v)| v)
+        .peekable();
+    if sorts.peek().is_some_and(|v| v.is_empty()) {
+        return Ok(q);
+    }
+    for value in sorts {
         let (reversed, name) = match value.strip_prefix('-') {
             Some(n) => (true, n),
             None => (false, value.as_str()),

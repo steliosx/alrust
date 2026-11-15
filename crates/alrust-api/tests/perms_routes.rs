@@ -33,6 +33,7 @@ const ADMIN: &str = "synthetic-admin-key-000000000000000000000";
 const PERMS: &str = "synthetic-perms-key-000000000000000000000";
 const PERMS_READ: &str = "synthetic-permsread-key-0000000000000000";
 const PERMS_WRITE_ALERTS: &str = "synthetic-permswa-key-00000000000000000000";
+const PERMS_DELETE_ALERTS: &str = "synthetic-permsda-key-00000000000000000000";
 
 struct TestDb {
     base: PgConnectOptions,
@@ -138,6 +139,11 @@ async fn setup(auth: AuthRequired) -> Option<(TestDb, Store, axum::Router)> {
             "k-perms-wa",
             PERMS_WRITE_ALERTS,
             vec!["admin:perms", "write:alerts"],
+        ),
+        (
+            "k-perms-da",
+            PERMS_DELETE_ALERTS,
+            vec!["admin:perms", "delete:alerts"],
         ),
     ] {
         store
@@ -606,4 +612,64 @@ async fn auth_off_ceiling() {
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
+}
+
+/// A scope held exactly grants itself (`delete:alerts` included), the base
+/// name of an excluded parameter is skipped, and an empty first `sort-by`
+/// means no order.
+#[tokio::test]
+async fn exact_scopes_and_list_parameters() {
+    let Some((_db, _store, app)) = setup(AuthRequired::Yes).await else {
+        return;
+    };
+    let body = json!({"match": "deleter", "scopes": ["delete:alerts"]});
+    let (status, answer) = call(&app, "POST", "/perm", Some(PERMS), Some(body.clone())).await;
+    assert_eq!(
+        (status, answer["message"].clone()),
+        (
+            StatusCode::FORBIDDEN,
+            json!("Requested scope 'delete:alerts' not in existing scopes: admin:perms")
+        )
+    );
+    let (status, answer) = call(&app, "POST", "/perm", Some(PERMS_DELETE_ALERTS), Some(body)).await;
+    assert_eq!(status, StatusCode::CREATED, "{answer}");
+    row(&app, "ops", &["read:alerts"]).await;
+    let names = |body: &Value| -> Vec<String> {
+        body["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["match"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    for uri in [
+        "/perms?id!=p-ops",
+        "/perms?page!=3",
+        "/perms?q.x=1",
+        "/perms?sort-by=",
+        "/perms?sort-by=&sort-by=nonsense",
+    ] {
+        let (status, body) = call(&app, "GET", uri, Some(ADMIN), None).await;
+        assert_eq!(status, StatusCode::OK, "{uri} {body}");
+        assert_eq!(
+            names(&body),
+            ["admin", "user", "guest", "deleter", "ops"],
+            "{uri}"
+        );
+    }
+    let (status, body) = call(
+        &app,
+        "GET",
+        "/perms?sort-by=match&sort-by=",
+        Some(ADMIN),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (status, body["message"].clone()),
+        (
+            StatusCode::BAD_REQUEST,
+            json!("Sorting by '' field not supported.")
+        )
+    );
 }
