@@ -170,9 +170,13 @@ INSERT INTO alerts (id, resource, event, environment, severity, status, service,
 "#;
 
 async fn seeded() -> Option<(TestDb, axum::Router)> {
+    seeded_with(SEED).await
+}
+
+async fn seeded_with(sql: &str) -> Option<(TestDb, axum::Router)> {
     let db = test_db().await?;
     let store = store(&db).await;
-    db.pool.execute(SEED).await.unwrap();
+    db.pool.execute(sql).await.unwrap();
     let app = router(Arc::new(AppState {
         store,
         cfg: ApiConfig {
@@ -453,4 +457,110 @@ async fn the_grouped_reads_need_read_alerts_and_an_empty_store_is_not_found() {
         body,
         json!({"status": "ok", "message": "not found", "services": [], "total": 0})
     );
+}
+
+/// Codex 7dda6a95 follow-up: a stored NULL or empty severity or status
+/// counts as `normal` or `open`, together with the literal values, and
+/// `/environments` agrees with `/alerts/count` on the same rows.
+#[tokio::test]
+async fn null_and_empty_severity_and_status_count_as_normal_and_open() {
+    let Some((_db, app)) = seeded_with(
+        r#"
+INSERT INTO alerts (id, resource, event, environment, severity, status, service) VALUES
+ ('n1', 'r1', 'e', 'Production', NULL,     NULL,   ARRAY['svc']),
+ ('n2', 'r2', 'e', 'Production', '',       '',     ARRAY['svc']),
+ ('n3', 'r3', 'e', 'Production', 'normal', 'open', ARRAY['svc'])
+"#,
+    )
+    .await
+    else {
+        return;
+    };
+    let (code, body) = get(&app, "/environments", READER_KEY).await;
+    assert_eq!(code, StatusCode::OK, "{body}");
+    let prod = item(
+        &body["environments"],
+        &[("environment", json!("Production"))],
+    );
+    assert_eq!(prod["count"], 3);
+    assert_eq!(prod["severityCounts"], json!({"normal": 3}));
+    assert_eq!(prod["statusCounts"], json!({"open": 3}));
+    let (_, count) = get(&app, "/alerts/count", READER_KEY).await;
+    assert_eq!(count["severityCounts"], prod["severityCounts"]);
+    assert_eq!(count["statusCounts"], prod["statusCounts"]);
+    let (_, body) = get(&app, "/services", READER_KEY).await;
+    let svc = item(
+        &body["services"],
+        &[
+            ("environment", json!("Production")),
+            ("service", json!("svc")),
+        ],
+    );
+    assert_eq!(
+        (svc["count"].clone(), svc["severityCounts"].clone()),
+        (json!(3), json!({"normal": 3}))
+    );
+}
+
+/// Codex 7dda6a95 follow-up: the 1000-row limit applies to the grouped
+/// SQL rows, not to alerts or names. Rows are kept in name order, so a cut
+/// can leave a name with some counts and a zero total, and the names after
+/// it with nothing.
+#[tokio::test]
+async fn the_grouped_row_limit_cuts_in_name_order() {
+    // e000 has two severities: 6 cube rows (2 pairs, 2 severities, 1
+    // status, 1 total). e001-e248 have 4 each (992). That leaves 2 rows for
+    // e249 (its pair and its severity) and none for e250.
+    let Some((_db, app)) = seeded_with(
+        r#"
+INSERT INTO alerts (id, resource, event, environment, severity, status, service)
+SELECT 'a' || i, 'r', 'e', 'e' || lpad(i::text, 3, '0'), 'major', 'open', ARRAY['svc']
+FROM generate_series(0, 250) AS i
+UNION ALL SELECT 'extra', 'r', 'e2', 'e000', 'minor', 'open', ARRAY['svc']
+"#,
+    )
+    .await
+    else {
+        return;
+    };
+    let (code, body) = get(&app, "/environments", READER_KEY).await;
+    assert_eq!(code, StatusCode::OK, "{body}");
+    assert_eq!(body["total"], 251);
+    let envs = &body["environments"];
+    assert_eq!(envs.as_array().unwrap().len(), 251);
+    let e000 = item(envs, &[("environment", json!("e000"))]);
+    assert_eq!(e000["count"], 2);
+    assert_eq!(e000["severityCounts"], json!({"major": 1, "minor": 1}));
+    let e248 = item(envs, &[("environment", json!("e248"))]);
+    assert_eq!(e248["count"], 1);
+    let e249 = item(envs, &[("environment", json!("e249"))]);
+    assert_eq!(e249["count"], 0);
+    assert_eq!(e249["severityCounts"], json!({"major": 1}));
+    assert_eq!(e249["statusCounts"], json!({}));
+    let e250 = item(envs, &[("environment", json!("e250"))]);
+    assert_eq!(e250["count"], 0);
+    assert_eq!(e250["severityCounts"], json!({}));
+}
+
+/// The same limit on `/alerts/groups`: 1001 groups give the first 1000.
+#[tokio::test]
+async fn alert_groups_keep_the_first_1000_rows() {
+    let Some((_db, app)) = seeded_with(
+        r#"
+INSERT INTO alerts (id, resource, event, environment, severity, status, service, "group")
+SELECT 'g' || i, 'r', 'e', 'Production', 'major', 'open', ARRAY['svc'], 'g' || lpad(i::text, 4, '0')
+FROM generate_series(0, 1000) AS i
+"#,
+    )
+    .await
+    else {
+        return;
+    };
+    let (code, body) = get(&app, "/alerts/groups", READER_KEY).await;
+    assert_eq!(code, StatusCode::OK, "{body}");
+    assert_eq!(body["total"], 1000);
+    let groups = names(&body["groups"], "group");
+    assert_eq!(groups.first(), Some(&json!("g0000")));
+    assert_eq!(groups.last(), Some(&json!("g0999")));
+    assert!(!groups.contains(&json!("g1000")));
 }
