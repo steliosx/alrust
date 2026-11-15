@@ -221,6 +221,24 @@ c, b = call('GET', f'/alerts?resource={NR}')
 for a_ in b.get('alerts', []):
     call('DELETE', f"/alert/{a_.get('id')}")
 
+# --- alert notes [views/alerts.py:596-723; SF-NOTES]
+NA = f'notes-{RUN}'
+code, body = call('POST', '/alert', alert(resource=NA, event='NoteSmoke'))
+naid = body.get('id', '') if isinstance(body, dict) else ''
+code, body = call('PUT', f'/alert/{naid}/note', {'text': 'smoke note'})
+nid = body.get('id', '') if isinstance(body, dict) else ''
+check('PUT /alert/<id>/note is 201 with the note', code == 201 and body.get('note', {}).get('text') == 'smoke note', (code, body))
+code, body = call('GET', f'/alert/{naid}/notes')
+check('GET /alert/<id>/notes lists it', code == 200 and [n.get('id') for n in body.get('notes', [])] == [nid], (code, body))
+code, body = call('PUT', f'/alert/{naid}/note/{nid}', {'text': 'edited'})
+check('PUT /alert/<id>/note/<note_id> updates it', code == 200 and body.get('note', {}).get('text') == 'edited', (code, body))
+code, body = call('DELETE', f'/alert/{naid}/note/{nid}')
+check('DELETE /alert/<id>/note/<note_id> removes it', code == 200, (code, body))
+code, body = call('GET', f'/alert/{naid}')
+h0 = (body.get('alert', {}).get('history') or [{}])[0] if isinstance(body, dict) else {}
+check('the dismissed note leaves a dismiss history entry', h0.get('type') == 'dismiss' and h0.get('id') == nid, h0)
+call('DELETE', f'/alert/{naid}')
+
 # --- heartbeats [HB]
 origin = f'smoke/{RUN}'
 code, body = call('POST', '/heartbeat', {'origin': origin, 'timeout': 60, 'tags': ['smoke']})

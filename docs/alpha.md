@@ -102,6 +102,7 @@ it. At start-up it decides what it was pointed at:
 | `PUT /alert/{id}/tag`, `/untag`, `/attributes` | Add or remove tags; merge attributes (a `null` value removes the key). No history entry, `updateTime` unchanged, as in the reference. Divergences (DECISIONS Y34): `tags` must be a non-empty list of strings and `attributes` a non-empty object, else 400; an update that leaves no attributes is 200 (the reference stores it and answers 500); untagging every tag stores `[]` (the reference stores NULL; both read back as `[]`) |
 | `POST /heartbeat`, `GET /heartbeats`, `GET`/`DELETE /heartbeat/{id}` | Upsert by origin and customer; derived latency, since and status |
 | `POST /key`, `GET /keys`, `DELETE /key/{id}` | API keys (`Authorization: Key …`, `X-API-Key`, or `?api-key=`). A new key's scopes must be within the creator's; the secret is shown only in the creation response; lists and `href`s use the public id. As in the reference, `POST /key` may supply its own `key` and `id`: a Python-falsy value (`null`, `false`, `0`, `""`, `[]`, `{}`) generates one, a duplicate is refused (500), and a truthy non-string is rejected with 400, an intentional divergence by the owner's ruling (DECISIONS Y33; the reference passes such values unchanged to the database adapter, and type-specific outcomes have not been qualified). `href`s percent-encode the id as one path segment |
+| `PUT /alert/{id}/note`, `GET /alert/{id}/notes`, `PUT`/`DELETE /alert/{id}/note/{note_id}` | Alert notes. A new note copies the alert's resource, event, environment, severity and status into its `attributes` and adds a `note` history entry (with the note's id); a deleted note adds a `dismiss` entry. SF-NOTES: a note is changed or deleted only through its own alert, else 404 (`not found` for `PUT`, `note not found` for `DELETE`) with no change. As in the reference (customer-mapping C21), the list selects notes whose `alert` matches the alert's id as a case-insensitive regular expression, so a short client-set id also lists notes of alerts whose ids contain it; at most 100, oldest first (the reference has no order). History entries are written to the matched alert only, as everywhere in alrust. Differences: a truthy non-string `text` or `note`, a non-string update `text`, non-object update `attributes` or a non-object body are 400 (the reference's outcome is not established) |
 | `GET /management/gtg`, `/management/healthcheck` | No key needed |
 | `GET`/`POST /management/housekeeping` | Deletion and expiry (K1, K2) |
 
@@ -182,7 +183,7 @@ or a key-management procedure.
   reference reads with a case-insensitive regex anchored at the start, with
   the id not escaped, and updates by `id` or `id` prefix; it returns any one
   matching row, and an exact match is always one of them.
-- **Not yet implemented:** blackouts, notes,
+- **Not yet implemented:** blackouts,
   customers, users, groups, permissions, auth logins (basic, LDAP, OIDC,
   SAML), webhooks, bulk routes, the top-N counts, auto-unshelve and auto-unack
   in housekeeping, `q=` queries, the web UI and the desktop app.
