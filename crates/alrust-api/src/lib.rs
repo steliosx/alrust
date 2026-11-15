@@ -438,6 +438,15 @@ pub fn router(state: Shared) -> Router {
         .route("/alert/{id}/action", put(take_action))
         .route("/alert/{id}/tag", put(tag_alert))
         .route("/alert/{id}/untag", put(untag_alert))
+        .route("/perm", post(perms::create_perm))
+        .route(
+            "/perm/{id}",
+            get(perms::get_perm)
+                .put(perms::update_perm)
+                .delete(perms::delete_perm),
+        )
+        .route("/perms", get(perms::list_perms))
+        .route("/scopes", get(perms::list_scopes))
         .route("/alert/{id}/attributes", put(update_attributes))
         .route("/alerts", get(search_alerts))
         .route("/alerts/count", get(count_alerts))
@@ -461,6 +470,10 @@ pub fn router(state: Shared) -> Router {
 }
 
 type Params = Query<Vec<(String, String)>>;
+
+// The admin lists (permissions; groups and users to follow).
+mod list_params;
+mod perms;
 
 async fn index(State(st): State<Shared>) -> Json<Value> {
     Json(json!({
