@@ -213,9 +213,9 @@ async fn post(app: &axum::Router, resource: &str, extra: Value) -> (StatusCode, 
         "resource": resource, "event": "Down", "environment": "Production",
         "service": ["svc"], "severity": "major"
     });
-    body.as_object_mut()
-        .unwrap()
-        .extend(extra.as_object().unwrap().clone());
+    if let Value::Object(map) = extra {
+        body.as_object_mut().unwrap().extend(map);
+    }
     let (code, _, out) = send(app, "POST", "/alert", ADMIN_KEY, Some(body)).await;
     (code, out)
 }
