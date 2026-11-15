@@ -430,6 +430,7 @@ async fn redact_error_body(r: Response) -> Response {
 }
 
 pub fn router(state: Shared) -> Router {
+    started();
     Router::new()
         .route("/", get(index))
         .route("/alert", post(receive))
@@ -452,6 +453,8 @@ pub fn router(state: Shared) -> Router {
         .route("/key/{id}", axum::routing::delete(delete_key))
         .route("/management/gtg", get(gtg))
         .route("/management/healthcheck", get(healthcheck))
+        .route("/management/manifest", get(management_manifest))
+        .route("/management/status", get(management_status))
         .route(
             "/management/housekeeping",
             get(housekeeping).post(housekeeping),
@@ -1347,6 +1350,72 @@ async fn housekeeping(
     Ok(Json(
         json!({"status": "ok", "expired": expired, "unshelve": [], "unack": [], "count": count}),
     ))
+}
+
+/// When this process built its first router: the reference's `started`
+/// (`management/views.py:36`, module import time).
+static STARTED: std::sync::OnceLock<chrono::DateTime<Utc>> = std::sync::OnceLock::new();
+
+fn started() -> chrono::DateTime<Utc> {
+    *STARTED.get_or_init(Utc::now)
+}
+
+/// `GET /management/manifest` (`management/views.py:67-79`). `release` is
+/// alrust's own version, as `GET /` reports it (the reference reports
+/// Alerta's, per `SERVER_VERSION`, which alrust always treats as `full`).
+/// The build fields are set at compile time by `ALRUST_BUILD_NUMBER`,
+/// `ALRUST_BUILD_DATE` and `ALRUST_VCS_REVISION`, else the reference's
+/// development values (`alerta/dev.py`): `DEV`, the start time, `HEAD`.
+async fn management_manifest(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+) -> ApiResult<Json<Value>> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("read:management")?;
+    let date = option_env!("ALRUST_BUILD_DATE").map_or_else(
+        || started().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        str::to_owned,
+    );
+    Ok(Json(json!({
+        "release": env!("CARGO_PKG_VERSION"),
+        "build": option_env!("ALRUST_BUILD_NUMBER").unwrap_or("DEV"),
+        "date": date,
+        "revision": option_env!("ALRUST_VCS_REVISION").unwrap_or("HEAD"),
+    })))
+}
+
+/// `GET /management/status` (`management/views.py:228-242`): alrust's name
+/// and version (as `GET /`), the time and the uptime in milliseconds, and
+/// the metrics alrust has: the total-alerts gauge, counted live, and the
+/// two reference switches, always on. alrust keeps no counters or timers,
+/// and neither writes nor reads the `metrics` table.
+async fn management_status(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+) -> ApiResult<Json<Value>> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("read:management")?;
+    let total = st.store.count_alerts(&AlertQuery::default()).await?.total;
+    let now = Utc::now();
+    let switch = |name: &str, title: &str, description: &str| {
+        json!({"group": "switch", "name": name, "type": "text", "title": title,
+               "description": description, "value": "ON"})
+    };
+    let metrics = json!([
+        {"group": "alerts", "name": "total", "title": "Total alerts",
+         "description": "Total number of alerts in the database", "type": "gauge", "value": total},
+        switch("auto-refresh-allow", "Alerta console auto-refresh", "Allow consoles to auto-refresh alerts"),
+        switch("sender-api-allow", "API alert submission", "Allow alerts to be submitted via the API"),
+    ]);
+    Ok(Json(json!({
+        "application": "alrust",
+        "version": env!("CARGO_PKG_VERSION"),
+        "time": now.timestamp_millis(),
+        "uptime": (now - started()).num_milliseconds(),
+        "metrics": metrics,
+    })))
 }
 
 #[cfg(test)]
