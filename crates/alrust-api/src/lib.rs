@@ -49,6 +49,8 @@ pub struct ApiConfig {
     /// applies once a verifier is configured; configuring one from the
     /// server's settings is a separate, later slice.
     pub bearer: Option<BearerConfig>,
+    /// `OAUTH2_CLIENT_ID` as configured (empty when unset), for `GET /config`.
+    pub oauth2_client_id: String,
 }
 
 /// The verifier inputs for operator Bearer tokens: the signing key, the
@@ -91,6 +93,7 @@ impl Default for ApiConfig {
             delete_expired_after_s: 7200,
             delete_info_after_s: 43200,
             bearer: None,
+            oauth2_client_id: String::new(),
         }
     }
 }
@@ -432,6 +435,7 @@ async fn redact_error_body(r: Response) -> Response {
 pub fn router(state: Shared) -> Router {
     Router::new()
         .route("/", get(index))
+        .route("/config", get(client_config))
         .route("/alert", post(receive))
         .route("/alert/{id}", get(get_alert).delete(delete_alert))
         .route("/alert/{id}/status", put(set_status))
@@ -468,6 +472,106 @@ async fn index(State(st): State<Shared>) -> Json<Value> {
         "name": "alrust",
         "version": env!("CARGO_PKG_VERSION"),
         "uri": st.cfg.base_url,
+    }))
+}
+
+/// `GET /config` (`views/config.py:9-74`; `spec/openapi.yaml` `/config`):
+/// the web UI's bootstrap settings, a bare object with the reference's 36
+/// keys. No permission check: credentials are not read, so an invalid key
+/// is not refused.
+///
+/// - alrust's own settings: `endpoint`, `auth_required`, `environments`,
+///   `client_id`, `provider` (when set) and the timeouts (`heartbeat` is the
+///   alert timeout, which alrust applies to a heartbeat without one).
+/// - What alrust does not implement, reported as off: `debug`,
+///   `allow_readonly`, `customer_views` and `signup_enabled` (signup is
+///   out of scope).
+/// - Everything else is the reference's default (`settings.py`), which
+///   alrust does not read from its own settings.
+async fn client_config(State(st): State<Shared>) -> Json<Value> {
+    use alrust_domain::alarm_model;
+    let store = st.store.config();
+    let severity = alarm_model::severity_map();
+    let colors = alarm_model::colors();
+    // An empty AUTH_PROVIDER is alrust's default; the reference's is basic.
+    let provider = st
+        .cfg
+        .bearer
+        .as_ref()
+        .map(|b| b.provider.as_str())
+        .filter(|p| !p.is_empty())
+        .unwrap_or("basic");
+    Json(json!({
+        "debug": false,
+        "endpoint": st.cfg.base_url.trim_end_matches('/'),
+        "alarm_model": {
+            "name": alarm_model::NAME,
+            "severity": severity,
+            "colors": colors,
+            "status": alarm_model::status_map(),
+            "defaults": {
+                "status": alrust_domain::status::OPEN,
+                "normal_severity": alrust_domain::NORMAL_SEVERITY,
+                "previous_severity": alrust_domain::DEFAULT_PREVIOUS_SEVERITY,
+            },
+        },
+        "auth_required": st.cfg.auth_required,
+        "allow_readonly": false,
+        "readonly_scopes": ["read"],
+        "provider": provider,
+        "customer_views": false,
+        "signup_enabled": false,
+        "email_verification": false,
+        "client_id": st.cfg.oauth2_client_id,
+        "azure_tenant": "common",
+        "aws_region": "us-east-1",
+        "cognito_domain": null,
+        "github_url": "https://github.com",
+        "gitlab_url": "https://gitlab.com",
+        "keycloak_url": null,
+        "keycloak_realm": null,
+        "oidc_auth_url": null,
+        "site_logo_url": "",
+        "severity": severity,
+        "colors": colors,
+        "timeouts": {
+            "alert": store.alert_timeout,
+            "heartbeat": store.alert_timeout,
+            "ack": store.ack_timeout,
+            "shelve": store.shelve_timeout,
+        },
+        "blackouts": {"duration": 3600},
+        "dates": {
+            "shortTime": "HH:mm",
+            "mediumDate": "ddd D MMM HH:mm",
+            "longDate": "ddd D MMM, YYYY HH:mm:ss.SSS Z",
+        },
+        "font": {
+            "font-family": "\"Sintony\", Arial, sans-serif",
+            "font-size": "13px",
+            "font-weight": 500,
+        },
+        "audio": {"new": null},
+        "columns": [
+            "severity", "status", "lastReceiveTime", "timeoutLeft", "duplicateCount",
+            "customer", "environment", "service", "resource", "event", "value", "text",
+        ],
+        "sort_by": ["severity", "lastReceiveTime"],
+        "filter": {"status": ["open", "ack"]},
+        "indicators": {
+            "severity": ["critical", "major", "minor", "warning", "indeterminate", "informational"],
+            "queries": [
+                {"text": "Production", "query": [["environment", "Production"]]},
+                {"text": "Development", "query": [["environment", "Development"]]},
+                {"text": "Heartbeats", "query": {"q": "event:Heartbeat"}},
+                {"text": "Misc.", "query": "group=Misc"},
+            ],
+        },
+        "actions": [],
+        "tracking_id": null,
+        "refresh_interval": 5000,
+        "environments": st.cfg.allowed_environments,
+        "clipboard_template": "",
     }))
 }
 

@@ -221,6 +221,11 @@ c, b = call('GET', f'/alerts?resource={NR}')
 for a_ in b.get('alerts', []):
     call('DELETE', f"/alert/{a_.get('id')}")
 
+# --- web UI bootstrap [views/config.py:9-74]
+code, body = call('GET', '/config', key=None)
+check('GET /config without a key is 200 with the 36 keys', code == 200 and isinstance(body, dict) and len(body) == 36
+      and body.get('alarm_model', {}).get('name') == 'Alerta 9.1.0', (code, sorted(body) if isinstance(body, dict) else body))
+
 # --- heartbeats [HB]
 origin = f'smoke/{RUN}'
 code, body = call('POST', '/heartbeat', {'origin': origin, 'timeout': 60, 'tags': ['smoke']})
