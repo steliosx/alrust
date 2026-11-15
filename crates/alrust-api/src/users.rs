@@ -185,9 +185,9 @@ fn merge(into: &mut Map<String, Value>, from: &Map<String, Value>) {
     for (key, value) in from {
         if let (Some(Value::Object(a)), Value::Object(b)) = (into.get_mut(key), value) {
             merge(a, b);
-            continue;
+        } else {
+            into.insert(key.clone(), value.clone());
         }
-        into.insert(key.clone(), value.clone());
     }
 }
 

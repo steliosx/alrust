@@ -33,13 +33,13 @@ pub struct User {
 impl User {
     /// `login or email or 'n/a'` (`User.from_record`).
     pub fn shown_login(&self) -> &str {
-        if !self.login.is_empty() {
-            &self.login
-        } else {
+        if self.login.is_empty() {
             self.email
                 .as_deref()
                 .filter(|e| !e.is_empty())
                 .unwrap_or("n/a")
+        } else {
+            &self.login
         }
     }
 
@@ -57,6 +57,7 @@ impl User {
     /// read as now. alrust has no `ADMIN_USERS`, so the roles are as stored.
     pub fn body(&self, base_url: &str) -> Value {
         let time = |t: NaiveDateTime| iso8601(&t.and_utc());
+        let updated = self.update_time.map_or_else(|| iso8601(&Utc::now()), time);
         json!({
             "id": self.id,
             "href": format!("{base_url}/user/{}", path_segment(&self.id)),
@@ -70,7 +71,7 @@ impl User {
             "createTime": time(self.create_time),
             "lastLogin": self.last_login.map(time),
             "text": self.text.clone().unwrap_or_default(),
-            "updateTime": iso8601(&self.update_time.map_or_else(Utc::now, |t| t.and_utc())),
+            "updateTime": updated,
             "email_verified": self.email_verified.unwrap_or(false),
         })
     }

@@ -651,6 +651,7 @@ async fn groups_and_delete() {
         ("DELETE", "/user/u-ana", 200),
         ("GET", "/user/u-ana", 404),
         ("DELETE", "/user/u-ana", 404),
+        ("DELETE", "/user/me", 405),
     ] {
         let (got, _) = call(&app, method, uri, &admin, None).await;
         assert_eq!(got.as_u16(), status, "{method} {uri}");
