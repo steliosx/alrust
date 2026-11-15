@@ -13,7 +13,10 @@ proposal in #228), which it does not edit:
 18.6 from PGDG, synthetic data). Read the numbers as relative and the
 plans as shapes. They are not a performance claim for any deployment.
 The source is the `search measurement` workflow of #247, runs `43714683590`
-and `43715199114`, and the raw plans are in those runs' artifacts.
+and `43715199114`, and the raw plans are in those runs' artifacts. The
+opt-in mode's numbers come from run `43759535625` of the same harness on
+#248's then head `2add07ad` (measurement-only PR #256, the same sizes and
+candidates).
 
 ## What was measured
 
@@ -113,6 +116,35 @@ figures agree within a few percent).
    and informational ones after `DELETE_INFO_AFTER` (12 hours), but open
    and acknowledged alerts stay as long as they are open.
 
+5. **The opt-in mode's bare term costs about four times the default
+   mode, and no candidate index serves it** (run `43759535625`; median ms,
+   default plans; the custom-plan column agrees):
+
+   | read | 10k, no index | 100k, no index | 100k, B-tree `last_receive_time` | 100k, trigram GIN `text` |
+   |---|---|---|---|---|
+   | `q=disk` (default mode) | 12 | 102 | 48 | 26 |
+   | `q.mode=lucene&q=disk` | 44 | 431 | 211 | 423 |
+   | `q.mode=lucene&q.df=text&q=disk` | 12 | 102 | 47 | 27 |
+   | `q="disk full"` (default mode) | 12 | 112 | 116 | 18 |
+   | `q.mode=lucene&q="disk full"` | 69 | 683 | 676 | 680 |
+
+   - A term without a field is an `OR` over seven default fields
+     (`spec/search-lucene-mode.md` M11), two of them arrays matched element
+     by element. A phrase is a word-boundary regular expression over the
+     same seven. So the opt-in term costs about 4 times the default mode's,
+     and the phrase about 6 times, at both sizes.
+   - Neither trigram candidate (on `text`, or on `resource` and `event`)
+     changes those reads. Only the list B-tree halves the term, through
+     its page. A prefix (`dis*`), a substring (`isk`), `AND`
+     and `NOT` behave like the term (210 to 480 ms at 100k); the short term
+     `on` costs 166 ms.
+   - `q.df=text` brings an opt-in search back to the default mode's cost
+     and indexability (102 ms; 27 ms with trigram GIN).
+   - In this run, `resource:host*` takes 164 to 181 ms with an index on
+     generic plans and 74 to 81 ms on custom plans, in both modes (113 to
+     169 ms in run `43714683590`): the generic-plan effect of finding 3,
+     not a property of the opt-in mode.
+
 ## Proposal (owner decisions, then an ADR-0005 revision)
 
 | # | Change | Gain | Cost | Gate |
@@ -121,11 +153,14 @@ figures agree within a few percent).
 | P2 | B-tree `alerts (last_receive_time DESC, id)` as migration `0003` | List 3.5×, most searches 2× | 3 MB at 100k; +31 % WAL per duplicate | ADR-0005 revision (owner ruling 6 of 2026-10-28: named extra indexes) |
 | P3 | `pg_trgm` and a GIN index on `alerts.text` | Selective text search 4–25× | An extension on adopted Alerta databases; +100 % WAL per duplicate; the 18.7 GIN fixes (#226) | Owner (Q-S3), then an ADR-0005 revision |
 | P4 | Nothing on `attributes`, `raw_data`, `history` | — | — | Unchanged from `search-design.md` |
+| P5 | The opt-in mode keeps its seven default fields; `q.df` is the documented way to a fast, indexable search | Search quality where the user asks for it; `q.df=text` at the default mode's cost | A bare opt-in term about 4×, a phrase about 6×, with no index that helps (44 and 69 ms at 10k, 431 and 683 ms at 100k) | Owner, with the opt-in mode's review. The alternatives: narrow the default fields, or a trigram index over an expression joining them, which needs a design because a match could then cross a field boundary |
 
 My recommendation: P1 and P2 first, together. They are cheap and broad,
-and need no extension. Decide P3 together with #226, after the opt-in
-mode is reviewed, because that mode's multi-field search changes which
-columns would want a trigram index.
+and need no extension. Decide P3 together with #226. The opt-in mode is
+now measured (finding 5): a trigram index on `text` helps it only through
+`q.df=text`, so P3's case rests on the default mode's text search, as
+before. P5 as written: it keeps the opt-in mode's quality, and states its
+cost.
 
 ## Not established
 
