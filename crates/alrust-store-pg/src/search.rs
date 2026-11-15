@@ -643,27 +643,27 @@ fn parts(field: &Field) -> (Option<&str>, &str) {
 }
 
 /// The `singleterm` branch of `SearchTerm.to_sql`.
-fn word_sql(field: &Field, w: &str, o: &mut Out) -> Vec<Piece> {
+fn word_sql(field: &Field, word: &str, o: &mut Out) -> Vec<Piece> {
     let (attr, name) = parts(field);
     let first = field.first();
     if name == "_exists_" {
-        let p = o.param(w.to_owned());
+        let p = o.param(word.to_owned());
         vec![text("\"attributes\"::jsonb ? "), param(p)]
     } else if ARRAYS.contains(&name) {
-        let p = o.param(w.to_owned());
+        let p = o.param(word.to_owned());
         vec![param(p), text(format!("=ANY({})", col(first)))]
     } else if let Some(a) = attr {
-        let a = a.replace('_', "attributes");
-        let k = o.param(name.to_owned());
-        let v = o.param(format!("%{w}%"));
+        let prefix = a.replace('_', "attributes");
+        let key = o.param(name.to_owned());
+        let value = o.param(format!("%{word}%"));
         vec![
-            text(format!("{}::jsonb ->>", col(&a))),
-            param(k),
+            text(format!("{}::jsonb ->>", col(&prefix))),
+            param(key),
             text(" ILIKE "),
-            param(v),
+            param(value),
         ]
     } else {
-        let p = o.param(format!("%{w}%"));
+        let p = o.param(format!("%{word}%"));
         vec![text(format!("{} ILIKE ", col(first))), param(p)]
     }
 }
@@ -680,14 +680,14 @@ fn phrase_sql(field: &Field, ph: &str, o: &mut Out) -> Vec<Piece> {
         let p = o.param(ph.to_owned());
         vec![param(p), text(format!("=ANY({})", col(first)))]
     } else if let Some(a) = attr {
-        let a = a.replace('_', "attributes");
-        let k = o.param(name.to_owned());
-        let v = o.param(format!("\\y{ph}\\y"));
+        let prefix = a.replace('_', "attributes");
+        let key = o.param(name.to_owned());
+        let value = o.param(format!("\\y{ph}\\y"));
         vec![
-            text(format!("{}::jsonb ->>", col(&a))),
-            param(k),
+            text(format!("{}::jsonb ->>", col(&prefix))),
+            param(key),
             text(" ~* "),
-            param(v),
+            param(value),
         ]
     } else {
         let p = o.param(format!("\\y{ph}\\y"));
