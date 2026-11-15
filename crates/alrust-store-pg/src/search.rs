@@ -36,6 +36,8 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use sqlx::{Postgres, QueryBuilder};
+
 /// One piece of a SQL template.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Piece {
@@ -72,12 +74,22 @@ impl SearchSql {
         out
     }
 
-    /// Whether every parameter can be sent to PostgreSQL: a text value
-    /// cannot contain NUL. The reference's driver refuses such a value
-    /// with an uncaught error (a 500); a `\u` escape of a lone surrogate,
-    /// which the reference cannot encode either, is held as NUL.
-    pub fn sendable(&self) -> bool {
-        self.params.iter().all(|p| !p.contains('\0'))
+    /// Appends the template to `qb`: each parameter bound in turn, and a
+    /// compared bound followed by its column's cast ([`cast_for`]).
+    pub fn push_to<'q>(&'q self, qb: &mut QueryBuilder<'q, Postgres>) {
+        for piece in &self.pieces {
+            match piece {
+                Piece::Text(t) => {
+                    qb.push(t);
+                }
+                Piece::Param { index, compare } => {
+                    qb.push_bind(&self.params[*index]);
+                    if let Some(c) = compare {
+                        qb.push(cast_for(c));
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -99,10 +111,11 @@ pub fn cast_for(column: &str) -> &'static str {
 
 const SPECIAL: &[u8] = b"=><(){}[]^\"~*?:\\/.&|";
 
-/// The deepest nesting of parentheses and unary operators accepted. The
-/// reference recurses without a limit and fails at Python's recursion
-/// limit with an uncaught error; alrust refuses deeper input as a parse
-/// error.
+/// The deepest nesting accepted, counting the query itself, each
+/// parenthesis and each unary operator: 31 nested parentheses (or 31
+/// `NOT`s) parse, 32 do not. The reference recurses without a limit and
+/// fails at Python's recursion limit with an uncaught error; alrust
+/// refuses deeper input as a parse error.
 pub const MAX_DEPTH: usize = 32;
 
 fn word_byte(b: u8) -> bool {
@@ -899,6 +912,72 @@ pub fn check_fields(node: &Node) -> Result<(), String> {
     }
 }
 
+/// Whether a phrase or regex holds NUL after unquoting (a `\0`, `\000`,
+/// `\x00` or `\u0000` escape, or a lone surrogate held as NUL). PostgreSQL
+/// text cannot hold it; the reference's driver refuses it with an uncaught
+/// error (a 500). Words, bounds and fields are printable ASCII, so a raw
+/// NUL outside quotes ends the word and, like any input that does not
+/// parse, is dropped with the rest (F1).
+fn has_nul(node: &Node) -> bool {
+    match node {
+        Node::Clause { term, .. } => match term {
+            Term::Phrase(t) | Term::Regex(t) => t.contains('\0'),
+            Term::Sub(inner) => has_nul(inner),
+            _ => false,
+        },
+        Node::Modifier(_, inner) | Node::Not(inner) => has_nul(inner),
+        Node::And(items) | Node::Or(items) => items.iter().any(|n| has_nul(n)),
+    }
+}
+
+/// Why a `q` is refused, in SF-QUERY alrust item 7's order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SearchError {
+    /// The reference's `Failed to parse query string.`; alrust also gives
+    /// it for a value that cannot be sent and beyond [`MAX_DEPTH`], where
+    /// the reference fails with an uncaught error.
+    Parse,
+    /// Item 3: `q.df` is not an `alerts` column.
+    DefaultField(String),
+    /// Item 4: the first unsupported search field, as written.
+    Field(String),
+}
+
+impl SearchError {
+    /// The 400 message.
+    pub fn message(&self) -> String {
+        match self {
+            SearchError::Parse => "Failed to parse query string.".to_owned(),
+            SearchError::DefaultField(v) => format!("Default field '{v}' not supported."),
+            SearchError::Field(f) => format!("Search field '{f}' not supported."),
+        }
+    }
+}
+
+/// A non-empty `q` with its `q.df`, for an alert query: parsed, checked
+/// in item 7's order (syntax, then `q.df`, then the search fields) and
+/// translated with chains folded (item 6). `q.df` is checked whether or
+/// not the query uses the default field (item 3); an empty `q.df` is the
+/// default field `text`, as in the reference (`default_field or 'text'`).
+///
+/// # Errors
+///
+/// The first failed check.
+pub fn compile(q: &str, default_field: Option<&str>) -> Result<SearchSql, SearchError> {
+    let node = parse(q).ok_or(SearchError::Parse)?;
+    if has_nul(&node) {
+        return Err(SearchError::Parse);
+    }
+    let df = default_field.filter(|d| !d.is_empty());
+    if let Some(d) = df
+        && !ALERT_COLUMNS.contains(&d)
+    {
+        return Err(SearchError::DefaultField(d.to_owned()));
+    }
+    check_fields(&node).map_err(SearchError::Field)?;
+    Ok(translate(&node, df, Chains::Fold))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1118,20 +1197,28 @@ mod tests {
         assert_eq!(phrase("\"\\q\\x4\""), Some(strings(&["\\y\\q\\x4\\y"])));
         assert_eq!(phrase("/\\d+/"), Some(strings(&["\\d+"])));
         assert_eq!(reference("\"a\rb\""), None);
-        for q in ["\"a\\0b\"", "\"\\000\"", "\"\\u0000\"", "\"\\ud800\""] {
-            let s = translate(&parse(q).unwrap(), None, Chains::Fold);
-            assert!(!s.sendable(), "{q}");
+        for q in [
+            "\"a\\0b\"",
+            "\"\\000\"",
+            "/\\x00/",
+            "\"\\u0000\"",
+            "\"\\ud800\"",
+        ] {
+            assert_eq!(compile(q, None), Err(SearchError::Parse), "{q}");
         }
-        assert!(translate(&parse("\"a\"").unwrap(), None, Chains::Fold).sendable());
+        // No backslash escape: `\\0` is a backslash, then NUL.
+        assert_eq!(compile("\"a\\\\0\"", None), Err(SearchError::Parse));
+        assert!(compile("\"\\x0g\"", None).is_ok());
     }
 
     #[test]
     fn nesting_beyond_the_cap_is_a_parse_error() {
         let nested = |n: usize| format!("{}a{}", "(".repeat(n), ")".repeat(n));
-        assert!(parse(&nested(20)).is_some());
-        assert_eq!(parse(&nested(40)), None);
-        assert!(parse(&format!("{}a", "NOT ".repeat(10))).is_some());
-        assert_eq!(parse(&format!("{}a", "NOT ".repeat(40))), None);
+        assert!(parse(&nested(31)).is_some());
+        assert_eq!(parse(&nested(32)), None);
+        assert!(parse(&format!("{}a", "NOT ".repeat(31))).is_some());
+        assert_eq!(parse(&format!("{}a", "NOT ".repeat(32))), None);
+        assert!(parse("disk\0 full").is_some());
     }
 
     #[test]
@@ -1161,5 +1248,42 @@ mod tests {
         assert_eq!(cast_for("timeout"), "::integer");
         assert_eq!(cast_for("create_time"), "::timestamp");
         assert_eq!(cast_for("resource"), "");
+    }
+
+    /// SF-QUERY items 3 and 7, vectors 15 to 17, 20 and 22.
+    #[test]
+    fn compile_checks_in_order() {
+        let err = |q: &str, df: Option<&str>| compile(q, df).unwrap_err().message();
+        assert_eq!(err("(disk", Some("bogus")), "Failed to parse query string.");
+        assert_eq!(
+            err("nosuch:x", Some("bogus")),
+            "Default field 'bogus' not supported."
+        );
+        assert_eq!(
+            err("resource:alpha", Some("bogus")),
+            "Default field 'bogus' not supported."
+        );
+        assert_eq!(
+            err("alpha", Some("Resource")),
+            "Default field 'Resource' not supported."
+        );
+        assert_eq!(
+            err("disk", Some("resource\" IS NOT NULL OR \"text")),
+            "Default field 'resource\" IS NOT NULL OR \"text' not supported."
+        );
+        assert_eq!(
+            err("unknownfield:disk", None),
+            "Search field 'unknownfield' not supported."
+        );
+        assert_eq!(
+            err("raw_data.x:y", None),
+            "Search field 'raw_data.x' not supported."
+        );
+        let sql = compile("alpha", Some("resource")).unwrap();
+        assert_eq!(sql.reference_text(), "\"resource\" ILIKE %(_qp_0)s");
+        let sql = compile("alpha", Some("")).unwrap();
+        assert_eq!(sql.reference_text(), "\"text\" ILIKE %(_qp_0)s");
+        let sql = compile("a b c", None).unwrap();
+        assert_eq!(sql.params, strings(&["%a%", "%b%", "%c%"]));
     }
 }
