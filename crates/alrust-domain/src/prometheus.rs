@@ -406,21 +406,21 @@ fn py_int(v: &PyVal) -> Result<Option<i64>, NoInt> {
     match v {
         PyVal::Str(text) => py_int_text(text),
         PyVal::Bool(b) => Ok(Some(i64::from(*b))),
-        PyVal::Num(n) => match (n.as_i64(), n.as_f64()) {
-            (Some(i), _) => Ok(Some(i)),
-            (None, _) if n.is_u64() => Err(NoInt::OutOfRange),
-            (None, Some(f)) => {
+        PyVal::Num(num) => match (num.as_i64(), num.as_f64()) {
+            (Some(int), _) => Ok(Some(int)),
+            (None, _) if num.is_u64() => Err(NoInt::OutOfRange),
+            (None, Some(float)) => {
                 // int(float) truncates toward zero. 2^63 is exact as a float,
                 // so this range check is exact too.
-                let t = f.trunc();
-                if (-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&t) {
+                let whole = float.trunc();
+                if (-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&whole) {
                     #[expect(
                         clippy::as_conversions,
                         clippy::cast_possible_truncation,
                         reason = "a whole float inside the i64 range converts exactly"
                     )]
-                    let i = t as i64;
-                    Ok(Some(i))
+                    let int = whole as i64;
+                    Ok(Some(int))
                 } else {
                     Err(NoInt::OutOfRange)
                 }
@@ -1071,14 +1071,8 @@ mod tests {
         assert_eq!(py_int_text("99999999999999999999x"), Ok(None));
         let num = |f: f64| PyVal::Num(serde_json::Number::from_f64(f).unwrap());
         assert_eq!(py_int(&num(-9e18)), Ok(Some(-9_000_000_000_000_000_000)));
-        assert_eq!(
-            py_int(&num(-9.223_372_036_854_775_808e18)),
-            Ok(Some(i64::MIN))
-        );
-        assert_eq!(
-            py_int(&num(9.223_372_036_854_775_808e18)),
-            Err(NoInt::OutOfRange)
-        );
+        assert_eq!(py_int(&num(-(2f64.powi(63)))), Ok(Some(i64::MIN)));
+        assert_eq!(py_int(&num(2f64.powi(63))), Err(NoInt::OutOfRange));
         assert_eq!(py_int(&PyVal::Num(u64::MAX.into())), Err(NoInt::OutOfRange));
     }
 
