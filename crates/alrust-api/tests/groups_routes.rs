@@ -145,7 +145,7 @@ async fn setup() -> Option<(TestDb, axum::Router)> {
             "INSERT INTO users (id, name, email, login, password, status, roles, attributes, create_time)
              VALUES ('u-ana', 'Ana', 'ana@example.test', 'ana@example.test', 'synthetic', 'active',
                      ARRAY[]::text[], '{}', timezone('UTC', now())),
-                    ('u-bo', 'Bo', 'bo@example.test', NULL, 'synthetic', 'inactive',
+                    ('u-bo', 'Bo', 'bo@example.test', 'bo', 'synthetic', 'inactive',
                      ARRAY[]::text[], '{}', timezone('UTC', now()))",
         )
         .await
@@ -392,10 +392,7 @@ async fn members_and_the_list() {
         .map(|u| u["login"].clone())
         .collect();
     logins.sort_by_key(ToString::to_string);
-    assert_eq!(
-        logins,
-        [json!("ana@example.test"), json!("bo@example.test")]
-    );
+    assert_eq!(logins, [json!("ana@example.test"), json!("bo")]);
     let names = |body: &Value| -> Vec<String> {
         body["groups"]
             .as_array()
