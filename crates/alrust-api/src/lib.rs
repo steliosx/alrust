@@ -447,6 +447,19 @@ pub fn router(state: Shared) -> Router {
         )
         .route("/perms", get(perms::list_perms))
         .route("/scopes", get(perms::list_scopes))
+        .route("/group", post(groups::create_group))
+        .route(
+            "/group/{id}",
+            get(groups::get_group)
+                .put(groups::update_group)
+                .delete(groups::delete_group),
+        )
+        .route("/group/{id}/users", get(groups::get_group_users))
+        .route(
+            "/group/{id}/user/{user_id}",
+            put(groups::add_user).delete(groups::remove_user),
+        )
+        .route("/groups", get(groups::list_groups))
         .route("/alert/{id}/attributes", put(update_attributes))
         .route("/alerts", get(search_alerts))
         .route("/alerts/count", get(count_alerts))
@@ -471,7 +484,8 @@ pub fn router(state: Shared) -> Router {
 
 type Params = Query<Vec<(String, String)>>;
 
-// The admin lists (permissions; groups and users to follow).
+// The admin lists (permissions and groups; users to follow).
+mod groups;
 mod list_params;
 mod perms;
 
