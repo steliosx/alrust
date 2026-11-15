@@ -1639,9 +1639,9 @@ async fn housekeeping_times_out_shelves_and_acks() {
     for sql in [
         "UPDATE alerts SET update_time = update_time - interval '2 minutes'",
         "UPDATE alerts SET status = 'open' WHERE id = 'not-shelved'",
-        // Actions write the action timeout (60) into the row (A4.1): keep
-        // the others' receive time fresh so that only `both` can expire,
-        // however long the steps above took.
+        // Keep the others' receive time fresh so that only `both` can
+        // expire, however long the steps above took; `both` also gets a
+        // 60-second row timeout (actions keep the row's own, A4.1).
         "UPDATE alerts SET last_receive_time = timezone('UTC', now()) WHERE id <> 'both'",
         "UPDATE alerts SET last_receive_time = last_receive_time - interval '2 minutes',
            timeout = 60 WHERE id = 'both'",

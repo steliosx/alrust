@@ -1856,6 +1856,9 @@ impl Store {
         let unack = self
             .timed_out(status::ACK, action::ACK, self.cfg.ack_timeout, now)
             .await?;
+        // The ids this run expired: a selected row that fails the re-check
+        // below was changed by someone else, and is not counted (K3.5).
+        let mut expired_here = Vec::new();
         for id in &ids {
             let mut tx = self.pool.begin().await?;
             // Re-check under the row lock: a receive or action since the
@@ -1872,12 +1875,17 @@ impl Store {
                 let a = row_to_alert(&row)?;
                 self.apply_action(&mut tx, a, "expired", "alert timeout", None, "housekeeping")
                     .await?;
+                expired_here.push(id.clone());
             }
             tx.commit().await?;
         }
-        for (wanted, list) in [(status::SHELVED, &unshelve), (status::ACK, &unack)] {
+        let rules = [
+            (status::SHELVED, action::SHELVE, self.cfg.shelve_timeout),
+            (status::ACK, action::ACK, self.cfg.ack_timeout),
+        ];
+        for (rule, list) in rules.into_iter().zip([&unshelve, &unack]) {
             for id in list {
-                self.time_out(id, wanted, &ids).await?;
+                self.time_out(id, rule, now, &expired_here).await?;
             }
         }
         // The response lists the ids selected before processing (K4.1).
@@ -1916,20 +1924,41 @@ impl Store {
     }
 
     /// K3.4: the `timeout` action on one selected alert, under its row lock.
-    /// It runs when the row is still in the selected state, or was expired
-    /// by this same run (K3.5: it then ends `open` or `ack`, not `expired`).
-    /// An alert a concurrent request has changed otherwise is left alone;
-    /// the reference applies the action to the alert as it was selected.
-    async fn time_out(&self, id: &str, state: &str, expired: &[String]) -> Result<(), StoreError> {
+    /// It runs when [`Store::timed_out`]'s test still holds for the locked
+    /// row at the run's `now`, or when this same run expired it (K3.5: it
+    /// then ends `open` or `ack`, not `expired`). An alert a concurrent
+    /// request has changed since the selection (a new status, or the same
+    /// status with a fresh `update_time`) is left alone; the reference
+    /// applies the action to the alert as it was selected.
+    /// `rule` is (state, history kind, default timeout).
+    async fn time_out(
+        &self,
+        id: &str,
+        (state, kind, default_timeout): (&str, &str, i64),
+        now: NaiveDateTime,
+        expired_here: &[String],
+    ) -> Result<(), StoreError> {
         let mut tx = self.pool.begin().await?;
-        let row = sqlx::query("SELECT * FROM alerts WHERE id = $1 FOR UPDATE")
-            .bind(id)
-            .fetch_optional(&mut *tx)
-            .await?;
+        let row = sqlx::query(
+            "SELECT a.*, (a.status = $2 AND EXISTS (
+                     SELECT 1 FROM UNNEST(a.history) h
+                      WHERE h.type = $3 AND h.status = $2
+                        AND COALESCE(h.timeout, $4) <> 0
+                        AND EXTRACT(EPOCH FROM ($5 - a.update_time)) > h.timeout)) AS due
+               FROM alerts a WHERE a.id = $1 FOR UPDATE",
+        )
+        .bind(id)
+        .bind(state)
+        .bind(kind)
+        .bind(default_timeout)
+        .bind(now)
+        .fetch_optional(&mut *tx)
+        .await?;
         if let Some(row) = row {
+            let due: bool = row.try_get("due")?;
             let a = row_to_alert(&row)?;
-            let expired_now = a.status == status::EXPIRED && expired.iter().any(|e| e == id);
-            if a.status == state || expired_now {
+            let expired_now = a.status == status::EXPIRED && expired_here.iter().any(|e| e == id);
+            if due || expired_now {
                 self.apply_action(&mut tx, a, action::TIMEOUT, "", None, "housekeeping")
                     .await?;
             }
