@@ -9,7 +9,9 @@ ignores `q` and must never be scored as fast search while it does.
 The design has two steps that stay separate:
 
 1. **Compatibility:** `GET /alerts?q=…` (and `/alerts/count`) select exactly
-   the alerts that Alerta 9.1.0 selects for the same `q` and `q.df`.
+   the alerts that Alerta 9.1.0 selects for the same `q` and `q.df`, except
+   where a reviewed SF-QUERY or privacy correction says otherwise (those
+   cases have their own expected results; see Step 1).
 2. **Speed and relevance:** make those queries fast without changing their
    results, then, only if the owner wants it, an opt-in ranked search as new
    API surface.
