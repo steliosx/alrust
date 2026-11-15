@@ -475,6 +475,77 @@ async fn index(State(st): State<Shared>) -> Json<Value> {
     }))
 }
 
+/// The `GET /config` values alrust reads no setting for: the reference
+/// defaults (`settings.py`). Built in parts, because one `json!` call this
+/// size exceeds the macro's recursion limit.
+fn config_reference_defaults() -> Map<String, Value> {
+    let dates = json!({
+        "shortTime": "HH:mm",
+        "mediumDate": "ddd D MMM HH:mm",
+        "longDate": "ddd D MMM, YYYY HH:mm:ss.SSS Z",
+    });
+    let font = json!({
+        "font-family": "\"Sintony\", Arial, sans-serif",
+        "font-size": "13px",
+        "font-weight": 500,
+    });
+    let columns = json!([
+        "severity",
+        "status",
+        "lastReceiveTime",
+        "timeoutLeft",
+        "duplicateCount",
+        "customer",
+        "environment",
+        "service",
+        "resource",
+        "event",
+        "value",
+        "text",
+    ]);
+    let indicators = json!({
+        "severity": ["critical", "major", "minor", "warning", "indeterminate", "informational"],
+        "queries": [
+            {"text": "Production", "query": [["environment", "Production"]]},
+            {"text": "Development", "query": [["environment", "Development"]]},
+            {"text": "Heartbeats", "query": {"q": "event:Heartbeat"}},
+            {"text": "Misc.", "query": "group=Misc"},
+        ],
+    });
+    let providers = json!({
+        "azure_tenant": "common",
+        "aws_region": "us-east-1",
+        "cognito_domain": null,
+        "github_url": "https://github.com",
+        "gitlab_url": "https://gitlab.com",
+        "keycloak_url": null,
+        "keycloak_realm": null,
+        "oidc_auth_url": null,
+        "site_logo_url": "",
+    });
+    let mut out = match providers {
+        Value::Object(m) => m,
+        _ => Map::new(),
+    };
+    for (key, value) in [
+        ("blackouts", json!({"duration": 3600})),
+        ("dates", dates),
+        ("font", font),
+        ("audio", json!({"new": null})),
+        ("columns", columns),
+        ("sort_by", json!(["severity", "lastReceiveTime"])),
+        ("filter", json!({"status": ["open", "ack"]})),
+        ("indicators", indicators),
+        ("actions", json!([])),
+        ("tracking_id", Value::Null),
+        ("refresh_interval", json!(5000)),
+        ("clipboard_template", json!("")),
+    ] {
+        out.insert(key.to_owned(), value);
+    }
+    out
+}
+
 /// `GET /config` (`views/config.py:9-74`; `spec/openapi.yaml` `/config`):
 /// the web UI's bootstrap settings, a bare object with the reference's 36
 /// keys. No permission check: credentials are not read, so an invalid key
@@ -501,20 +572,21 @@ async fn client_config(State(st): State<Shared>) -> Json<Value> {
         .map(|b| b.provider.as_str())
         .filter(|p| !p.is_empty())
         .unwrap_or("basic");
-    Json(json!({
+    let alarm_model = json!({
+        "name": alarm_model::NAME,
+        "severity": severity,
+        "colors": colors,
+        "status": alarm_model::status_map(),
+        "defaults": {
+            "status": alrust_domain::status::OPEN,
+            "normal_severity": alrust_domain::NORMAL_SEVERITY,
+            "previous_severity": alrust_domain::DEFAULT_PREVIOUS_SEVERITY,
+        },
+    });
+    let mut body = json!({
         "debug": false,
         "endpoint": st.cfg.base_url.trim_end_matches('/'),
-        "alarm_model": {
-            "name": alarm_model::NAME,
-            "severity": severity,
-            "colors": colors,
-            "status": alarm_model::status_map(),
-            "defaults": {
-                "status": alrust_domain::status::OPEN,
-                "normal_severity": alrust_domain::NORMAL_SEVERITY,
-                "previous_severity": alrust_domain::DEFAULT_PREVIOUS_SEVERITY,
-            },
-        },
+        "alarm_model": alarm_model,
         "auth_required": st.cfg.auth_required,
         "allow_readonly": false,
         "readonly_scopes": ["read"],
@@ -523,15 +595,6 @@ async fn client_config(State(st): State<Shared>) -> Json<Value> {
         "signup_enabled": false,
         "email_verification": false,
         "client_id": st.cfg.oauth2_client_id,
-        "azure_tenant": "common",
-        "aws_region": "us-east-1",
-        "cognito_domain": null,
-        "github_url": "https://github.com",
-        "gitlab_url": "https://gitlab.com",
-        "keycloak_url": null,
-        "keycloak_realm": null,
-        "oidc_auth_url": null,
-        "site_logo_url": "",
         "severity": severity,
         "colors": colors,
         "timeouts": {
@@ -540,39 +603,12 @@ async fn client_config(State(st): State<Shared>) -> Json<Value> {
             "ack": store.ack_timeout,
             "shelve": store.shelve_timeout,
         },
-        "blackouts": {"duration": 3600},
-        "dates": {
-            "shortTime": "HH:mm",
-            "mediumDate": "ddd D MMM HH:mm",
-            "longDate": "ddd D MMM, YYYY HH:mm:ss.SSS Z",
-        },
-        "font": {
-            "font-family": "\"Sintony\", Arial, sans-serif",
-            "font-size": "13px",
-            "font-weight": 500,
-        },
-        "audio": {"new": null},
-        "columns": [
-            "severity", "status", "lastReceiveTime", "timeoutLeft", "duplicateCount",
-            "customer", "environment", "service", "resource", "event", "value", "text",
-        ],
-        "sort_by": ["severity", "lastReceiveTime"],
-        "filter": {"status": ["open", "ack"]},
-        "indicators": {
-            "severity": ["critical", "major", "minor", "warning", "indeterminate", "informational"],
-            "queries": [
-                {"text": "Production", "query": [["environment", "Production"]]},
-                {"text": "Development", "query": [["environment", "Development"]]},
-                {"text": "Heartbeats", "query": {"q": "event:Heartbeat"}},
-                {"text": "Misc.", "query": "group=Misc"},
-            ],
-        },
-        "actions": [],
-        "tracking_id": null,
-        "refresh_interval": 5000,
         "environments": st.cfg.allowed_environments,
-        "clipboard_template": "",
-    }))
+    });
+    if let Value::Object(top) = &mut body {
+        top.extend(config_reference_defaults());
+    }
+    Json(body)
 }
 
 // ---------------------------------------------------------------- alerts
