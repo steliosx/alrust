@@ -8,6 +8,7 @@
 
 pub mod catalog;
 pub mod hooks;
+pub mod search;
 pub mod startup;
 
 use std::sync::Arc;
