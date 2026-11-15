@@ -465,12 +465,12 @@ async fn the_grouped_reads_need_read_alerts_and_an_empty_store_is_not_found() {
 #[tokio::test]
 async fn null_and_empty_severity_and_status_count_as_normal_and_open() {
     let Some((_db, app)) = seeded_with(
-        r#"
+        r"
 INSERT INTO alerts (id, resource, event, environment, severity, status, service) VALUES
  ('n1', 'r1', 'e', 'Production', NULL,     NULL,   ARRAY['svc']),
  ('n2', 'r2', 'e', 'Production', '',       '',     ARRAY['svc']),
  ('n3', 'r3', 'e', 'Production', 'normal', 'open', ARRAY['svc'])
-"#,
+",
     )
     .await
     else {
@@ -512,12 +512,12 @@ async fn the_grouped_row_limit_cuts_in_name_order() {
     // status, 1 total). e001-e248 have 4 each (992). That leaves 2 rows for
     // e249 (its pair and its severity) and none for e250.
     let Some((_db, app)) = seeded_with(
-        r#"
+        r"
 INSERT INTO alerts (id, resource, event, environment, severity, status, service)
 SELECT 'a' || i, 'r', 'e', 'e' || lpad(i::text, 3, '0'), 'major', 'open', ARRAY['svc']
 FROM generate_series(0, 250) AS i
 UNION ALL SELECT 'extra', 'r', 'e2', 'e000', 'minor', 'open', ARRAY['svc']
-"#,
+",
     )
     .await
     else {
