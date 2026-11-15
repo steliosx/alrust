@@ -69,6 +69,7 @@ pub(crate) fn parse(params: &[(String, String)], spec: &ListSpec) -> ApiResult<L
         let Some(&(_, column, kind)) = spec.filters.iter().find(|(n, _, _)| *n == name) else {
             return Err(ApiError::bad(format!("Invalid filter parameter: {key}")));
         };
+        let unsupported = || ApiError::bad(format!("Filtering by '{key}' field not supported."));
         let values: Vec<String> = params
             .iter()
             .filter(|(k, _)| k == key)
@@ -76,16 +77,32 @@ pub(crate) fn parse(params: &[(String, String)], spec: &ListSpec) -> ApiResult<L
             .collect();
         // An empty value among several fails `v[0]` in the reference.
         if values.len() > 1 && values.iter().any(String::is_empty) {
-            return Err(ApiError::bad(format!(
-                "Filtering by '{key}' field not supported."
-            )));
+            return Err(unsupported());
         }
-        q.filters.push(ListFilter {
+        let mut filter = ListFilter {
             column,
             kind,
             negated: key.ends_with('!'),
             values,
-        });
+            key: None,
+        };
+        match kind {
+            // `attributes.<k>`: the reference takes the key as written,
+            // `!` included, and only the first value.
+            FilterKind::Contains => match key.strip_prefix("attributes.") {
+                Some(k) => {
+                    filter.key = Some(k.to_owned());
+                    filter.negated = false;
+                    filter.values.truncate(1);
+                }
+                None => return Err(unsupported()),
+            },
+            FilterKind::Typed(_) if filter.values.iter().any(|v| v.starts_with('~')) => {
+                return Err(unsupported());
+            }
+            _ => {}
+        }
+        q.filters.push(filter);
     }
     // No order at all when the first `sort-by` is empty (`utils.py:31`,
     // `params.get`); after a non-empty first one, an empty one is 400.

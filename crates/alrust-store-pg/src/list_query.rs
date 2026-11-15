@@ -3,6 +3,7 @@
 //! (`postgres/utils.py:24-104`). The blackout (#241) and customer (#243)
 //! lists carry their own copies until they move to this one.
 
+use serde_json::{Map, Value};
 use sqlx::{Postgres, QueryBuilder};
 
 /// How a filter compares.
@@ -15,6 +16,12 @@ pub enum FilterKind {
     /// A text-array column: it overlaps the values (`&&`); `!` negates.
     /// `~` has no meaning here and is literal.
     Array,
+    /// A non-text column: equality with the values cast to this type
+    /// (`= CAST($n AS <type>)`, `= ANY(CAST($n AS <type>[]))`); `!` negates.
+    Typed(&'static str),
+    /// A `jsonb` column: `attributes.<key>=<value>` contains
+    /// `{<key>: <first value>}`, the reference's own branch.
+    Contains,
 }
 
 /// One filter: a fixed, quoted column and the values given for it.
@@ -25,6 +32,8 @@ pub struct ListFilter {
     pub kind: FilterKind,
     pub negated: bool,
     pub values: Vec<String>,
+    /// The `jsonb` key of a [`FilterKind::Contains`] filter.
+    pub key: Option<String>,
 }
 
 /// A list's filters and order.
@@ -49,6 +58,16 @@ impl ListQuery {
                         .push(")");
                 }
                 FilterKind::Text => push_text(qb, f),
+                FilterKind::Typed(cast) => push_typed(qb, f, cast),
+                FilterKind::Contains => {
+                    let mut want = Map::new();
+                    want.insert(
+                        f.key.clone().unwrap_or_default(),
+                        Value::String(f.values.first().cloned().unwrap_or_default()),
+                    );
+                    qb.push(format!(" AND {col} @> "))
+                        .push_bind(Value::Object(want));
+                }
             }
         }
     }
@@ -63,6 +82,21 @@ impl ListQuery {
             .collect();
         order.push(tiebreak.to_owned());
         qb.push(format!(" ORDER BY {}", order.join(", ")));
+    }
+}
+
+fn push_typed(qb: &mut QueryBuilder<'_, Postgres>, f: &ListFilter, cast: &str) {
+    let col = f.column;
+    if let [one] = f.values.as_slice() {
+        let op = if f.negated { "!=" } else { "=" };
+        qb.push(format!(" AND {col} {op} CAST("))
+            .push_bind(one.clone())
+            .push(format!(" AS {cast})"));
+    } else {
+        let not = if f.negated { "NOT " } else { "" };
+        qb.push(format!(" AND {not}{col} = ANY(CAST("))
+            .push_bind(f.values.clone())
+            .push(format!(" AS {cast}[]))"));
     }
 }
 
