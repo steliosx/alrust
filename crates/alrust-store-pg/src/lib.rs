@@ -10,10 +10,11 @@ pub mod catalog;
 pub mod hooks;
 pub mod startup;
 
-// The admin lists (permissions and groups; users to follow).
+// The admin lists (permissions, groups and users).
 pub mod groups;
 pub mod list_query;
 pub mod perms;
+pub mod users;
 
 use std::sync::Arc;
 

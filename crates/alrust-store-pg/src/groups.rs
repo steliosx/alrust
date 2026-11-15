@@ -256,6 +256,25 @@ impl Store {
         row.map(|_| ()).ok_or(StoreError::NotFound)
     }
 
+    /// The groups that list user `user` among their members
+    /// (`get_groups_by_user`), by id.
+    ///
+    /// # Errors
+    ///
+    /// The database error.
+    pub async fn groups_of_user(&self, user: &str) -> Result<Vec<Group>, StoreError> {
+        let rows = sqlx::query(&format!(
+            "SELECT *, {COUNT} AS count FROM groups WHERE $1 = ANY(users) ORDER BY id"
+        ))
+        .bind(user)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(row_to_group)
+            .collect::<Result<Vec<_>, sqlx::Error>>()?)
+    }
+
     /// `DELETE /group/{id}`.
     ///
     /// # Errors

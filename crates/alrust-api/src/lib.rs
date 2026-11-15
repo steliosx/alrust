@@ -460,6 +460,20 @@ pub fn router(state: Shared) -> Router {
             put(groups::add_user).delete(groups::remove_user),
         )
         .route("/groups", get(groups::list_groups))
+        .route("/user/me", get(users::get_me).put(users::update_me))
+        .route(
+            "/user/me/attributes",
+            get(users::get_me_attributes).put(users::update_me_attributes),
+        )
+        .route(
+            "/user/{id}",
+            get(users::get_user)
+                .put(users::update_user)
+                .delete(users::delete_user),
+        )
+        .route("/user/{id}/attributes", put(users::update_user_attributes))
+        .route("/user/{id}/groups", get(users::get_user_groups))
+        .route("/users", get(users::list_users))
         .route("/alert/{id}/attributes", put(update_attributes))
         .route("/alerts", get(search_alerts))
         .route("/alerts/count", get(count_alerts))
@@ -484,10 +498,11 @@ pub fn router(state: Shared) -> Router {
 
 type Params = Query<Vec<(String, String)>>;
 
-// The admin lists (permissions and groups; users to follow).
+// The admin lists (permissions, groups and users).
 mod groups;
 mod list_params;
 mod perms;
+mod users;
 
 async fn index(State(st): State<Shared>) -> Json<Value> {
     Json(json!({
