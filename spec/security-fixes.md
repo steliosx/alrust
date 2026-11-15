@@ -1563,3 +1563,152 @@ Every Y3 item now has an entry above. A defect found later gets its own
 entry here before alrust relies on its fix; until then its reference
 behavior in `spec/openapi.yaml` stands as the description of the defect, not
 as a requirement for alrust.
+
+## SF-BULK: the bulk routes keep the single-alert controls
+
+Status: Proposed, 15 November 2026. Covers BULK-SEC-1, BULK-SEC-2 and
+BULK-SEC-3 of `spec/openapi.yaml` (`/_bulk/alerts*`, `/_bulk/task/{task_id}`;
+owner Y29, full spec depth). Owner request the same day: build the bulk and
+oEmbed routes, spec first. Two choices below are the owner's (BULK-Q1,
+BULK-Q2).
+
+**Reference** (`views/bulk.py`; `spec/openapi.yaml` gives the full route
+contract):
+1. BULK-SEC-1: every bulk route selects with `qb.alerts.from_params(
+   request.args)` **without** `customers` (`bulk.py:43`, `:85`, `:105`,
+   `:120`, `:135`, `:147`; `postgres/utils.py:160-163`), so a caller limited
+   to some customers selects, changes and deletes every customer's alerts.
+2. BULK-SEC-2: `DELETE /_bulk/alerts` needs only `write:alerts`
+   (`bulk.py:143`), runs no plugin delete hook, and with no query parameter
+   at all deletes every alert in one committed statement
+   (`postgres/utils.py:157`; `postgres/base.py:390-397`).
+3. BULK-SEC-3: no bulk route writes an audit event.
+4. `PUT /_bulk/alerts/action` and `GET /_bulk/task/{task_id}` need Celery:
+   without it (no `CELERY_BROKER_URL`, the default) the import of
+   `alerta.tasks` fails before any body check and the route answers 500
+   (`bulk.py:24`, `:76-83`). With it, the action route queues one task and
+   answers 202 `{status: ok, message: "<n> alerts queued for action"}` with
+   `Location: /_bulk/task/<task id>`, and the task route reports the Celery
+   state, lowercased; an unknown id is `pending`.
+5. `PUT /_bulk/alerts/tag` and `/untag` with `tags` falsy or absent raise
+   `ApiError("must supply 'tags' as json list")` without a code: 500.
+
+**alrust.**
+1. **Selection.** Every bulk route selects with the selection part of
+   `GET /alerts` in alrust (`parse_search`: the hook 4.2 guard, `q`, `q.df`,
+   `q.mode`, the filters and their 400s) **and the caller's customer
+   restriction** (BULK-SEC-1 fixed), as every single-alert route has.
+   `page`, `page-size`, `sort-by` and `group-by` are not read, so their
+   checks do not apply (the reference validates `sort-by` and ignores the
+   others). The status and action routes keep the reference's limit of
+   1000 alerts, taken newest first (alrust's fixed list order; the
+   reference's default is the table's order, so above 1000 alerts the
+   chosen 1000 can differ). The set-based routes (delete, tag, untag,
+   attributes) keep no limit, as in the reference.
+2. **Delete** (BULK-SEC-2): the same scope as `DELETE /alert/{id}` in alrust
+   (`write:alerts`; the reference's own outcome while `DELETE_SCOPES` is
+   empty). alrust's single delete runs no plugin or integration hook
+   (`Store::delete_alert` is one `DELETE` statement), so the bulk path
+   skips nothing the single one runs. **BULK-Q1 (owner):** a bulk delete
+   whose selection, before the customer restriction, has no filter and no
+   `q` is refused with 400 `bulk delete needs a query`, instead of deleting
+   every alert. A customer-limited caller with no parameter is refused too.
+   Recommendation: yes. Deleting many alerts on purpose stays possible by
+   naming them with a filter (an environment, a status), and a client that
+   sends no filter by mistake loses nothing.
+3. **Audit** (BULK-SEC-3): alrust has no audit trail. When it has one, each
+   bulk mutation writes the events its single-alert form writes, one per
+   alert. Nothing to implement until then.
+4. **Action and task** (no task queue in alrust). **BULK-Q2 (owner):**
+   - (a) run the action on each selected alert in the request, as the status
+     route does, and answer 200 `{status: ok, updated: [ids], count}`;
+   - (b) run it the same way, but answer as a Celery-enabled reference does:
+     202 with the reference's message and `Location: /_bulk/task/<id>`,
+     whatever happened per alert (the reference's task catches each alert's
+     failure and ends normally, `tasks.py`, so its state is `success`;
+     alrust logs the per-alert errors). `GET /_bulk/task/<id>` answers
+     `success` for an id this server issued (kept in memory, bounded) and
+     `pending` for any other id, as Celery answers an unknown id. An id
+     issued by one alrust instance is therefore `pending` on another, where
+     Celery with a shared result backend would answer `success`;
+   - (c) answer 500 as the reference does without Celery.
+
+   Recommendation: (b). A client written for the reference keeps working,
+   and the work is done before the answer, so nothing is left to poll.
+5. Every per-alert step runs the same transition, hooks and history as the
+   single route (`PUT /alert/{id}/status`, `PUT /alert/{id}/action`), each
+   alert in its own transaction. On the status route, per-alert errors are
+   collected and the route answers the reference's 500 `failed to bulk set
+   alert status` with them after processing the others. The action route
+   follows BULK-Q2.
+6. `tags` falsy or absent on tag and untag: 400 `must supply 'tags' as json
+   list` (the reference's 500 is an uncoded `ApiError`; the inferred-500
+   rule).
+
+**Vectors.** A store `BK`: alerts `b1` (`major`) and `b2` (`critical`) of
+customer `A`, `b3` (`critical`) of customer `B`, all `open` in
+`Production`; keys `KA` (`write:alerts`, customer `A`) and `KW`
+(`write:alerts`, no customer).
+
+| # | Case | Reference | alrust | Kind |
+|---|---|---|---|---|
+| 1 | `KA`, `PUT /_bulk/alerts/tag?environment=Production` `{tags: [t]}` | `b1`, `b2`, `b3` tagged | `b1`, `b2` tagged; `b3` unchanged | divergence (BULK-SEC-1) |
+| 2 | `KA`, `DELETE /_bulk/alerts?status=open` | all three deleted | `b1`, `b2` deleted | divergence (BULK-SEC-1) |
+| 3 | `KW`, `DELETE /_bulk/alerts` (no parameter); then `KA` the same | every alert deleted | 400 `bulk delete needs a query` both times, nothing deleted (BULK-Q1 yes) | divergence |
+| 4 | `KW`, `PUT /_bulk/alerts/status?id=b1` `{status: ack}` | 200, `b1` acked | same | parity |
+| 5 | `KW`, `PUT /_bulk/alerts/action?status=open` `{action: ack}`, no Celery | 500 | 202, all three acked, `Location` to a task that reports `success` (BULK-Q2 (b)) | divergence |
+| 6 | `KW`, `PUT /_bulk/alerts/tag?id=b1` `{}` | 500 `must supply 'tags' as json list` | 400, same message | divergence (status only) |
+| 7 | `KW`, `PUT /_bulk/alerts/attributes?id=b1` `{attributes: {k: v}}` | 200, merged | same | parity |
+| 8 | `KW`, `GET /_bulk/task/unknown` | 500 without Celery; `pending` with it | `pending` | divergence (no Celery) |
+
+## SF-OEMBED: the counts widget works, within the caller's customers
+
+Status: Proposed, 15 November 2026. Covers OEMBED-SEC-1 and the broken
+counts branch of `spec/openapi.yaml` (`/oembed`, `/oembed.{format}`,
+`/embed.js`). One choice is the owner's (OEMBED-Q1).
+
+**Reference** (`views/oembed.py:14-74`; `spec/openapi.yaml`):
+1. The counts branch (`url` ending `/alerts/count`) calls `from_params` with
+   a plain `dict`, which raises TypeError at `params.get('from-date',
+   default=None, type=…)`, so it **always** answers 500 `{status: error,
+   message: 'Server Error'}` (inferred; NOT_RUN). The widget never renders.
+2. OEMBED-SEC-1 (latent): the same query has no customer restriction, and
+   `read:oembed` is granted by plain `read`.
+3. A `url` ending `/alerts/top10/count` returns `None`: 500.
+4. `title` is HTML-escaped inside `html` and returned raw in the JSON
+   `title`; any other path is 400 `unsupported oEmbed URL scheme`; `format`
+   is never read; `/embed.js` is a static script, no scope.
+
+**alrust.**
+1. **OEMBED-Q1 (owner):** the counts branch answers what the reference
+   intends: the severity counts of the alerts the URL's query selects, with
+   alrust's `GET /alerts/count` selection **and the caller's customer
+   restriction** (OEMBED-SEC-1 fixed); `max` as the reference computes it;
+   `html` from the reference's `counts.html` with `title` escaped; 200 with
+   `Access-Control-Allow-Origin: *`. The embedded URL's query goes through
+   `parse_search`, so the hook 4.2 guard applies to it too, and the counts
+   cannot be narrowed by a restricted attribute: with the customer
+   restriction, OEMBED-SEC-1 is closed. Recommendation: yes; the
+   alternative, reproducing the 500, serves no caller.
+2. A `url` ending `/alerts/top10/count`: 400 `unsupported oEmbed URL scheme`
+   (the inferred-500 rule).
+3. Everything else as the reference: `url` and `title` required (400
+   `Client Error`, the reference's own body without `code`), `format`
+   ignored, the JSON `title` raw. `callback` is ignored, as on every alrust
+   route (alrust has no JSONP); the reference answers 500 for a non-empty
+   one.
+4. `/embed.js` and the `counts.html` markup come from the reference
+   (Apache-2.0, as alrust). Copying them verbatim into alrust is a question
+   for Codex: the repository so far derives only the schema from the
+   reference (`0002_reference_layout.sql`), with `NOTICE`.
+
+**Vectors.** Store `BK` of SF-BULK; key `KR` (`read`, customer `A`).
+
+| # | Case | Reference | alrust | Kind |
+|---|---|---|---|---|
+| 1 | `KR`, `GET /oembed?url=http://x/alerts/count&title=T` | 500 `Server Error` (inferred) | 200, counts `major` 1, `critical` 1, `max` `critical` | divergence (OEMBED-Q1) |
+| 2 | same with `title=<b>T</b>` | 500 | 200; `html` holds `&lt;b&gt;T&lt;/b&gt;`; JSON `title` is `<b>T</b>` | divergence (OEMBED-Q1) |
+| 3 | `url=http://x/alerts/top10/count` | 500 (inferred) | 400 `unsupported oEmbed URL scheme` | divergence |
+| 4 | `url=http://x/other` | 400 `unsupported oEmbed URL scheme` | same | parity |
+| 5 | no `title` | 400 `Client Error` | same | parity |
+| 6 | `GET /embed.js`, no credential | 200, the script | same | parity |
