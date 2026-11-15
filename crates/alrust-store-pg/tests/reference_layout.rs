@@ -1456,7 +1456,7 @@ async fn times_round_trip_exactly_whatever_the_session_time_zone() {
     .execute(&db.pool)
     .await
     .unwrap();
-    assert_eq!(s.housekeeping(0, 0).await.unwrap(), ["t1"]);
+    assert_eq!(s.housekeeping(0, 0).await.unwrap().expired, ["t1"]);
 }
 
 /// Two rows match the correlate lookup: `y1` has the same event with another
@@ -1588,13 +1588,92 @@ async fn housekeeping_deletes_only_old_closed_and_old_informational_alerts() {
         .await
         .unwrap();
     }
-    let expired = s.housekeeping(2 * 3600, 12 * 3600).await.unwrap();
+    let expired = s.housekeeping(2 * 3600, 12 * 3600).await.unwrap().expired;
     assert!(expired.is_empty(), "{expired:?}");
     let left: Vec<String> = sqlx::query_scalar("SELECT id FROM alerts ORDER BY id")
         .fetch_all(&db.pool)
         .await
         .unwrap();
     assert_eq!(left, ["hk-new-closed", "hk-new-info", "hk-old-open"]);
+}
+
+/// K3: auto-unshelve and auto-unack select by the row's `update_time` and
+/// any matching history entry's timeout, before any action runs (K0.3). The
+/// `timeout` action returns an alert acked before it was shelved to `ack`
+/// (K3.4), and an alert expired in the same run ends `open` (K3.5).
+#[tokio::test]
+async fn housekeeping_times_out_shelves_and_acks() {
+    let Some(db) = test_db().await else { return };
+    let s = store(&db.pool);
+    s.prepare().await.unwrap();
+    let ids = [
+        "sh-due",
+        "sh-later",
+        "ack-due",
+        "ack-zero",
+        "not-shelved",
+        "ack-then-shelve",
+        "both",
+    ];
+    for id in ids {
+        let mut alert = new_alert(id, 86400);
+        alert.resource = id.into();
+        s.receive(alert, "alice").await.unwrap();
+    }
+    for (id, act, timeout) in [
+        ("sh-due", "shelve", Some(60)),
+        ("sh-later", "shelve", Some(3600)),
+        ("ack-due", "ack", Some(60)),
+        ("ack-zero", "ack", None),
+        ("not-shelved", "shelve", Some(60)),
+        ("ack-then-shelve", "ack", None),
+        ("ack-then-shelve", "shelve", Some(60)),
+        ("both", "shelve", Some(60)),
+    ] {
+        s.take_action(id, None, act, "", timeout, "alice")
+            .await
+            .unwrap();
+    }
+    // Two minutes since every row's last update; `not-shelved` is open
+    // again by a direct write; `both` is also due to expire.
+    for sql in [
+        "UPDATE alerts SET update_time = update_time - interval '2 minutes'",
+        "UPDATE alerts SET status = 'open' WHERE id = 'not-shelved'",
+        // Keep the others' receive time fresh so that only `both` can
+        // expire, however long the steps above took; `both` also gets a
+        // 60-second row timeout (actions keep the row's own, A4.1).
+        "UPDATE alerts SET last_receive_time = timezone('UTC', now()) WHERE id <> 'both'",
+        "UPDATE alerts SET last_receive_time = last_receive_time - interval '2 minutes',
+           timeout = 60 WHERE id = 'both'",
+    ] {
+        sqlx::query(sql).execute(&db.pool).await.unwrap();
+    }
+    let done = s.housekeeping(0, 0).await.unwrap();
+    assert_eq!(done.expired, ["both"]);
+    assert_eq!(done.unshelve, ["ack-then-shelve", "both", "sh-due"]);
+    assert_eq!(done.unack, ["ack-due"]);
+    for (id, status) in [
+        ("sh-due", "open"),
+        ("sh-later", "shelved"),
+        ("ack-due", "open"),
+        ("ack-zero", "ack"),
+        ("not-shelved", "open"),
+        ("ack-then-shelve", "ack"),
+        ("both", "open"),
+    ] {
+        let a = s.get_alert(id, None).await.unwrap();
+        assert_eq!(a.status, status, "{id}");
+        let timed_out = a.history.iter().any(|h| h.change_type == "timeout");
+        let expect_timeout = matches!(id, "sh-due" | "ack-due" | "ack-then-shelve" | "both");
+        assert_eq!(timed_out, expect_timeout, "{id}: {:?}", a.history);
+    }
+    // A second run times nothing out again (`both` is due to expire
+    // again: it is still not received).
+    let again = s.housekeeping(0, 0).await.unwrap();
+    assert_eq!(
+        (again.unshelve, again.unack),
+        (Vec::<String>::new(), Vec::<String>::new())
+    );
 }
 
 #[tokio::test]
