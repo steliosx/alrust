@@ -586,6 +586,11 @@ impl ApiKey {
     }
 }
 
+/// Whether `scopes` grant `wanted` (`Permission.is_in_scope`,
+/// `models/permission.py:90-109`): a scope held exactly grants itself,
+/// whatever its type (`delete:<x>` included); otherwise `admin` grants every
+/// type and `write` grants `read`, for the whole API or the same resource.
+/// The reference's `delete` from `write` derivation is not made here.
 pub fn scope_allows(scopes: &[String], wanted: &str) -> bool {
     let (want_type, want_res) = match wanted.split_once(':') {
         Some((t, r)) => (t, Some(r)),
@@ -605,7 +610,7 @@ pub fn scope_allows(scopes: &[String], wanted: &str) -> bool {
             (Some(h), Some(w)) => h == w,
             (Some(_), None) => false,
         };
-        type_ok && res_ok
+        s == wanted || (type_ok && res_ok)
     })
 }
 
