@@ -37,6 +37,7 @@
 
 mod bearer_settings;
 mod limits;
+mod properties_page;
 mod redacted_log;
 
 use std::net::SocketAddr;
@@ -239,6 +240,27 @@ async fn run() -> anyhow::Result<()> {
         env_i64("ALRUST_REQUEST_TIMEOUT", 30)?,
         0,
     )?;
+    let housekeeping_interval_s = env_i64("ALRUST_HOUSEKEEPING_INTERVAL", 0)?;
+    let bind_text = env_or("ALRUST_BIND", "0.0.0.0:8080");
+    // The settings page (SF-MGMT item 1, Y8), rendered once from the values
+    // read above.
+    let properties = alrust_api::properties::render(&properties_page::settings(
+        &api_cfg,
+        &store_cfg,
+        &properties_page::Runtime {
+            bind: bind_text.clone(),
+            housekeeping_interval_s,
+            request_timeout_s: request_timeout,
+            db_acquire_timeout_s: db_limits.acquire.as_secs(),
+            db_lock_timeout_s: db_limits.lock_timeout_s,
+            db_statement_timeout_s: db_limits.statement_timeout_s,
+        },
+        |name| std::env::var(name).ok(),
+    ));
+    let api_cfg = ApiConfig {
+        properties,
+        ..api_cfg
+    };
 
     // Start-up has its own pool with no lock or statement limit: a migration
     // may run long, or wait for another instance's. It is closed before the
@@ -292,7 +314,7 @@ async fn run() -> anyhow::Result<()> {
     );
 
     // A zero or negative interval is off (`try_from` fails only for negatives).
-    if let Ok(hk_secs) = u64::try_from(env_i64("ALRUST_HOUSEKEEPING_INTERVAL", 0)?)
+    if let Ok(hk_secs) = u64::try_from(housekeeping_interval_s)
         && hk_secs > 0
     {
         let store = store.clone();
@@ -314,9 +336,7 @@ async fn run() -> anyhow::Result<()> {
         });
     }
 
-    let bind: SocketAddr = env_or("ALRUST_BIND", "0.0.0.0:8080")
-        .parse()
-        .context("ALRUST_BIND must be host:port")?;
+    let bind: SocketAddr = bind_text.parse().context("ALRUST_BIND must be host:port")?;
     let app = limits::with_deadline(
         router(Arc::new(AppState {
             store,
