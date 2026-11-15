@@ -885,11 +885,14 @@ corrected twice for Codex's findings; it waits for review. The owner
 answered ZBX-1 (DECISIONS Y60). The owner approved a 30-minute inbox
 check in Claude's session through claude-chief-0a and paused it on
 2026-11-15 at about 02:45Z, and approved the deletion of a branch Claude
-had pushed by mistake (`claude/next-comparison`). On 2026-11-15 at 03:14Z
-the owner asked Claude to continue alone with the advisor for 24 hours and
-to send nothing to Codex, receipts included. Until 2026-11-16T03:14Z
-nothing merges, because no Codex approval can be read; review packets are
-kept for one consolidated send afterwards.
+had pushed by mistake (`claude/next-comparison`). On 2026-11-15 at about
+03:14Z the owner wrote: "Thanks you can continue alone with your advisor for
+24 hours and don't send anything to codex". Claude reads that as including
+the signed receipts a mailbox fetch delivers to Codex (the tool has no
+separate receipt step), so Claude does not read the mailbox until
+2026-11-16T03:14Z, and nothing merges in that time, because no Codex
+approval can be read. Review packets are kept for one consolidated send
+afterwards.
 Still open, all owner decisions: the repository history (session links,
 home paths, the author address; Claude recommends keeping it, since a
 rewrite breaks the exact-head records), the security-reporting contact,
@@ -1507,9 +1510,10 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
   confirm, forgot, reset, GitHub and CAS stay at inventory depth, and
   auth-contract changes stay with the owner. Keep STATUS current.
 - **Owner:**
-  - repository protection: approved (Y2); applied when the owner makes the
-    repository public after the beta has been tested (no paid upgrade); until
-    then `main` is unprotected and the guard is not enforced;
+  - repository protection: approved (Y2); applied on 2026-11-14 after the
+    repository became public (Y59): `main` needs a pull request, the ten
+    required checks, an up-to-date branch and resolved conversations,
+    admins included, with secret scanning and push protection on;
   - production-exposure checks: deferred (Y4);
   - the security and behavior items below are DECIDED (Y3): alrust fixes
     each one. Specified and approved in `spec/security-fixes.md` so far:
