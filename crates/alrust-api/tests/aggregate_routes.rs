@@ -548,7 +548,7 @@ async fn alert_groups_keep_the_first_1000_rows() {
     let Some((_db, app)) = seeded_with(
         r#"
 INSERT INTO alerts (id, resource, event, environment, severity, status, service, "group")
-SELECT 'g' || i, 'r', 'e', 'Production', 'major', 'open', ARRAY['svc'], 'g' || lpad(i::text, 4, '0')
+SELECT 'g' || i, 'r' || i, 'e', 'Production', 'major', 'open', ARRAY['svc'], 'g' || lpad(i::text, 4, '0')
 FROM generate_series(0, 1000) AS i
 "#,
     )
