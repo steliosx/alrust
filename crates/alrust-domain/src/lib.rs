@@ -6,6 +6,9 @@
 
 pub mod bearer;
 
+// Scopes and the built-in roles (the admin lists).
+pub mod roles;
+
 use std::fmt::Write as _;
 
 use chrono::{DateTime, SecondsFormat, Utc};
