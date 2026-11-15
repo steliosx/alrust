@@ -869,10 +869,11 @@ fn restricted_path(path: &str) -> bool {
 /// `zab-al-ack@eaf2acf:src/zabalack/query_guard.py:1-50`): a direct
 /// `attributes.<key>` filter, negated or not; `sort-by` on it, either
 /// direction; `group-by` the whole `attributes` object; `q.df` defaulting to
-/// `attributes` or to the key; and any `q` that mentions the key. alrust
-/// parses none of `q`, `q.df`, `sort-by`, `group-by` or `attributes.*` filters
-/// yet (they are ignored like other unknown parameters), so today this only
-/// refuses; it is in place before any of them is supported.
+/// `attributes` or to the key; and any `q` that mentions the key. It runs
+/// before `q` and `q.df` are parsed, so `q.df=attributes`, which SF-QUERY
+/// item 3 alone would accept, is refused here (F16). alrust parses none of
+/// `sort-by`, `group-by` or `attributes.*` filters yet (they are ignored
+/// like other unknown parameters).
 fn restricted_selector(key: &str, value: &str) -> bool {
     match key {
         "sort-by" => restricted_path(value.strip_prefix('-').unwrap_or(value)),
@@ -897,8 +898,25 @@ fn refuse_restricted_selectors(params: &[(String, String)]) -> ApiResult<()> {
 fn parse_search(st: &AppState, caller: &Caller, params: &[(String, String)]) -> ApiResult<Search> {
     // Before anything else is parsed.
     refuse_restricted_selectors(params)?;
+    // `q` and `q.df` are the first occurrences (`MultiDict.get`), and an
+    // empty first `q` is no search (`postgres/utils.py:144-155`). They are
+    // checked before every other parameter (SF-QUERY item 7).
+    let first = |name: &str| {
+        params
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
+    };
+    let search = match first("q") {
+        Some(text) if !text.is_empty() => Some(
+            alrust_store_pg::search::compile(text, first("q.df"))
+                .map_err(|e| ApiError::bad(e.message()))?,
+        ),
+        _ => None,
+    };
     let mut q = AlertQuery {
         customers: caller.customers(),
+        search,
         ..AlertQuery::default()
     };
     let mut page = 1i64;

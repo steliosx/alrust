@@ -8,6 +8,7 @@
 
 pub mod catalog;
 pub mod hooks;
+pub mod search;
 pub mod startup;
 
 use std::sync::Arc;
@@ -196,6 +197,9 @@ pub struct AlertQuery {
     pub not_origins: Vec<String>,
     /// `None` means no customer restriction.
     pub customers: Option<Vec<String>>,
+    /// A checked `q=` search (`search::compile`), the first condition of
+    /// the reference's `WHERE` clause (`postgres/utils.py:144-155`).
+    pub search: Option<search::SearchSql>,
 }
 
 /// The grouped counts of the alerts a query selects (`/alerts/count`, and
@@ -1450,6 +1454,11 @@ impl Store {
 
     fn push_filters<'q>(qb: &mut QueryBuilder<'q, Postgres>, q: &'q AlertQuery) {
         qb.push(" WHERE true");
+        if let Some(search) = &q.search {
+            qb.push(" AND (");
+            search.push_to(qb);
+            qb.push(")");
+        }
         let fields: [(&str, &Vec<String>); 8] = [
             ("environment", &q.environments),
             ("severity", &q.severities),

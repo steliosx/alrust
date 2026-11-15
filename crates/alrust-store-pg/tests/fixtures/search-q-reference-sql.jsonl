@@ -1,0 +1,70 @@
+{"identity": {"reference_commit": "f4312727783dad64198b62ed778bbca98a5144a3", "module": "alerta/database/backends/postgres/queryparser.py", "module_sha256": "d9c13317bb36208bbe83bd305bed1199a9e7a586659ca8256479f6158b9d0ce6", "python": "CPython 3.12.14", "pyparsing": "3.3.2"}}
+{"q": "disk", "q.df": null, "sql": "\"text\" ILIKE %(_qp_0)s", "params": {"_qp_0": "%disk%"}}
+{"q": "disk", "q.df": "resource", "sql": "\"resource\" ILIKE %(_qp_0)s", "params": {"_qp_0": "%disk%"}}
+{"q": "resource:web01", "q.df": null, "sql": "\"resource\" ILIKE %(_qp_0)s", "params": {"_qp_0": "%web01%"}}
+{"q": "event:HttpError", "q.df": null, "sql": "\"event\" ILIKE %(_qp_0)s", "params": {"_qp_0": "%HttpError%"}}
+{"q": "Disk", "q.df": null, "sql": "\"text\" ILIKE %(_qp_0)s", "params": {"_qp_0": "%Disk%"}}
+{"q": "service:Web", "q.df": null, "sql": "%(_qp_0)s=ANY(\"service\")", "params": {"_qp_0": "Web"}}
+{"q": "tags:linux", "q.df": null, "sql": "%(_qp_0)s=ANY(\"tags\")", "params": {"_qp_0": "linux"}}
+{"q": "correlate:NodeDown", "q.df": null, "sql": "%(_qp_0)s=ANY(\"correlate\")", "params": {"_qp_0": "NodeDown"}}
+{"q": "attributes.region:eu", "q.df": null, "sql": "\"attributes\"::jsonb ->>%(_qp_0)s ILIKE %(_qp_1)s", "params": {"_qp_0": "region", "_qp_1": "%eu%"}}
+{"q": "_.region:eu", "q.df": null, "sql": "\"attributes\"::jsonb ->>%(_qp_0)s ILIKE %(_qp_1)s", "params": {"_qp_0": "region", "_qp_1": "%eu%"}}
+{"q": "_exists_:region", "q.df": null, "sql": "\"attributes\"::jsonb ? %(_qp_0)s", "params": {"_qp_0": "region"}}
+{"q": "\"disk full\"", "q.df": null, "sql": "\"text\" ~* %(_qp_0)s", "params": {"_qp_0": "\\ydisk full\\y"}}
+{"q": "resource:\"web 01\"", "q.df": null, "sql": "\"resource\" ~* %(_qp_0)s", "params": {"_qp_0": "\\yweb 01\\y"}}
+{"q": "service:\"Web App\"", "q.df": null, "sql": "%(_qp_0)s=ANY(\"service\")", "params": {"_qp_0": "Web App"}}
+{"q": "_.region:\"eu west\"", "q.df": null, "sql": "\"attributes\"::jsonb ->>%(_qp_0)s ~* %(_qp_1)s", "params": {"_qp_0": "region", "_qp_1": "\\yeu west\\y"}}
+{"q": "dis*", "q.df": null, "sql": "\"text\" ~* %(_qp_0)s", "params": {"_qp_0": "\\ydis.*\\y"}}
+{"q": "d?sk", "q.df": null, "sql": "\"text\" ~* %(_qp_0)s", "params": {"_qp_0": "\\yd.?sk\\y"}}
+{"q": "resource:web*", "q.df": null, "sql": "\"resource\" ~* %(_qp_0)s", "params": {"_qp_0": "\\yweb.*\\y"}}
+{"q": "Dis*", "q.df": null, "sql": "(\"text\" ILIKE %(_qp_0)s OR \"text\" ~* %(_qp_1)s)", "params": {"_qp_0": "%Dis%", "_qp_1": "\\y.*\\y"}}
+{"q": "/^web[0-9]+$/", "q.df": null, "sql": "\"text\" ~* %(_qp_0)s", "params": {"_qp_0": "^web[0-9]+$"}}
+{"q": "resource:/^web[0-9]+$/", "q.df": null, "sql": "\"resource\" ~* %(_qp_0)s", "params": {"_qp_0": "^web[0-9]+$"}}
+{"q": "duplicateCount:[2 TO 5]", "q.df": null, "sql": "(\"duplicateCount\" >= %(_qp_0)s AND \"duplicateCount\" <= %(_qp_1)s)", "params": {"_qp_0": "2", "_qp_1": "5"}}
+{"q": "duplicateCount:{2 TO 5}", "q.df": null, "sql": "(\"duplicateCount\" > %(_qp_0)s AND \"duplicateCount\" < %(_qp_1)s)", "params": {"_qp_0": "2", "_qp_1": "5"}}
+{"q": "duplicateCount:[2 TO *]", "q.df": null, "sql": "(\"duplicateCount\" >= %(_qp_0)s AND 1=1)", "params": {"_qp_0": "2"}}
+{"q": "duplicateCount:>=2", "q.df": null, "sql": "(\"duplicateCount\" >= %(_qp_0)s)", "params": {"_qp_0": "2"}}
+{"q": "timeout:<60", "q.df": null, "sql": "(\"timeout\" < %(_qp_0)s)", "params": {"_qp_0": "60"}}
+{"q": "resource:(web01 OR web02)", "q.df": null, "sql": "(\"resource\" ILIKE %(_qp_0)s OR \"resource\" ILIKE %(_qp_1)s)", "params": {"_qp_0": "%web01%", "_qp_1": "%web02%"}}
+{"q": "_.region:(eu OR us)", "q.df": null, "sql": "(\"attributes\"::jsonb ->>%(_qp_2)s ILIKE %(_qp_0)s OR \"attributes\"::jsonb ->>%(_qp_2)s ILIKE %(_qp_1)s)", "params": {"_qp_0": "%eu%", "_qp_1": "%us%", "_qp_2": "region"}}
+{"q": "disk AND full", "q.df": null, "sql": "(\"text\" ILIKE %(_qp_0)s AND \"text\" ILIKE %(_qp_1)s)", "params": {"_qp_0": "%disk%", "_qp_1": "%full%"}}
+{"q": "disk && full", "q.df": null, "sql": "(\"text\" ILIKE %(_qp_0)s AND \"text\" ILIKE %(_qp_1)s)", "params": {"_qp_0": "%disk%", "_qp_1": "%full%"}}
+{"q": "disk OR full", "q.df": null, "sql": "(\"text\" ILIKE %(_qp_0)s OR \"text\" ILIKE %(_qp_1)s)", "params": {"_qp_0": "%disk%", "_qp_1": "%full%"}}
+{"q": "disk || full", "q.df": null, "sql": "(\"text\" ILIKE %(_qp_0)s OR \"text\" ILIKE %(_qp_1)s)", "params": {"_qp_0": "%disk%", "_qp_1": "%full%"}}
+{"q": "disk full", "q.df": null, "sql": "(\"text\" ILIKE %(_qp_0)s OR \"text\" ILIKE %(_qp_1)s)", "params": {"_qp_0": "%disk%", "_qp_1": "%full%"}}
+{"q": "NOT disk", "q.df": null, "sql": "NOT (\"text\" ILIKE %(_qp_0)s)", "params": {"_qp_0": "%disk%"}}
+{"q": "!disk", "q.df": null, "sql": "NOT (\"text\" ILIKE %(_qp_0)s)", "params": {"_qp_0": "%disk%"}}
+{"q": "disk OR NOT full", "q.df": null, "sql": "(\"text\" ILIKE %(_qp_0)s AND NOT (\"text\" ILIKE %(_qp_1)s))", "params": {"_qp_0": "%disk%", "_qp_1": "%full%"}}
+{"q": "disk AND NOT full", "q.df": null, "sql": "(\"text\" ILIKE %(_qp_0)s AND NOT (\"text\" ILIKE %(_qp_1)s))", "params": {"_qp_0": "%disk%", "_qp_1": "%full%"}}
+{"q": "+disk", "q.df": null, "sql": "+ \"text\" ILIKE %(_qp_0)s", "params": {"_qp_0": "%disk%"}}
+{"q": "-disk", "q.df": null, "sql": "- \"text\" ILIKE %(_qp_0)s", "params": {"_qp_0": "%disk%"}}
+{"q": "a AND b OR c", "q.df": null, "sql": "((\"text\" ILIKE %(_qp_0)s AND \"text\" ILIKE %(_qp_1)s) OR \"text\" ILIKE %(_qp_2)s)", "params": {"_qp_0": "%a%", "_qp_1": "%b%", "_qp_2": "%c%"}}
+{"q": "a OR b AND c", "q.df": null, "sql": "(\"text\" ILIKE %(_qp_0)s OR (\"text\" ILIKE %(_qp_1)s AND \"text\" ILIKE %(_qp_2)s))", "params": {"_qp_0": "%a%", "_qp_1": "%b%", "_qp_2": "%c%"}}
+{"q": "(a OR b) AND c", "q.df": null, "sql": "((\"text\" ILIKE %(_qp_0)s OR \"text\" ILIKE %(_qp_1)s) AND \"text\" ILIKE %(_qp_2)s)", "params": {"_qp_0": "%a%", "_qp_1": "%b%", "_qp_2": "%c%"}}
+{"q": "rawData:secret", "q.df": null, "sql": "\"rawData\" ILIKE %(_qp_0)s", "params": {"_qp_0": "%secret%"}}
+{"q": "history:ack", "q.df": null, "sql": "\"history\" ILIKE %(_qp_0)s", "params": {"_qp_0": "%ack%"}}
+{"q": "nosuchcolumn:x", "q.df": null, "sql": "\"nosuchcolumn\" ILIKE %(_qp_0)s", "params": {"_qp_0": "%x%"}}
+{"q": "100%", "q.df": null, "sql": "\"text\" ILIKE %(_qp_0)s", "params": {"_qp_0": "%100%%"}}
+{"q": "a_b", "q.df": null, "sql": "\"text\" ILIKE %(_qp_0)s", "params": {"_qp_0": "%a_b%"}}
+{"q": "web\\-01", "q.df": null, "sql": "\"text\" ILIKE %(_qp_0)s", "params": {"_qp_0": "%web%"}}
+{"q": "attributes.zabbix_ack_sync_intent:x", "q.df": null, "sql": "\"attributes\"::jsonb ->>%(_qp_0)s ILIKE %(_qp_1)s", "params": {"_qp_0": "zabbix_ack_sync_intent", "_qp_1": "%x%"}}
+{"q": "_exists_:zabbix_ack_sync_intent", "q.df": null, "sql": "\"attributes\"::jsonb ? %(_qp_0)s", "params": {"_qp_0": "zabbix_ack_sync_intent"}}
+{"q": "x", "q.df": "attributes", "sql": "\"attributes\" ILIKE %(_qp_0)s", "params": {"_qp_0": "%x%"}}
+{"q": "a AND b AND c", "q.df": null, "sql": "(\"text\" ILIKE %(_qp_0)s AND \"text\" ILIKE %(_qp_1)s)", "params": {"_qp_0": "%a%", "_qp_1": "%b%"}}
+{"q": "a OR b OR c", "q.df": null, "sql": "(\"text\" ILIKE %(_qp_0)s OR \"text\" ILIKE %(_qp_1)s)", "params": {"_qp_0": "%a%", "_qp_1": "%b%"}}
+{"q": "a b c", "q.df": null, "sql": "(\"text\" ILIKE %(_qp_0)s OR \"text\" ILIKE %(_qp_1)s)", "params": {"_qp_0": "%a%", "_qp_1": "%b%"}}
+{"q": "a b c d", "q.df": null, "sql": "(\"text\" ILIKE %(_qp_0)s OR \"text\" ILIKE %(_qp_1)s)", "params": {"_qp_0": "%a%", "_qp_1": "%b%"}}
+{"q": "a && b && c", "q.df": null, "sql": "(\"text\" ILIKE %(_qp_0)s AND \"text\" ILIKE %(_qp_1)s)", "params": {"_qp_0": "%a%", "_qp_1": "%b%"}}
+{"q": "NOT a AND b", "q.df": null, "sql": "(NOT (\"text\" ILIKE %(_qp_0)s) AND \"text\" ILIKE %(_qp_1)s)", "params": {"_qp_0": "%a%", "_qp_1": "%b%"}}
+{"q": "a AND b OR c AND d", "q.df": null, "sql": "((\"text\" ILIKE %(_qp_0)s AND \"text\" ILIKE %(_qp_1)s) OR (\"text\" ILIKE %(_qp_2)s AND \"text\" ILIKE %(_qp_3)s))", "params": {"_qp_0": "%a%", "_qp_1": "%b%", "_qp_2": "%c%", "_qp_3": "%d%"}}
+{"q": "resource:(a OR b OR c)", "q.df": null, "sql": "(\"resource\" ILIKE %(_qp_0)s OR \"resource\" ILIKE %(_qp_1)s)", "params": {"_qp_0": "%a%", "_qp_1": "%b%"}}
+{"q": "a-b", "q.df": null, "sql": "\"text\" ILIKE %(_qp_0)s", "params": {"_qp_0": "%a-b%"}}
+{"q": "disk!", "q.df": null, "sql": "\"text\" ILIKE %(_qp_0)s", "params": {"_qp_0": "%disk!%"}}
+{"q": "ANDROID", "q.df": null, "sql": "\"text\" ILIKE %(_qp_0)s", "params": {"_qp_0": "%ANDROID%"}}
+{"q": "web01 OR", "q.df": null, "sql": "\"text\" ILIKE %(_qp_0)s", "params": {"_qp_0": "%web01%"}}
+{"q": "-a -b", "q.df": null, "sql": "(- \"text\" ILIKE %(_qp_0)s OR - \"text\" ILIKE %(_qp_1)s)", "params": {"_qp_0": "%a%", "_qp_1": "%b%"}}
+{"q": "", "q.df": null, "error": "ParseException", "message": "Expected ['OR' | '||'] operations  (at char 0), (line:1, col:1)"}
+{"q": "disk AND", "q.df": null, "sql": "(\"text\" ILIKE %(_qp_0)s OR \"text\" ILIKE %(_qp_1)s)", "params": {"_qp_0": "%disk%", "_qp_1": "%AND%"}}
+{"q": "(disk", "q.df": null, "error": "ParseException", "message": "Expected ')', found end of text  (at char 5), (line:1, col:6)"}
+{"q": "\"unterminated", "q.df": null, "error": "ParseException", "message": "Expected ['OR' | '||'] operations, found '\"'  (at char 0), (line:1, col:1)"}
+{"q": "a:b:c", "q.df": null, "sql": "\"a\" ILIKE %(_qp_0)s", "params": {"_qp_0": "%b%"}}
