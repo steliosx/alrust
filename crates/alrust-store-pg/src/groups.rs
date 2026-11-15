@@ -42,7 +42,8 @@ impl Group {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupUser {
     pub id: String,
-    /// `login`, else `email` (`GroupUser.from_record`).
+    /// `login`, else `email`, with Python's `or` (`GroupUser.from_record`):
+    /// an empty login falls back too.
     pub login: Option<String>,
     pub name: Option<String>,
     pub status: Option<String>,
@@ -187,7 +188,7 @@ impl Store {
     /// The database error.
     pub async fn group_users(&self, id: &str) -> Result<Vec<GroupUser>, StoreError> {
         let rows = sqlx::query(
-            "SELECT u.id, COALESCE(u.login, u.email) AS login, u.name, u.status
+            "SELECT u.id, COALESCE(NULLIF(u.login, ''), u.email) AS login, u.name, u.status
                FROM groups g, UNNEST(g.users) WITH ORDINALITY AS m(uid, n)
                JOIN users u ON u.id = m.uid
               WHERE g.id = $1

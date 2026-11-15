@@ -145,7 +145,7 @@ async fn setup() -> Option<(TestDb, axum::Router)> {
             "INSERT INTO users (id, name, email, login, password, status, roles, attributes, create_time)
              VALUES ('u-ana', 'Ana', 'ana@example.test', 'ana@example.test', 'synthetic', 'active',
                      ARRAY[]::text[], '{}', timezone('UTC', now())),
-                    ('u-bo', 'Bo', 'bo@example.test', 'bo', 'synthetic', 'inactive',
+                    ('u-bo', 'Bo', 'bo@example.test', '', 'synthetic', 'inactive',
                      ARRAY[]::text[], '{}', timezone('UTC', now()))",
         )
         .await
@@ -335,6 +335,19 @@ async fn sf_groups_vectors() {
     );
     let (_, adm_users) = call(&app, "GET", "/group/g-adm/users", ADMIN, None).await;
     assert_eq!(adm_users["total"], json!(0));
+    // `text` alone needs no ceiling, even on a privileged group (SF-GROUPS).
+    let (status, body) = call(
+        &app,
+        "PUT",
+        "/group/g-adm",
+        GROUPS,
+        Some(json!({"text": "admins"})),
+    )
+    .await;
+    assert_eq!(
+        (status, body["group"]["text"].clone()),
+        (StatusCode::OK, json!("admins"))
+    );
     // Within the ceiling: text, a harmless rename, a member.
     let (status, body) = call(
         &app,
@@ -392,7 +405,10 @@ async fn members_and_the_list() {
         .map(|u| u["login"].clone())
         .collect();
     logins.sort_by_key(ToString::to_string);
-    assert_eq!(logins, [json!("ana@example.test"), json!("bo")]);
+    assert_eq!(
+        logins,
+        [json!("ana@example.test"), json!("bo@example.test")]
+    );
     let names = |body: &Value| -> Vec<String> {
         body["groups"]
             .as_array()
