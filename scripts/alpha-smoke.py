@@ -619,6 +619,12 @@ created += [r.get('resourceId') for r in res]
 check('prometheus webhook: a rejected middle item gives 403 and the others are stored [Y10, vector 5]',
       code == 403 and [r.get('outcome') for r in res] == ['processed', 'rejected', 'processed']
       and res[1].get('resourceId') is None, (code, body))
+code, body = prom(prom_item(f'{pinst}-ta'), prom_item(f'{pinst}-tb', extra_labels=', "timeout": -9e18'),
+                  prom_item(f'{pinst}-tc'))
+res = body.get('results', []) if isinstance(body, dict) else []
+created += [r.get('resourceId') for r in res]
+check('prometheus webhook: a negative timeout makes the item invalid, never the default [Codex 41481c78]',
+      code == 400 and [r.get('outcome') for r in res] == ['processed', 'invalid', 'processed'], (code, body))
 code, body = prom(bad_item)
 check('prometheus webhook: one malformed item is 400 without results [vector 8e]',
       code == 400 and body.get('message') == 'Invalid alert at index 0 in webhook payload.'

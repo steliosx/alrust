@@ -388,39 +388,56 @@ fn expand(template: &str, args: &[(String, PyVal)]) -> Option<String> {
     Some(out)
 }
 
-/// Python's `TypeError` from `int(x)`: the item is invalid.
+/// Why `int(x)` gives alrust no value; either way the item is invalid.
 #[derive(Debug, PartialEq, Eq)]
-struct TypeError;
+enum NoInt {
+    /// Python raises `TypeError`, which the reference does not catch.
+    TypeError,
+    /// Python succeeds but the integer does not fit `i64`. The reference
+    /// then fails later (a negative timeout in `Alert()`, a too large one in
+    /// the database); it never falls back to the default timeout, so
+    /// alrust must not either (Codex 41481c78).
+    OutOfRange,
+}
 
 /// Python `int(x)` on a label value: `Ok(Some(n))`, `Ok(None)` for the
-/// `ValueError` the reference catches, `Err(TypeError)` otherwise.
-fn py_int(v: &PyVal) -> Result<Option<i64>, TypeError> {
+/// `ValueError` the reference catches (no timeout), `Err` otherwise.
+fn py_int(v: &PyVal) -> Result<Option<i64>, NoInt> {
     match v {
-        PyVal::Str(text) => Ok(py_int_text(text)),
+        PyVal::Str(text) => py_int_text(text),
         PyVal::Bool(b) => Ok(Some(i64::from(*b))),
-        PyVal::Num(n) => Ok(n.as_i64().or_else(|| {
-            n.as_f64()
-                .filter(|f| f.is_finite() && f.abs() < 9.0e18)
-                .map(|f| {
+        PyVal::Num(n) => match (n.as_i64(), n.as_f64()) {
+            (Some(i), _) => Ok(Some(i)),
+            (None, _) if n.is_u64() => Err(NoInt::OutOfRange),
+            (None, Some(f)) => {
+                // int(float) truncates toward zero. 2^63 is exact as a float,
+                // so this range check is exact too.
+                let t = f.trunc();
+                if (-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&t) {
                     #[expect(
                         clippy::as_conversions,
                         clippy::cast_possible_truncation,
-                        reason = "Python int() truncates toward zero; the range is checked"
+                        reason = "a whole float inside the i64 range converts exactly"
                     )]
-                    let t = f.trunc() as i64;
-                    t
-                })
-        })),
-        PyVal::Null | PyVal::List(_) | PyVal::Obj(_) => Err(TypeError),
+                    let i = t as i64;
+                    Ok(Some(i))
+                } else {
+                    Err(NoInt::OutOfRange)
+                }
+            }
+            (None, None) => Err(NoInt::OutOfRange),
+        },
+        PyVal::Null | PyVal::List(_) | PyVal::Obj(_) => Err(NoInt::TypeError),
     }
 }
 
 /// Python `int(text)` (base 10): the characters `int()` strips around the
 /// number, a sign, then Unicode decimal digits (any script, as `int()`
-/// reads them) with single `_` between them. `None` where `int()` raises
-/// `ValueError`, and also beyond the `i64` range (a residual: Python's int
-/// has no limit).
-fn py_int_text(text: &str) -> Option<i64> {
+/// reads them) with single `_` between them. `Ok(None)` where `int()`
+/// raises `ValueError`; `Err(OutOfRange)` for a valid integer outside
+/// `i64` (Python's int has no limit). A negative number is accumulated
+/// negatively, so `i64::MIN` is read exactly.
+fn py_int_text(text: &str) -> Result<Option<i64>, NoInt> {
     let t = text.trim_matches(crate::pytext::is_int_space);
     let (neg, digits) = match t.strip_prefix('-') {
         Some(d) => (true, d),
@@ -431,14 +448,27 @@ fn py_int_text(text: &str) -> Option<i64> {
         || digits.ends_with('_')
         || digits.contains("__")
     {
-        return None;
+        return Ok(None);
+    }
+    let mut values = Vec::with_capacity(digits.len());
+    for c in digits.chars().filter(|&c| c != '_') {
+        match crate::pytext::decimal(c) {
+            Some(d) => values.push(i64::from(d)),
+            None => return Ok(None),
+        }
     }
     let mut n: i64 = 0;
-    for c in digits.chars().filter(|&c| c != '_') {
-        let d = crate::pytext::decimal(c)?;
-        n = n.checked_mul(10)?.checked_add(i64::from(d))?;
+    for d in values {
+        let next = n.checked_mul(10).and_then(|m| {
+            if neg {
+                m.checked_sub(d)
+            } else {
+                m.checked_add(d)
+            }
+        });
+        n = next.ok_or(NoInt::OutOfRange)?;
     }
-    Some(if neg { -n } else { n })
+    Ok(Some(n))
 }
 
 /// An ordered `str → value` map: Python's `labels` / `annotations` dicts.
@@ -839,6 +869,24 @@ mod tests {
                 "{bad}"
             );
         }
+        // Codex 41481c78: a negative timeout inside i64 is kept (the API's
+        // R0.4 check then refuses it); one beyond i64 makes the item invalid.
+        // Neither may fall back to the default.
+        for (label, want) in [
+            (r#""-9223372036854775808""#, json!(i64::MIN)),
+            ("-9e18", json!(-9_000_000_000_000_000_000_i64)),
+        ] {
+            let t = one(&format!(
+                r#"{{"alerts": [{{"labels": {{"alertname": "A", "timeout": {label}}}, "annotations": {{}}, "startsAt": "s", "endsAt": "e"}}]}}"#
+            ));
+            assert_eq!(t["timeout"], want, "{label}");
+        }
+        for label in [r#""9223372036854775808""#, "1e19"] {
+            let body = format!(
+                r#"{{"alerts": [{{"labels": {{"alertname": "A", "timeout": {label}}}, "annotations": {{}}, "startsAt": "s", "endsAt": "e"}}]}}"#
+            );
+            assert_eq!(items(&body), vec![Item::Invalid], "{label}");
+        }
         // Python int() reads Arabic-Indic digits: timeout 12, not the default.
         let t = one(
             r#"{"alerts": [{"labels": {"alertname": "A", "timeout": "\u0661\u0662"}, "annotations": {}, "startsAt": "s", "endsAt": "e"}]}"#,
@@ -980,8 +1028,8 @@ mod tests {
         assert_eq!(py_float(1.0), "1.0");
         assert_eq!(py_float(1e16), "1e+16");
         assert_eq!(py_float(2.5e-5), "2.5e-05");
-        assert_eq!(py_int_text(" +5 "), Some(5));
-        assert_eq!(py_int_text("-1_0"), Some(-10));
+        assert_eq!(py_int_text(" +5 "), Ok(Some(5)));
+        assert_eq!(py_int_text("-1_0"), Ok(Some(-10)));
         for bad in [
             "",
             "5.0",
@@ -993,7 +1041,7 @@ mod tests {
             "+-1",
             "\u{1c}12\u{1f}",
         ] {
-            assert_eq!(py_int_text(bad), None, "{bad}");
+            assert_eq!(py_int_text(bad), Ok(None), "{bad}");
         }
         // Expected values from the pinned CPython 3.12.14 int().
         for (text, n) in [
@@ -1005,13 +1053,33 @@ mod tests {
             ("+\u{661}", 1),
             ("0012", 12),
         ] {
-            assert_eq!(py_int_text(text), Some(n), "{text:?}");
+            assert_eq!(py_int_text(text), Ok(Some(n)), "{text:?}");
         }
         assert_eq!(
             py_int(&PyVal::Num(serde_json::Number::from_f64(5.7).unwrap())),
             Ok(Some(5))
         );
-        assert_eq!(py_int(&PyVal::Null), Err(TypeError));
+        assert_eq!(py_int(&PyVal::Null), Err(NoInt::TypeError));
+        // Codex 41481c78: valid integers are read exactly to the i64 limits,
+        // and beyond them are out of range, never "no timeout".
+        assert_eq!(py_int_text("-9223372036854775808"), Ok(Some(i64::MIN)));
+        assert_eq!(py_int_text("9223372036854775807"), Ok(Some(i64::MAX)));
+        for big in ["9223372036854775808", "-9223372036854775809"] {
+            assert_eq!(py_int_text(big), Err(NoInt::OutOfRange), "{big}");
+        }
+        // A syntax error wins over the size, as in int().
+        assert_eq!(py_int_text("99999999999999999999x"), Ok(None));
+        let num = |f: f64| PyVal::Num(serde_json::Number::from_f64(f).unwrap());
+        assert_eq!(py_int(&num(-9e18)), Ok(Some(-9_000_000_000_000_000_000)));
+        assert_eq!(
+            py_int(&num(-9.223_372_036_854_775_808e18)),
+            Ok(Some(i64::MIN))
+        );
+        assert_eq!(
+            py_int(&num(9.223_372_036_854_775_808e18)),
+            Err(NoInt::OutOfRange)
+        );
+        assert_eq!(py_int(&PyVal::Num(u64::MAX.into())), Err(NoInt::OutOfRange));
     }
 
     #[test]
