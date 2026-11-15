@@ -337,8 +337,12 @@ pub fn json_ascii(s: &str) -> String {
             ' '..='~' => out.push(c),
             _ => {
                 let mut units = [0u16; 2];
-                for u in c.encode_utf16(&mut units) {
-                    out.push_str(&format!("\\u{u:04x}"));
+                for unit in c.encode_utf16(&mut units).iter() {
+                    out.push_str("\\u");
+                    for shift in [12, 8, 4, 0] {
+                        let digit = u32::from((*unit >> shift) & 0xf);
+                        out.push(char::from_digit(digit, 16).unwrap_or('0'));
+                    }
                 }
             }
         }
