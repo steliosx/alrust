@@ -9,6 +9,7 @@
 pub mod catalog;
 pub mod hooks;
 pub mod startup;
+pub mod suppression;
 
 use std::sync::Arc;
 
