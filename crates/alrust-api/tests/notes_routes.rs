@@ -321,7 +321,7 @@ async fn note_text_rules_missing_alerts_and_scopes() {
     };
     let a = alert(&app, "note-t", "r3", None).await;
     let first = note(&app, &a, ADMIN_KEY, "first").await;
-    assert!(!first.is_empty());
+    assert_ne!(first, "");
     // `text`, else `note`, with Python's `or`.
     let (code, _, body) = send(
         &app,
@@ -431,7 +431,7 @@ async fn a_note_is_updated_and_dismissed() {
         (json!("note dismissed"), json!("acme-writer")),
         "{h}"
     );
-    assert!(notes_of(&app, &a).await.is_empty());
+    assert_eq!(notes_of(&app, &a).await, Vec::<(String, String)>::new());
     let (code, _, body) = send(&app, "DELETE", "/alert/nosuch/note/x", ADMIN_KEY, None).await;
     assert_eq!(
         (code, body["message"].clone()),
