@@ -290,6 +290,8 @@ async fn every_vector_in_both_modes() {
         ("disk AND", ids("q1 q4 q5 q7"), refused(PARSE)),
         ("disk and full", ids("q1 q2 q4 q5 q7"), ids("")),
         ("/^disk$/", ids("q1"), ids("q1")),
+        ("disk OR -server", Outcome::Failed, ids("q1 q4 q7")),
+        ("disk OR NOT server", ids("q1 q4 q7"), ids("q1 q4 q7")),
         ("resource:(alpha OR bravo)", ids("q1 q2"), ids("q1 q2")),
         ("_.region:a", ids("q2"), ids("q2")),
         ("_exists_:region", ids("q1 q2"), ids("q1 q2")),
@@ -334,6 +336,8 @@ async fn operator_default_field_and_surface() {
             ids("q1 q2 q4 q5 q7"),
         ),
         (lucene("disk full", &[("q.op", "AND")]), ids("q4 q5")),
+        (lucene("full -disk", &[("q.op", "OR")]), ids("q2")),
+        (lucene("-disk -full", &[("q.op", "OR")]), ids("q3 q6 q8 q9")),
         (
             lucene("disk", &[("q.op", "XOR")]),
             refused("Default operator 'XOR' not supported."),

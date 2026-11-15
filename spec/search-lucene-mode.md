@@ -57,8 +57,8 @@ it. Every rule below is one of two kinds:
 | # | Rule | Kind | Reference defect |
 |---|---|---|---|
 | M1 | Implicit operator: two clauses with no operator between them are joined by `q.op`, `AND` by default. With `q.op=OR` the result is Lucene's and Alerta's | (A) — Lucene's own default is OR | F2 (not a defect against Lucene) |
-| M2 | Precedence: `NOT`/`!` binds tighter than `AND`/`&&`, which binds tighter than `OR`/`\|\|`; the implicit operator has the precedence of the operator it stands for. Chains keep every operand | (L) for the operators; (A) for strict precedence (Lucene's classic parser has none) | F3, F19 |
-| M3 | `+x` requires `x` and `-x` prohibits it (`NOT x`), also as the first clause. With `q.op=AND` this is Lucene's MUST and MUST_NOT. With `q.op=OR`, `+` has no further effect: `full +disk` is `full OR disk` (Lucene would make `full` optional, so `disk`). A query of only prohibited clauses matches everything else, as Elasticsearch resolves it (Lucene's classic parser matches nothing) | (L) with `AND`; (A) with `OR`; Elasticsearch for a pure negative | F5 (a database error) |
+| M2 | Precedence: `NOT`/`!` binds tighter than `AND`/`&&`, which binds tighter than `OR`/`\|\|`; the implicit operator has the precedence of the operator it stands for. Chains keep every operand. Precedence governs how `AND` and `OR` nest; a negated clause inside an `OR` group follows M3 | (L) for the operators; (A) for strict precedence (Lucene's classic parser has none) | F3, F19 |
+| M3 | `+x` requires `x`; `-x`, `!x` and `NOT x` prohibit it, also as the first clause. A prohibited clause excludes from its whole `OR` group, as Lucene's MUST_NOT does: `a OR b OR -c` is `(a OR b) AND NOT c`, also with `q.op=OR` (`full -disk` is `full AND NOT disk`). This is also how the default mode reads `a OR NOT b` (F4), per pair. A group of prohibited clauses only matches everything else, as Elasticsearch resolves it (Lucene's classic parser matches nothing). With `q.op=OR`, `+` has no further effect: `full +disk` is `full OR disk` (Lucene would make `full` optional, so `disk`) | (L) for `-`, `!`, `NOT`, and `+` with `AND`; (A) for `+` with `OR`; Elasticsearch for a pure negative | F5 (a database error) |
 | M4 | `AND`, `OR` and `NOT` (upper case only) are operators, never terms; a missing operand is a syntax error. Lower-case `and` is a term | (L) | F2, F21 (`disk AND` searches `AND`) |
 | M5 | The whole input must parse; anything left over is 400 `Failed to parse query string.` | (L) | F1 (dropped silently) |
 | M6 | `\` escapes the next character, which is then literal (`web\-01`, `a\:b`), also in a field name; inside `"…"`, `\"` is a quote and `\\` a backslash. A term may hold any non-ASCII letter (`résumé`) and dots (`10.0.0.1`); `-` and `+` inside a term are text | (L) | F1 (`web\-01` is `web`; `résumé` is `r`) |
@@ -71,7 +71,7 @@ it. Every rule below is one of two kinds:
 | M13 | `history` and a bare `attributes` are not searchable: 400 `Search field '<field>' not supported.`. `attributes.<key>`, `_.<key>` and `_exists_:<key>` keep their meaning; `raw_data` is searched only when named | (A) | F16 (database errors) |
 | M14 | Array fields (`service`, `tags`, `correlate`): a term matches an element exactly, case-insensitively; a wildcard or regex matches a whole element | (A) | F8 (case-sensitive) |
 | M15 | Ranges and one-sided ranges as in the default mode, and a bound may be quoted, so a timestamp with `:` can be written (`lastReceiveTime:>"2026-11-01T00:30:00"`). Bounds compare with the column's type. On an integer, boolean or timestamp column a plain term is an exact match (`duplicateCount:3`). A value the type cannot hold (an integer; `true` or `false`; a timestamp `YYYY-MM-DD`, optionally with `THH:MM`, `:SS`, a fraction and a `Z`), or a wildcard or regex on such a column: 400 `Search value '<value>' not supported for '<field>'.` | (L) for quoted bounds; one-sided ranges are Elasticsearch's; (A) for the value check | quoted bounds are a parse error; a bad value is a database error |
-| M16 | `~` (fuzzy, proximity) and `^` (boost) right after a term or a phrase are Lucene operators alrust does not implement: 400 `Query operator '<op>' not supported.` Inside quotes or `/…/` they are text | (L) syntax; (A) refusal | F1 (dropped silently) |
+| M16 | `~` (fuzzy, proximity) and `^` (boost) right after a term or a phrase are Lucene operators alrust does not implement: 400 `Query operator '<op>' not supported.` Inside quotes or `/…/` they are text; anywhere else (after `)` or `]`) they are a syntax error | (L) syntax; (A) refusal | F1 (dropped silently) |
 | M17 | Results keep the newest-first order; no relevance ranking. A ranked order is a later, separate step (`sort-by=relevance`, Q-S4) | (A) | — |
 
 As regular expressions: a phrase is `(^|[^[:alnum:]_])<literal>([^[:alnum:]_]|$)`; a
@@ -106,6 +106,8 @@ with the same `q` without `q.mode`. Sets are alert ids.
 |---|---|---|---|---|
 | 1 | `disk full` | q1 q2 q4 q5 q7 | q4 q5; with `q.op=OR` q1 q2 q4 q5 q7 | M1 |
 | 1b | `full +disk` with `q.op=OR` | — | q1 q2 q4 q5 q7 (Lucene: q1 q4 q5 q7) | M3 |
+| 1c | `full -disk` with `q.op=OR`; `-disk -full` with `q.op=OR` | — | q2; q3 q6 q8 q9 | M3 |
+| 1d | `disk OR -server`; `disk OR NOT server` | 500; q1 q4 q7 (F4) | q1 q4 q7; q1 q4 q7 | M3 |
 | 2 | `-disk` | 500 (`- "text" ILIKE …`) | q2 q3 q6 q8 q9 | M3 |
 | 3 | `+disk -server` | 500 | q1 q4 q7 | M3 |
 | 4 | `Dis*` | all nine (`\y.*\y`) | q1 q4 q5 q7 | M9 |

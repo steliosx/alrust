@@ -957,19 +957,45 @@ fn node_sql(node: &LNode, defaults: &[Target], o: &mut Out) -> Result<Vec<Piece>
             out.push(text(" IS NOT TRUE)"));
             Ok(out)
         }
-        LNode::And(items) | LNode::Or(items) => {
-            let op = if matches!(node, LNode::And(_)) {
-                "AND"
-            } else {
-                "OR"
-            };
+        LNode::And(items) => {
             let mut parts = Vec::with_capacity(items.len());
             for item in items {
                 parts.push(node_sql(item, defaults, o)?);
             }
-            Ok(join(op, parts))
+            Ok(join("AND", parts))
+        }
+        LNode::Or(items) => or_group(items, defaults, o),
+    }
+}
+
+/// M3: in an `OR` group a negated clause excludes from the whole group,
+/// as Lucene's `MUST_NOT` does (and as Alerta's `a OR NOT b` already reads,
+/// F4): `a OR b OR -c` is `(a OR b) AND NOT c`, and a group of negations
+/// only is their conjunction. Parameters keep the written order.
+fn or_group(
+    items: &[Arc<LNode>],
+    defaults: &[Target],
+    o: &mut Out,
+) -> Result<Vec<Piece>, SearchError> {
+    let mut positives = Vec::new();
+    let mut negations = Vec::new();
+    for item in items {
+        let sql = node_sql(item, defaults, o)?;
+        if matches!(**item, LNode::Not(_)) {
+            negations.push(sql);
+        } else {
+            positives.push(sql);
         }
     }
+    if negations.is_empty() {
+        return Ok(join("OR", positives));
+    }
+    let mut parts = Vec::with_capacity(negations.len() + 1);
+    if !positives.is_empty() {
+        parts.push(join("OR", positives));
+    }
+    parts.extend(negations);
+    Ok(join("AND", parts))
 }
 
 /// `q` in `q.mode=lucene`, with its `q.df` and `q.op`: the mode's checks in
@@ -1355,6 +1381,32 @@ mod tests {
             Ok(default)
         );
         assert_eq!(compile("\"a\u{0}b\"", None, None), Err(SearchError::Parse));
+    }
+
+    /// M3: in an `OR` group a negation excludes from the whole group.
+    #[test]
+    fn negations_exclude_from_an_or_group() {
+        let t = |n: usize| format!("\"text\" ILIKE %(_qp_{n})s ESCAPE '\\'");
+        let not = |n: usize| format!("({} IS NOT TRUE)", t(n));
+        let text =
+            |q: &str, op: Option<&str>| compile(q, Some("text"), op).unwrap().reference_text();
+        assert_eq!(
+            text("full -disk", Some("OR")),
+            format!("({} AND {})", t(0), not(1))
+        );
+        assert_eq!(
+            text("a b -c", Some("OR")),
+            format!("(({} OR {}) AND {})", t(0), t(1), not(2))
+        );
+        assert_eq!(
+            text("-a -b", Some("OR")),
+            format!("({} AND {})", not(0), not(1))
+        );
+        assert_eq!(
+            text("a OR NOT b", None),
+            format!("({} AND {})", t(0), not(1))
+        );
+        assert_eq!(text("a OR b", None), format!("({} OR {})", t(0), t(1)));
     }
 
     #[test]
