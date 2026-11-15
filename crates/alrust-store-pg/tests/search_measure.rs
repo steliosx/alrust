@@ -32,7 +32,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use alrust_domain::HistoryOutput;
-use alrust_store_pg::search::compile;
+use alrust_store_pg::search::{compile, compile_mode};
 use alrust_store_pg::{AlertQuery, Explain, NewAlert, ReceiveKind, Store, StoreConfig};
 use chrono::{TimeZone, Utc};
 use sqlx::Executor as _;
@@ -305,6 +305,33 @@ fn cases() -> Vec<(String, AlertQuery)> {
             format!("q={q}"),
             AlertQuery {
                 search: Some(compile(q, None).unwrap()),
+                ..AlertQuery::default()
+            },
+        ));
+    }
+    // The opt-in mode (#248, spec/search-lucene-mode.md): a term without a
+    // field matches any of seven default fields (M11), against the default
+    // mode's `text`; then `q.df=text`, which narrows the set to one field.
+    for (q, df) in [
+        ("disk", None),
+        ("\"disk full\"", None),
+        ("dis*", None),
+        ("isk", None),
+        ("on", None),
+        ("disk full", None),
+        ("NOT disk", None),
+        ("resource:host*", None),
+        ("disk", Some("text")),
+        ("dis*", Some("text")),
+    ] {
+        let label = match df {
+            Some(f) => format!("q.mode=lucene&q.df={f}&q={q}"),
+            None => format!("q.mode=lucene&q={q}"),
+        };
+        out.push((
+            label,
+            AlertQuery {
+                search: Some(compile_mode(q, df, Some("lucene"), None).unwrap()),
                 ..AlertQuery::default()
             },
         ));
