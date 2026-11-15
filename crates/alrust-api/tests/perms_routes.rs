@@ -555,12 +555,12 @@ async fn null_rows_and_the_role_lookup() {
             .unwrap(),
         ["admin", "read", "write"]
     );
-    assert!(
+    assert_eq!(
         store
             .scopes_by_match("", &roles(&["nosuch"]))
             .await
-            .unwrap()
-            .is_empty()
+            .unwrap(),
+        Vec::<String>::new()
     );
     db.pool
         .execute("INSERT INTO perms (id, match, scopes) VALUES ('p-null', 'nullrole', NULL)")
