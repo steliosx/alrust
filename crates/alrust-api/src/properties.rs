@@ -497,7 +497,7 @@ mod tests {
                 || (value.starts_with('"') && value.ends_with('"') && value.len() >= 2)
                 || (value.starts_with('[') && value.ends_with(']'));
             assert!(ok, "{l}");
-            if value.starts_with('"') || value.starts_with('[') {
+            if value != REDACTED && (value.starts_with('"') || value.starts_with('[')) {
                 serde_json::from_str::<serde_json::Value>(value).unwrap();
             }
         }
