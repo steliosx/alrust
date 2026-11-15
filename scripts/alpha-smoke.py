@@ -235,8 +235,9 @@ check('PUT /alert/<id>/note/<note_id> updates it', code == 200 and body.get('not
 code, body = call('DELETE', f'/alert/{naid}/note/{nid}')
 check('DELETE /alert/<id>/note/<note_id> removes it', code == 200, (code, body))
 code, body = call('GET', f'/alert/{naid}')
-h0 = (body.get('alert', {}).get('history') or [{}])[0] if isinstance(body, dict) else {}
-check('the dismissed note leaves a dismiss history entry', h0.get('type') == 'dismiss' and h0.get('id') == nid, h0)
+hist = body.get('alert', {}).get('history', []) if isinstance(body, dict) else []
+check('the dismissed note leaves a dismiss history entry',
+      any(h.get('type') == 'dismiss' and h.get('id') == nid for h in hist), hist)
 call('DELETE', f'/alert/{naid}')
 
 # --- heartbeats [HB]

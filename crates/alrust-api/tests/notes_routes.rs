@@ -246,9 +246,23 @@ async fn notes_of(app: &axum::Router, alert_id: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-async fn first_history(app: &axum::Router, alert_id: &str) -> Value {
+async fn history(app: &axum::Router, alert_id: &str) -> Value {
     let (_, _, body) = send(app, "GET", &format!("/alert/{alert_id}"), ADMIN_KEY, None).await;
-    body["alert"]["history"][0].clone()
+    body["alert"]["history"].clone()
+}
+
+/// The history entry of `kind` with the given id. Looked up by content:
+/// the body lists history oldest first, and two entries can share a
+/// millisecond.
+async fn history_entry(app: &axum::Router, alert_id: &str, kind: &str, id: &str) -> Value {
+    history(app, alert_id)
+        .await
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["type"] == kind && h["id"] == id)
+        .cloned()
+        .unwrap_or(Value::Null)
 }
 
 #[tokio::test]
@@ -290,15 +304,11 @@ async fn a_note_is_added_listed_and_recorded_in_history() {
     assert_eq!(n["updateTime"], Value::Null);
     assert_eq!(n["customer"], Value::Null);
     // The note entry carries the note's id, not the alert's.
-    let h = first_history(&app, &a).await;
+    let h = history_entry(&app, &a, "note", &id).await;
     assert_eq!(
-        (
-            h["type"].clone(),
-            h["id"].clone(),
-            h["text"].clone(),
-            h["user"].clone()
-        ),
-        (json!("note"), json!(id), json!("first"), json!("admin"))
+        (h["text"].clone(), h["user"].clone()),
+        (json!("first"), json!("admin")),
+        "{h}"
     );
     assert_eq!(notes_of(&app, &a).await, vec![(id, "first".to_owned())]);
 }
@@ -415,20 +425,11 @@ async fn a_note_is_updated_and_dismissed() {
     )
     .await;
     assert_eq!((code, body), (StatusCode::OK, json!({"status": "ok"})));
-    let h = first_history(&app, &a).await;
+    let h = history_entry(&app, &a, "dismiss", &id).await;
     assert_eq!(
-        (
-            h["type"].clone(),
-            h["id"].clone(),
-            h["text"].clone(),
-            h["user"].clone()
-        ),
-        (
-            json!("dismiss"),
-            json!(id),
-            json!("note dismissed"),
-            json!("acme-writer")
-        )
+        (h["text"].clone(), h["user"].clone()),
+        (json!("note dismissed"), json!("acme-writer")),
+        "{h}"
     );
     assert!(notes_of(&app, &a).await.is_empty());
     let (code, _, body) = send(&app, "DELETE", "/alert/nosuch/note/x", ADMIN_KEY, None).await;
@@ -495,7 +496,7 @@ async fn sf_notes_vectors() {
         vec![(no.clone(), "other's note".to_owned())]
     );
     // 3: DELETE with a note of another alert; nothing deleted, no history.
-    let before = first_history(&app, &a).await;
+    let before = history(&app, &a).await;
     let (code, _, body) = send(
         &app,
         "DELETE",
@@ -509,7 +510,7 @@ async fn sf_notes_vectors() {
         (StatusCode::NOT_FOUND, json!("note not found"))
     );
     assert_eq!(notes_of(&app, &b).await.len(), 1);
-    assert_eq!(first_history(&app, &a).await, before);
+    assert_eq!(history(&app, &a).await, before);
     // a's own note is untouched by all of the above.
     assert_eq!(notes_of(&app, &a).await, vec![(na, "a's note".to_owned())]);
 }
