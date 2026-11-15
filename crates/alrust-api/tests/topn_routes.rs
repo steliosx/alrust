@@ -216,15 +216,6 @@ async fn get(app: &axum::Router, uri: &str, key: &str) -> (StatusCode, Value) {
     )
 }
 
-/// The item of `list` whose `key` fields equal `want`.
-fn item<'a>(list: &'a Value, want: &[(&str, Value)]) -> &'a Value {
-    list.as_array()
-        .unwrap()
-        .iter()
-        .find(|i| want.iter().all(|(k, v)| &i[*k] == v))
-        .unwrap_or_else(|| panic!("no item {want:?} in {list}"))
-}
-
 fn names(list: &Value, key: &str) -> Vec<Value> {
     list.as_array()
         .unwrap()
