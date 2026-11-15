@@ -27,11 +27,11 @@ it. Every rule below is one of two kinds:
 
 - `q.mode` and `q.op` are read only when `q` is non-empty, like `q.df`:
   without a search they are ignored.
-- `q.mode`: the first occurrence. Absent, or `alerta`, is the default mode
+- `q.mode`: the first occurrence. Absent, empty, or `alerta`, is the default mode
   (#245, unchanged). `lucene` is this mode. Any other value: 400 `Query
   mode '<value>' not supported.`
 - `q.op`: the first occurrence, used only with `q.mode=lucene`: `AND` (the
-  default) or `OR`. Any other value: 400 `Default operator '<value>' not
+  default, also when empty) or `OR`. Any other value: 400 `Default operator '<value>' not
   supported.` In the default mode `q.op` is ignored, as `q.df` is without
   `q`.
 - The same endpoints as `q` (every alert read that goes through
@@ -69,7 +69,7 @@ it. Every rule below is one of two kinds:
 | M11 | Default fields: without `field:` (and without `q.df`), a clause matches if any of `text`, `resource`, `event`, `service`, `tags`, `group` and `value` matches. Not `environment` or `origin`: with substring matching, short terms (`on`, `prod`, `fix`) would match nearly every alert, and both have exact filter parameters. Never `attributes`, `raw_data` or `history`. `q.df` names one field that replaces the set. A term is a substring (`isk` finds `disk`), while a wildcard matches from the start of a word (`isk*` does not) | (A) | default field `text` only |
 | M12 | Field names: the API spelling (the reference's own `VALID_PARAMS`, `postgres/utils.py:108-137`: `createTime`, `duplicateCount`, `lastReceiveTime`, `rawData`, `tag`, …) or the column name; `type` is the `type` column (the reference maps it to a non-existent `event_type`). Any other field: 400 `Search field '<field>' not supported.` | (A) | F6 |
 | M13 | `history` and a bare `attributes` are not searchable: 400 `Search field '<field>' not supported.`. `attributes.<key>`, `_.<key>` and `_exists_:<key>` keep their meaning; `raw_data` is searched only when named | (A) | F16 (database errors) |
-| M14 | Array fields (`service`, `tags`, `correlate`): a term matches an element exactly, case-insensitively; a wildcard or regex matches a whole element | (A) | F8 (case-sensitive) |
+| M14 | Array fields (`service`, `tags`, `correlate`): a term matches an element exactly, case-insensitively; a wildcard matches a whole element; a regex is unanchored (M10), so it matches within an element | (A) | F8 (case-sensitive) |
 | M15 | Ranges and one-sided ranges as in the default mode, and a bound may be quoted, so a timestamp with `:` can be written (`lastReceiveTime:>"2026-11-01T00:30:00"`). Bounds compare with the column's type. On an integer, boolean or timestamp column a plain term is an exact match (`duplicateCount:3`). A value the type cannot hold (an integer; `true` or `false`; a timestamp `YYYY-MM-DD`, optionally with `THH:MM`, `:SS`, a fraction and a `Z`), or a wildcard or regex on such a column: 400 `Search value '<value>' not supported for '<field>'.` | (L) for quoted bounds; one-sided ranges are Elasticsearch's; (A) for the value check | quoted bounds are a parse error; a bad value is a database error |
 | M16 | `~` (fuzzy, proximity) and `^` (boost) right after a term or a phrase are Lucene operators alrust does not implement: 400 `Query operator '<op>' not supported.` Inside quotes or `/…/` they are text; anywhere else (after `)` or `]`) they are a syntax error | (L) syntax; (A) refusal | F1 (dropped silently) |
 | M17 | Results keep the newest-first order; no relevance ranking. A ranked order is a later, separate step (`sort-by=relevance`, Q-S4) | (A) | — |

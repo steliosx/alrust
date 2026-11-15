@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use alrust_domain::is_restricted_attribute;
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{Datelike as _, NaiveDate, NaiveDateTime};
 
 use crate::search::{MAX_DEPTH, Piece, SearchError, SearchSql};
 
@@ -258,6 +258,18 @@ impl Parser<'_> {
         }
     }
 
+    /// A word, or a negative number: a bound may start with `-` followed by
+    /// a digit (`[-1 TO 5]`, `>-1`), as in the default mode, where a word
+    /// start reads `-` as the prohibit operator.
+    fn signed(&self, p: usize) -> Option<(Word, usize)> {
+        if self.b.get(p) == Some(&b'-') && self.b.get(p + 1).is_some_and(u8::is_ascii_digit) {
+            let (mut w, e) = self.word(p + 1)?;
+            w.text.insert(0, '-');
+            return Some((w, e));
+        }
+        self.word(p)
+    }
+
     /// A range bound: `*`, a phrase, or a word without wildcards.
     fn bound(&self, p: usize) -> Option<(Option<String>, usize)> {
         if let Some(e) = self.literal(p, "*")
@@ -271,7 +283,7 @@ impl Parser<'_> {
         if let Some((ph, e)) = self.quoted(p, b'"') {
             return Some((Some(ph), e));
         }
-        let (w, e) = self.word(p)?;
+        let (w, e) = self.signed(p)?;
         (!w.wild && !w.is_operator()).then_some((Some(w.text), e))
     }
 
@@ -307,7 +319,7 @@ impl Parser<'_> {
         if let Some((bound, e)) = self.quoted(after, b'"') {
             return Some((LTerm::OneSided { op, bound }, e));
         }
-        let (w, e) = self.word(after)?;
+        let (w, e) = self.signed(after)?;
         if w.wild || w.is_operator() {
             return None;
         }
@@ -622,6 +634,9 @@ fn names_restricted_key(node: &LNode) -> bool {
 
 struct Out {
     params: Vec<String>,
+    /// The name a clause without `field:` is reported under: `q.df`, else
+    /// `text` (M15's message).
+    default_name: String,
 }
 
 impl Out {
@@ -709,7 +724,8 @@ fn phrase_pattern(ph: &str) -> String {
 
 fn valid(kind: Kind, value: &str) -> bool {
     match kind {
-        Kind::Int => value.parse::<i64>().is_ok(),
+        // `timeout` and `duplicate_count` are PostgreSQL `integer`s.
+        Kind::Int => value.parse::<i32>().is_ok(),
         Kind::Bool => matches!(value.to_ascii_lowercase().as_str(), "true" | "false"),
         Kind::Time => {
             [
@@ -720,11 +736,16 @@ fn valid(kind: Kind, value: &str) -> bool {
                 "%Y-%m-%d %H:%M:%S",
                 "%Y-%m-%d %H:%M:%S%.f",
                 "%Y-%m-%dT%H:%M",
+                "%Y-%m-%dT%H:%MZ",
                 "%Y-%m-%d %H:%M",
             ]
             .iter()
-            .any(|f| NaiveDateTime::parse_from_str(value, f).is_ok())
-                || NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok()
+            .find_map(|f| NaiveDateTime::parse_from_str(value, f).ok())
+            .as_ref()
+            .map(NaiveDateTime::date)
+            .or_else(|| NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
+            // PostgreSQL has no year 0.
+            .is_some_and(|d| d.year() >= 1)
         }
     }
 }
@@ -940,10 +961,10 @@ fn clause_sql(
     } else {
         &targets[..]
     };
-    let written = field.unwrap_or("text");
+    let written = field.map_or_else(|| o.default_name.clone(), str::to_owned);
     let mut parts = Vec::with_capacity(used.len());
     for t in used {
-        parts.push(predicate(t, term, written, o)?);
+        parts.push(predicate(t, term, &written, o)?);
     }
     Ok(join("OR", parts))
 }
@@ -1015,10 +1036,18 @@ pub fn compile(
         Some("OR") => DefaultOperator::Or,
         Some(other) => return Err(SearchError::DefaultOperator(other.to_owned())),
     };
+    // A NUL is a syntax error, reported before any later check (M5 order).
+    if q.contains('\0') {
+        return Err(SearchError::Parse);
+    }
     let node = parse(q, op)?;
     if names_restricted_key(&node) {
         return Err(SearchError::Restricted);
     }
+    let default_name = default_field
+        .filter(|d| !d.is_empty())
+        .unwrap_or("text")
+        .to_owned();
     let defaults = match default_field.filter(|d| !d.is_empty()) {
         None => default_fields(),
         Some(df) => match resolve(df) {
@@ -1029,7 +1058,10 @@ pub fn compile(
             _ => return Err(SearchError::DefaultField(df.to_owned())),
         },
     };
-    let mut o = Out { params: Vec::new() };
+    let mut o = Out {
+        params: Vec::new(),
+        default_name,
+    };
     let pieces = node_sql(&node, &defaults, &mut o)?;
     if o.params.iter().any(|p| p.contains('\0')) {
         return Err(SearchError::Parse);
@@ -1071,6 +1103,46 @@ mod tests {
         match &*p(q).unwrap() {
             LNode::Clause { term, .. } => term.clone(),
             other => panic!("{q}: {other:?}"),
+        }
+    }
+
+    /// Self-review findings (2026-11-15): the integer range, negative
+    /// bounds, year 0, `THH:MMZ`, the field named for `q.df`, and a NUL
+    /// reported as a syntax error before a field error.
+    #[test]
+    fn value_checks_from_the_self_review() {
+        let value = |field: &str, value: &str| SearchError::Value {
+            field: field.to_owned(),
+            value: value.to_owned(),
+        };
+        for (q, df, want) in [
+            (
+                "duplicateCount:>3000000000",
+                None,
+                Some(value("duplicateCount", "3000000000")),
+            ),
+            (
+                "timeout:[1 TO 2147483648]",
+                None,
+                Some(value("timeout", "2147483648")),
+            ),
+            ("duplicateCount:[-1 TO 5]", None, None),
+            ("duplicateCount:>-1", None, None),
+            ("timeout:2147483647", None, None),
+            (
+                "lastReceiveTime:>0000-01-01",
+                None,
+                Some(value("lastReceiveTime", "0000-01-01")),
+            ),
+            ("lastReceiveTime:>\"2026-11-01T00:30Z\"", None, None),
+            (
+                "disk",
+                Some("duplicateCount"),
+                Some(value("duplicateCount", "disk")),
+            ),
+            ("nosuch:x \"a\0b\"", None, Some(SearchError::Parse)),
+        ] {
+            assert_eq!(compile(q, df, None).err(), want, "{q} {df:?}");
         }
     }
 
