@@ -304,17 +304,14 @@ impl Parser<'_> {
         let (op, after) = [">=", ">", "<=", "<"]
             .iter()
             .find_map(|op| self.literal(p, op).map(|e| (*op, e)))?;
-        let (bound, e) = match self.quoted(after, b'"') {
-            Some(found) => found,
-            None => {
-                let (w, e) = self.word(after)?;
-                if w.wild || w.is_operator() {
-                    return None;
-                }
-                (w.text, e)
-            }
-        };
-        Some((LTerm::OneSided { op, bound }, e))
+        if let Some((bound, e)) = self.quoted(after, b'"') {
+            return Some((LTerm::OneSided { op, bound }, e));
+        }
+        let (w, e) = self.word(after)?;
+        if w.wild || w.is_operator() {
+            return None;
+        }
+        Some((LTerm::OneSided { op, bound: w.text }, e))
     }
 
     fn term(&mut self, p: usize) -> Option<(LTerm, usize)> {
