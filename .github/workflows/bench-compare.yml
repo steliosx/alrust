@@ -1,7 +1,6 @@
 # alrust and Alerta 9.1.0 side by side (scripts/bench/bench_compare.py):
 # a diagnostic benchmark on one GitHub-hosted runner, PostgreSQL 18.7
-# (the owner's choice for this benchmark, 2026-11-15; alrust's 18.6 pin is
-# unchanged), synthetic data only. The numbers are relative to the runner,
+# (alrust's pin since #226, Y67), synthetic data only. The numbers are relative to the runner,
 # not a capacity claim. Not a required check. When it runs (the owner's
 # choice, DECISIONS Y69): a full run only when a person starts it
 # (workflow_dispatch, mode "full" by default); a pull request that changes
