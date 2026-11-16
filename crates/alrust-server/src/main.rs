@@ -19,7 +19,8 @@
 //! - `ALRUST_KEY_USAGE_IMMEDIATE` (default `false`): `true` writes an API
 //!   key's `count` and `last_used_time` on every request, as the reference
 //!   does; otherwise uses are tallied and written about once a second, and on
-//!   a graceful shutdown (DECISIONS Y68)
+//!   a graceful shutdown; uses not written within 30 s are dropped and logged
+//!   (DECISIONS Y68, Y70)
 //! - `ALRUST_REQUEST_TIMEOUT` seconds (default 30; 0 = off): a request that
 //!   runs longer is answered 503
 //! - `ALRUST_DB_ACQUIRE_TIMEOUT` seconds (default 10): the longest wait for a
@@ -40,6 +41,7 @@
 //!   (unset: none do)
 
 mod bearer_settings;
+mod key_usage_writer;
 mod limits;
 mod redacted_log;
 
@@ -188,6 +190,9 @@ async fn run() -> anyhow::Result<()> {
             .context("ALRUST_HISTORY_LIMIT is too large")?,
         history_on_value_change: env_bool("ALRUST_HISTORY_ON_VALUE_CHANGE", true)?,
         key_usage_immediate: env_bool("ALRUST_KEY_USAGE_IMMEDIATE", false)?,
+        // DECISIONS Y70: tallied uses wait at most 30 s for a write.
+        key_usage_max_pending: Duration::from_secs(30),
+        key_usage_attempt_timeout: Duration::from_secs(5),
     };
     for (name, v) in [
         ("ALRUST_ALERT_TIMEOUT", store_cfg.alert_timeout),
@@ -319,20 +324,19 @@ async fn run() -> anyhow::Result<()> {
         });
     }
 
-    // Key uses are tallied in memory and written about once a second, and
-    // once more after a graceful shutdown (DECISIONS Y68).
-    let flush_store = (!store.config().key_usage_immediate).then(|| store.clone());
-    if let Some(s) = flush_store.clone() {
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(Duration::from_secs(1));
-            loop {
-                tick.tick().await;
-                if let Err(e) = s.flush_key_usage().await {
-                    tracing::error!(error = %redact_diagnostic(e.to_string()), "key usage flush failed");
-                }
-            }
-        });
-    }
+    // Key uses are tallied in memory and written about once a second by one
+    // writer task; at shutdown it lets a write in progress finish, then
+    // writes once more (DECISIONS Y68, Y70).
+    let (stop_writer, writer_stop) = tokio::sync::watch::channel(false);
+    let config_max_pending = store.config().key_usage_max_pending;
+    let writer = (!store.config().key_usage_immediate).then(|| {
+        let s = store.clone();
+        tokio::spawn(key_usage_writer::run(
+            move |last| key_usage_writer::write_once(s.clone(), last),
+            writer_stop,
+            key_usage_writer::INTERVAL,
+        ))
+    });
 
     let bind: SocketAddr = env_or("ALRUST_BIND", "0.0.0.0:8080")
         .parse()
@@ -381,10 +385,19 @@ async fn run() -> anyhow::Result<()> {
     let served = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await;
-    if let Some(s) = flush_store
-        && let Err(e) = s.flush_key_usage().await
-    {
-        tracing::error!(error = %redact_diagnostic(e.to_string()), "final key usage flush failed");
+    if let Some(handle) = writer {
+        // Requests have finished: the writer completes any write in
+        // progress, then writes once more.
+        let _ = stop_writer.send(true);
+        // A write in progress and the final one, each within the bound.
+        let deadline = config_max_pending * 2 + Duration::from_secs(5);
+        match tokio::time::timeout(deadline, handle).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::error!(error = %e, "the API-key use writer failed"),
+            Err(_) => tracing::error!(
+                "the API-key use writer did not finish within {deadline:?}; its pending uses are lost"
+            ),
+        }
     }
     served?;
     Ok(())

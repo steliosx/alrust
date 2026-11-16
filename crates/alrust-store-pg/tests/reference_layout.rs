@@ -2268,3 +2268,150 @@ async fn key_use_is_tallied_and_flushed() {
     );
     assert_eq!(row("imm").await.0, Some(6));
 }
+
+/// cdx 56ffa31d R1 to R3 (DECISIONS Y70): a write blocked by a row lock is
+/// refused within the attempt timeout and its uses stay pending while
+/// authentication keeps working; a cancelled write leaves them pending too;
+/// a key recreated under the same id with a new secret gets none of the old
+/// uses; uses not written within the bound are dropped and reported.
+#[tokio::test]
+async fn key_use_survives_blocked_writes_and_is_bounded() {
+    use alrust_store_pg::key_usage::KeyUsageLosses;
+    use std::time::Duration;
+
+    let Some(db) = test_db().await else { return };
+    let cfg = StoreConfig {
+        key_usage_attempt_timeout: Duration::from_millis(300),
+        ..StoreConfig::default()
+    };
+    let s = Store::new(db.pool.clone(), cfg.clone());
+    s.prepare().await.expect("fresh start");
+    db.pool
+        .execute(
+            "INSERT INTO keys (id, key, \"user\", scopes, text, expire_time, count, last_used_time, customer)
+             VALUES ('a', 'secret-a', 'alice', '{read}', NULL, '2099-01-01 00:00:00', 0, NULL, NULL),
+                    ('b', 'secret-b', 'alice', '{read}', NULL, '2099-01-01 00:00:00', 0, NULL, NULL)",
+        )
+        .await
+        .unwrap();
+    let count = |id: &'static str| {
+        let pool = db.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, Option<i64>>("SELECT count FROM keys WHERE id = $1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    // Another session holds the row lock, as a slow writer would.
+    let locker = db.pool_with(test_session(&db.base)).await;
+
+    // Blocked: each write is refused within the attempt timeout, nothing is
+    // written, the uses stay pending, and authentication still succeeds.
+    let mut lock = locker.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM keys WHERE id = 'a' FOR UPDATE")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    for _ in 0..3 {
+        assert!(s.authenticate_key("secret-a").await.unwrap().is_some());
+    }
+    for _ in 0..2 {
+        let err = s.flush_key_usage().await.expect_err("the row is locked");
+        assert!(
+            matches!(&err, StoreError::Db(sqlx::Error::Database(_))),
+            "{err}"
+        );
+        assert!(s.authenticate_key("secret-a").await.unwrap().is_some());
+    }
+    assert_eq!(s.key_usage_pending(), (1, 5));
+    // A write cancelled before COMMIT (its future dropped) changes nothing,
+    // and its uses stay pending. It has its own pool: the cancelled UPDATE
+    // still waits on the server, so that backend is ended before the lock is
+    // released, which rolls its transaction back.
+    let slow = Store::new(
+        db.pool_with(test_session(&db.base)).await,
+        StoreConfig {
+            key_usage_attempt_timeout: Duration::from_secs(20),
+            ..cfg.clone()
+        },
+    );
+    assert!(slow.authenticate_key("secret-a").await.unwrap().is_some());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(500), slow.flush_key_usage())
+            .await
+            .is_err(),
+        "the write waits for the lock"
+    );
+    assert_eq!(slow.key_usage_pending(), (1, 1));
+    assert_eq!(s.take_key_usage_losses(), KeyUsageLosses::default());
+    assert_eq!(slow.take_key_usage_losses(), KeyUsageLosses::default());
+    let ended: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM (SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+          WHERE datname = current_database() AND pid <> pg_backend_pid()
+            AND state = 'active' AND query LIKE 'UPDATE keys AS k%') t",
+    )
+    .fetch_one(&mut *lock)
+    .await
+    .unwrap();
+    assert_eq!(ended, 1, "the cancelled write was still waiting");
+    lock.rollback().await.unwrap();
+    assert_eq!(count("a").await, Some(0));
+    assert_eq!(s.flush_key_usage().await.unwrap(), 1);
+    assert_eq!(count("a").await, Some(5), "every use once, none twice");
+    assert_eq!(s.key_usage_pending(), (0, 0));
+    assert_eq!(
+        slow.key_usage_pending(),
+        (1, 1),
+        "never written, never lost silently"
+    );
+
+    // The same id with a new secret is a new credential.
+    assert!(s.authenticate_key("secret-b").await.unwrap().is_some());
+    db.pool
+        .execute("DELETE FROM keys WHERE id = 'b'")
+        .await
+        .unwrap();
+    db.pool
+        .execute(
+            "INSERT INTO keys (id, key, \"user\", scopes, text, expire_time, count, last_used_time, customer)
+             VALUES ('b', 'secret-b2', 'alice', '{read}', NULL, '2099-01-01 00:00:00', 0, NULL, NULL)",
+        )
+        .await
+        .unwrap();
+    assert_eq!(s.flush_key_usage().await.unwrap(), 0);
+    assert_eq!(count("b").await, Some(0));
+    assert_eq!(s.key_usage_pending(), (0, 0));
+
+    // The bound: uses that wait longer are dropped at the next write, and
+    // reported once.
+    let short = Store::new(
+        db.pool.clone(),
+        StoreConfig {
+            key_usage_max_pending: Duration::from_millis(400),
+            ..cfg
+        },
+    );
+    let mut lock = locker.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM keys WHERE id = 'a' FOR UPDATE")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    assert!(short.authenticate_key("secret-a").await.unwrap().is_some());
+    assert!(short.authenticate_key("secret-a").await.unwrap().is_some());
+    assert!(short.flush_key_usage().await.is_err());
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(short.flush_key_usage().await.unwrap(), 0);
+    assert_eq!(
+        short.take_key_usage_losses(),
+        KeyUsageLosses {
+            expired_keys: 1,
+            expired_uses: 2,
+            ..KeyUsageLosses::default()
+        }
+    );
+    assert_eq!(short.take_key_usage_losses(), KeyUsageLosses::default());
+    lock.rollback().await.unwrap();
+    assert_eq!(count("a").await, Some(5));
+}

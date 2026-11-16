@@ -83,6 +83,11 @@ pub struct StoreConfig {
     /// default: uses are tallied in memory and written about once a second
     /// (`key_usage`, DECISIONS Y68).
     pub key_usage_immediate: bool,
+    /// How long tallied uses wait for a successful write before they are
+    /// dropped and reported (DECISIONS Y70: 30 seconds).
+    pub key_usage_max_pending: std::time::Duration,
+    /// The longest one write of the tallies may wait for a lock or run.
+    pub key_usage_attempt_timeout: std::time::Duration,
 }
 
 impl Default for StoreConfig {
@@ -94,6 +99,8 @@ impl Default for StoreConfig {
             history_limit: 100,
             history_on_value_change: true,
             key_usage_immediate: false,
+            key_usage_max_pending: std::time::Duration::from_secs(30),
+            key_usage_attempt_timeout: std::time::Duration::from_secs(5),
         }
     }
 }
