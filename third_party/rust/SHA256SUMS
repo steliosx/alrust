@@ -1,6 +1,6 @@
 795d1a3c779bea031369cbb2ec7cb44a234216a0c4ed5a22de8da46197b997c3  .cargo/config.toml
 38195e0448779c14a050fe460805ce2ac32ec7fac7a0cb84a19ffb2a0a8cce4c  Cargo.lock
-00934034895f22e84dff1056b9085a54f4b0682f0c1a9556fb2b7bef64c7e043  Cargo.toml
+a5701518919b180717fc46bf1b27c9a7ed90f77910b7acf02b0dd4b55e630d87  Cargo.toml
 2005a6440b4cf56de43085410f26315d73dece6d34a6d32920669f65f33062c4  rust-toolchain.toml
 7936690fa3e87b6fe4e6119dfaf4a178e2ee9c85420424221065b62051c93e2c  crates/alrust-api/Cargo.toml
 e771388036a3d3239380c849ad7a12178f16ceff520eb1e37663b1d1086723cc  crates/alrust-domain/Cargo.toml
@@ -8,7 +8,7 @@ e771388036a3d3239380c849ad7a12178f16ceff520eb1e37663b1d1086723cc  crates/alrust-
 23a660d9b2e8ec6c5260448c01af603915ee6176e8f4cf2ffdc9ac95c51cf47a  crates/alrust-receivers/Cargo.toml
 defff51f618b1386494c96419c79b670b58b3f0f66b1231574290215aee0c72c  crates/alrust-server/Cargo.toml
 2bb55c053d34584c9092fd20ec4d988b4ce389b767a8916b6f5b71596414bae9  crates/alrust-store-pg/Cargo.toml
-a27e1a92a2885ae7cd4205e6b917bc0de81b9a52ba2c78d8cb022e0ffe525ebe  third_party/rust/README.md
+aaf71532e3b8934f962f2550d693fd112021edbe4ecfcd7374598863d5a00195  third_party/rust/README.md
 a7ccdcf4b4508862b81b36f5c6bea7e85714d71c5fabe3568b5c895fbfb23e7b  third_party/rust/excerpts/axum-0.8.9/src/extract/ws.rs.L749-770.txt
 0c05f09c852017244876b6a2b96e1978a69c132247f434697265871a0d2480d8  third_party/rust/excerpts/chrono-0.4.45/src/format/parse.rs.L1-2.txt
 9e752188d388918985f0d152d553c7d237d858a9dc2e51b97cb1b20e6c15ec7a  third_party/rust/excerpts/futures-channel-0.3.34/src/mpsc/queue.rs.L1-26.txt
@@ -16,7 +16,7 @@ cde86e9dcd1f108afcd2967ec61b39562f37e14663ef6ecceb1d18e87b93b7fb  third_party/ru
 e4c82b854ec22d96d4c41fabde629bd2bb08624ce44531dd47eb5c9243514595  third_party/rust/excerpts/tracing-subscriber-0.3.23/src/fmt/time/datetime.rs.L1-193.txt
 ed2c9b62db5ebdcd63a6f7639b1c258d268a866acdc18857d1143d4d15276df7  third_party/rust/excerpts/uuid-1.28.0/src/rng.rs.L212-245.txt
 c92a0616b838eab43a5946d58eac73a4fcde09de377de4bbdca423d523a734a4  third_party/rust/excerpts/whoami-1.6.1/README.md.L75-75.txt
-cb5af35f47c49b3a7dc18c73736e76928cd00673e291e67f24264b9795bdf061  third_party/rust/manifest.json
+65c5c14c6fbddd43b622076e0486b2248d184cd676d5f9287d398adcee9bfc15  third_party/rust/manifest.json
 20fe7b00e904ed690e3b9fd6073784d3fc428141dbd10b81c01fd143d0797f58  third_party/rust/texts/allocator-api2-0.2.21/LICENSE-APACHE
 36516aefdc84c5d5a1e7485425913a22dbda69eb1930c5e84d6ae4972b5194b9  third_party/rust/texts/allocator-api2-0.2.21/LICENSE-MIT
 62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a  third_party/rust/texts/anyhow-1.0.104/LICENSE-APACHE

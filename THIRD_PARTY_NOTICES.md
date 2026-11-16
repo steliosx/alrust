@@ -1,7 +1,8 @@
 # Third-party notices
 
-This file records third-party material included in alrust. It does not select
-a license for alrust's original code; that remains an owner decision.
+This file records third-party material included in alrust. alrust's own code
+is licensed under the Apache License, Version 2.0 (`LICENSE`, with `NOTICE`;
+DECISIONS Y58); the material below keeps its own terms.
 
 ## Alerta
 
