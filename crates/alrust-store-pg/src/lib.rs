@@ -88,6 +88,8 @@ pub struct StoreConfig {
     pub key_usage_max_pending: std::time::Duration,
     /// The longest one write of the tallies may wait for a lock or run.
     pub key_usage_attempt_timeout: std::time::Duration,
+    /// The most credentials one write carries (the oldest first).
+    pub key_usage_batch: usize,
 }
 
 impl Default for StoreConfig {
@@ -101,6 +103,7 @@ impl Default for StoreConfig {
             key_usage_immediate: false,
             key_usage_max_pending: std::time::Duration::from_secs(30),
             key_usage_attempt_timeout: std::time::Duration::from_secs(5),
+            key_usage_batch: 1000,
         }
     }
 }

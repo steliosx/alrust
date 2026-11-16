@@ -30,12 +30,23 @@
 //!   after the oldest of them was recorded are dropped at the next write and
 //!   reported. A credential's tally ages from its oldest pending use, so newer
 //!   uses merged into it are dropped with it; after a successful write, the
-//!   uses recorded meanwhile are dated from that write's snapshot. A write
-//!   is bounded by PostgreSQL (`lock_timeout`, `statement_timeout`) and by
-//!   the writer's timeout, which shrinks with the oldest pending age, so a
-//!   drop happens between 30 seconds and 30 seconds plus one attempt.
-//! - The tally holds at most one entry per verified credential, and expiry
-//!   empties it under lasting failure, so its memory is bounded.
+//!   uses recorded meanwhile are dated from that write's snapshot.
+//! - No write runs past the oldest pending use's 30-second deadline: the
+//!   writer's timeout and PostgreSQL's `lock_timeout` and `statement_timeout`
+//!   for the write are all cut to the time left before it (and to
+//!   `key_usage_attempt_timeout` at most). The one exception is a `COMMIT`
+//!   already sent when the deadline passes: PostgreSQL may still apply it,
+//!   and its uses settle as unknown (possibly unrecorded, never retried).
+//! - Memory: only uses of a key that verified against a `keys` row are
+//!   recorded, so the tally holds at most one entry per distinct key used in
+//!   the last 30 seconds, never more than the rows in `keys`, at roughly 200
+//!   bytes each. A write takes at most `StoreConfig::key_usage_batch` (1,000)
+//!   of the oldest entries, so one statement's arrays and `RETURNING` rows
+//!   are bounded; the others wait for the next write under the same 30-second
+//!   rule. Taking a snapshot copies the tally under its lock (one entry per
+//!   key); sorting and the database work happen outside it. More distinct
+//!   keys than one batch per write under lasting trouble would see expiry,
+//!   which is Y70's rule, not another one.
 //! - Reported separately and disjointly: expired (dropped after the bound),
 //!   unmatched (written, but no row matched), unknown (possibly unrecorded),
 //!   and, at exit, whatever is still pending (the writer logs it as lost).
@@ -147,9 +158,16 @@ impl KeyUsage {
         }
     }
 
-    /// A copy of what is pending; nothing is removed until it is written.
-    fn snapshot(&self) -> Vec<(Credential, Pending)> {
-        self.map().iter().map(|(c, p)| (c.clone(), *p)).collect()
+    /// A copy of the oldest `limit` pending tallies; nothing is removed
+    /// until it is written. The lock is held only to copy.
+    fn snapshot(&self, limit: usize) -> Vec<(Credential, Pending)> {
+        let mut all: Vec<(Credential, Pending)> =
+            self.map().iter().map(|(c, p)| (c.clone(), *p)).collect();
+        if all.len() > limit {
+            all.sort_by_key(|(_, p)| p.since);
+            all.truncate(limit);
+        }
+        all
     }
 
     /// Settles a write attempt. Written or unknown: the batch's uses leave
@@ -319,7 +337,7 @@ impl Store {
         usage.expire(self.cfg.key_usage_max_pending, taken);
         let mut attempt = Attempt {
             usage,
-            batch: usage.snapshot(),
+            batch: usage.snapshot(self.cfg.key_usage_batch),
             taken,
             committing: false,
             settled: false,
@@ -338,9 +356,19 @@ impl Store {
             uses.push(p.uses);
             times.push(p.last);
         }
+        // The time left before the oldest use in the batch reaches the bound,
+        // and one attempt at most: PostgreSQL ends the write by then.
+        let oldest = attempt.batch.iter().map(|(_, p)| p.since).min();
+        let left = oldest.map_or(self.cfg.key_usage_max_pending, |since| {
+            self.cfg
+                .key_usage_max_pending
+                .saturating_sub(taken.saturating_duration_since(since))
+        });
         let limit = format!(
             "{}ms",
-            self.cfg.key_usage_attempt_timeout.as_millis().max(1)
+            left.min(self.cfg.key_usage_attempt_timeout)
+                .as_millis()
+                .max(1)
         );
         let mut tx = self.pool.begin().await?;
         sqlx::query(
@@ -394,6 +422,13 @@ impl Store {
         (map.len(), map.values().map(|p| p.uses).sum())
     }
 
+    /// Drops the uses pending longer than `key_usage_max_pending` and counts
+    /// them as expired; [`Store::flush_key_usage`] also does this first.
+    pub fn expire_key_usage(&self) {
+        self.usage
+            .expire(self.cfg.key_usage_max_pending, Instant::now());
+    }
+
     /// How long the oldest pending use has waited, if any is pending.
     #[must_use]
     pub fn key_usage_oldest_age(&self) -> Option<Duration> {
@@ -438,7 +473,7 @@ mod tests {
         for _ in 0..3 {
             usage.record(cred("a"), at, start);
         }
-        let batch: Vec<(Credential, Pending)> = usage.snapshot();
+        let batch: Vec<(Credential, Pending)> = usage.snapshot(usize::MAX);
         usage.record(cred("a"), at, start);
 
         // Not committed: everything stays for the next write.
@@ -455,7 +490,7 @@ mod tests {
 
         // Unknown: treated as written (never retried, so never counted
         // twice) and reported.
-        let batch = usage.snapshot();
+        let batch = usage.snapshot(usize::MAX);
         usage.settle(&batch, later, Outcome::Unknown);
         assert_eq!(total(&usage), 0);
         assert_eq!(
@@ -485,7 +520,7 @@ mod tests {
                 .store(true, std::sync::atomic::Ordering::Release);
             drop(Attempt {
                 usage: &usage,
-                batch: usage.snapshot(),
+                batch: usage.snapshot(usize::MAX),
                 taken: start,
                 committing,
                 settled: false,
@@ -506,6 +541,27 @@ mod tests {
                 assert_eq!(usage.take_losses(), KeyUsageLosses::default());
             }
         }
+    }
+
+    /// cdx 0e4cb36f R3b: a write carries at most a batch of the oldest
+    /// tallies; the rest stay for the next write.
+    #[test]
+    fn a_write_takes_at_most_a_batch_of_the_oldest() {
+        let usage = KeyUsage::default();
+        let at = NaiveDateTime::MIN;
+        let start = Instant::now();
+        for i in 0..2500_u64 {
+            usage.record(
+                cred(&format!("k{i:04}")),
+                at,
+                start + Duration::from_millis(i),
+            );
+        }
+        let batch = usage.snapshot(1000);
+        assert_eq!(batch.len(), 1000);
+        let newest_taken = batch.iter().map(|(_, p)| p.since).max();
+        assert_eq!(newest_taken, Some(start + Duration::from_millis(999)));
+        assert_eq!(usage.map().len(), 2500, "a snapshot removes nothing");
     }
 
     #[test]

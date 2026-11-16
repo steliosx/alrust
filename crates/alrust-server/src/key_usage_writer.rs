@@ -43,34 +43,48 @@ where
     write(WriteKind::Final).await;
 }
 
-/// One write of `store`'s tallies, with each kind of loss logged
-/// separately. After the final write, uses still pending are logged as
-/// lost at exit. PostgreSQL bounds a write normally (`lock_timeout` and
-/// `statement_timeout`, set per write). This function's own timeout is a
-/// backstop for a hung connection: it is the time left before the oldest
-/// pending use reaches `key_usage_max_pending`, but at least one attempt
-/// (`key_usage_attempt_timeout`). A write cancelled by it is settled by how
-/// far it got: before `COMMIT`, its uses stay pending; while committing,
-/// they are reported as possibly unrecorded.
+/// The time one write may take: what is left before the oldest pending use
+/// reaches `max_pending`. `None` when nothing is pending or nothing is left
+/// (expiry then drops those uses). Never extended to a full attempt.
+pub(crate) fn budget(oldest_age: Option<Duration>, max_pending: Duration) -> Option<Duration> {
+    let left = max_pending.saturating_sub(oldest_age?);
+    (!left.is_zero()).then_some(left)
+}
+
+/// One write of `store`'s tallies, then [`report_losses`]. Uses past the
+/// bound are expired first, so the budget is that of the oldest use still
+/// pending. PostgreSQL bounds the write with the same budget
+/// (`lock_timeout`, `statement_timeout`); this function's own timeout also
+/// bounds getting a connection and a hung one. A write cancelled by it
+/// settles by how far it got: before `COMMIT`, its uses stay pending (and
+/// expire at the next write if their time is up); while committing, they
+/// are reported as possibly unrecorded.
 pub(crate) async fn write_once(store: Store, kind: WriteKind) {
-    let cfg = store.config();
-    let left = cfg
-        .key_usage_max_pending
-        .saturating_sub(store.key_usage_oldest_age().unwrap_or_default());
-    let limit = left
-        .max(cfg.key_usage_attempt_timeout)
-        .min(cfg.key_usage_max_pending);
+    store.expire_key_usage();
     let what = match kind {
         WriteKind::Final => "final API-key use write",
         WriteKind::Periodic => "API-key use write",
     };
-    match tokio::time::timeout(limit, store.flush_key_usage()).await {
-        Ok(Ok(_)) => {}
-        Ok(Err(e)) => {
-            tracing::warn!(error = %redact_diagnostic(e.to_string()), "{what} failed");
+    if let Some(limit) = budget(
+        store.key_usage_oldest_age(),
+        store.config().key_usage_max_pending,
+    ) {
+        match tokio::time::timeout(limit, store.flush_key_usage()).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => {
+                tracing::warn!(error = %redact_diagnostic(e.to_string()), "{what} failed");
+            }
+            Err(_) => tracing::warn!("{what} did not finish within {limit:?}"),
         }
-        Err(_) => tracing::warn!("{what} did not finish within {limit:?}"),
     }
+    report_losses(&store, kind);
+}
+
+/// Logs each kind of loss since the last report, separately: expired,
+/// unmatched and possibly unrecorded; and, at exit, what is still pending.
+/// The writer calls it after every write, and the server after stopping a
+/// writer that did not finish, so no count goes unreported.
+pub(crate) fn report_losses(store: &Store, kind: WriteKind) {
     let dropped = store.take_key_usage_losses();
     if dropped.expired_uses > 0 {
         tracing::warn!(
@@ -110,7 +124,26 @@ mod tests {
 
     use tokio::sync::{Notify, watch};
 
-    use super::{WriteKind, run};
+    use super::{WriteKind, budget, run};
+
+    /// cdx 0e4cb36f R3a: a write gets only the time left before the oldest
+    /// use's bound, never a full attempt more.
+    #[test]
+    fn the_budget_is_the_time_left_and_never_more() {
+        let bound = Duration::from_secs(30);
+        assert_eq!(budget(None, bound), None, "nothing pending");
+        assert_eq!(
+            budget(Some(Duration::from_secs(29)), bound),
+            Some(Duration::from_secs(1))
+        );
+        assert_eq!(
+            budget(Some(Duration::from_millis(29_900)), bound),
+            Some(Duration::from_millis(100))
+        );
+        assert_eq!(budget(Some(bound), bound), None, "expired");
+        assert_eq!(budget(Some(Duration::from_secs(31)), bound), None);
+        assert_eq!(budget(Some(Duration::ZERO), bound), Some(bound));
+    }
 
     /// cdx 56ffa31d R1: a write in progress when shutdown starts finishes
     /// before the final write, nothing else starts meanwhile, and two writes

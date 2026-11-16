@@ -2477,3 +2477,68 @@ async fn key_use_survives_blocked_writes_and_is_bounded() {
     lock.rollback().await.unwrap();
     assert_eq!(count("a").await, Some(8));
 }
+
+/// cdx 0e4cb36f R3a: a write that starts just before the bound gets only the
+/// time left (PostgreSQL ends it then, not after a full attempt), and its
+/// uses expire at the next write. Nothing is written after the deadline.
+#[tokio::test]
+async fn key_use_writes_stop_at_the_deadline() {
+    use alrust_store_pg::key_usage::KeyUsageLosses;
+    use std::time::{Duration, Instant};
+
+    let Some(db) = test_db().await else { return };
+    let s = Store::new(
+        db.pool.clone(),
+        StoreConfig {
+            key_usage_max_pending: Duration::from_millis(1500),
+            key_usage_attempt_timeout: Duration::from_secs(10),
+            ..StoreConfig::default()
+        },
+    );
+    s.prepare().await.expect("fresh start");
+    db.pool
+        .execute(
+            "INSERT INTO keys (id, key, \"user\", scopes, text, expire_time, count, last_used_time, customer)
+             VALUES ('a', 'secret-a', 'alice', '{read}', NULL, '2099-01-01 00:00:00', 0, NULL, NULL)",
+        )
+        .await
+        .unwrap();
+    let locker = db.pool_with(test_session(&db.base)).await;
+    let mut lock = locker.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM keys WHERE id = 'a' FOR UPDATE")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    assert!(s.authenticate_key("secret-a").await.unwrap().is_some());
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+
+    let started = Instant::now();
+    let err = s.flush_key_usage().await.expect_err("the row is locked");
+    let took = started.elapsed();
+    assert!(
+        matches!(&err, StoreError::Db(sqlx::Error::Database(_))),
+        "{err}"
+    );
+    assert!(
+        took < Duration::from_millis(1500),
+        "the write had only the time left, not the 10 s attempt: {took:?}"
+    );
+
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    s.expire_key_usage();
+    assert_eq!(s.key_usage_pending(), (0, 0));
+    assert_eq!(
+        s.take_key_usage_losses(),
+        KeyUsageLosses {
+            expired_keys: 1,
+            expired_uses: 1,
+            ..KeyUsageLosses::default()
+        }
+    );
+    lock.rollback().await.unwrap();
+    let count: Option<i64> = sqlx::query_scalar("SELECT count FROM keys WHERE id = 'a'")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, Some(0), "nothing was written after the deadline");
+}

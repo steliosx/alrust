@@ -193,6 +193,7 @@ async fn run() -> anyhow::Result<()> {
         // DECISIONS Y70: tallied uses wait at most 30 s for a write.
         key_usage_max_pending: Duration::from_secs(30),
         key_usage_attempt_timeout: Duration::from_secs(5),
+        key_usage_batch: 1000,
     };
     for (name, v) in [
         ("ALRUST_ALERT_TIMEOUT", store_cfg.alert_timeout),
@@ -394,19 +395,19 @@ async fn run() -> anyhow::Result<()> {
         let deadline = config_max_pending * 2 + Duration::from_secs(5);
         match tokio::time::timeout(deadline, &mut handle).await {
             Ok(Ok(())) => {}
-            Ok(Err(e)) => tracing::error!(error = %e, "the API-key use writer failed"),
+            Ok(Err(e)) => {
+                tracing::error!(error = %e, "the API-key use writer failed");
+                key_usage_writer::report_losses(&writer_store, key_usage_writer::WriteKind::Final);
+            }
             Err(_) => {
                 // Not detached: aborting drops its write, which settles by
                 // how far it got; then what is still pending is lost.
                 handle.abort();
                 let _ = handle.await;
-                let (keys, uses) = writer_store.key_usage_pending();
-                tracing::error!(
-                    keys,
-                    uses,
-                    "the API-key use writer did not finish within {deadline:?}; \
-                     the uses still pending at exit are lost"
-                );
+                tracing::error!("the API-key use writer did not finish within {deadline:?}");
+                // The aborted write settled by how far it got; report it and
+                // what is still pending, as the writer would have.
+                key_usage_writer::report_losses(&writer_store, key_usage_writer::WriteKind::Final);
             }
         }
     }
