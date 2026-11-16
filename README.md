@@ -63,7 +63,7 @@ disposable database for a trial.
 | API keys | Create, list, delete; scopes; customer assignment |
 | Authentication | API keys, and verification of HS256 Bearer tokens. There is no login yet |
 | Housekeeping | Expiry and deletion, on request or on an interval |
-| Database | PostgreSQL 18.6 only. alrust uses the Alerta 9.1.0 schema exactly: it creates it in an empty database, or accepts an existing Alerta 9.1.0 database whose schema matches |
+| Database | PostgreSQL 18.7 only. alrust uses the Alerta 9.1.0 schema exactly: it creates it in an empty database, or accepts an existing Alerta 9.1.0 database whose schema matches |
 | Packaging | A Dockerfile and a Compose file for linux/amd64 |
 
 The route-by-route list, with each known difference from Alerta, is in the

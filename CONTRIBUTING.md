@@ -1,6 +1,6 @@
 # Contributing
 
-Alrust is an early Rust API alpha. Changes should preserve the consumed Alerta API and alert lifecycle, and make incomplete behavior explicit. The current evaluation target is Linux x86_64 with PostgreSQL 18.6; ARM64, the web UI and desktop delivery are not qualified. See [README](README.md), [the alpha guide](docs/alpha.md) and [STATUS](docs/STATUS.md) for scope and known gaps.
+Alrust is an early Rust API alpha. Changes should preserve the consumed Alerta API and alert lifecycle, and make incomplete behavior explicit. The current evaluation target is Linux x86_64 with PostgreSQL 18.7; ARM64, the web UI and desktop delivery are not qualified. See [README](README.md), [the alpha guide](docs/alpha.md) and [STATUS](docs/STATUS.md) for scope and known gaps.
 
 ## Propose a change
 
@@ -45,7 +45,7 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
 ```
 
-Database-dependent tests require a disposable PostgreSQL 18.6 instance and a suitable `DATABASE_URL`. Store tests create and drop their own test databases. Do not point them at a production or shared database. Without `DATABASE_URL`, some database-dependent tests return without executing outside CI; a successful command alone is not evidence that those cases ran. State which checks executed, skipped or could not run.
+Database-dependent tests require a disposable PostgreSQL 18.7 instance and a suitable `DATABASE_URL`. Store tests create and drop their own test databases. Do not point them at a production or shared database. Without `DATABASE_URL`, some database-dependent tests return without executing outside CI; a successful command alone is not evidence that those cases ran. State which checks executed, skipped or could not run.
 
 The Python harness currently locks wheels for CPython 3.12 on Linux x86_64 with glibc 2.17 or newer. To run its unit controls in a separate environment:
 
