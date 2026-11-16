@@ -2520,7 +2520,7 @@ async fn key_use_writes_stop_at_the_deadline() {
         "{err}"
     );
     assert!(
-        took < Duration::from_millis(1500),
+        took < Duration::from_millis(1000),
         "the write had only the time left, not the 10 s attempt: {took:?}"
     );
 
@@ -2541,4 +2541,90 @@ async fn key_use_writes_stop_at_the_deadline() {
         .await
         .unwrap();
     assert_eq!(count, Some(0), "nothing was written after the deadline");
+}
+
+/// cdx 766fb5e4: a write that waited for a connection past the deadline
+/// sends nothing (the uses stay pending, then expire), and a backlog of
+/// several batches drains in one write.
+#[tokio::test]
+async fn key_use_writes_check_the_deadline_after_waiting_and_drain_in_batches() {
+    use alrust_store_pg::key_usage::KeyUsageLosses;
+    use std::time::Duration;
+
+    let Some(db) = test_db().await else { return };
+    store(&db.pool).prepare().await.expect("fresh start");
+    db.pool
+        .execute(
+            "INSERT INTO keys (id, key, \"user\", scopes, text, expire_time, count, last_used_time, customer)
+             SELECT 'k' || i, 'secret-' || i, 'alice', '{read}', NULL, '2099-01-01 00:00:00', 0, NULL, NULL
+               FROM generate_series(1, 5) AS i",
+        )
+        .await
+        .unwrap();
+    let total = || {
+        let pool = db.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, Option<i64>>("SELECT sum(count)::bigint FROM keys")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+
+    // Every connection of a small pool is held while a write waits for one,
+    // until after the deadline.
+    let small = db.pool_with(test_session(&db.base)).await; // 2 connections
+    let s = Store::new(
+        small.clone(),
+        StoreConfig {
+            key_usage_max_pending: Duration::from_millis(1500),
+            key_usage_attempt_timeout: Duration::from_secs(10),
+            ..StoreConfig::default()
+        },
+    );
+    assert!(s.authenticate_key("secret-1").await.unwrap().is_some());
+    let held = (
+        small.acquire().await.unwrap(),
+        small.acquire().await.unwrap(),
+    );
+    let waiting = {
+        let w = s.clone();
+        tokio::spawn(async move { w.flush_key_usage().await })
+    };
+    tokio::time::sleep(Duration::from_millis(1700)).await;
+    drop(held);
+    assert_eq!(
+        waiting.await.unwrap().unwrap(),
+        0,
+        "nothing is sent once the deadline has passed"
+    );
+    assert_eq!(total().await, Some(0));
+    assert_eq!(s.key_usage_pending(), (1, 1));
+    s.expire_key_usage();
+    assert_eq!(
+        s.take_key_usage_losses(),
+        KeyUsageLosses {
+            expired_keys: 1,
+            expired_uses: 1,
+            ..KeyUsageLosses::default()
+        }
+    );
+
+    // A backlog of three batches of two drains in one write.
+    let batched = Store::new(
+        db.pool.clone(),
+        StoreConfig {
+            key_usage_batch: 2,
+            ..StoreConfig::default()
+        },
+    );
+    for i in 1..=5 {
+        let key = format!("secret-{i}");
+        assert!(batched.authenticate_key(&key).await.unwrap().is_some());
+    }
+    assert_eq!(batched.key_usage_pending(), (5, 5));
+    assert_eq!(batched.flush_key_usage().await.unwrap(), 5);
+    assert_eq!(batched.key_usage_pending(), (0, 0));
+    assert_eq!(total().await, Some(5));
+    assert_eq!(batched.take_key_usage_losses(), KeyUsageLosses::default());
 }

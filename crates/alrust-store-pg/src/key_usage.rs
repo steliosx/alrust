@@ -31,22 +31,39 @@
 //!   reported. A credential's tally ages from its oldest pending use, so newer
 //!   uses merged into it are dropped with it; after a successful write, the
 //!   uses recorded meanwhile are dated from that write's snapshot.
-//! - No write runs past the oldest pending use's 30-second deadline: the
-//!   writer's timeout and PostgreSQL's `lock_timeout` and `statement_timeout`
-//!   for the write are all cut to the time left before it (and to
-//!   `key_usage_attempt_timeout` at most). The one exception is a `COMMIT`
-//!   already sent when the deadline passes: PostgreSQL may still apply it,
-//!   and its uses settle as unknown (possibly unrecorded, never retried).
-//! - Memory: only uses of a key that verified against a `keys` row are
-//!   recorded, so the tally holds at most one entry per distinct key used in
-//!   the last 30 seconds, never more than the rows in `keys`, at roughly 200
-//!   bytes each. A write takes at most `StoreConfig::key_usage_batch` (1,000)
-//!   of the oldest entries, so one statement's arrays and `RETURNING` rows
-//!   are bounded; the others wait for the next write under the same 30-second
-//!   rule. Taking a snapshot copies the tally under its lock (one entry per
-//!   key); sorting and the database work happen outside it. More distinct
-//!   keys than one batch per write under lasting trouble would see expiry,
-//!   which is Y70's rule, not another one.
+//! - One deadline per write: the oldest use in its batch plus
+//!   `key_usage_max_pending` (30 seconds). Once a connection is held, the
+//!   write sets PostgreSQL's `lock_timeout` and `statement_timeout` to the
+//!   time then left (at most `key_usage_attempt_timeout`); it sends nothing
+//!   if no time is left, and it does not send `COMMIT` once the deadline has
+//!   passed. The writer's own timeout is the same time left. The one exception
+//!   is a `COMMIT` already sent when the deadline passes: PostgreSQL may still
+//!   apply it, and its uses settle as unknown (possibly unrecorded, never
+//!   retried).
+//! - A write continues batch after batch while uses are pending, time is left
+//!   and each batch makes progress, so a backlog of several batches, and the
+//!   final write at shutdown, drain in one call within the 30-second budget.
+//!   What is left is reported.
+//! - Memory. The tally holds one entry per credential (id and secret hash)
+//!   verified in the last 30 seconds and not yet written, plus the batch a
+//!   write carries. Only a key that verified against a `keys` row is recorded,
+//!   and creating a key needs the admin scope. But a key deleted, recreated, or
+//!   given a new secret or id within the window counts once per credential it
+//!   was, so the bound is the distinct credentials used in 30 seconds, not the
+//!   current rows in `keys`. An entry costs its id's bytes, 64 bytes of hash
+//!   and about 40 bytes of counters and times, plus the map's slack.
+//!   alrust-generated ids are UUIDs (36 bytes). An id supplied on `POST /key`
+//!   is limited only by the request body size, and ids in an adopted Alerta
+//!   database only by their `text` column. After expiry or a write, the map
+//!   releases spare capacity beyond twice its size (at least 64 entries), so
+//!   its allocation follows the window, not its peak. A write selects the
+//!   `key_usage_batch` oldest entries (clamped to 1..=10,000; default 1,000)
+//!   with a bounded heap under the tally's lock: time in proportion to the
+//!   entries, but only the batch is copied. One statement's arrays and
+//!   `RETURNING` rows are bounded by the batch.
+//! - Writes and expiry share one write slot: `flush_key_usage` and
+//!   `expire_key_usage` never overlap, and each returns at once if the other
+//!   holds it.
 //! - Reported separately and disjointly: expired (dropped after the bound),
 //!   unmatched (written, but no row matched), unknown (possibly unrecorded),
 //!   and, at exit, whatever is still pending (the writer logs it as lost).
@@ -55,7 +72,7 @@
 //! `StoreConfig::key_usage_immediate` restores the reference's per-request
 //! write.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -67,7 +84,7 @@ use sqlx::Row;
 use crate::{Store, StoreError, naive, row_to_key};
 
 /// One credential: the key's id and the hex SHA-256 of its secret.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 struct Credential {
     id: String,
     key_hash: String,
@@ -139,6 +156,11 @@ impl KeyUsage {
         entry.last = entry.last.max(at);
     }
 
+    /// The pending uses, all credentials together.
+    fn pending_uses(&self) -> i64 {
+        self.map().values().map(|p| p.uses).sum()
+    }
+
     /// Drops the uses pending for `max_age` or longer.
     fn expire(&self, max_age: Duration, now: Instant) {
         let mut map = self.map();
@@ -152,6 +174,7 @@ impl KeyUsage {
             keep
         });
         let keys = before - map.len();
+        compact(&mut map);
         if keys > 0 {
             self.expired_keys.fetch_add(keys, Ordering::Relaxed);
             self.expired_uses.fetch_add(uses, Ordering::Relaxed);
@@ -159,15 +182,22 @@ impl KeyUsage {
     }
 
     /// A copy of the oldest `limit` pending tallies; nothing is removed
-    /// until it is written. The lock is held only to copy.
+    /// until it is written. A heap of at most `limit` references selects
+    /// them under the lock, and only they are copied.
     fn snapshot(&self, limit: usize) -> Vec<(Credential, Pending)> {
-        let mut all: Vec<(Credential, Pending)> =
-            self.map().iter().map(|(c, p)| (c.clone(), *p)).collect();
-        if all.len() > limit {
-            all.sort_by_key(|(_, p)| p.since);
-            all.truncate(limit);
+        let map = self.map();
+        let mut oldest: BinaryHeap<(Instant, &Credential)> =
+            BinaryHeap::with_capacity(limit.min(map.len()) + 1);
+        for (c, p) in map.iter() {
+            oldest.push((p.since, c));
+            if oldest.len() > limit {
+                oldest.pop();
+            }
         }
-        all
+        oldest
+            .into_iter()
+            .filter_map(|(_, c)| map.get(c).map(|p| (c.clone(), *p)))
+            .collect()
     }
 
     /// Settles a write attempt. Written or unknown: the batch's uses leave
@@ -193,6 +223,7 @@ impl KeyUsage {
                 map.remove(credential);
             }
         }
+        compact(&mut map);
         if outcome == Outcome::Unknown {
             self.unknown_keys.fetch_add(batch.len(), Ordering::Relaxed);
             self.unknown_uses
@@ -227,6 +258,31 @@ impl KeyUsage {
     }
 }
 
+/// Releases a map's spare capacity once it exceeds twice its size (at least
+/// 64 entries), so memory follows the live window, not its peak.
+fn compact(map: &mut HashMap<Credential, Pending>) {
+    if map.capacity() > 2 * map.len().max(64) {
+        map.shrink_to_fit();
+    }
+}
+
+/// The write slot: held by a write (all its batches) or by expiry outside
+/// a write, so the two never overlap. Released on drop, also when a write's
+/// future is cancelled.
+struct WriteSlot<'a>(&'a KeyUsage);
+
+impl<'a> WriteSlot<'a> {
+    fn take(usage: &'a KeyUsage) -> Option<Self> {
+        (!usage.writing.swap(true, Ordering::Acquire)).then_some(WriteSlot(usage))
+    }
+}
+
+impl Drop for WriteSlot<'_> {
+    fn drop(&mut self) {
+        self.0.writing.store(false, Ordering::Release);
+    }
+}
+
 /// A write in progress. If its future is dropped (cancelled by a timeout or
 /// at shutdown), the drop settles the batch by how far the write got.
 struct Attempt<'a> {
@@ -254,7 +310,6 @@ impl Drop for Attempt<'_> {
             };
             self.usage.settle(&self.batch, self.taken, outcome);
         }
-        self.usage.writing.store(false, Ordering::Release);
     }
 }
 
@@ -314,11 +369,12 @@ impl Store {
     /// the row with the same id and the same secret. A NULL `count` stays
     /// NULL, as the reference's `count + 1` leaves it; a key deleted or
     /// recreated meanwhile matches no row. Uses pending longer than
-    /// `key_usage_max_pending` are dropped first. The write runs in one
-    /// transaction with `lock_timeout` and `statement_timeout` set to
-    /// `key_usage_attempt_timeout`. Returns the number of credentials
-    /// written; a write already in progress makes this call return 0 at
-    /// once.
+    /// `key_usage_max_pending` are dropped first. The uses go in batches of
+    /// at most `key_usage_batch`, the oldest first, each in its own
+    /// transaction under the deadline rules in the module documentation, for
+    /// as long as uses are pending and each batch makes progress. Returns the
+    /// number of credentials written; while another write or expiry holds
+    /// the write slot, this call returns 0 at once.
     ///
     /// See the module documentation for what each failure does to the uses,
     /// and [`Store::take_key_usage_losses`] for what was dropped.
@@ -330,22 +386,41 @@ impl Store {
     /// are reported, not retried.
     pub async fn flush_key_usage(&self) -> Result<u64, StoreError> {
         let usage: &KeyUsage = &self.usage;
-        if usage.writing.swap(true, Ordering::Acquire) {
+        let Some(_slot) = WriteSlot::take(usage) else {
             return Ok(0);
+        };
+        let mut written = 0;
+        loop {
+            usage.expire(self.cfg.key_usage_max_pending, Instant::now());
+            let before = usage.pending_uses();
+            if before == 0 {
+                return Ok(written);
+            }
+            written += self.write_batch(usage).await?;
+            if usage.pending_uses() >= before {
+                return Ok(written);
+            }
         }
-        let taken = Instant::now();
-        usage.expire(self.cfg.key_usage_max_pending, taken);
+    }
+
+    /// One batch: the oldest pending tallies, written in one transaction
+    /// that sends nothing once the batch's deadline has passed.
+    async fn write_batch(&self, usage: &KeyUsage) -> Result<u64, StoreError> {
         let mut attempt = Attempt {
             usage,
             batch: usage.snapshot(self.cfg.key_usage_batch),
-            taken,
+            taken: Instant::now(),
             committing: false,
             settled: false,
         };
-        if attempt.batch.is_empty() {
+        // The batch holds the oldest tallies, so its oldest use sets the one
+        // deadline of this write.
+        let Some(oldest) = attempt.batch.iter().map(|(_, p)| p.since).min() else {
             attempt.settled = true;
             return Ok(0);
-        }
+        };
+        let max_pending = self.cfg.key_usage_max_pending;
+        let time_left = || max_pending.saturating_sub(oldest.elapsed());
         let mut ids = Vec::with_capacity(attempt.batch.len());
         let mut hashes = Vec::with_capacity(attempt.batch.len());
         let mut uses = Vec::with_capacity(attempt.batch.len());
@@ -356,21 +431,20 @@ impl Store {
             uses.push(p.uses);
             times.push(p.last);
         }
-        // The time left before the oldest use in the batch reaches the bound,
-        // and one attempt at most: PostgreSQL ends the write by then.
-        let oldest = attempt.batch.iter().map(|(_, p)| p.since).min();
-        let left = oldest.map_or(self.cfg.key_usage_max_pending, |since| {
-            self.cfg
-                .key_usage_max_pending
-                .saturating_sub(taken.saturating_duration_since(since))
-        });
+        let mut tx = self.pool.begin().await?;
+        // After waiting for a connection: send nothing if no time is left
+        // (the uses stay pending and expire at the next write), else bound
+        // PostgreSQL by the time now left.
+        let left = time_left();
+        if left.is_zero() {
+            return Ok(0);
+        }
         let limit = format!(
             "{}ms",
             left.min(self.cfg.key_usage_attempt_timeout)
                 .as_millis()
                 .max(1)
         );
-        let mut tx = self.pool.begin().await?;
         sqlx::query(
             "SELECT set_config('lock_timeout', $1, true), set_config('statement_timeout', $1, true)",
         )
@@ -398,6 +472,11 @@ impl Store {
                 key_hash: r.try_get("h")?,
             });
         }
+        // No `COMMIT` once the deadline has passed: dropping the transaction
+        // rolls it back, and the uses stay pending until they expire.
+        if time_left().is_zero() {
+            return Ok(0);
+        }
         // From here on `COMMIT` may reach the server: any failure or
         // cancellation has an unknown outcome.
         attempt.committing = true;
@@ -423,10 +502,14 @@ impl Store {
     }
 
     /// Drops the uses pending longer than `key_usage_max_pending` and counts
-    /// them as expired; [`Store::flush_key_usage`] also does this first.
+    /// them as expired; [`Store::flush_key_usage`] also does this before each
+    /// batch. It takes the write slot, so it never removes a batch a write is
+    /// carrying: while a write holds the slot, it returns at once.
     pub fn expire_key_usage(&self) {
-        self.usage
-            .expire(self.cfg.key_usage_max_pending, Instant::now());
+        if let Some(_slot) = WriteSlot::take(&self.usage) {
+            self.usage
+                .expire(self.cfg.key_usage_max_pending, Instant::now());
+        }
     }
 
     /// How long the oldest pending use has waited, if any is pending.
@@ -450,7 +533,7 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
-    use super::{Attempt, Credential, KeyUsage, KeyUsageLosses, Outcome, Pending};
+    use super::{Attempt, Credential, KeyUsage, KeyUsageLosses, Outcome, Pending, WriteSlot};
     use chrono::NaiveDateTime;
     use std::time::{Duration, Instant};
 
@@ -515,9 +598,6 @@ mod tests {
         usage.record(cred("a"), at, start);
         usage.record(cred("a"), at, start);
         for committing in [false, true] {
-            usage
-                .writing
-                .store(true, std::sync::atomic::Ordering::Release);
             drop(Attempt {
                 usage: &usage,
                 batch: usage.snapshot(usize::MAX),
@@ -525,7 +605,6 @@ mod tests {
                 committing,
                 settled: false,
             });
-            assert!(!usage.writing.load(std::sync::atomic::Ordering::Acquire));
             if committing {
                 assert_eq!(total(&usage), 0);
                 assert_eq!(
@@ -562,6 +641,34 @@ mod tests {
         let newest_taken = batch.iter().map(|(_, p)| p.since).max();
         assert_eq!(newest_taken, Some(start + Duration::from_millis(999)));
         assert_eq!(usage.map().len(), 2500, "a snapshot removes nothing");
+    }
+
+    /// cdx 0e4cb36f / 766fb5e4: writes and expiry hold one slot; it is
+    /// released on drop.
+    #[test]
+    fn the_write_slot_is_held_by_one_at_a_time() {
+        let usage = KeyUsage::default();
+        let held = WriteSlot::take(&usage);
+        assert!(held.is_some());
+        assert!(WriteSlot::take(&usage).is_none(), "a second holder waits");
+        drop(held);
+        assert!(WriteSlot::take(&usage).is_some(), "released on drop");
+    }
+
+    /// cdx 766fb5e4 R3b: after a large expiry the map's spare capacity is
+    /// released, so memory follows the window, not its peak.
+    #[test]
+    fn spare_capacity_is_released_after_expiry() {
+        let usage = KeyUsage::default();
+        let at = NaiveDateTime::MIN;
+        let start = Instant::now();
+        for i in 0..5000_u32 {
+            usage.record(cred(&format!("k{i:05}")), at, start);
+        }
+        assert!(usage.map().capacity() >= 5000);
+        usage.expire(Duration::from_secs(30), start + Duration::from_secs(30));
+        assert_eq!(usage.map().len(), 0);
+        assert!(usage.map().capacity() <= 128, "{}", usage.map().capacity());
     }
 
     #[test]

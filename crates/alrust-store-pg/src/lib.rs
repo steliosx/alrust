@@ -88,7 +88,8 @@ pub struct StoreConfig {
     pub key_usage_max_pending: std::time::Duration,
     /// The longest one write of the tallies may wait for a lock or run.
     pub key_usage_attempt_timeout: std::time::Duration,
-    /// The most credentials one write carries (the oldest first).
+    /// The most credentials one write carries (the oldest first); clamped
+    /// to 1..=10,000 by [`Store::new`].
     pub key_usage_batch: usize,
 }
 
@@ -649,7 +650,8 @@ fn identity_history<'a>(alert: &'a Alert, event: &str) -> Vec<&'a HistoryEntry> 
 }
 
 impl Store {
-    pub fn new(pool: PgPool, cfg: StoreConfig) -> Self {
+    pub fn new(pool: PgPool, mut cfg: StoreConfig) -> Self {
+        cfg.key_usage_batch = cfg.key_usage_batch.clamp(1, 10_000);
         Store {
             pool,
             cfg,
