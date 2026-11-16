@@ -97,28 +97,31 @@ not a recording. Alerta's time per request, as a multiple of alrust's:
 | Count alerts by severity and status | 14–17× | 10–13× |
 | Receive a duplicate alert | 15–17× | 11–13× |
 
-Each range comes from two runs on different runners. Their absolute speeds
-differed by 37% to 77% (most on alrust's sub-millisecond requests); the
-ratios differed less.
+Each range comes from two runs on different runners. Every server's
+single-client latency was 37% to 77% higher on the second runner (most on
+alrust's sub-millisecond requests); the ratios differed less.
 
 **Why, as measured:**
-- **CPU per request.** For each request, Alerta's Python process uses about
+- **CPU per request.** With one client, Alerta's Python process used about
   7.5 times (list), 28 times (count) and 20 times (duplicate write) the CPU
-  alrust uses. A pooler and more workers do not change this.
+  alrust used per request. With one client, a pooler and more workers left
+  this about the same.
 - **A database connection per request.** Alerta opens and closes a
-  PostgreSQL connection for every request, which costs the database about
-  5.5 ms of CPU each time; alrust keeps a pool of connections. PgBouncer in
-  front of Alerta removes this cost, which is why the right-hand column is
-  smaller, but the gap remains.
+  PostgreSQL connection for every request; alrust keeps a pool of
+  connections. On the list, PostgreSQL used about 5.5 ms less CPU per
+  request with PgBouncer in front of Alerta. That difference includes the
+  connection's start and authentication, but does not measure them alone.
+  PgBouncer narrows the gap (the right-hand column), but the gap remains.
 
 **Why, read from the code:** a list request costs Alerta about seven
 database round trips and alrust three. Alerta also builds and serializes
 Python objects, where alrust uses compiled code.
 
 **Limits:** one machine at a time, synthetic data, and a write case that
-covers duplicates only. At eight clients the 4-vCPU runner itself is the
-bottleneck, so throughput ratios there are not quoted. This is not a
-capacity claim. Details, the raw results and the harness are in the
+covers duplicates only. The duplicate-write ratios are diagnostic: those
+runs predate the check that every write was saved. At eight clients the
+bottleneck was not isolated, so eight-client figures are not compared. This
+is not a capacity claim. Details, the raw results and the harness are in the
 [benchmark report](docs/performance/2026-11-15-bench-compare.md). An
 independent run on an 8-vCPU machine
 ([#255](https://github.com/steliosx/alrust/pull/255)) measured similar
