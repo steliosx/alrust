@@ -1,0 +1,84 @@
+# alrust and Alerta 9.1.0 side by side (scripts/bench/bench_compare.py):
+# a diagnostic benchmark on one GitHub-hosted runner, PostgreSQL 18.7
+# (the owner's choice for this benchmark, 2026-11-15; alrust's 18.6 pin is
+# unchanged), synthetic data only. The numbers are relative to the runner,
+# not a capacity claim. Not a required check. scripts/bench/MODE selects
+# "quick" (plumbing: 1 repetition, c=1, 5 s) or "full".
+name: bench compare
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/bench/**
+      - .github/workflows/bench-compare.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bench-compare-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    name: alrust vs Alerta (PostgreSQL 18.7, relative numbers only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
+        with:
+          # The reference Alerta is installed from the pinned submodule.
+          submodules: true
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0 (Node24)
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master resolved 2026-11-06
+        with:
+          toolchain: "1.100.0"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2 resolved 2026-11-06
+      - name: Build alrust (release)
+        timeout-minutes: 20
+        run: |
+          cargo build --locked --release --bin alrust
+          echo "ALRUST_BIN=$GITHUB_WORKSPACE/target/release/alrust" >> "$GITHUB_ENV"
+      - name: Install oha 1.17.0 (crates.io, locked)
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          # Outside the checkout, so the repository's Cargo config does not apply.
+          cd "$RUNNER_TEMP"
+          cargo install oha --version 1.17.0 --locked --root "$RUNNER_TEMP/oha"
+          echo "OHA_BIN=$RUNNER_TEMP/oha/bin/oha" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/oha/bin/oha" --version
+          "$RUNNER_TEMP/oha/bin/oha" --help
+      - name: PostgreSQL 18.7, pgbouncer and the reference Alerta environment
+        timeout-minutes: 15
+        run: scripts/bench/setup.sh
+      - name: Benchmark
+        timeout-minutes: 45
+        run: |
+          set -euo pipefail
+          echo "BENCH_OUT=$RUNNER_TEMP/bench-out" >> "$GITHUB_ENV"
+          status=0
+          python3 -I scripts/bench/bench_compare.py "$RUNNER_TEMP/bench-out" || status=$?
+          if [ -f "$RUNNER_TEMP/bench-out/summary.md" ]; then
+            cat "$RUNNER_TEMP/bench-out/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$status"
+      - name: Collect environment records
+        if: always() && env.BENCH_OUT != ''
+        run: |
+          cp "$BENCH_WORK/alerta-pip-freeze.txt" "$BENCH_OUT/" 2>/dev/null || true
+          cp "$BENCH_WORK/pg.log" "$BENCH_OUT/postgres.log" 2>/dev/null || true
+          cp "$BENCH_WORK/pgb/pgbouncer.log" "$BENCH_OUT/" 2>/dev/null || true
+          nproc > "$BENCH_OUT/nproc.txt"; free -m > "$BENCH_OUT/free.txt"
+      - name: Upload results (7-day artifact)
+        if: always() && env.BENCH_OUT != ''
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: bench-compare-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.BENCH_OUT }}
+          retention-days: 7
