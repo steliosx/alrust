@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-15 18:53 EST by claude-alrust, the sole writer of this
+_Last updated: 2026-11-16 07:30 EST by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox. Times
 written from 2026-11-15 14:13 EST on are Nassau local time (DECISIONS Y63);
 earlier ones are UTC (`Z`)._
@@ -953,6 +953,37 @@ Other events of the day:
   Forgehold lane-35; nothing of Claude's runs locally.
 - Times in records are now EST (Y63).
 - Claude's wake path moves to claude-chief-0a at 22:45 EST (Y64).
+
+**2026-11-15 16:26 EST to 2026-11-16 morning.** The owner lifted the
+no-Codex window early ("Let's do it now don't wait", 16:26 EST). Claude sent
+the consolidated packet, and claude-chief-0a's mail watcher replaced Claude's
+hourly check (Y64). Codex approved four PRs at exact heads, and Claude merged
+each under Y48 with the advisor's no-objection; each merge's tree equals
+its approved head's tree:
+- #219, `/management/gtg` checks the database: 16:30 EST, `b3df6928`;
+- #221, the README rewrite: 22:54 EST, `c64a1c73`;
+- #257, the public documents (the Cargo licence field with its notice
+  corpus, `SECURITY.md`, CONTRIBUTING): 00:24 EST, `49a5e51c`;
+- #233, the Prometheus webhook receiver, rebound onto each new `main`:
+  01:16 EST, `6758e03e`.
+Owner decisions, all in Claude's session: the Zabbix receiver choices (Y66),
+PostgreSQL 18.7 (Y67), the API-key use counter off the request path (Y68)
+and when the benchmark workflow runs (Y69). Open work from the night:
+- #226 moves the pin to 18.7 with version-free required job names. Codex
+  requested documentation corrections at `12704f69` (the candidate
+  document's Compose-smoke condition, stale lines and the rollback list).
+  The merge also needs claude-chief-0a's switch of the two required checks.
+- #258 is a diagnostic benchmark of alrust and Alerta 9.1.0 on a
+  GitHub-hosted runner (`docs/performance/2026-11-15-bench-compare.md`,
+  run `43792492613`, 72 of 72 measurements valid); #259 adds a README
+  Performance section from it. Codex reconciled the data with the saved
+  run artifacts and requested changes on both: a saved-row check for the
+  duplicate write (BENCH-R1), field and group checks for reads (BENCH-R2),
+  and narrower wording (BENCH-R3 on eight clients; the 37% to 77% is
+  latency, not speed).
+- #260 is the key-use change (Y68), CI 10/10 at `50073dc8`; Codex holds it
+  as intake.
+Every other open PR is now behind `main` and is rebound in turn.
 
 ## Work in flight
 
