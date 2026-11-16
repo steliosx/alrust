@@ -348,7 +348,30 @@ async fn run() -> anyhow::Result<()> {
     // The span records the path only: a query string can carry `api-key`.
     .layer(
         TraceLayer::new_for_http().make_span_with(|req: &axum::http::Request<_>| {
-            tracing::debug_span!("request", method = %req.method(), path = %req.uri().path())
+            let path = req.uri().path();
+            // SF-WEBHOOKS item 1 (W-SEC-1): a webhook path can carry caller
+            // text, so only the route template, the registered webhook name
+            // (else <unknown>) and the body length are logged.
+            if let Some(rest) = path.strip_prefix("/webhooks/") {
+                let name = match rest.split('/').next() {
+                    Some("prometheus") => "prometheus",
+                    _ => "<unknown>",
+                };
+                let body_len = req
+                    .headers()
+                    .get(axum::http::header::CONTENT_LENGTH)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse::<u64>().ok());
+                tracing::debug_span!(
+                    "request",
+                    method = %req.method(),
+                    path = "/webhooks/<webhook>/<path>",
+                    webhook = name,
+                    body_len,
+                )
+            } else {
+                tracing::debug_span!("request", method = %req.method(), path = %path)
+            }
         }),
     );
     let listener = tokio::net::TcpListener::bind(bind)
