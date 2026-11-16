@@ -1,9 +1,10 @@
-# PostgreSQL 18.7: candidate pins and checklist
+# PostgreSQL 18.7: pins and checklist
 
-Status: **candidate for review, not adopted.** DECISIONS Y32 pins PostgreSQL
-18.6 by the owner's direction. This branch exists so that hosted CI runs the
-catalog, adoption, migration and history tests on 18.7; it is not merged
-unless the owner decides to replace the 18.6 pin. Background and the
+Status: **adopted by the owner's decision on 2026-11-15** ("Yes, move to 18.7
+(Recommended)", in Claude's session), which replaces Y32's 18.6 pin; the
+DECISIONS record is Y67. This branch first existed so that hosted CI ran the
+catalog, adoption, migration and history tests on 18.7 while 18.6 was the
+pin. Background and the
 experiment plan: [PostgreSQL evaluation](postgresql-evaluation-2026-11-14.md)
 (Codex). 18.7 was released on 2026-11-12; it is a fixes release. 19 RC2 is
 not a candidate.
