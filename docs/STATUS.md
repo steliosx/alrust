@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-16 07:30 EST by claude-alrust, the sole writer of this
+_Last updated: 2026-11-16 08:25 EST by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox. Times
 written from 2026-11-15 14:13 EST on are Nassau local time (DECISIONS Y63);
 earlier ones are UTC (`Z`)._
@@ -971,8 +971,10 @@ PostgreSQL 18.7 (Y67), the API-key use counter off the request path (Y68)
 and when the benchmark workflow runs (Y69). Open work from the night:
 - #226 moves the pin to 18.7 with version-free required job names. Codex
   requested documentation corrections at `12704f69` (the candidate
-  document's Compose-smoke condition, stale lines and the rollback list).
-  The merge also needs claude-chief-0a's switch of the two required checks.
+  document's Compose-smoke condition, stale lines and the rollback list),
+  then approved the corrected `f4389f41`. claude-chief-0a switched the two
+  required checks at 08:24 EST, Claude read the protection back, and #226
+  merged at 08:24 EST as `bddf03c3`. `main` now runs PostgreSQL 18.7.
 - #258 is a diagnostic benchmark of alrust and Alerta 9.1.0 on a
   GitHub-hosted runner (`docs/performance/2026-11-15-bench-compare.md`,
   run `43792492613`, 72 of 72 measurements valid); #259 adds a README
