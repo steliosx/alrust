@@ -1,6 +1,6 @@
 # alrust alpha: quick start
 
-The first runnable alrust: the Rust API server on PostgreSQL 18.6, speaking
+The first runnable alrust: the Rust API server on PostgreSQL 18.7, speaking
 the core of the Alerta v9.1.0 API. It is an **early alpha**: built to be
 tried, not yet to replace the reference server. Behaviour follows
 `spec/lifecycle.md`; the gaps are listed below.
@@ -51,14 +51,14 @@ Stop with `docker compose down`; add `-v` to delete the database volume.
 
 ### Without Docker
 
-Use a disposable PostgreSQL 18.6 development database. Set its connection
+Use a disposable PostgreSQL 18.7 development database. Set its connection
 URL privately; do not commit real connection strings or credentials. The native
 server defaults to listening on all interfaces, so bind it to loopback explicitly
 for a local trial. Authentication is enabled by default; bootstrap a local admin
 key before using the authenticated examples above:
 
 ```sh
-export DATABASE_URL='<your disposable PostgreSQL 18.6 connection URL>'
+export DATABASE_URL='<your disposable PostgreSQL 18.7 connection URL>'
 export ALRUST_ADMIN_KEY="$(openssl rand -hex 20)"
 export ALRUST_BIND=127.0.0.1:8080
 cargo build --locked --release --bin alrust
