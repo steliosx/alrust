@@ -128,8 +128,13 @@ def start(arm, db, logf):
         env = {"PATH": f"{VENV}/bin:/usr/bin:/bin", "HOME": str(WORK),
                "DATABASE_URL": db_url(db, port), "AUTH_REQUIRED": "True",
                "SECRET_KEY": "bench-not-secret", "LOG_LEVEL": "WARNING"}
+        # Every Alerta worker runs sql/schema.sql at boot (create_engine), and
+        # its threading.Lock is per call, so workers booting together can
+        # deadlock on that DDL (run 43788943429, repetition 1). With several
+        # workers, --preload runs it once in the master before the fork.
+        preload = ["--preload"] if workers > 1 else []
         proc = subprocess.Popen([str(VENV / "bin/gunicorn"), "--workers", str(workers),
-                                 "--worker-class", "gthread", "--threads", "4",
+                                 "--worker-class", "gthread", "--threads", "4", *preload,
                                  "--bind", "127.0.0.1:8081", "alerta.app:create_app()"],
                                 env=env, cwd=str(WORK), stdout=logf, stderr=subprocess.STDOUT)
         base = "http://127.0.0.1:8081"
@@ -275,6 +280,9 @@ def check(arm, base, db, record):
     got = [a["id"] for a in body.get("alerts", [])]
     status_c, raw_c, enc_c = http("GET", base + CASES["count"][1])
     count = json.loads(raw_c)
+    # The bodies, for comparing fields and formatting between servers.
+    (OUT / "raw" / f"check-{arm}-list.json").write_bytes(raw)
+    (OUT / "raw" / f"check-{arm}-count.json").write_bytes(raw_c)
     ok = status == 200 and body.get("total") == total and got == ids and status_c == 200 \
         and count.get("total") == total
     record["checks"].append({"arm": arm, "db": db, "ok": ok, "list_bytes": len(raw),
@@ -296,6 +304,7 @@ def cell(arm, proc, base, case, conc, rep, db, json_flag, record):
     j = oha(base, case, conc, TIMED_S, raw_dir / f"timed-{arm}-{case}-c{conc}-r{rep}.json", json_flag)
     wall = time.monotonic() - t0
     srv1, pm1 = tree_cpu(proc.pid), tree_cpu(postmaster_pid())
+    alive = proc.poll() is None
     time.sleep(1.5)
     pg1 = pg_db_stats(db)
     s = summarize_oha(j)
@@ -304,15 +313,22 @@ def cell(arm, proc, base, case, conc, rep, db, json_flag, record):
               "server_cpu_s": (srv1 - srv0) / hz, "postgres_cpu_s": (pm1 - pm0) / hz,
               "pg_sessions": pg1["sessions"] - pg0["sessions"],
               "pg_commits": pg1["xact_commit"] - pg0["xact_commit"]})
+    # A repetition counts only with no error, real responses, and the server
+    # still running at the end; otherwise it is kept but not scored.
+    s["server_alive"] = alive
+    s["valid"] = alive and s["errors"] == 0 and s["non_2xx"] == 0 and s["ok"] > 0
     req = s["requests"] or 1
     s["sessions_per_request"] = s["pg_sessions"] / req
     s["commits_per_request"] = s["pg_commits"] / req
     s["server_cpu_ms_per_request"] = 1000 * s["server_cpu_s"] / req
     s["postgres_cpu_ms_per_request"] = 1000 * s["postgres_cpu_s"] / req
     record["cells"].append(s)
-    log(f"{arm:16} {case:9} c={conc} r{rep}: {s['rps']:.1f} rps, p50 {s['p50_ms']:.2f} ms, "
+    if not alive:
+        log(f"{arm}: the server exited during {case} c={conc} r{rep}; its remaining cells are skipped")
+    log(f"{arm:16} {case:9} c={conc} r{rep}: {'' if s['valid'] else 'INVALID '}{s['rps']:.1f} rps, p50 {s['p50_ms']:.2f} ms, "
         f"p99 {s['p99_ms']:.2f} ms, errors {s['errors']}, non-2xx {s['non_2xx']}, "
         f"sessions/req {s['sessions_per_request']:.3f}, server CPU {s['server_cpu_ms_per_request']:.3f} ms/req")
+    return alive
 
 
 def start_pgbouncer():
@@ -398,9 +414,11 @@ def main():
                         if not check(arm, base, db, record):
                             all_ok = False
                             continue
+                        alive = True
                         for case in ("list", "count"):
                             for conc in CONCURRENCY:
-                                cell(arm, proc, base, case, conc, rep, db, json_flag, record)
+                                if alive:
+                                    alive = cell(arm, proc, base, case, conc, rep, db, json_flag, record)
                     finally:
                         stop(proc)
                 for conc in CONCURRENCY:
@@ -431,18 +449,24 @@ def write_summary(record):
              f"Runner vCPUs {record['vcpus']}; {record['reps']} repetition(s); "
              f"warm-up {record['warm_s']} s, timed {record['timed_s']} s; medians across repetitions.",
              "Relative numbers on one hosted runner; not a capacity claim.", "",
-             "| case | c | arm | rps | p50 ms | p99 ms | errors+non-2xx | sessions/req | "
+             "A repetition is scored only with no error, real responses and the server alive at its end.",
+             "",
+             "| case | c | arm | valid reps | rps | p50 ms | p99 ms | errors+non-2xx (all reps) | sessions/req | "
              "commits/req | server CPU ms/req | postgres CPU ms/req |",
-             "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
+             "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for case in CASES:
         for conc in record["concurrency"]:
             for arm in record["arms"]:
-                cs = rows.get((case, conc, arm))
+                allc = rows.get((case, conc, arm))
+                if not allc:
+                    continue
+                bad = sum(x["errors"] + x["non_2xx"] for x in allc)
+                cs = [x for x in allc if x["valid"]]
                 if not cs:
+                    lines.append(f"| {case} | {conc} | {arm} | 0/{len(allc)} | - | - | - | {bad} | - | - | - | - |")
                     continue
                 med = lambda k: statistics.median(x[k] for x in cs)
-                bad = sum(x["errors"] + x["non_2xx"] for x in cs)
-                lines.append(f"| {case} | {conc} | {arm} | {med('rps'):.1f} | {med('p50_ms'):.2f} | "
+                lines.append(f"| {case} | {conc} | {arm} | {len(cs)}/{len(allc)} | {med('rps'):.1f} | {med('p50_ms'):.2f} | "
                              f"{med('p99_ms'):.2f} | {bad} | {med('sessions_per_request'):.3f} | "
                              f"{med('commits_per_request'):.2f} | {med('server_cpu_ms_per_request'):.3f} | "
                              f"{med('postgres_cpu_ms_per_request'):.3f} |")
