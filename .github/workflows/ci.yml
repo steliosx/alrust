@@ -297,7 +297,7 @@ jobs:
   alpha-smoke:
     # The alpha server end to end: build the binary, start it on PostgreSQL
     # 18.7 and run scripts/alpha-smoke.py against it.
-    name: alpha server smoke (PostgreSQL 18.7)
+    name: alpha server smoke (PostgreSQL 18)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -349,7 +349,7 @@ jobs:
     # cluster, and only then upload the three generated files with a
     # manifest and a cleanup record. A successful upload therefore implies
     # completed cleanup. Nothing is committed or pushed from here.
-    name: store catalog generation (PostgreSQL 18.7, draft PRs only)
+    name: store catalog generation (PostgreSQL 18, draft PRs only)
     if: github.event_name == 'pull_request' && github.event.pull_request.draft
     runs-on: ubuntu-24.04
     timeout-minutes: 25
