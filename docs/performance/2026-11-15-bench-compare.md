@@ -50,9 +50,24 @@ Fairness, checked in the code before the first run:
 - Alerta enables Flask-Compress; alrust does not compress. Every request
   asks for `identity`, and no response was compressed.
 - Neither server logs each request.
-- Before anything is scored, every arm must return the same total, the same
-  50 newest ids in order, and the same count. A repetition is scored only
-  with no error, real responses, and the server alive at its end.
+- In both cited runs, before anything was scored, every arm had to return
+  the same total, the same 50 newest ids in order, and the same count. A
+  repetition was scored only with no error, real responses, and the server
+  alive at its end.
+- Added after both runs, from Codex's review (BENCH-R1, BENCH-R2), and not
+  applied to their numbers: every listed alert is checked field by field
+  against its database row; the count's severity and status groups against
+  SQL; and every arm's list and count bodies against the first arm's, with
+  only `href` origins normalized. For the duplicate write, the alert is
+  created by one request and checked in the database, and its
+  `duplicate_count` must grow by exactly the 2xx responses counted, in the
+  warm-up and in the timed run (oha waits for requests in flight at the
+  deadline). A failed gate leaves the repetition unscored.
+- Codex compared the saved check bodies of run `43792492613` afterwards:
+  the list bodies match apart from `href` origins, and the count bodies
+  match exactly. That does not cover every timed response, and nothing in
+  the cited runs checked that the duplicate writes were saved. So the
+  duplicate-write rows below are diagnostic only.
 
 Recorded per measurement, besides latency: PostgreSQL sessions and commits
 per request (`pg_stat_database`), and the CPU time per request of the
@@ -88,7 +103,10 @@ backends).
 | write (duplicate) | 8 | alerta-1x4-pgb | 169.0 | 46.75 | 59.51 | 0.000 | 12.27 | 2.93 |
 | write (duplicate) | 8 | alerta-4x4-pgb | 214.6 | 36.68 | 59.56 | 0.001 | 11.87 | 3.18 |
 
-No measurement had an error or a non-2xx response.
+No measurement had an error or a non-2xx response, and every row is the
+median of three valid repetitions. In the earlier run `43788943429`, 71 of
+72 measurements were usable: the four-worker, eight-client duplicate-write
+group had two (see Observations).
 
 ## Findings
 
@@ -109,15 +127,19 @@ alrust (run 43792492613, then run 43788943429):
 **Measured causes:**
 1. **Per-request work in the server.** Alerta's process spends 9.0 ms of
    CPU on a list request, 6.4 ms on a count and 7.5 ms on a duplicate write.
-   alrust spends 1.2, 0.23 and 0.37 ms: 7.5, 28 and 20 times less. A pooler
-   and more workers do not change Alerta's per-request CPU, so this is most
-   of the remaining gap.
+   alrust spends 1.2, 0.23 and 0.37 ms: 7.5, 28 and 20 times less (one
+   client). With one client, a pooler and more workers left Alerta's
+   per-request CPU about the same (8.9 to 9.0 ms on the list), so at one
+   client this is most of the remaining gap.
 2. **A new database connection per request.** Alerta opens and closes a
    PostgreSQL connection for every request (`database/base.py`: `get_db` and
    `teardown_db`). Sessions per request are 1.000 on the direct arm and 0
-   behind PgBouncer. The connection costs PostgreSQL about 5.5 ms of CPU per
-   list request (8.1 against 2.6 ms) and adds about 3 ms of latency. alrust
-   keeps a pool, so it opens none.
+   behind PgBouncer. On the list, with one client, PostgreSQL's CPU per
+   request was 8.1 ms direct and 2.6 ms behind PgBouncer, a difference of
+   about 5.5 ms, and the median latency was about 3 ms lower. The difference
+   includes the per-request backend start and authentication, but it does
+   not measure them alone, and the other cases differ by other amounts.
+   alrust keeps a pool, so it opens none.
 
 **Read from the code, not measured separately:**
 - A list request costs Alerta about seven database round trips (the
@@ -128,13 +150,16 @@ alrust (run 43792492613, then run 43788943429):
 - Alerta builds a Python object per alert and serializes it to JSON in the
   interpreter; alrust does both in compiled code.
 
-**At eight clients, the runner is the limit, not the servers.** Both sides
-use most of the four vCPUs (for example, Alerta with four workers: 186
-list requests/s × 14.9 ms is about 2.8 CPUs, plus PostgreSQL; alrust: 934
-× 1.6 ms is about 1.5 CPUs plus 2.1 for PostgreSQL). So the throughput
-ratios at eight clients measure this machine more than either server, and
-the four-worker arm does not cleanly isolate the one-process limit. The
-per-request CPU and the single-client latency are the comparable figures.
+**At eight clients, the bottleneck was not isolated.** The server and
+PostgreSQL together used, per second of the timed run, about 3.5 of the
+four vCPUs for alrust's list, 2.85 for its count and 1.36 (1.34 to 1.38) for
+its duplicate write; Alerta's arms used 2.4 to 3.5. Client, pooler and other
+waits on the machine were not measured, other jobs on a shared runner may
+interfere, and a limit in the server or on the one updated row (for the
+duplicate write) was not ruled out. So the eight-client numbers are left out
+of the comparisons, without claiming that the machine was saturated, and the
+four-worker arm does not cleanly isolate the one-process limit. The
+single-client latency and per-request CPU are the comparable figures.
 
 ## Observations
 
@@ -145,7 +170,9 @@ per-request CPU and the single-client latency are the comparable figures.
   deadlocked on that DDL ("deadlock detected … AccessExclusiveLock"), one
   failed to boot and gunicorn stopped. That repetition is excluded from the
   findings. The harness now starts multi-worker Alerta with `--preload`, so
-  the schema runs once, in the master.
+  the schema runs once, in the master. The two runs' harnesses differ in
+  this setting, and `--preload` avoids the race in this harness only; it is
+  not a general fix for Alerta.
 - **The JSON differs only in formatting.** The same 50 alerts are 41,048
   bytes from alrust and 44,130 bytes from Alerta, which puts a space after
   each `:` and `,`. Written compactly, both are 41,048 bytes; the fields
@@ -156,7 +183,8 @@ per-request CPU and the single-client latency are the comparable figures.
 One hosted 4-vCPU runner at a time, 1,000 synthetic alerts, three
 repetitions, one PostgreSQL configuration (defaults, 18.7 for both
 servers). No confidence interval beyond the spread of three medians. The
-write case is the duplicate path only: no new-alert, correlation or
+duplicate-write numbers predate the check that the writes were saved, so
+they are diagnostic. The write case is the duplicate path only: no new-alert, correlation or
 history-heavy write. No search (`q=` is not on `main`), no web UI traffic,
 no production workload, no tuning study of either server beyond the arms
 above, and nothing above 1,000 alerts. Alerta's own JSON encoder,

@@ -15,6 +15,23 @@ body: the duplicate path). Every request sends the same API key and
 Accept-Encoding: identity (Alerta enables Flask-Compress; alrust does not
 compress). Results are relative to this runner; see the workflow's summary.
 
+Correctness gates (Codex BENCH-R1, BENCH-R2; added after runs 43788943429
+and 43792492613, whose numbers they do not cover):
+  reads   every arm's 50 newest alerts must match the database field by
+          field, the count's severity and status groups must match SQL, and
+          every arm's list and count bodies must equal the first arm's, with
+          only `href` origins normalized;
+  writes  the duplicate alert is primed with one request and checked in the
+          database; after the warm-up and after the timed run its
+          duplicate_count must have grown by exactly the 2xx responses
+          counted (oha -w waits for in-flight requests), with one row, the
+          same id and unchanged identity fields.
+A failed gate makes the check or the repetition invalid; it is never scored.
+
+BENCH_MODE selects "quick" (plumbing: 1 repetition, c=1, 5 s; the default)
+or "full". The workflow passes "quick" on pull requests and the dispatch
+input otherwise (DECISIONS Y69).
+
 Standard library only; run with `python3 -I`. Inputs come from the
 environment that scripts/bench/setup.sh writes.
 """
@@ -28,6 +45,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
 WORK = Path(os.environ["BENCH_WORK"])
@@ -37,7 +55,9 @@ PGBOUNCER = os.environ["BENCH_PGBOUNCER"]
 ALRUST = os.environ["ALRUST_BIN"]
 OHA = os.environ["OHA_BIN"]
 OUT = Path(sys.argv[1])
-MODE = (ROOT / "scripts/bench/MODE").read_text().strip()
+MODE = os.environ.get("BENCH_MODE", "quick")
+if MODE not in ("quick", "full"):
+    sys.exit(f"BENCH_MODE must be quick or full, not {MODE!r}")
 QUICK = MODE == "quick"
 
 KEY = "bench-key-0123456789abcdef0123456789abcdef"
@@ -58,8 +78,16 @@ SEED_ALERTS = 1000
 EVENTS = ["BackupFailed", "DiskFull", "HighCPU", "NodeDown", "Latency",
           "QueueDepth", "CertExpiry", "MemoryLow", "ServiceDown", "PacketLoss"]
 SEVERITIES = ["critical", "major", "minor", "warning", "normal"]
-DUP_BODY = json.dumps({"resource": "bench-dup", "event": "Dup", "environment": "Production",
-                       "severity": "major", "service": ["web"], "text": "duplicate path"})
+DUP_ALERT = {"resource": "bench-dup", "event": "Dup", "environment": "Production",
+             "severity": "major", "service": ["web"], "text": "duplicate path"}
+DUP_BODY = json.dumps(DUP_ALERT)
+# Fields compared between each served alert and its database row (API name,
+# column). Timestamps are compared across arms by the body comparison.
+ALERT_FIELDS = [("id", "id"), ("resource", "resource"), ("event", "event"),
+                ("environment", "environment"), ("severity", "severity"), ("status", "status"),
+                ("service", "service"), ("group", "group"), ("value", "value"), ("text", "text"),
+                ("tags", "tags"), ("attributes", "attributes"),
+                ("duplicateCount", "duplicate_count"), ("customer", "customer")]
 CASES = {
     "list": ("GET", "/alerts?page-size=50&sort-by=lastReceiveTime", None),
     "count": ("GET", "/alerts/count", None),
@@ -272,6 +300,48 @@ def expected(db):
     return ids, total
 
 
+def sql_json(db, sql):
+    out = psql(db, sql)
+    return json.loads(out) if out else None
+
+
+def expected_rows(db):
+    cols = ", ".join(f'"{c}"' for _, c in ALERT_FIELDS)
+    return sql_json(db, f"SELECT json_agg(row_to_json(t)) FROM (SELECT {cols} FROM alerts "
+                        "ORDER BY last_receive_time DESC, id LIMIT 50) t") or []
+
+
+def expected_groups(db, col):
+    return sql_json(db, f"SELECT json_object_agg({col}, n) FROM "
+                        f"(SELECT {col}, count(*) AS n FROM alerts GROUP BY {col}) g") or {}
+
+
+def fields_match(served, rows):
+    """Each served alert against its row; returns a list of differences."""
+    diffs = []
+    if len(served) != len(rows):
+        return [f"{len(served)} alerts served, {len(rows)} expected"]
+    for a, r in zip(served, rows):
+        for api, col in ALERT_FIELDS:
+            if a.get(api) != r.get(col):
+                diffs.append(f"{r.get('id')}.{api}: served {a.get(api)!r}, database {r.get(col)!r}")
+    return diffs
+
+
+def normalized(value):
+    """The body with only `href` origins removed (each server names its own base URL)."""
+    if isinstance(value, dict):
+        return {k: (urlsplit(v)._replace(scheme="", netloc="").geturl()
+                    if k == "href" and isinstance(v, str) else normalized(v))
+                for k, v in value.items()}
+    if isinstance(value, list):
+        return [normalized(v) for v in value]
+    return value
+
+
+FIRST_BODIES = {}  # the run's first checked arm: its normalized list and count bodies
+
+
 def check(arm, base, db, record):
     """Same answer on every arm before anything is scored."""
     ids, total = expected(db)
@@ -283,22 +353,73 @@ def check(arm, base, db, record):
     # The bodies, for comparing fields and formatting between servers.
     (OUT / "raw" / f"check-{arm}-list.json").write_bytes(raw)
     (OUT / "raw" / f"check-{arm}-count.json").write_bytes(raw_c)
-    ok = status == 200 and body.get("total") == total and got == ids and status_c == 200 \
+    basic_ok = status == 200 and body.get("total") == total and got == ids and status_c == 200 \
         and count.get("total") == total
-    record["checks"].append({"arm": arm, "db": db, "ok": ok, "list_bytes": len(raw),
+    field_diffs = fields_match(body.get("alerts", []), expected_rows(db))
+    groups_ok = (count.get("severityCounts") == expected_groups(db, "severity")
+                 and count.get("statusCounts") == expected_groups(db, "status"))
+    bodies = {"list": normalized(body), "count": normalized(count)}
+    reference = FIRST_BODIES.setdefault("arm", arm)
+    FIRST_BODIES.setdefault("bodies", bodies)
+    cross_arm_ok = bodies == FIRST_BODIES["bodies"]
+    ok = basic_ok and not field_diffs and groups_ok and cross_arm_ok
+    record["checks"].append({"arm": arm, "db": db, "ok": ok, "basic_ok": basic_ok,
+                             "fields_ok": not field_diffs, "field_diffs": field_diffs[:20],
+                             "groups_ok": groups_ok, "cross_arm_ok": cross_arm_ok,
+                             "reference_arm": reference, "list_bytes": len(raw),
                              "list_content_encoding": enc, "count_bytes": len(raw_c),
                              "count_content_encoding": enc_c,
                              "severityCounts": count.get("severityCounts"),
                              "statusCounts": count.get("statusCounts")})
     if not ok:
-        log(f"CHECK FAILED for {arm}: status {status}, total {body.get('total')} vs {total}")
+        log(f"CHECK FAILED for {arm}: basic {basic_ok}, fields {not field_diffs} {field_diffs[:3]}, "
+            f"groups {groups_ok}, same as {reference} {cross_arm_ok}")
     return ok
+
+
+def dup_rows(db):
+    return sql_json(db, "SELECT json_agg(row_to_json(t)) FROM (SELECT id, resource, event, "
+                        "environment, severity, status, service, text, duplicate_count "
+                        "FROM alerts WHERE resource = 'bench-dup') t") or []
+
+
+def dup_identity_ok(row, prime_id):
+    return (row["id"] == prime_id and row["status"] == "open"
+            and all(row[k] == v for k, v in DUP_ALERT.items()))
+
+
+def prime_dup(base, db):
+    """One request creates the duplicate alert; returns (id or None, problems)."""
+    problems = []
+    if dup_rows(db):
+        problems.append("a bench-dup alert existed before priming")
+    status, raw, _ = http("POST", base + "/alert", DUP_BODY)
+    alert = (json.loads(raw).get("alert") or {}) if status == 201 else {}
+    if status != 201 or alert.get("duplicateCount") != 0 or alert.get("repeat") is not False:
+        problems.append(f"priming answered {status}, duplicateCount {alert.get('duplicateCount')!r}, "
+                        f"repeat {alert.get('repeat')!r}")
+    rows = dup_rows(db)
+    if len(rows) != 1 or not dup_identity_ok(rows[0], alert.get("id")) or rows[0]["duplicate_count"] != 0:
+        problems.append(f"after priming the database has {rows!r}")
+    return alert.get("id"), problems
 
 
 def cell(arm, proc, base, case, conc, rep, db, json_flag, record):
     raw_dir = OUT / "raw"
-    oha(base, case, conc, WARM_S, raw_dir / f"warm-{arm}-{case}-c{conc}-r{rep}.json", json_flag)
+    write = case == "write-dup"
+    persisted = {}
+    if write:
+        prime_id, problems = prime_dup(base, db)
+        persisted = {"prime_id": prime_id, "problems": problems}
+    warm = summarize_oha(oha(base, case, conc, WARM_S,
+                             raw_dir / f"warm-{arm}-{case}-c{conc}-r{rep}.json", json_flag))
     time.sleep(1.5)
+    if write:
+        rows = dup_rows(db)
+        persisted["dup_before"] = rows[0]["duplicate_count"] if len(rows) == 1 else None
+        if persisted["dup_before"] != warm["ok"]:
+            persisted["problems"].append(f"after the warm-up duplicate_count is "
+                                         f"{persisted['dup_before']!r}, {warm['ok']} counted")
     pg0, srv0, pm0 = pg_db_stats(db), tree_cpu(proc.pid), tree_cpu(postmaster_pid())
     t0 = time.monotonic()
     j = oha(base, case, conc, TIMED_S, raw_dir / f"timed-{arm}-{case}-c{conc}-r{rep}.json", json_flag)
@@ -308,15 +429,34 @@ def cell(arm, proc, base, case, conc, rep, db, json_flag, record):
     time.sleep(1.5)
     pg1 = pg_db_stats(db)
     s = summarize_oha(j)
+    s["warm"] = warm
+    if write:
+        rows = dup_rows(db)
+        after = rows[0]["duplicate_count"] if len(rows) == 1 else None
+        persisted["dup_after"] = after
+        before = persisted["dup_before"]
+        if before is None or after is None or after - before != s["ok"]:
+            persisted["problems"].append(f"timed: duplicate_count {before!r} -> {after!r}, "
+                                         f"{s['ok']} counted")
+        if len(rows) != 1 or not dup_identity_ok(rows[0], persisted["prime_id"]):
+            persisted["problems"].append(f"after the timed run the database has {rows!r}")
+        total = int(psql(db, "SELECT count(*) FROM alerts"))
+        if total != record["seed"]["alerts"] + 1:
+            persisted["problems"].append(f"{total} alerts, {record['seed']['alerts'] + 1} expected")
+        persisted["ok"] = not persisted["problems"]
+        s["persisted"] = persisted
     hz = os.sysconf("SC_CLK_TCK")
     s.update({"arm": arm, "case": case, "c": conc, "rep": rep, "db": db, "wall_s": wall,
               "server_cpu_s": (srv1 - srv0) / hz, "postgres_cpu_s": (pm1 - pm0) / hz,
               "pg_sessions": pg1["sessions"] - pg0["sessions"],
               "pg_commits": pg1["xact_commit"] - pg0["xact_commit"]})
-    # A repetition counts only with no error, real responses, and the server
-    # still running at the end; otherwise it is kept but not scored.
+    # A repetition counts only with no error, real responses, the server
+    # still running at the end and, for writes, every counted write saved;
+    # otherwise it is kept but not scored.
     s["server_alive"] = alive
-    s["valid"] = alive and s["errors"] == 0 and s["non_2xx"] == 0 and s["ok"] > 0
+    s["valid"] = (alive and s["errors"] == 0 and s["non_2xx"] == 0 and s["ok"] > 0
+                  and warm["errors"] == 0 and warm["non_2xx"] == 0
+                  and (not write or persisted["ok"]))
     req = s["requests"] or 1
     s["sessions_per_request"] = s["pg_sessions"] / req
     s["commits_per_request"] = s["pg_commits"] / req
@@ -325,6 +465,8 @@ def cell(arm, proc, base, case, conc, rep, db, json_flag, record):
     record["cells"].append(s)
     if not alive:
         log(f"{arm}: the server exited during {case} c={conc} r{rep}; its remaining cells are skipped")
+    if write and not persisted["ok"]:
+        log(f"{arm}: WRITE CHECK FAILED in {case} c={conc} r{rep}: {persisted['problems']}")
     log(f"{arm:16} {case:9} c={conc} r{rep}: {'' if s['valid'] else 'INVALID '}{s['rps']:.1f} rps, p50 {s['p50_ms']:.2f} ms, "
         f"p99 {s['p99_ms']:.2f} ms, errors {s['errors']}, non-2xx {s['non_2xx']}, "
         f"sessions/req {s['sessions_per_request']:.3f}, server CPU {s['server_cpu_ms_per_request']:.3f} ms/req")
@@ -449,7 +591,8 @@ def write_summary(record):
              f"Runner vCPUs {record['vcpus']}; {record['reps']} repetition(s); "
              f"warm-up {record['warm_s']} s, timed {record['timed_s']} s; medians across repetitions.",
              "Relative numbers on one hosted runner; not a capacity claim.", "",
-             "A repetition is scored only with no error, real responses and the server alive at its end.",
+             "A repetition is scored only with no error, real responses, the server alive at its end "
+             "and, for writes, every counted write saved in the database.",
              "",
              "| case | c | arm | valid reps | rps | p50 ms | p99 ms | errors+non-2xx (all reps) | sessions/req | "
              "commits/req | server CPU ms/req | postgres CPU ms/req |",
@@ -470,10 +613,21 @@ def write_summary(record):
                              f"{med('p99_ms'):.2f} | {bad} | {med('sessions_per_request'):.3f} | "
                              f"{med('commits_per_request'):.2f} | {med('server_cpu_ms_per_request'):.3f} | "
                              f"{med('postgres_cpu_ms_per_request'):.3f} |")
-    lines += ["", "Checks before scoring (same total, the same 50 newest ids, the count's total):", ""]
+    lines += ["", "Checks before scoring (total and the 50 newest ids; every listed alert's fields against "
+              "the database; the count's groups against SQL; the same bodies as the first arm, "
+              "`href` origins aside):", ""]
     for ch in record["checks"]:
-        lines.append(f"- {ch['arm']} on {ch['db']}: {'ok' if ch['ok'] else 'FAILED'}; list "
-                     f"{ch['list_bytes']} bytes, Content-Encoding {ch['list_content_encoding']}")
+        lines.append(f"- {ch['arm']} on {ch['db']}: {'ok' if ch['ok'] else 'FAILED'} (basic "
+                     f"{ch['basic_ok']}, fields {ch['fields_ok']}, groups {ch['groups_ok']}, same as "
+                     f"{ch['reference_arm']} {ch['cross_arm_ok']}); list {ch['list_bytes']} bytes, "
+                     f"Content-Encoding {ch['list_content_encoding']}")
+    writes = [c for c in record["cells"] if "persisted" in c]
+    if writes:
+        bad = [c for c in writes if not c["persisted"]["ok"]]
+        lines += ["", f"Write checks: {len(writes) - len(bad)} of {len(writes)} duplicate-write "
+                      "repetitions saved exactly the writes counted."]
+        for c in bad:
+            lines.append(f"- FAILED {c['arm']} c={c['c']} r{c['rep']}: {c['persisted']['problems']}")
     (OUT / "summary.md").write_text("\n".join(lines) + "\n")
 
 

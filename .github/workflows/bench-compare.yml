@@ -2,12 +2,20 @@
 # a diagnostic benchmark on one GitHub-hosted runner, PostgreSQL 18.7
 # (the owner's choice for this benchmark, 2026-11-15; alrust's 18.6 pin is
 # unchanged), synthetic data only. The numbers are relative to the runner,
-# not a capacity claim. Not a required check. scripts/bench/MODE selects
-# "quick" (plumbing: 1 repetition, c=1, 5 s) or "full".
+# not a capacity claim. Not a required check. When it runs (the owner's
+# choice, DECISIONS Y69): a full run only when a person starts it
+# (workflow_dispatch, mode "full" by default); a pull request that changes
+# the benchmark runs only the quick check (1 repetition, c=1, 5 s).
 name: bench compare
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "full (3 repetitions, c=1 and c=8) or quick (plumbing only)"
+        type: choice
+        options: [full, quick]
+        default: full
   pull_request:
     paths:
       - scripts/bench/**
@@ -58,6 +66,8 @@ jobs:
         run: scripts/bench/setup.sh
       - name: Benchmark
         timeout-minutes: 45
+        env:
+          BENCH_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'quick' }}
         run: |
           set -euo pipefail
           echo "BENCH_OUT=$RUNNER_TEMP/bench-out" >> "$GITHUB_ENV"
