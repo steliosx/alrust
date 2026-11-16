@@ -41,7 +41,10 @@ data="$root/data"
 {
   # The PGDG signing key (fingerprint B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8).
   sudo install -d /usr/share/postgresql-common/pgdg
-  sudo curl -fsSL --retry 3 -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+  # --retry alone does not retry a transfer dropped mid-way (curl exit 56,
+  # nine CI jobs on 2026-11-15/16); --retry-all-errors does. The key is still
+  # checked against its fingerprint below.
+  sudo curl -fsSL --retry 5 --retry-all-errors -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
     https://www.postgresql.org/media/keys/ACCC4CF8.asc
   gpg --show-keys --with-colons /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
     | grep -q '^fpr:::::::::B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8:' \

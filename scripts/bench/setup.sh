@@ -2,9 +2,9 @@
 # Benchmark setup on a GitHub-hosted ubuntu-24.04 runner (bench-compare.yml):
 # PostgreSQL 18.7 and pgbouncer from PGDG, a throwaway cluster on
 # 127.0.0.1:5432, and the reference Alerta environment with gunicorn.
-# PostgreSQL 18.7 is the benchmark's choice (the owner, 2026-11-15: "use
-# postgres 18.7 which is the current stable one"); alrust's 18.6 pin (Y32)
-# and the #226 hold are unchanged. Writes BENCH_* lines to $GITHUB_ENV.
+# PostgreSQL 18.7 is alrust's pin since #226 (Y67); the owner first chose it
+# for this benchmark (2026-11-15: "use postgres 18.7 which is the current
+# stable one"). Writes BENCH_* lines to $GITHUB_ENV.
 set -euo pipefail
 : "${RUNNER_TEMP:?RUNNER_TEMP is required}"
 root=$(git rev-parse --show-toplevel)

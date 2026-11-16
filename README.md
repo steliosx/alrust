@@ -18,6 +18,7 @@ use it, and to run on Alerta's own database layout.**
 [Quick start](#quick-start) ·
 [What works](#what-works) ·
 [Not yet](#not-yet) ·
+[Performance](#performance) ·
 [Architecture](#architecture) ·
 [Roadmap](#roadmap) ·
 [Contributing](#contributing) ·
@@ -80,6 +81,51 @@ The route-by-route list, with each known difference from Alerta, is in the
 - **Qualification against Alerta.** The comparison suite in `conformance/`
   has not completed a full run against both servers: all 19 runtime profiles
   are `NOT_RUN`. The [status record](docs/STATUS.md) has the exact evidence.
+
+## Performance
+
+![A replay of the benchmark's single-client rates: alrust's bars fill several times faster than Alerta's for a list, a count and a duplicate write](docs/performance/assets/bench-race.gif)
+
+A diagnostic benchmark compared alrust with Alerta 9.1.0 on one GitHub-hosted
+runner (4 vCPUs, PostgreSQL 18.7, 1,000 synthetic alerts), with one client
+waiting for each answer. The animation replays the measured rates; it is
+not a recording. Alerta's time per request, as a multiple of alrust's:
+
+| Request | Alerta, 1 worker | Alerta, PgBouncer and 4 workers |
+|---|---|---|
+| List the 50 newest alerts | 5.5–5.6× | 4.3–4.5× |
+| Count alerts by severity and status | 14–17× | 10–13× |
+| Receive a duplicate alert | 15–17× | 11–13× |
+
+Each range comes from two runs on different runners. Every server's
+single-client latency was 37% to 77% higher on the second runner (most on
+alrust's sub-millisecond requests); the ratios differed less.
+
+**Why, as measured:**
+- **CPU per request.** With one client, Alerta's Python process used about
+  7.5 times (list), 28 times (count) and 20 times (duplicate write) the CPU
+  alrust used per request. With one client, a pooler and more workers left
+  this about the same.
+- **A database connection per request.** Alerta opens and closes a
+  PostgreSQL connection for every request; alrust keeps a pool of
+  connections. On the list, PostgreSQL used about 5.5 ms less CPU per
+  request with PgBouncer in front of Alerta. That difference includes the
+  connection's start and authentication, but does not measure them alone.
+  PgBouncer narrows the gap (the right-hand column), but the gap remains.
+
+**Why, read from the code:** a list request costs Alerta about seven
+database round trips and alrust three. Alerta also builds and serializes
+Python objects, where alrust uses compiled code.
+
+**Limits:** one machine at a time, synthetic data, and a write case that
+covers duplicates only. The duplicate-write ratios are diagnostic: those
+runs predate the check that every write was saved. At eight clients the
+bottleneck was not isolated, so eight-client figures are not compared. This
+is not a capacity claim. Details, the raw results and the harness are in the
+[benchmark report](docs/performance/2026-11-15-bench-compare.md). An
+independent run on an 8-vCPU machine
+([#255](https://github.com/steliosx/alrust/pull/255)) measured similar
+single-client ratios.
 
 ## Architecture
 
