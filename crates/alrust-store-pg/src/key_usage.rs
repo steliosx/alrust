@@ -6,14 +6,20 @@
 //! read. Here a request verifies its key with a read only, under the same
 //! rule as before (ADR-0005 decision 7: a NULL expiry or NULL scopes never
 //! matches), and adds one to an in-memory tally. The server's writer writes
-//! the tallies about once a second, in one statement for all keys. A deleted
-//! or expired key still fails on its next request: the verification is never
-//! cached.
+//! the tallies about once a second, in bounded batches: one statement per
+//! batch of at most `key_usage_batch` credentials, the oldest first. A
+//! deleted or expired key still fails on its next request: the verification
+//! is never cached.
 //!
 //! The contract (Y68, with Y70's failure rule):
-//! - In normal operation `GET /keys` shows a key's count and last use about
-//!   one second late. Requests never wait for a write: they only update the
-//!   in-memory tally under a short lock.
+//! - In normal operation, at a load the writer keeps up with, `GET /keys`
+//!   shows a key's count and last use about one second late. Requests never
+//!   wait for a database write: they only update the in-memory tally under
+//!   its mutex. The same mutex is held while a write selects its batch
+//!   (O(M log B) for M pending credentials and batch size B), while expiry
+//!   and settlement scan the map, and while the map releases spare capacity;
+//!   so a request's wait for it grows with the pending map. These are stated
+//!   limits, not a measured latency.
 //! - A tally is bound to the credential, not only to its id: the key's id and
 //!   a SHA-256 of its secret, computed by PostgreSQL from the same row the
 //!   request was verified against, and matched the same way by the write.
@@ -40,30 +46,44 @@
 //!   is a `COMMIT` already sent when the deadline passes: PostgreSQL may still
 //!   apply it, and its uses settle as unknown (possibly unrecorded, never
 //!   retried).
-//! - A write continues batch after batch while uses are pending, time is left
-//!   and each batch makes progress, so a backlog of several batches, and the
-//!   final write at shutdown, drain in one call within the 30-second budget.
-//!   What is left is reported.
-//! - Memory. The tally holds one entry per credential (id and secret hash)
-//!   verified in the last 30 seconds and not yet written, plus the batch a
-//!   write carries. Only a key that verified against a `keys` row is recorded,
-//!   and creating a key needs the admin scope. But a key deleted, recreated, or
-//!   given a new secret or id within the window counts once per credential it
-//!   was, so the bound is the distinct credentials used in 30 seconds, not the
-//!   current rows in `keys`. An entry costs its id's bytes, 64 bytes of hash
-//!   and about 40 bytes of counters and times, plus the map's slack.
-//!   alrust-generated ids are UUIDs (36 bytes). An id supplied on `POST /key`
-//!   is limited only by the request body size, and ids in an adopted Alerta
-//!   database only by their `text` column. After expiry or a write, the map
-//!   releases spare capacity beyond twice its size (at least 64 entries), so
-//!   its allocation follows the window, not its peak. A write selects the
-//!   `key_usage_batch` oldest entries (clamped to 1..=10,000; default 1,000)
-//!   with a bounded heap under the tally's lock: time in proportion to the
-//!   entries, but only the batch is copied. One statement's arrays and
-//!   `RETURNING` rows are bounded by the batch.
-//! - Writes and expiry share one write slot: `flush_key_usage` and
-//!   `expire_key_usage` never overlap, and each returns at once if the other
-//!   holds it.
+//! - A write continues batch after batch while uses are pending, the next
+//!   batch's deadline still admits it, and each batch lowers the total of
+//!   pending uses. Each later batch selects again from what remains. Uses
+//!   that arrive meanwhile can stop the drain, when the total does not fall;
+//!   the rest waits for the next write. What is left at exit is reported.
+//! - Time bounds. Each batch checks its own deadline (above), but
+//!   `flush_key_usage` has no timeout for the whole call: waiting for a pool
+//!   connection, or newer uses that keep arriving, can make a direct call
+//!   last longer than 30 seconds. The server's writer puts one timeout around
+//!   each call: the time left before the oldest pending use reaches
+//!   `key_usage_max_pending`.
+//! - Memory. There is no hard cap on entries or bytes: the size depends on
+//!   the traffic. The tally holds one entry per credential (id and secret
+//!   hash) with uses not yet written, plus the batch a write carries. Expiry
+//!   is lazy: an entry past the bound is removed at the next sweep (before
+//!   each batch of a write, and in `expire_key_usage`), not at the moment it
+//!   reaches 30 seconds. Only a key that verified against a `keys` row is
+//!   recorded, and creating a key needs the admin scope. But a key deleted,
+//!   recreated, or given a new secret or id counts once per credential it
+//!   was, so the map holds the distinct credentials with uses not yet written
+//!   and not yet swept, not the current rows in `keys`. An entry holds two
+//!   owned strings (the id, and the 64-character hex hash of the secret),
+//!   each with its own heap allocation and allocator overhead, plus counters
+//!   and times; the map adds its own slack. alrust-generated ids are UUIDs
+//!   (36 bytes). An id supplied on `POST /key` is limited only by the
+//!   request body size, and ids in an adopted Alerta database only by their
+//!   `text` column. At the maintenance points (after expiry, and after a
+//!   batch settles), the map releases spare capacity beyond twice its size
+//!   (at least 64 entries), so its allocation does not stay at its peak. A
+//!   write selects the `key_usage_batch` oldest entries (clamped to
+//!   1..=10,000; default 1,000) with a heap of at most that many references,
+//!   under the tally's mutex, and copies only the batch. One statement's
+//!   arrays and `RETURNING` rows are bounded by the batch's number of
+//!   credentials, not by a byte count.
+//! - Writes and expiry share one write slot: no two calls of
+//!   `flush_key_usage` and `expire_key_usage` overlap, and a call returns at
+//!   once if another holds the slot. A refused call leaves the slot with its
+//!   holder.
 //! - Reported separately and disjointly: expired (dropped after the bound),
 //!   unmatched (written, but no row matched), unknown (possibly unrecorded),
 //!   and, at exit, whatever is still pending (the writer logs it as lost).
@@ -267,13 +287,27 @@ fn compact(map: &mut HashMap<Credential, Pending>) {
 }
 
 /// The write slot: held by a write (all its batches) or by expiry outside
-/// a write, so the two never overlap. Released on drop, also when a write's
-/// future is cancelled.
+/// a write, so the two never overlap. `flush_key_usage` holds it until it
+/// returns or its future is dropped. On cancellation the batch in flight
+/// settles first: its `Attempt` is in the `write_batch` future, created
+/// after the slot, so it is dropped before the slot is released.
 struct WriteSlot<'a>(&'a KeyUsage);
 
 impl<'a> WriteSlot<'a> {
+    /// The slot, if no one holds it. The guard is built only after the slot
+    /// is won: a guard built for a refused caller would release the holder's
+    /// slot when it is dropped (cdx d9834bdc 260-SLOT; `then_some` builds its
+    /// argument even when the condition is false).
     fn take(usage: &'a KeyUsage) -> Option<Self> {
-        (!usage.writing.swap(true, Ordering::Acquire)).then_some(WriteSlot(usage))
+        if usage
+            .writing
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
+            Some(WriteSlot(usage))
+        } else {
+            None
+        }
     }
 }
 
@@ -374,7 +408,8 @@ impl Store {
     /// transaction under the deadline rules in the module documentation, for
     /// as long as uses are pending and each batch makes progress. Returns the
     /// number of credentials written; while another write or expiry holds
-    /// the write slot, this call returns 0 at once.
+    /// the write slot, this call returns 0 at once. It has no timeout for the
+    /// whole call; the server's writer puts one around it.
     ///
     /// See the module documentation for what each failure does to the uses,
     /// and [`Store::take_key_usage_losses`] for what was dropped.
@@ -535,6 +570,7 @@ impl Store {
 mod tests {
     use super::{Attempt, Credential, KeyUsage, KeyUsageLosses, Outcome, Pending, WriteSlot};
     use chrono::NaiveDateTime;
+    use std::sync::atomic::Ordering;
     use std::time::{Duration, Instant};
 
     fn cred(id: &str) -> Credential {
@@ -644,15 +680,28 @@ mod tests {
     }
 
     /// cdx 0e4cb36f / 766fb5e4: writes and expiry hold one slot; it is
-    /// released on drop.
+    /// released on drop. cdx d9834bdc 260-SLOT: a refused caller never
+    /// releases the holder's slot, however many are refused.
     #[test]
     fn the_write_slot_is_held_by_one_at_a_time() {
         let usage = KeyUsage::default();
         let held = WriteSlot::take(&usage);
         assert!(held.is_some());
-        assert!(WriteSlot::take(&usage).is_none(), "a second holder waits");
+        assert!(WriteSlot::take(&usage).is_none(), "B is refused");
+        assert!(
+            usage.writing.load(Ordering::SeqCst),
+            "B's refusal leaves the slot held"
+        );
+        assert!(WriteSlot::take(&usage).is_none(), "C is refused too");
+        assert!(
+            usage.writing.load(Ordering::SeqCst),
+            "C's refusal leaves the slot held"
+        );
         drop(held);
-        assert!(WriteSlot::take(&usage).is_some(), "released on drop");
+        assert!(!usage.writing.load(Ordering::SeqCst), "released on drop");
+        let next = WriteSlot::take(&usage);
+        assert!(next.is_some(), "taken again after release");
+        assert!(WriteSlot::take(&usage).is_none(), "and held again");
     }
 
     /// cdx 766fb5e4 R3b: after a large expiry the map's spare capacity is
