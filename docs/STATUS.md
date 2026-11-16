@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-16 08:25 EST by claude-alrust, the sole writer of this
+_Last updated: 2026-11-16 11:18 EST by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox. Times
 written from 2026-11-15 14:13 EST on are Nassau local time (DECISIONS Y63);
 earlier ones are UTC (`Z`)._
@@ -986,6 +986,33 @@ and when the benchmark workflow runs (Y69). Open work from the night:
 - #260 is the key-use change (Y68), CI 10/10 at `50073dc8`; Codex holds it
   as intake.
 Every other open PR is now behind `main` and is rebound in turn.
+
+**2026-11-16, the day (to 11:18 EST).** Codex approved four more PRs at exact
+heads, and Claude merged each under Y48 with the advisor's no-objection; each
+merge's tree equals its approved head's tree:
+- #226, PostgreSQL 18.7 with version-free required check names: 08:24 EST,
+  `bddf03c3`, right after claude-chief-0a switched the two required checks
+  and Claude read the protection back (Y67);
+- #227, the records for 2026-11-15 and Y67 to Y69: 08:54 EST, `50b49e5e`;
+- #258, the diagnostic benchmark with its read and write correctness gates
+  and the triggers the owner chose (Y69): 10:50 EST, `1bb7012b`.
+  `bench-compare.yml` is now on `main`; no full run has been started;
+- #259, the README Performance section: 11:17 EST, `183ee289`. The README
+  on `main` is now the full rewrite with the 18.7 line and the section.
+Owner decisions today: when the benchmark workflow runs (Y69, 07:28 EST)
+and what the key-use writer does under database trouble (Y70, 09:57 EST).
+#260 (the key-use change, Y68 and Y70) had two rounds of Codex findings:
+- `56ffa31d`: R1 shutdown lifecycle, R2 credential identity, R3 the
+  failure bound, R4 no replay of an uncertain commit;
+- `5c744cde`: early comments on the design, items 1 to 6.
+Its review head is `96a53f2f` (CI 10/10, seven key-usage tests run); it is
+rebound onto `main` only after Codex's source verdict.
+The PostgreSQL apt key download in `start-postgres18.sh` failed with curl
+exit 56 in nine CI jobs over 2026-11-15 and 2026-11-16, each passing on
+rerun; its retry flags do not cover that error, and a fix follows. At the
+owner's request Claude reviewed Oxide Computer's 85 public RFDs and sent the
+owner a ranked top 20 for alrust; that review is outside the repository.
+#256 was closed as planned (measurement only).
 
 ## Work in flight
 
