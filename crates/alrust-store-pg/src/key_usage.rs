@@ -12,28 +12,42 @@
 //!
 //! The contract (Y68, with Y70's failure rule):
 //! - In normal operation `GET /keys` shows a key's count and last use about
-//!   one second late.
+//!   one second late. Requests never wait for a write: they only update the
+//!   in-memory tally under a short lock.
 //! - A tally is bound to the credential, not only to its id: the key's id and
-//!   a SHA-256 of its secret, computed by PostgreSQL. A key deleted and
-//!   recreated under the same id with a new secret gets none of the old uses.
-//!   No secret is kept in memory.
-//! - A write that is refused or never reaches `COMMIT` changes nothing and
-//!   its uses stay pending, so the next write retries them. Uses still
-//!   unwritten after `StoreConfig::key_usage_max_pending` (30 seconds) are
-//!   dropped and reported. A write is bounded by
-//!   `StoreConfig::key_usage_attempt_timeout`, so requests never wait for it.
-//! - A use is never counted twice. When the outcome of a `COMMIT` is unknown
-//!   (the connection failed, or the write was abandoned while committing),
-//!   its uses are treated as written and reported as possibly unrecorded.
-//! - A crash loses the uses not yet written. Alerts are never involved.
+//!   a SHA-256 of its secret, computed by PostgreSQL from the same row the
+//!   request was verified against, and matched the same way by the write.
+//!   The pending tallies hold no raw secret. A key deleted, or recreated under
+//!   the same id with a new secret, or given a new id by `ensure_key`, matches
+//!   no row: its uses are dropped and reported as unmatched. The same id with
+//!   the same secret is the same credential.
+//! - Only a failure before `COMMIT` is sent proves that nothing was written:
+//!   those uses stay pending and the next write retries them. Any error from
+//!   `COMMIT`, or a write abandoned while committing, has an unknown outcome:
+//!   its uses are never retried, so a use is never counted twice, and they
+//!   are reported as possibly unrecorded.
+//! - Uses still pending `StoreConfig::key_usage_max_pending` (30 seconds)
+//!   after the oldest of them was recorded are dropped at the next write and
+//!   reported. A credential's tally ages from its oldest pending use, so newer
+//!   uses merged into it are dropped with it; after a successful write, the
+//!   uses recorded meanwhile are dated from that write's snapshot. A write
+//!   is bounded by PostgreSQL (`lock_timeout`, `statement_timeout`) and by
+//!   the writer's timeout, which shrinks with the oldest pending age, so a
+//!   drop happens between 30 seconds and 30 seconds plus one attempt.
+//! - The tally holds at most one entry per verified credential, and expiry
+//!   empties it under lasting failure, so its memory is bounded.
+//! - Reported separately and disjointly: expired (dropped after the bound),
+//!   unmatched (written, but no row matched), unknown (possibly unrecorded),
+//!   and, at exit, whatever is still pending (the writer logs it as lost).
+//!   A crash loses the uses not yet written. Alerts are never involved.
 //!
 //! `StoreConfig::key_usage_immediate` restores the reference's per-request
 //! write.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use alrust_domain::ApiKey;
 use chrono::{NaiveDateTime, Utc};
@@ -63,8 +77,12 @@ pub struct KeyUsageLosses {
     /// Credentials and uses dropped after waiting longer than the bound.
     pub expired_keys: usize,
     pub expired_uses: i64,
+    /// Credentials and uses whose write committed but matched no row (the
+    /// key was deleted, or its id or secret changed).
+    pub unmatched_keys: usize,
+    pub unmatched_uses: i64,
     /// Credentials and uses whose write had an unknown outcome; they are
-    /// treated as written, so they may be missing from the database.
+    /// never retried, so they may be missing from the database.
     pub unknown_keys: usize,
     pub unknown_uses: i64,
 }
@@ -74,9 +92,9 @@ pub struct KeyUsageLosses {
 enum Outcome {
     /// Committed: the uses are written.
     Written,
-    /// Refused, failed or abandoned before `COMMIT`: nothing changed.
+    /// Failed or abandoned before `COMMIT` was sent: nothing changed.
     NotCommitted,
-    /// `COMMIT` was sent and its answer was lost.
+    /// `COMMIT` was sent and failed, or its answer was lost.
     Unknown,
 }
 
@@ -88,6 +106,8 @@ pub struct KeyUsage {
     writing: AtomicBool,
     expired_keys: AtomicUsize,
     expired_uses: AtomicI64,
+    unmatched_keys: AtomicUsize,
+    unmatched_uses: AtomicI64,
     unknown_keys: AtomicUsize,
     unknown_uses: AtomicI64,
 }
@@ -109,7 +129,7 @@ impl KeyUsage {
     }
 
     /// Drops the uses pending for `max_age` or longer.
-    fn expire(&self, max_age: std::time::Duration, now: Instant) {
+    fn expire(&self, max_age: Duration, now: Instant) {
         let mut map = self.map();
         let before = map.len();
         let mut uses = 0;
@@ -162,10 +182,27 @@ impl KeyUsage {
         }
     }
 
+    fn note_unmatched(&self, batch: &[(Credential, Pending)], matched: &HashSet<Credential>) {
+        let mut keys = 0;
+        let mut uses = 0;
+        for (c, p) in batch {
+            if !matched.contains(c) {
+                keys += 1;
+                uses += p.uses;
+            }
+        }
+        if keys > 0 {
+            self.unmatched_keys.fetch_add(keys, Ordering::Relaxed);
+            self.unmatched_uses.fetch_add(uses, Ordering::Relaxed);
+        }
+    }
+
     fn take_losses(&self) -> KeyUsageLosses {
         KeyUsageLosses {
             expired_keys: self.expired_keys.swap(0, Ordering::Relaxed),
             expired_uses: self.expired_uses.swap(0, Ordering::Relaxed),
+            unmatched_keys: self.unmatched_keys.swap(0, Ordering::Relaxed),
+            unmatched_uses: self.unmatched_uses.swap(0, Ordering::Relaxed),
             unknown_keys: self.unknown_keys.swap(0, Ordering::Relaxed),
             unknown_uses: self.unknown_uses.swap(0, Ordering::Relaxed),
         }
@@ -261,16 +298,18 @@ impl Store {
     /// recreated meanwhile matches no row. Uses pending longer than
     /// `key_usage_max_pending` are dropped first. The write runs in one
     /// transaction with `lock_timeout` and `statement_timeout` set to
-    /// `key_usage_attempt_timeout`. Returns the number of rows written; a
-    /// write already in progress makes this call return 0 at once.
+    /// `key_usage_attempt_timeout`. Returns the number of credentials
+    /// written; a write already in progress makes this call return 0 at
+    /// once.
     ///
     /// See the module documentation for what each failure does to the uses,
     /// and [`Store::take_key_usage_losses`] for what was dropped.
     ///
     /// # Errors
     ///
-    /// The database error; the uses stay pending unless the error came from
-    /// `COMMIT` with an unknown outcome.
+    /// The database error. The uses stay pending when it came before
+    /// `COMMIT`; an error from `COMMIT` has an unknown outcome, and those uses
+    /// are reported, not retried.
     pub async fn flush_key_usage(&self) -> Result<u64, StoreError> {
         let usage: &KeyUsage = &self.usage;
         if usage.writing.swap(true, Ordering::Acquire) {
@@ -310,29 +349,36 @@ impl Store {
         .bind(&limit)
         .execute(&mut *tx)
         .await?;
-        let done = sqlx::query(
+        let rows = sqlx::query(
             "UPDATE keys AS k
                 SET count = k.count + u.n,
                     last_used_time = GREATEST(k.last_used_time, u.t)
                FROM unnest($1::text[], $2::text[], $3::bigint[], $4::timestamp[]) AS u(id, h, n, t)
-              WHERE k.id = u.id AND encode(sha256(convert_to(k.key, 'UTF8')), 'hex') = u.h",
+              WHERE k.id = u.id AND encode(sha256(convert_to(k.key, 'UTF8')), 'hex') = u.h
+          RETURNING u.id, u.h",
         )
         .bind(&ids)
         .bind(&hashes)
         .bind(&uses)
         .bind(&times)
-        .execute(&mut *tx)
+        .fetch_all(&mut *tx)
         .await?;
+        let mut matched = HashSet::with_capacity(rows.len());
+        for r in &rows {
+            matched.insert(Credential {
+                id: r.try_get("id")?,
+                key_hash: r.try_get("h")?,
+            });
+        }
+        // From here on `COMMIT` may reach the server: any failure or
+        // cancellation has an unknown outcome.
         attempt.committing = true;
-        match tx.commit().await {
+        let committed = tx.commit().await;
+        match committed {
             Ok(()) => {
+                usage.note_unmatched(&attempt.batch, &matched);
                 attempt.finish(Outcome::Written);
-                Ok(done.rows_affected())
-            }
-            // PostgreSQL answered: the transaction did not commit.
-            Err(e @ sqlx::Error::Database(_)) => {
-                attempt.finish(Outcome::NotCommitted);
-                Err(e.into())
+                Ok(u64::try_from(matched.len()).unwrap_or(u64::MAX))
             }
             Err(e) => {
                 attempt.finish(Outcome::Unknown);
@@ -348,6 +394,17 @@ impl Store {
         (map.len(), map.values().map(|p| p.uses).sum())
     }
 
+    /// How long the oldest pending use has waited, if any is pending.
+    #[must_use]
+    pub fn key_usage_oldest_age(&self) -> Option<Duration> {
+        let now = Instant::now();
+        self.usage
+            .map()
+            .values()
+            .map(|p| now.saturating_duration_since(p.since))
+            .max()
+    }
+
     /// The uses dropped or possibly unrecorded since the last call; the
     /// counters restart at zero.
     #[must_use]
@@ -358,7 +415,7 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
-    use super::{Credential, KeyUsage, KeyUsageLosses, Outcome, Pending};
+    use super::{Attempt, Credential, KeyUsage, KeyUsageLosses, Outcome, Pending};
     use chrono::NaiveDateTime;
     use std::time::{Duration, Instant};
 
@@ -410,6 +467,45 @@ mod tests {
             }
         );
         assert_eq!(usage.take_losses(), KeyUsageLosses::default());
+    }
+
+    /// cdx 56ffa31d item 6: a write abandoned while committing is never
+    /// retried (so never counted twice) and is reported; one abandoned
+    /// before `COMMIT` leaves its uses pending.
+    #[test]
+    fn an_abandoned_write_is_settled_by_how_far_it_got() {
+        let usage = KeyUsage::default();
+        let at = NaiveDateTime::MIN;
+        let start = Instant::now();
+        usage.record(cred("a"), at, start);
+        usage.record(cred("a"), at, start);
+        for committing in [false, true] {
+            usage
+                .writing
+                .store(true, std::sync::atomic::Ordering::Release);
+            drop(Attempt {
+                usage: &usage,
+                batch: usage.snapshot(),
+                taken: start,
+                committing,
+                settled: false,
+            });
+            assert!(!usage.writing.load(std::sync::atomic::Ordering::Acquire));
+            if committing {
+                assert_eq!(total(&usage), 0);
+                assert_eq!(
+                    usage.take_losses(),
+                    KeyUsageLosses {
+                        unknown_keys: 1,
+                        unknown_uses: 2,
+                        ..KeyUsageLosses::default()
+                    }
+                );
+            } else {
+                assert_eq!(total(&usage), 2);
+                assert_eq!(usage.take_losses(), KeyUsageLosses::default());
+            }
+        }
     }
 
     #[test]

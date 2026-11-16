@@ -43,13 +43,23 @@ where
     write(WriteKind::Final).await;
 }
 
-/// One write of `store`'s tallies, with what was lost logged. After the
-/// final write, uses still pending are logged as lost. PostgreSQL bounds a
-/// write normally (`lock_timeout` and `statement_timeout`, set per write);
-/// this function's own timeout, the retention bound itself, is a backstop
-/// for a hung connection, so no write outlives `key_usage_max_pending`.
+/// One write of `store`'s tallies, with each kind of loss logged
+/// separately. After the final write, uses still pending are logged as
+/// lost at exit. PostgreSQL bounds a write normally (`lock_timeout` and
+/// `statement_timeout`, set per write). This function's own timeout is a
+/// backstop for a hung connection: it is the time left before the oldest
+/// pending use reaches `key_usage_max_pending`, but at least one attempt
+/// (`key_usage_attempt_timeout`). A write cancelled by it is settled by how
+/// far it got: before `COMMIT`, its uses stay pending; while committing,
+/// they are reported as possibly unrecorded.
 pub(crate) async fn write_once(store: Store, kind: WriteKind) {
-    let limit = store.config().key_usage_max_pending;
+    let cfg = store.config();
+    let left = cfg
+        .key_usage_max_pending
+        .saturating_sub(store.key_usage_oldest_age().unwrap_or_default());
+    let limit = left
+        .max(cfg.key_usage_attempt_timeout)
+        .min(cfg.key_usage_max_pending);
     let what = match kind {
         WriteKind::Final => "final API-key use write",
         WriteKind::Periodic => "API-key use write",
@@ -70,6 +80,13 @@ pub(crate) async fn write_once(store: Store, kind: WriteKind) {
             store.config().key_usage_max_pending
         );
     }
+    if dropped.unmatched_uses > 0 {
+        tracing::warn!(
+            keys = dropped.unmatched_keys,
+            uses = dropped.unmatched_uses,
+            "API-key uses dropped: their key was deleted or its id or secret changed"
+        );
+    }
     if dropped.unknown_uses > 0 {
         tracing::warn!(
             keys = dropped.unknown_keys,
@@ -80,7 +97,7 @@ pub(crate) async fn write_once(store: Store, kind: WriteKind) {
     if kind == WriteKind::Final {
         let (keys, uses) = store.key_usage_pending();
         if uses > 0 {
-            tracing::error!(keys, uses, "API-key uses not written before exit are lost");
+            tracing::error!(keys, uses, "API-key uses still pending at exit are lost");
         }
     }
 }

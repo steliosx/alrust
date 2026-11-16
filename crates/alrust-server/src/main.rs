@@ -329,6 +329,7 @@ async fn run() -> anyhow::Result<()> {
     // writes once more (DECISIONS Y68, Y70).
     let (stop_writer, writer_stop) = tokio::sync::watch::channel(false);
     let config_max_pending = store.config().key_usage_max_pending;
+    let writer_store = store.clone();
     let writer = (!store.config().key_usage_immediate).then(|| {
         let s = store.clone();
         tokio::spawn(key_usage_writer::run(
@@ -385,18 +386,28 @@ async fn run() -> anyhow::Result<()> {
     let served = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await;
-    if let Some(handle) = writer {
+    if let Some(mut handle) = writer {
         // Requests have finished: the writer completes any write in
         // progress, then writes once more.
         let _ = stop_writer.send(true);
         // A write in progress and the final one, each within the bound.
         let deadline = config_max_pending * 2 + Duration::from_secs(5);
-        match tokio::time::timeout(deadline, handle).await {
+        match tokio::time::timeout(deadline, &mut handle).await {
             Ok(Ok(())) => {}
             Ok(Err(e)) => tracing::error!(error = %e, "the API-key use writer failed"),
-            Err(_) => tracing::error!(
-                "the API-key use writer did not finish within {deadline:?}; its pending uses are lost"
-            ),
+            Err(_) => {
+                // Not detached: aborting drops its write, which settles by
+                // how far it got; then what is still pending is lost.
+                handle.abort();
+                let _ = handle.await;
+                let (keys, uses) = writer_store.key_usage_pending();
+                tracing::error!(
+                    keys,
+                    uses,
+                    "the API-key use writer did not finish within {deadline:?}; \
+                     the uses still pending at exit are lost"
+                );
+            }
         }
     }
     served?;

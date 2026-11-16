@@ -2383,6 +2383,50 @@ async fn key_use_survives_blocked_writes_and_is_bounded() {
     assert_eq!(s.flush_key_usage().await.unwrap(), 0);
     assert_eq!(count("b").await, Some(0));
     assert_eq!(s.key_usage_pending(), (0, 0));
+    assert_eq!(
+        s.take_key_usage_losses(),
+        KeyUsageLosses {
+            unmatched_keys: 1,
+            unmatched_uses: 1,
+            ..KeyUsageLosses::default()
+        },
+        "a committed write that matched no row is a definite, separate loss"
+    );
+
+    // Uses recorded while a write is in progress stay for the next write;
+    // a second write does not start meanwhile.
+    let cont = Store::new(
+        db.pool.clone(),
+        StoreConfig {
+            key_usage_attempt_timeout: Duration::from_secs(10),
+            ..cfg.clone()
+        },
+    );
+    assert!(cont.authenticate_key("secret-a").await.unwrap().is_some());
+    let mut lock = locker.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM keys WHERE id = 'a' FOR UPDATE")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    let in_progress = {
+        let c = cont.clone();
+        tokio::spawn(async move { c.flush_key_usage().await })
+    };
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(cont.authenticate_key("secret-a").await.unwrap().is_some());
+    assert!(cont.authenticate_key("secret-a").await.unwrap().is_some());
+    assert_eq!(
+        cont.flush_key_usage().await.unwrap(),
+        0,
+        "no second write while one is in progress"
+    );
+    lock.rollback().await.unwrap();
+    assert_eq!(in_progress.await.unwrap().unwrap(), 1);
+    assert_eq!(count("a").await, Some(6), "the snapshot's one use");
+    assert_eq!(cont.key_usage_pending(), (1, 2));
+    assert_eq!(cont.flush_key_usage().await.unwrap(), 1);
+    assert_eq!(count("a").await, Some(8));
+    assert_eq!(cont.take_key_usage_losses(), KeyUsageLosses::default());
 
     // The bound: uses that wait longer are dropped at the next write, and
     // reported once.
@@ -2413,5 +2457,5 @@ async fn key_use_survives_blocked_writes_and_is_bounded() {
     );
     assert_eq!(short.take_key_usage_losses(), KeyUsageLosses::default());
     lock.rollback().await.unwrap();
-    assert_eq!(count("a").await, Some(5));
+    assert_eq!(count("a").await, Some(8));
 }
