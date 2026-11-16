@@ -2147,3 +2147,124 @@ async fn alter_type_history_does_not_wait_for_the_alerts_lock() {
         "ALTER TYPE history now waits for (or fails on) the alerts lock; revisit ADR-0005 adoption P2: {altered:?}"
     );
 }
+
+/// DECISIONS Y68: a key is verified with a read on every request, and its use
+/// is written by the flush, or at once with `key_usage_immediate`.
+#[tokio::test]
+async fn key_use_is_tallied_and_flushed() {
+    let Some(db) = test_db().await else { return };
+    let s = store(&db.pool);
+    s.prepare().await.expect("fresh start");
+    db.pool
+        .execute(
+            "INSERT INTO keys (id, key, \"user\", scopes, text, expire_time, count, last_used_time, customer)
+             VALUES ('ok', 'secret-ok', 'alice', '{read}', 'k', '2099-01-01 00:00:00', 1, NULL, NULL),
+                    ('nullcount', 'secret-nc', 'alice', '{read}', NULL, '2099-01-01 00:00:00', NULL, NULL, NULL),
+                    ('old', 'secret-old', 'alice', '{read}', NULL, '2000-01-01 00:00:00', 0, NULL, NULL),
+                    ('noexp', 'secret-noexp', 'alice', '{admin}', NULL, NULL, 2, NULL, NULL),
+                    ('noscope', 'secret-noscope', 'alice', NULL, NULL, '2099-01-01 00:00:00', NULL, NULL, NULL)",
+        )
+        .await
+        .unwrap();
+    let row = |id: &'static str| {
+        let pool = db.pool.clone();
+        async move {
+            sqlx::query_as::<_, (Option<i64>, Option<chrono::NaiveDateTime>)>(
+                "SELECT count, last_used_time FROM keys WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+
+    // The read matches exactly the keys use_key matches, and writes nothing.
+    for refused in ["secret-old", "secret-noexp", "secret-noscope", "unknown"] {
+        assert!(s.verify_key(refused).await.unwrap().is_none(), "{refused}");
+        assert!(
+            s.authenticate_key(refused).await.unwrap().is_none(),
+            "{refused}"
+        );
+    }
+    assert_eq!(s.verify_key("secret-ok").await.unwrap().unwrap().count, 1);
+    assert_eq!(s.flush_key_usage().await.unwrap(), 0, "nothing tallied yet");
+
+    // Two uses and one on a NULL count: nothing written until the flush.
+    let before = Utc::now().naive_utc();
+    assert_eq!(
+        s.authenticate_key("secret-ok").await.unwrap().unwrap().id,
+        "ok"
+    );
+    assert!(s.authenticate_key("secret-ok").await.unwrap().is_some());
+    assert!(s.authenticate_key("secret-nc").await.unwrap().is_some());
+    assert_eq!(row("ok").await, (Some(1), None));
+    // A clone shares the tally, as the API's state and the flush loop do.
+    assert_eq!(s.clone().flush_key_usage().await.unwrap(), 2);
+    let (count, used) = row("ok").await;
+    assert_eq!(count, Some(3));
+    assert!(used.unwrap() >= before);
+    // A NULL count stays NULL, as the reference's count + 1 leaves it.
+    let (count, used) = row("nullcount").await;
+    assert_eq!(count, None);
+    assert!(used.is_some());
+    assert_eq!(
+        s.flush_key_usage().await.unwrap(),
+        0,
+        "the flush emptied the tally"
+    );
+    assert_eq!(row("ok").await.0, Some(3));
+
+    // A key deleted between its use and the flush is harmless.
+    assert!(s.authenticate_key("secret-ok").await.unwrap().is_some());
+    db.pool
+        .execute("DELETE FROM keys WHERE id = 'ok'")
+        .await
+        .unwrap();
+    assert_eq!(s.flush_key_usage().await.unwrap(), 0);
+    assert!(
+        s.authenticate_key("secret-ok").await.unwrap().is_none(),
+        "never cached"
+    );
+
+    // The parity switch: the reference's write on every request.
+    db.pool
+        .execute(
+            "INSERT INTO keys (id, key, \"user\", scopes, text, expire_time, count, last_used_time, customer)
+             VALUES ('imm', 'secret-imm', 'alice', '{read}', NULL, '2099-01-01 00:00:00', 5, NULL, NULL)",
+        )
+        .await
+        .unwrap();
+    let immediate = Store::new(
+        db.pool.clone(),
+        StoreConfig {
+            key_usage_immediate: true,
+            ..StoreConfig::default()
+        },
+    );
+    assert_eq!(
+        immediate
+            .authenticate_key("secret-imm")
+            .await
+            .unwrap()
+            .unwrap()
+            .count,
+        6
+    );
+    let (count, used) = row("imm").await;
+    assert_eq!(count, Some(6), "written before the flush");
+    assert!(used.is_some());
+    assert!(
+        immediate
+            .authenticate_key("secret-noexp")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        immediate.flush_key_usage().await.unwrap(),
+        0,
+        "nothing tallied"
+    );
+    assert_eq!(row("imm").await.0, Some(6));
+}

@@ -8,6 +8,7 @@
 
 pub mod catalog;
 pub mod hooks;
+pub mod key_usage;
 pub mod startup;
 
 use std::sync::Arc;
@@ -78,6 +79,10 @@ pub struct StoreConfig {
     pub shelve_timeout: i64,
     pub history_limit: usize,
     pub history_on_value_change: bool,
+    /// Write a key's use on every request, as the reference does. Off by
+    /// default: uses are tallied in memory and written about once a second
+    /// (`key_usage`, DECISIONS Y68).
+    pub key_usage_immediate: bool,
 }
 
 impl Default for StoreConfig {
@@ -88,6 +93,7 @@ impl Default for StoreConfig {
             shelve_timeout: 7200,
             history_limit: 100,
             history_on_value_change: true,
+            key_usage_immediate: false,
         }
     }
 }
@@ -229,6 +235,8 @@ pub struct Store {
     cfg: StoreConfig,
     /// Acknowledgement integrations, in call order; empty unless registered.
     hooks: Vec<Arc<dyn AckIntegration>>,
+    /// Key uses not yet written, shared by every clone of this store.
+    usage: Arc<key_usage::KeyUsage>,
 }
 
 /// An action's decisions, made before anything is written.
@@ -636,6 +644,7 @@ impl Store {
             pool,
             cfg,
             hooks: Vec::new(),
+            usage: Arc::new(key_usage::KeyUsage::default()),
         }
     }
 

@@ -133,6 +133,7 @@ for a container remains separate reviewed configuration and an owner step.
 | `ALRUST_DB_ACQUIRE_TIMEOUT` | `10` | Seconds a request waits for a free database connection (pool of 16) before it fails with 500 |
 | `ALRUST_DB_LOCK_TIMEOUT` / `ALRUST_DB_STATEMENT_TIMEOUT` | `10` / `0` (off) | PostgreSQL `lock_timeout` and `statement_timeout`, in seconds, on serving connections; a statement that exceeds one fails with 500. Start-up (migration, adoption) runs without them |
 | `ALRUST_HOUSEKEEPING_INTERVAL` | `0` (off) | Seconds between automatic housekeeping runs. The reference never schedules it; with it on, closed and expired alerts older than 2 h and informational alerts older than 12 h are **deleted**. |
+| `ALRUST_KEY_USAGE_IMMEDIATE` | `false` | `true` writes an API key's use count and last-used time on every request, as the reference does. By default a request checks its key with a read only, and the uses are written about once a second and at a graceful shutdown: `GET /keys` can show them up to a second late, and a crash loses at most that second's counts, never an alert (DECISIONS Y68) |
 
 ### Bearer verification only
 

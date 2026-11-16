@@ -346,10 +346,12 @@ async fn authenticate(
     params: &[(String, String)],
 ) -> ApiResult<Caller> {
     match select_credential(headers, params, st.cfg.bearer.as_ref()) {
-        Credential::Key(k) => match st.store.use_key(&k).await? {
+        Credential::Key(k) => match st.store.authenticate_key(&k).await? {
             Some(key) => Ok(Caller {
                 login: Some(key.user),
-                // use_key matches only keys with scopes.
+                // authenticate_key matches only keys with scopes. The use is
+                // recorded before any scope check, so a 403 still counts, as
+                // in the reference's verify_key.
                 scopes: key.scopes.unwrap_or_default(),
                 customer: key.customer,
                 auth_off: false,

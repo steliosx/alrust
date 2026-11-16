@@ -16,6 +16,10 @@
 //!   timeout at most 2147483647, the reference's `integer` columns
 //! - `ALRUST_HOUSEKEEPING_INTERVAL` seconds (default 0 = off; the reference
 //!   relies on an external cron calling `/management/housekeeping`)
+//! - `ALRUST_KEY_USAGE_IMMEDIATE` (default `false`): `true` writes an API
+//!   key's `count` and `last_used_time` on every request, as the reference
+//!   does; otherwise uses are tallied and written about once a second, and on
+//!   a graceful shutdown (DECISIONS Y68)
 //! - `ALRUST_REQUEST_TIMEOUT` seconds (default 30; 0 = off): a request that
 //!   runs longer is answered 503
 //! - `ALRUST_DB_ACQUIRE_TIMEOUT` seconds (default 10): the longest wait for a
@@ -183,6 +187,7 @@ async fn run() -> anyhow::Result<()> {
         history_limit: usize::try_from(env_i64("ALRUST_HISTORY_LIMIT", 100)?.max(1))
             .context("ALRUST_HISTORY_LIMIT is too large")?,
         history_on_value_change: env_bool("ALRUST_HISTORY_ON_VALUE_CHANGE", true)?,
+        key_usage_immediate: env_bool("ALRUST_KEY_USAGE_IMMEDIATE", false)?,
     };
     for (name, v) in [
         ("ALRUST_ALERT_TIMEOUT", store_cfg.alert_timeout),
@@ -314,6 +319,21 @@ async fn run() -> anyhow::Result<()> {
         });
     }
 
+    // Key uses are tallied in memory and written about once a second, and
+    // once more after a graceful shutdown (DECISIONS Y68).
+    let flush_store = (!store.config().key_usage_immediate).then(|| store.clone());
+    if let Some(s) = flush_store.clone() {
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(1));
+            loop {
+                tick.tick().await;
+                if let Err(e) = s.flush_key_usage().await {
+                    tracing::error!(error = %redact_diagnostic(e.to_string()), "key usage flush failed");
+                }
+            }
+        });
+    }
+
     let bind: SocketAddr = env_or("ALRUST_BIND", "0.0.0.0:8080")
         .parse()
         .context("ALRUST_BIND must be host:port")?;
@@ -335,8 +355,14 @@ async fn run() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("cannot bind {bind}"))?;
     tracing::info!(%bind, "alrust listening");
-    axum::serve(listener, app)
+    let served = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
-        .await?;
+        .await;
+    if let Some(s) = flush_store
+        && let Err(e) = s.flush_key_usage().await
+    {
+        tracing::error!(error = %redact_diagnostic(e.to_string()), "final key usage flush failed");
+    }
+    served?;
     Ok(())
 }

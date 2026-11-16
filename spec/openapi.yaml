@@ -62,6 +62,10 @@ info:
        `database/backends/postgres/base.py:1002-1005`), so **every
        API-key-authenticated request, reads included, writes to `keys`**
        before the handler runs (UW-R1).
+       alrust diverges here by default (DECISIONS Y68): it checks the key
+       with a read under the same conditions, and writes the uses about
+       once a second; `ALRUST_KEY_USAGE_IMMEDIATE=true` restores this
+       per-request write.
     2. Then Hawk, Bearer, proxy and Basic, in that order.
     3. With no credentials and `AUTH_REQUIRED` false, access is anonymous,
        with scopes `[]` and no scope check (`:156-161`).
