@@ -13,13 +13,20 @@ use tokio::sync::watch;
 /// How often the tallies are written.
 pub(crate) const INTERVAL: Duration = Duration::from_secs(1);
 
-/// Calls `write(false)` every `every`, one call at a time, until `stop`
-/// changes or its sender is dropped; then calls `write(true)` once. `stop` is
+/// Which write this is: a periodic one, or the last one at shutdown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WriteKind {
+    Periodic,
+    Final,
+}
+
+/// Calls `write(Periodic)` every `every`, one call at a time, until `stop`
+/// changes or its sender is dropped; then calls `write(Final)` once. `stop` is
 /// only looked at between calls, so a call in progress always finishes first,
 /// and it wins over a tick that is due at the same time.
 pub(crate) async fn run<F, Fut>(mut write: F, mut stop: watch::Receiver<bool>, every: Duration)
 where
-    F: FnMut(bool) -> Fut,
+    F: FnMut(WriteKind) -> Fut,
     Fut: Future<Output = ()>,
 {
     let mut tick = tokio::time::interval(every);
@@ -30,10 +37,10 @@ where
         tokio::select! {
             biased;
             _ = stop.changed() => break,
-            _ = tick.tick() => write(false).await,
+            _ = tick.tick() => write(WriteKind::Periodic).await,
         }
     }
-    write(true).await;
+    write(WriteKind::Final).await;
 }
 
 /// One write of `store`'s tallies, with what was lost logged. After the
@@ -41,16 +48,11 @@ where
 /// write normally (`lock_timeout` and `statement_timeout`, set per write);
 /// this function's own timeout, the retention bound itself, is a backstop
 /// for a hung connection, so no write outlives `key_usage_max_pending`.
-pub(crate) fn write_once(store: Store, last: bool) -> impl Future<Output = ()> + Send {
-    async move { write_logged(&store, last).await }
-}
-
-async fn write_logged(store: &Store, last: bool) {
+pub(crate) async fn write_once(store: Store, kind: WriteKind) {
     let limit = store.config().key_usage_max_pending;
-    let what = if last {
-        "final API-key use write"
-    } else {
-        "API-key use write"
+    let what = match kind {
+        WriteKind::Final => "final API-key use write",
+        WriteKind::Periodic => "API-key use write",
     };
     match tokio::time::timeout(limit, store.flush_key_usage()).await {
         Ok(Ok(_)) => {}
@@ -59,23 +61,23 @@ async fn write_logged(store: &Store, last: bool) {
         }
         Err(_) => tracing::warn!("{what} did not finish within {limit:?}"),
     }
-    let lost = store.take_key_usage_losses();
-    if lost.expired_uses > 0 {
+    let dropped = store.take_key_usage_losses();
+    if dropped.expired_uses > 0 {
         tracing::warn!(
-            keys = lost.expired_keys,
-            uses = lost.expired_uses,
+            keys = dropped.expired_keys,
+            uses = dropped.expired_uses,
             "API-key uses dropped: not written within {:?}",
             store.config().key_usage_max_pending
         );
     }
-    if lost.unknown_uses > 0 {
+    if dropped.unknown_uses > 0 {
         tracing::warn!(
-            keys = lost.unknown_keys,
-            uses = lost.unknown_uses,
+            keys = dropped.unknown_keys,
+            uses = dropped.unknown_uses,
             "API-key uses may be unrecorded: the write's outcome is unknown"
         );
     }
-    if last {
+    if kind == WriteKind::Final {
         let (keys, uses) = store.key_usage_pending();
         if uses > 0 {
             tracing::error!(keys, uses, "API-key uses not written before exit are lost");
@@ -91,7 +93,7 @@ mod tests {
 
     use tokio::sync::{Notify, watch};
 
-    use super::run;
+    use super::{WriteKind, run};
 
     /// cdx 56ffa31d R1: a write in progress when shutdown starts finishes
     /// before the final write, nothing else starts meanwhile, and two writes
@@ -116,7 +118,7 @@ mod tests {
                 Arc::clone(&release),
             );
             tokio::spawn(run(
-                move |last| {
+                move |kind: WriteKind| {
                     let (events, active, overlaps, started, release) = (
                         Arc::clone(&events),
                         Arc::clone(&active),
@@ -129,13 +131,16 @@ mod tests {
                         if active.fetch_add(1, Ordering::SeqCst) > 0 {
                             overlaps.fetch_add(1, Ordering::SeqCst);
                         }
-                        events.lock().expect("events").push(format!("start {last}"));
+                        events
+                            .lock()
+                            .expect("events")
+                            .push(format!("start {kind:?}"));
                         if first {
                             // The first periodic write blocks until released.
                             started.notify_one();
                             release.notified().await;
                         }
-                        events.lock().expect("events").push(format!("end {last}"));
+                        events.lock().expect("events").push(format!("end {kind:?}"));
                         active.fetch_sub(1, Ordering::SeqCst);
                     }
                 },
@@ -149,7 +154,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(
             *events.lock().expect("events"),
-            ["start false"],
+            ["start Periodic"],
             "nothing else runs while a write is in progress"
         );
         release.notify_one();
@@ -159,7 +164,7 @@ mod tests {
             .expect("the writer does not panic");
         assert_eq!(
             *events.lock().expect("events"),
-            ["start false", "end false", "start true", "end true"]
+            ["start Periodic", "end Periodic", "start Final", "end Final"]
         );
         assert_eq!(overlaps.load(Ordering::SeqCst), 0);
     }

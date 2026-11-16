@@ -332,7 +332,7 @@ async fn run() -> anyhow::Result<()> {
     let writer = (!store.config().key_usage_immediate).then(|| {
         let s = store.clone();
         tokio::spawn(key_usage_writer::run(
-            move |last| key_usage_writer::write_once(s.clone(), last),
+            move |kind| key_usage_writer::write_once(s.clone(), kind),
             writer_stop,
             key_usage_writer::INTERVAL,
         ))
