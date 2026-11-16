@@ -22,8 +22,8 @@
 
 use alrust_store_pg::catalog;
 use alrust_store_pg::{
-    AlertQuery, NewAlert, Outcome, ReceiveKind, StartupError, Store, StoreConfig, StoreError,
-    session_options, value_text,
+    ALERT_BY_EXACT_ID, ALERT_BY_EXACT_ID_FOR_UPDATE, AlertCounts, AlertQuery, NewAlert, Outcome,
+    ReceiveKind, StartupError, Store, StoreConfig, StoreError, session_options, value_text,
 };
 use chrono::{TimeZone, Utc};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
@@ -1213,6 +1213,193 @@ async fn unrecognised_states_are_refused_without_writing() {
         );
         assert_eq!(catalog_of(&db.pool).await, before, "{setup}");
     }
+}
+
+/// `count_alerts` gives exactly the totals and grouped counts of
+/// `find_alerts` for the same query: empty, matching, excluding,
+/// customer-restricted and unrestricted selections.
+#[tokio::test]
+async fn count_alerts_matches_the_list_totals() {
+    let Some(db) = test_db().await else { return };
+    let s = store(&db.pool);
+    s.prepare().await.expect("fresh start");
+    for (id, resource, event, severity, customer) in [
+        ("c1", "web01", "HttpError", "major", None),
+        ("c2", "web02", "HttpError", "critical", None),
+        ("c3", "db01", "DiskFull", "critical", Some("acme")),
+        ("c4", "db02", "DiskFull", "minor", Some("other")),
+    ] {
+        let mut n = new_alert(id, 3600);
+        n.resource = resource.into();
+        n.event = event.into();
+        n.severity = severity.into();
+        n.customer = customer.map(Into::into);
+        s.receive(n, "alice").await.expect("receive");
+    }
+    s.take_action("c2", None, "ack", "seen", None, "alice")
+        .await
+        .expect("ack");
+    let queries = [
+        AlertQuery::default(),
+        AlertQuery {
+            events: vec!["HttpError".into()],
+            ..AlertQuery::default()
+        },
+        AlertQuery {
+            not_events: vec!["HttpError".into()],
+            ..AlertQuery::default()
+        },
+        AlertQuery {
+            severities: vec!["critical".into()],
+            not_statuses: vec!["ack".into()],
+            ..AlertQuery::default()
+        },
+        AlertQuery {
+            events: vec!["NoSuchEvent".into()],
+            ..AlertQuery::default()
+        },
+        AlertQuery {
+            customers: Some(vec!["acme".into()]),
+            ..AlertQuery::default()
+        },
+        AlertQuery {
+            customers: Some(vec![]),
+            ..AlertQuery::default()
+        },
+    ];
+    let mut totals = Vec::new();
+    for q in &queries {
+        let c = s.count_alerts(q).await.expect("count");
+        let p = s
+            .find_alerts(q, 1, 1, alrust_domain::HistoryOutput::Omit)
+            .await
+            .expect("list");
+        assert_eq!(
+            c,
+            AlertCounts {
+                total: p.total,
+                severity_counts: p.severity_counts,
+                status_counts: p.status_counts,
+            },
+            "{q:?}"
+        );
+        totals.push(c.total);
+    }
+    assert_eq!(totals, [4, 2, 2, 1, 0, 1, 0]);
+    let all = s.count_alerts(&AlertQuery::default()).await.unwrap();
+    assert_eq!(
+        serde_json::Value::Object(all.severity_counts),
+        serde_json::json!({"critical": 2, "major": 1, "minor": 1})
+    );
+    assert_eq!(
+        serde_json::Value::Object(all.status_counts),
+        serde_json::json!({"ack": 1, "open": 3})
+    );
+}
+
+/// An exact id wins over a longer id that starts with it and over another
+/// alert's `lastReceiveId`, on the read, lock (action) and delete paths;
+/// prefixes and `lastReceiveId` still find their alert; the customer
+/// restriction applies to both the exact and the prefix path.
+#[tokio::test]
+async fn id_lookup_takes_the_exact_id_first_and_keeps_the_prefix_match() {
+    let Some(db) = test_db().await else { return };
+    let s = store(&db.pool);
+    s.prepare().await.expect("fresh start");
+    let mk = |id: &str, resource: &str, customer: Option<&str>| {
+        let mut n = new_alert(id, 3600);
+        n.resource = resource.into();
+        n.customer = customer.map(Into::into);
+        n
+    };
+    // Inserted first, so an unordered prefix scan for "aa11" meets it first.
+    s.receive(mk("aa1199", "r-long", None), "alice")
+        .await
+        .unwrap();
+    s.receive(mk("aa11", "r-short", None), "alice")
+        .await
+        .unwrap();
+    s.receive(mk("e1", "r-e", None), "alice").await.unwrap();
+    s.receive(mk("q1", "r-q", None), "alice").await.unwrap();
+    // A duplicate of e1 whose incoming id is q1: e1's lastReceiveId is q1.
+    let (dup, kind) = s.receive(mk("q1", "r-e", None), "alice").await.unwrap();
+    assert_eq!(kind, ReceiveKind::Duplicate);
+    assert_eq!(
+        (dup.id.as_str(), dup.last_receive_id.as_deref()),
+        ("e1", Some("q1"))
+    );
+    s.receive(mk("c7", "r-c", Some("acme")), "alice")
+        .await
+        .unwrap();
+
+    let id_of = |r: Result<alrust_domain::Alert, StoreError>| r.map(|a| a.id);
+    assert_eq!(id_of(s.get_alert("aa11", None).await).unwrap(), "aa11");
+    assert_eq!(id_of(s.get_alert("aa119", None).await).unwrap(), "aa1199");
+    assert!(
+        id_of(s.get_alert("aa1", None).await)
+            .unwrap()
+            .starts_with("aa11")
+    );
+    assert_eq!(id_of(s.get_alert("q1", None).await).unwrap(), "q1");
+
+    // lastReceiveId only, full and prefix: a later duplicate of e1.
+    s.receive(mk("zz9", "r-e", None), "alice").await.unwrap();
+    assert_eq!(id_of(s.get_alert("zz9", None).await).unwrap(), "e1");
+    assert_eq!(id_of(s.get_alert("zz", None).await).unwrap(), "e1");
+
+    // Customers restrict the exact path too.
+    let acme = ["acme".to_string()];
+    let other = ["other".to_string()];
+    assert_eq!(id_of(s.get_alert("c7", Some(&acme)).await).unwrap(), "c7");
+    assert!(matches!(
+        s.get_alert("c7", Some(&other)).await,
+        Err(StoreError::NotFound)
+    ));
+    assert!(matches!(
+        s.get_alert("nope", None).await,
+        Err(StoreError::NotFound)
+    ));
+
+    // The lock path (an action) and delete act on the exact id.
+    let acked = s
+        .take_action("aa11", None, "ack", "seen", None, "alice")
+        .await
+        .unwrap();
+    assert_eq!((acked.id.as_str(), acked.status.as_str()), ("aa11", "ack"));
+    assert_eq!(s.get_alert("aa1199", None).await.unwrap().status, "open");
+    s.delete_alert("aa11", None).await.unwrap();
+    // With no exact id left, the prefix match finds the longer id.
+    assert_eq!(id_of(s.get_alert("aa11", None).await).unwrap(), "aa1199");
+    s.delete_alert("aa11", None).await.unwrap();
+    assert!(matches!(
+        s.get_alert("aa11", None).await,
+        Err(StoreError::NotFound)
+    ));
+}
+
+/// The exact-id statements can use the primary key: with sequential scans
+/// off for one transaction, both plans name `alerts_pkey`.
+#[tokio::test]
+async fn the_exact_id_lookup_can_use_the_primary_key() {
+    let Some(db) = test_db().await else { return };
+    let s = store(&db.pool);
+    s.prepare().await.expect("fresh start");
+    let mut tx = db.pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL enable_seqscan = off")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    for sql in [ALERT_BY_EXACT_ID, ALERT_BY_EXACT_ID_FOR_UPDATE] {
+        let explain = format!("EXPLAIN {sql}");
+        let plan: Vec<String> = sqlx::query_scalar(&explain)
+            .bind("x")
+            .bind(None::<Vec<String>>)
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap();
+        assert!(plan.iter().any(|l| l.contains("alerts_pkey")), "{plan:?}");
+    }
+    tx.rollback().await.unwrap();
 }
 
 fn new_alert(id: &str, timeout: i64) -> NewAlert {

@@ -102,7 +102,7 @@ it. At start-up it decides what it was pointed at:
 | `PUT /alert/{id}/tag`, `/untag`, `/attributes` | Add or remove tags; merge attributes (a `null` value removes the key). No history entry, `updateTime` unchanged, as in the reference. Divergences (DECISIONS Y34): `tags` must be a non-empty list of strings and `attributes` a non-empty object, else 400; an update that leaves no attributes is 200 (the reference stores it and answers 500); untagging every tag stores `[]` (the reference stores NULL; both read back as `[]`) |
 | `POST /heartbeat`, `GET /heartbeats`, `GET`/`DELETE /heartbeat/{id}` | Upsert by origin and customer; derived latency, since and status |
 | `POST /key`, `GET /keys`, `DELETE /key/{id}` | API keys (`Authorization: Key …`, `X-API-Key`, or `?api-key=`). A new key's scopes must be within the creator's; the secret is shown only in the creation response; lists and `href`s use the public id. As in the reference, `POST /key` may supply its own `key` and `id`: a Python-falsy value (`null`, `false`, `0`, `""`, `[]`, `{}`) generates one, a duplicate is refused (500), and a truthy non-string is rejected with 400, an intentional divergence by the owner's ruling (DECISIONS Y33; the reference passes such values unchanged to the database adapter, and type-specific outcomes have not been qualified). `href`s percent-encode the id as one path segment |
-| `GET /management/gtg`, `/management/healthcheck` | No key needed |
+| `GET /management/gtg`, `/management/healthcheck` | No key needed. `gtg` answers `OK`, or 503 `FAILED` when the database does not answer |
 | `GET`/`POST /management/housekeeping` | Deletion and expiry (K1, K2) |
 
 ## Configuration
@@ -129,6 +129,9 @@ for a container remains separate reviewed configuration and an owner step.
 | `ALRUST_ALERT_TIMEOUT` | `86400` | Seconds, at most 2147483647 (the reference's `integer` columns) |
 | `ALRUST_ACK_TIMEOUT` / `ALRUST_SHELVE_TIMEOUT` | `0` / `7200` | Seconds, at most 2147483647 |
 | `ALRUST_HISTORY_LIMIT` | `100` | History entries kept per alert |
+| `ALRUST_REQUEST_TIMEOUT` | `30` | Seconds a request may run before it is answered 503 `request timed out`; `0` turns the limit off. After this 503 the outcome of a write is **unknown**: a commit already sent may have succeeded, and parts committed earlier stay (a long `/management/housekeeping` run keeps the batches it finished and continues at the next call). Check the alert before retrying. The database query itself is not cancelled; only `ALRUST_DB_STATEMENT_TIMEOUT` bounds it |
+| `ALRUST_DB_ACQUIRE_TIMEOUT` | `10` | Seconds a request waits for a free database connection (pool of 16) before it fails with 500 |
+| `ALRUST_DB_LOCK_TIMEOUT` / `ALRUST_DB_STATEMENT_TIMEOUT` | `10` / `0` (off) | PostgreSQL `lock_timeout` and `statement_timeout`, in seconds, on serving connections; a statement that exceeds one fails with 500. Start-up (migration, adoption) runs without them |
 | `ALRUST_HOUSEKEEPING_INTERVAL` | `0` (off) | Seconds between automatic housekeeping runs. The reference never schedules it; with it on, closed and expired alerts older than 2 h and informational alerts older than 12 h are **deleted**. |
 
 ### Bearer verification only
@@ -174,8 +177,11 @@ or a key-management procedure.
   segment, which a URI-normalizing client may remove; ids are not validated.
 - **Query parameters:** an unknown filter parameter is ignored; the reference answers 400
   "Invalid filter parameter". `~` (regex) values are not supported.
-- **Id lookup:** a prefix match on `id` or `lastReceiveId`; the reference
-  uses a case-insensitive unanchored regex.
+- **Id lookup:** a full id is looked up exactly first (an index lookup);
+  otherwise a case-sensitive prefix match on `id` or `lastReceiveId`. The
+  reference reads with a case-insensitive regex anchored at the start, with
+  the id not escaped, and updates by `id` or `id` prefix; it returns any one
+  matching row, and an exact match is always one of them.
 - **Not yet implemented:** blackouts, notes,
   customers, users, groups, permissions, auth logins (basic, LDAP, OIDC,
   SAML), webhooks, bulk routes, the top-N counts, auto-unshelve and auto-unack

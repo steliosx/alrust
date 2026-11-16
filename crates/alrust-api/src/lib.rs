@@ -973,10 +973,7 @@ async fn count_alerts(
     let caller = authenticate(&st, &headers, &params).await?;
     caller.require("read:alerts")?;
     let s = parse_search(&st, &caller, &params)?;
-    let r = st
-        .store
-        .find_alerts(&s.q, 1, 1, HistoryOutput::Omit)
-        .await?;
+    let r = st.store.count_alerts(&s.q).await?;
     Ok(Json(json!({
         "status": "ok",
         "total": r.total,
@@ -1298,8 +1295,17 @@ async fn delete_key(
 
 // ---------------------------------------------------------------- management
 
-async fn gtg() -> &'static str {
-    "OK"
+/// `GET /management/gtg`: `OK` when the database answers, else 503 `FAILED`
+/// (the reference's two answers, `management/views.py:127-134`). The cause is
+/// logged, never returned.
+async fn gtg(State(st): State<Shared>) -> Response {
+    match st.store.ping().await {
+        Ok(()) => "OK".into_response(),
+        Err(e) => {
+            tracing::warn!(error = %redact_diagnostic(e.to_string()), "gtg: the database did not answer");
+            (StatusCode::SERVICE_UNAVAILABLE, "FAILED").into_response()
+        }
+    }
 }
 
 /// `GET /management/healthcheck` (spec HB5). Reproduces the reference's use

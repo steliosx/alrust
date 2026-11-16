@@ -198,6 +198,15 @@ pub struct AlertQuery {
     pub customers: Option<Vec<String>>,
 }
 
+/// The grouped counts of the alerts a query selects (`/alerts/count`, and
+/// the totals of `/alerts`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AlertCounts {
+    pub total: i64,
+    pub severity_counts: Map<String, Value>,
+    pub status_counts: Map<String, Value>,
+}
+
 #[derive(Debug)]
 pub struct AlertPage {
     pub alerts: Vec<Alert>,
@@ -528,6 +537,26 @@ impl Col {
 /// `dedup_alert` (`postgres/base.py:218-226`).
 /// Every `alerts` column of the reference layout but `history`, which a list
 /// without `show-history` would read and then discard.
+/// One alert whose `id` equals `$1` exactly, within the customers `$2`
+/// (`NULL` for no restriction). Served by the primary key `alerts_pkey`.
+/// Public so that tests can check the plan of this exact text.
+pub const ALERT_BY_EXACT_ID: &str =
+    "SELECT * FROM alerts WHERE id = $1 AND ($2::text[] IS NULL OR customer = ANY($2))";
+
+/// [`ALERT_BY_EXACT_ID`], locking the row.
+pub const ALERT_BY_EXACT_ID_FOR_UPDATE: &str =
+    "SELECT * FROM alerts WHERE id = $1 AND ($2::text[] IS NULL OR customer = ANY($2)) FOR UPDATE";
+
+/// The reference-compatible match: an `id` or `last_receive_id` that starts
+/// with `$1` (a `like_prefix` pattern), within the customers `$2`. A plain
+/// B-tree cannot serve it under a non-`C` collation, so it scans `alerts`.
+const ALERT_BY_PREFIX: &str = "SELECT * FROM alerts WHERE (id LIKE $1 OR last_receive_id LIKE $1)
+               AND ($2::text[] IS NULL OR customer = ANY($2)) LIMIT 1";
+
+const ALERT_BY_PREFIX_FOR_UPDATE: &str =
+    "SELECT * FROM alerts WHERE (id LIKE $1 OR last_receive_id LIKE $1)
+               AND ($2::text[] IS NULL OR customer = ANY($2)) LIMIT 1 FOR UPDATE";
+
 const ALERTS_WITHOUT_HISTORY: &str = "SELECT id, resource, event, environment, severity,
     correlate, status, service, \"group\", value, text, tags, attributes, origin, type,
     create_time, timeout, raw_data, customer, duplicate_count, repeat, previous_severity,
@@ -1020,24 +1049,35 @@ impl Store {
         }
     }
 
+    /// Locks the alert `id` names: the row whose `id` equals it exactly when
+    /// there is one (an index lookup), else the reference's prefix match on
+    /// `id` or `last_receive_id`. The reference returns any one matching row
+    /// (no `ORDER BY`), and an exact match is always one of them, so taking
+    /// it first stays within the reference's results.
     async fn lock_alert(
         tx: &mut Transaction<'_, Postgres>,
         id: &str,
         customers: Option<&[String]>,
     ) -> Result<Alert, StoreError> {
-        let row = sqlx::query(
-            "SELECT * FROM alerts WHERE (id LIKE $1 OR last_receive_id LIKE $1)
-               AND ($2::text[] IS NULL OR customer = ANY($2)) LIMIT 1 FOR UPDATE",
-        )
-        .bind(like_prefix(id))
-        .bind(customers)
-        .fetch_optional(&mut **tx)
-        .await?
-        .ok_or(StoreError::NotFound)?;
+        let exact = sqlx::query(ALERT_BY_EXACT_ID_FOR_UPDATE)
+            .bind(id)
+            .bind(customers)
+            .fetch_optional(&mut **tx)
+            .await?;
+        let row = match exact {
+            Some(row) => row,
+            None => sqlx::query(ALERT_BY_PREFIX_FOR_UPDATE)
+                .bind(like_prefix(id))
+                .bind(customers)
+                .fetch_optional(&mut **tx)
+                .await?
+                .ok_or(StoreError::NotFound)?,
+        };
         Ok(row_to_alert(&row)?)
     }
 
     /// Look an alert up by id or id prefix, or by `lastReceiveId` (spec C17).
+    /// An exact id is looked up first (see `lock_alert`).
     ///
     /// # Errors
     ///
@@ -1047,15 +1087,20 @@ impl Store {
         id: &str,
         customers: Option<&[String]>,
     ) -> Result<Alert, StoreError> {
-        let row = sqlx::query(
-            "SELECT * FROM alerts WHERE (id LIKE $1 OR last_receive_id LIKE $1)
-               AND ($2::text[] IS NULL OR customer = ANY($2)) LIMIT 1",
-        )
-        .bind(like_prefix(id))
-        .bind(customers)
-        .fetch_optional(&self.pool)
-        .await?
-        .ok_or(StoreError::NotFound)?;
+        let exact = sqlx::query(ALERT_BY_EXACT_ID)
+            .bind(id)
+            .bind(customers)
+            .fetch_optional(&self.pool)
+            .await?;
+        let row = match exact {
+            Some(row) => row,
+            None => sqlx::query(ALERT_BY_PREFIX)
+                .bind(like_prefix(id))
+                .bind(customers)
+                .fetch_optional(&self.pool)
+                .await?
+                .ok_or(StoreError::NotFound)?,
+        };
         Ok(row_to_alert(&row)?)
     }
 
@@ -1369,6 +1414,7 @@ impl Store {
     }
 
     /// `DELETE /alert/<id>`: one alert by id or id prefix, or by `lastReceiveId`.
+    /// An exact id is deleted first (see `lock_alert`).
     ///
     /// # Errors
     ///
@@ -1378,6 +1424,16 @@ impl Store {
         id: &str,
         customers: Option<&[String]>,
     ) -> Result<(), StoreError> {
+        let exact = sqlx::query(
+            "DELETE FROM alerts WHERE id = $1 AND ($2::text[] IS NULL OR customer = ANY($2))",
+        )
+        .bind(id)
+        .bind(customers)
+        .execute(&self.pool)
+        .await?;
+        if exact.rows_affected() > 0 {
+            return Ok(());
+        }
         let r = sqlx::query(
             "DELETE FROM alerts WHERE id IN (SELECT id FROM alerts WHERE (id LIKE $1 OR last_receive_id LIKE $1)
                AND ($2::text[] IS NULL OR customer = ANY($2)) LIMIT 1)",
@@ -1455,23 +1511,11 @@ impl Store {
         page_size: i64,
         history: HistoryOutput,
     ) -> Result<AlertPage, StoreError> {
-        let mut counts = QueryBuilder::new("SELECT severity, status, count(*) AS n FROM alerts");
-        Self::push_filters(&mut counts, q);
-        counts.push(" GROUP BY severity, status");
-        let rows = counts.build().fetch_all(&self.pool).await?;
-        let mut severity_counts = Map::new();
-        let mut status_counts = Map::new();
-        let mut total = 0i64;
-        for r in rows {
-            let sev = or_default(&r, "severity", NORMAL_SEVERITY)?;
-            let st = or_default(&r, "status", status::OPEN)?;
-            let n: i64 = r.try_get("n")?;
-            total += n;
-            let e = severity_counts.entry(sev).or_insert(Value::from(0));
-            *e = Value::from(e.as_i64().unwrap_or(0) + n);
-            let e = status_counts.entry(st).or_insert(Value::from(0));
-            *e = Value::from(e.as_i64().unwrap_or(0) + n);
-        }
+        let AlertCounts {
+            total,
+            severity_counts,
+            status_counts,
+        } = self.count_alerts(q).await?;
         let mut sel = QueryBuilder::new(match history {
             HistoryOutput::Include => "SELECT * FROM alerts",
             HistoryOutput::Omit => ALERTS_WITHOUT_HISTORY,
@@ -1488,6 +1532,43 @@ impl Store {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(AlertPage {
             alerts,
+            total,
+            severity_counts,
+            status_counts,
+        })
+    }
+
+    /// The one grouped-count statement of a query, with the same filters as
+    /// the alert list.
+    fn counts_query(q: &AlertQuery) -> QueryBuilder<'_, Postgres> {
+        let mut counts = QueryBuilder::new("SELECT severity, status, count(*) AS n FROM alerts");
+        Self::push_filters(&mut counts, q);
+        counts.push(" GROUP BY severity, status");
+        counts
+    }
+
+    /// `GET /alerts/count`: the total and the per-severity and per-status
+    /// counts of the alerts `q` selects. One statement; no alert row is read.
+    ///
+    /// # Errors
+    ///
+    /// The database error.
+    pub async fn count_alerts(&self, q: &AlertQuery) -> Result<AlertCounts, StoreError> {
+        let rows = Self::counts_query(q).build().fetch_all(&self.pool).await?;
+        let mut severity_counts = Map::new();
+        let mut status_counts = Map::new();
+        let mut total = 0i64;
+        for r in rows {
+            let sev = or_default(&r, "severity", NORMAL_SEVERITY)?;
+            let st = or_default(&r, "status", status::OPEN)?;
+            let n: i64 = r.try_get("n")?;
+            total += n;
+            let e = severity_counts.entry(sev).or_insert(Value::from(0));
+            *e = Value::from(e.as_i64().unwrap_or(0) + n);
+            let e = status_counts.entry(st).or_insert(Value::from(0));
+            *e = Value::from(e.as_i64().unwrap_or(0) + n);
+        }
+        Ok(AlertCounts {
             total,
             severity_counts,
             status_counts,
@@ -1790,6 +1871,36 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `/alerts/count` runs only the grouped count: one statement, the list's
+    /// filters, no row fetch, ordering or paging.
+    #[test]
+    fn the_count_path_is_one_grouped_statement_with_the_list_filters() {
+        let q = AlertQuery {
+            events: vec!["HttpError".into()],
+            not_statuses: vec!["closed".into()],
+            tags: vec!["t".into()],
+            customers: Some(vec!["acme".into()]),
+            ..AlertQuery::default()
+        };
+        let mut list = QueryBuilder::new("");
+        Store::push_filters(&mut list, &q);
+        let counts = Store::counts_query(&q);
+        assert_eq!(
+            counts.sql(),
+            format!(
+                "SELECT severity, status, count(*) AS n FROM alerts{} GROUP BY severity, status",
+                list.sql()
+            )
+        );
+        assert_eq!(
+            list.sql(),
+            " WHERE true AND event = ANY($1) AND NOT (status = ANY($2)) AND tags @> $3 AND customer = ANY($4)"
+        );
+        for absent in ["ORDER BY", "LIMIT", "OFFSET", "SELECT *"] {
+            assert!(!counts.sql().contains(absent), "{absent}");
+        }
+    }
 
     #[test]
     fn tags_union_keeps_first_seen_order() {
