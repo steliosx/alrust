@@ -7,6 +7,14 @@
 # the workspace; a yanked version fails it.
 unmaintained = "workspace"
 yanked = "deny"
+# The one accepted advisory (DECISIONS Y76, the owner, 2026-11-17). It says
+# that chrono is unmaintained and reports no vulnerability; no chrono
+# version clears it. Every other advisory still fails the check, also a
+# later vulnerability in chrono. Review on or before 2027-02-15 and at each
+# chrono update. Replacing chrono is a backlog item.
+ignore = [
+    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained; no vulnerability reported; accepted by the owner 2026-11-17 (DECISIONS Y76); review by 2027-02-15" },
+]
 
 [bans]
 # Two versions of one crate only warn.
