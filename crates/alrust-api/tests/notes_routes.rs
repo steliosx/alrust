@@ -746,6 +746,130 @@ async fn sf_notes_own_note_and_invisible_alert() {
     assert_eq!(code, StatusCode::OK);
 }
 
+/// SF-NOTES, the same id again: a note that outlives its alert is not
+/// changed or deleted through a later alert with that id, for the same
+/// customer and for another one. Nothing is written and no `dismiss` entry
+/// is added. The later alert's own notes work.
+#[tokio::test]
+async fn a_note_of_an_earlier_alert_with_the_same_id_stays_as_it_is() {
+    let Some((_db, app)) = app().await else {
+        return;
+    };
+    for (id, first, second) in [
+        ("reuse-same", Some("acme"), Some("acme")),
+        ("reuse-other", Some("other"), Some("acme")),
+    ] {
+        let a = alert(&app, id, "r-first", first).await;
+        let old = note(&app, &a, ADMIN_KEY, "the earlier alert's note").await;
+        let (code, _, _) = send(&app, "DELETE", &format!("/alert/{a}"), ADMIN_KEY, None).await;
+        assert_eq!(code, StatusCode::OK, "{id}");
+        let b = alert(&app, id, "r-second", second).await;
+        assert_eq!(b, a, "{id}: the id is used again");
+        // The note is still stored, and the reference's list shows it (C21).
+        let before = note_body(&app, &b, &old).await;
+        assert_eq!(before["text"], "the earlier alert's note", "{id}");
+        let history_before = history(&app, &b).await;
+        for body in [
+            json!({"text": "hijacked"}),
+            json!({"attributes": {"k": "v"}}),
+            json!({"text": 5}),
+            json!({"id": "x", "text": "hijacked"}),
+        ] {
+            let (code, _, answer) = send(
+                &app,
+                "PUT",
+                &format!("/alert/{b}/note/{old}"),
+                ACME_KEY,
+                Some(body.clone()),
+            )
+            .await;
+            assert_eq!(
+                (code, answer["message"].clone()),
+                (StatusCode::NOT_FOUND, json!("not found")),
+                "{id} {body}"
+            );
+        }
+        let (code, _, answer) = send(
+            &app,
+            "DELETE",
+            &format!("/alert/{b}/note/{old}"),
+            ACME_KEY,
+            None,
+        )
+        .await;
+        assert_eq!(
+            (code, answer["message"].clone()),
+            (StatusCode::NOT_FOUND, json!("note not found")),
+            "{id}"
+        );
+        assert_eq!(note_body(&app, &b, &old).await, before, "{id}");
+        assert_eq!(history(&app, &b).await, history_before, "{id}");
+        // The later alert's own note is changed and deleted as usual.
+        let new = note(&app, &b, ACME_KEY, "the later alert's note").await;
+        let (code, _, _) = send(
+            &app,
+            "PUT",
+            &format!("/alert/{b}/note/{new}"),
+            ACME_KEY,
+            Some(json!({"text": "edited"})),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK, "{id}");
+        assert_eq!(note_body(&app, &b, &new).await["text"], "edited", "{id}");
+        let (code, _, _) = send(
+            &app,
+            "DELETE",
+            &format!("/alert/{b}/note/{new}"),
+            ACME_KEY,
+            None,
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK, "{id}");
+        assert_eq!(note_body(&app, &b, &old).await, before, "{id}");
+    }
+}
+
+/// SF-NOTES: a note row that no stored alert received (its alert was
+/// removed earlier, by any program) is not changed or deleted through an
+/// alert with its id.
+#[tokio::test]
+async fn a_note_row_left_by_an_earlier_deletion_stays_as_it_is() {
+    let Some((db, app)) = app().await else {
+        return;
+    };
+    let c = alert(&app, "reuse-orphan", "r-orphan", Some("acme")).await;
+    sqlx::query(
+        r#"INSERT INTO notes (id, text, "user", attributes, type, create_time, alert, customer)
+           VALUES ('orphan-note', 'left behind', 'someone', '{}'::jsonb, 'alert',
+                   NOW() AT TIME ZONE 'utc', $1, 'other')"#,
+    )
+    .bind(&c)
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    let before = note_body(&app, &c, "orphan-note").await;
+    assert_eq!(before["text"], "left behind");
+    let (code, _, _) = send(
+        &app,
+        "PUT",
+        &format!("/alert/{c}/note/orphan-note"),
+        ACME_KEY,
+        Some(json!({"text": "hijacked"})),
+    )
+    .await;
+    assert_eq!(code, StatusCode::NOT_FOUND);
+    let (code, _, _) = send(
+        &app,
+        "DELETE",
+        &format!("/alert/{c}/note/orphan-note"),
+        ACME_KEY,
+        None,
+    )
+    .await;
+    assert_eq!(code, StatusCode::NOT_FOUND);
+    assert_eq!(note_body(&app, &c, "orphan-note").await, before);
+}
+
 /// customer-mapping C21, kept: the list matches `alert ~* <id>`, so a short
 /// client-set id also lists notes of an alert whose id contains it.
 #[tokio::test]

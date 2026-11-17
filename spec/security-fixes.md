@@ -608,6 +608,21 @@ an alert they can see and the other note's id.
 that alert's id), else the handler's own not-found refusal: 404 `not found`
 for `PUT`, 404 `note not found` for `DELETE`. There is no side effect.
 
+*The same id, an earlier alert.* A client can set an alert's id, and a
+deleted alert leaves its notes in the table (the reference does the same;
+alrust does not delete them). A later alert can therefore have the id of an
+earlier one, also for another customer. Equal ids are then not enough: the
+note must have been added to the alert that is stored now. alrust reads
+this from the alert's history, which has a `note` entry with the note's id
+for each note the alert received, and which a new alert starts empty. The
+check and the write are in one transaction that locks the alert's row. The
+rule does not depend on who removed the earlier alert (the API, the
+housekeeping, another program). Its cost: when the history has dropped a
+note's entry (`ALRUST_HISTORY_LIMIT`, 100 by default), that note can no
+longer be changed or deleted through the API, and the answer is the same
+404. `GET /alert/{id}/notes` is not changed by this: it still lists by the
+reference's expression (C21), earlier notes included.
+
 **Vectors.**
 
 | Case | Reference | alrust | Kind |
@@ -617,6 +632,10 @@ for `PUT`, 404 `note not found` for `DELETE`. There is no side effect.
 | `DELETE` with a note of another alert | 200 | 404 `note not found`, nothing deleted | divergence |
 | `PUT` or `DELETE` with the alert's own note | 200 | 200 | parity |
 | an alert the caller cannot see | 404 | 404 | parity |
+| `PUT` or `DELETE` with a note of a deleted alert, through a later alert with the same id (same or another customer) | 200 | 404, no change, no `dismiss` entry | divergence |
+| the same for a note row that no stored alert received (left by an earlier deletion) | 200 | 404, no change | divergence |
+| a note added to the later alert | 200 | 200 | parity |
+| the alert's own note after its `note` entry left the history | 200 | 404, no change | divergence (cost of the rule) |
 
 ## SF-BLACKOUTS: an edit keeps the blackout's customer unless it sets one
 

@@ -4,6 +4,17 @@
 //! with `spec/security-fixes.md` SF-NOTES: a note is changed or deleted only
 //! through its own alert.
 //!
+//! "Its own alert" means the stored alert that received the note, not only
+//! an alert with the same id. An alert's id can be set by the client, and a
+//! deleted alert leaves its notes behind (as in the reference), so a later
+//! alert can have the id of an earlier one. A note is changed or deleted
+//! only when the alert's history still has that note's `note` entry
+//! ([`owns_note`]). A new alert starts with a new history, so it owns none
+//! of the earlier notes, whoever deleted the earlier alert and however.
+//! The cost: when an alert's history has dropped a note's entry (the
+//! history limit, 100 entries by default), that note can no longer be
+//! changed or deleted, and the answer is the same 404.
+//!
 //! As in the reference:
 //! - a new note copies the alert's resource, event, environment, severity
 //!   and status into its `attributes`, and adds a `note` history entry
@@ -21,7 +32,7 @@
 //! starts with that id; `docs/alpha.md`, id lookup). The list adds an order
 //! (creation time, then id); the reference has none.
 
-use alrust_domain::{HistoryEntry, change_type, truncate_ms};
+use alrust_domain::{Alert, HistoryEntry, change_type, truncate_ms};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde_json::{Map, Value, json};
 use sqlx::postgres::PgRow;
@@ -93,6 +104,14 @@ fn row_to_note(row: &PgRow) -> Result<Note, sqlx::Error> {
 pub struct NoteUpdate {
     pub text: Option<String>,
     pub attributes: Option<Map<String, Value>>,
+}
+
+/// Whether the stored alert `a` received the note `note_id`: its history
+/// has the `note` entry that `add_note` wrote for it. See the module text.
+fn owns_note(a: &Alert, note_id: &str) -> bool {
+    a.history
+        .iter()
+        .any(|h| h.id == note_id && h.change_type == change_type::NOTE)
 }
 
 impl Store {
@@ -195,6 +214,9 @@ impl Store {
         note_id: &str,
     ) -> Result<(), StoreError> {
         let a = self.get_alert(id, customers).await?;
+        if !owns_note(&a, note_id) {
+            return Err(StoreError::NotFound);
+        }
         sqlx::query("SELECT 1 FROM notes WHERE id = $1 AND alert = $2")
             .bind(note_id)
             .bind(&a.id)
@@ -205,7 +227,10 @@ impl Store {
     }
 
     /// Update note `note_id` of the alert `id`. SF-NOTES: a note of another
-    /// alert is `NotFound`, like a missing one, and nothing changes.
+    /// alert, or of an earlier alert with the same id, is `NotFound`, like a
+    /// missing one, and nothing changes. The alert's row is locked from the
+    /// lookup to the commit, so the alert cannot be deleted and stored again
+    /// between the check and the write.
     ///
     /// # Errors
     ///
@@ -218,7 +243,12 @@ impl Store {
         update: NoteUpdate,
         login: &str,
     ) -> Result<Note, StoreError> {
-        let a = self.get_alert(id, customers).await?;
+        let mut tx = self.pool.begin().await?;
+        let a = Self::lock_alert(&mut tx, id, customers).await?;
+        if !owns_note(&a, note_id) {
+            tx.rollback().await?;
+            return Err(StoreError::NotFound);
+        }
         let mut qb: QueryBuilder<'_, Postgres> = QueryBuilder::new("UPDATE notes SET ");
         if let Some(text) = update.text {
             qb.push("text = ").push_bind(text).push(", ");
@@ -235,17 +265,18 @@ impl Store {
             .push(" AND alert = ")
             .push_bind(a.id)
             .push(" RETURNING *");
-        let row = qb
-            .build()
-            .fetch_optional(&self.pool)
-            .await?
-            .ok_or(StoreError::NotFound)?;
-        Ok(row_to_note(&row)?)
+        let Some(row) = qb.build().fetch_optional(&mut *tx).await? else {
+            tx.rollback().await?;
+            return Err(StoreError::NotFound);
+        };
+        let note = row_to_note(&row)?;
+        tx.commit().await?;
+        Ok(note)
     }
 
     /// Delete note `note_id` of the alert `id`: `Ok(false)` when the alert
-    /// has no such note (SF-NOTES: a note of another alert counts as
-    /// missing), with nothing changed.
+    /// has no such note (SF-NOTES: a note of another alert, or of an earlier
+    /// alert with the same id, counts as missing), with nothing changed.
     ///
     /// # Errors
     ///
@@ -259,6 +290,10 @@ impl Store {
     ) -> Result<bool, StoreError> {
         let mut tx = self.pool.begin().await?;
         let mut a = Self::lock_alert(&mut tx, id, customers).await?;
+        if !owns_note(&a, note_id) {
+            tx.rollback().await?;
+            return Ok(false);
+        }
         let deleted = sqlx::query("DELETE FROM notes WHERE id = $1 AND alert = $2 RETURNING id")
             .bind(note_id)
             .bind(&a.id)
