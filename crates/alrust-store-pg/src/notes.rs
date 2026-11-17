@@ -180,6 +180,30 @@ impl Store {
             .collect::<Result<Vec<_>, sqlx::Error>>()?)
     }
 
+    /// The reference's two lookups before a note update, with SF-NOTES:
+    /// the alert `id` is visible and `note_id` is one of its notes. Reads
+    /// only. The API calls it before a refusal that the reference makes
+    /// after these lookups, so that a missing alert or note stays 404.
+    ///
+    /// # Errors
+    ///
+    /// `NotFound` for a missing alert or note, otherwise the database error.
+    pub async fn check_note(
+        &self,
+        id: &str,
+        customers: Option<&[String]>,
+        note_id: &str,
+    ) -> Result<(), StoreError> {
+        let a = self.get_alert(id, customers).await?;
+        sqlx::query("SELECT 1 FROM notes WHERE id = $1 AND alert = $2")
+            .bind(note_id)
+            .bind(&a.id)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(|_| ())
+            .ok_or(StoreError::NotFound)
+    }
+
     /// Update note `note_id` of the alert `id`. SF-NOTES: a note of another
     /// alert is `NotFound`, like a missing one, and nothing changes.
     ///

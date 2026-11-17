@@ -1650,6 +1650,19 @@ async fn list_notes(
 
 /// `PUT /alert/{id}/note/{note_id}` (`views/alerts.py:665-697`; SF-NOTES:
 /// only the alert's own note, else 404 `not found` with no change).
+///
+/// The order is the reference's: a falsy body is 400 before any lookup;
+/// then the alert and the note are looked up (404); only then come the
+/// refusals of the body's content, and none of them writes anything:
+/// - a truthy body that is not an object is 500 (the reference fails at
+///   `update['user'] = ...`);
+/// - a body key `id` or `self`, with any value, is 500 (the reference's
+///   `note.update(**update)` cannot bind it and fails before its SQL);
+/// - a `text` that is not a string or an `attributes` that is not an
+///   object is 400 (alrust's own refusal; the reference's outcome is not
+///   established).
+///
+/// The 500 messages are alrust's; the reference's are Python's.
 async fn update_note(
     State(st): State<Shared>,
     headers: HeaderMap,
@@ -1659,12 +1672,55 @@ async fn update_note(
 ) -> ApiResult<Json<Value>> {
     let caller = authenticate(&st, &headers, &params).await?;
     caller.require("write:alerts")?;
-    let fields = match &body {
-        Value::Object(fields) if !fields.is_empty() => fields,
-        _ => return Err(ApiError::bad("nothing to change")),
+    if python_falsy(&body) {
+        return Err(ApiError::bad("nothing to change"));
+    }
+    let customers = caller.customers();
+    let update = match note_update(&body) {
+        Ok(update) => update,
+        Err(refusal) => {
+            st.store
+                .check_note(&id, customers.as_deref(), &note_id)
+                .await?;
+            return Err(refusal);
+        }
     };
-    // `update_note` writes `text` and merges `attributes` when they are not
-    // None; other keys are ignored.
+    let note = st
+        .store
+        .update_note(&id, customers.as_deref(), &note_id, update, caller.login())
+        .await?;
+    Ok(Json(
+        json!({"status": "ok", "note": note.body(&st.cfg.base_url)}),
+    ))
+}
+
+/// Python's `not value` for a JSON value.
+fn python_falsy(value: &Value) -> bool {
+    match value {
+        Value::Null => true,
+        Value::Bool(b) => !b,
+        Value::Number(n) => n.as_f64() == Some(0.0),
+        Value::String(s) => s.is_empty(),
+        Value::Array(a) => a.is_empty(),
+        Value::Object(o) => o.is_empty(),
+    }
+}
+
+/// What a truthy note-update body changes, or the refusal that follows the
+/// lookups (see `update_note`). `update_note` writes `text` and merges
+/// `attributes` when they are not None; other ordinary keys are ignored.
+fn note_update(body: &Value) -> Result<NoteUpdate, ApiError> {
+    let server_error = |m: &str| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, m);
+    let Value::Object(fields) = body else {
+        return Err(server_error("the note update must be a JSON object"));
+    };
+    for reserved in ["id", "self"] {
+        if fields.contains_key(reserved) {
+            return Err(server_error(&format!(
+                "'{reserved}' cannot be a key of a note update"
+            )));
+        }
+    }
     let text = match fields.get("text") {
         None | Some(Value::Null) => None,
         Some(Value::String(t)) => Some(t.clone()),
@@ -1675,19 +1731,7 @@ async fn update_note(
         Some(Value::Object(a)) => Some(a.clone()),
         Some(_) => return Err(ApiError::bad("attributes must be an object")),
     };
-    let note = st
-        .store
-        .update_note(
-            &id,
-            caller.customers().as_deref(),
-            &note_id,
-            NoteUpdate { text, attributes },
-            caller.login(),
-        )
-        .await?;
-    Ok(Json(
-        json!({"status": "ok", "note": note.body(&st.cfg.base_url)}),
-    ))
+    Ok(NoteUpdate { text, attributes })
 }
 
 /// `DELETE /alert/{id}/note/{note_id}` (`views/alerts.py:701-723`; SF-NOTES:

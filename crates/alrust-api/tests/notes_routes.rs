@@ -451,6 +451,179 @@ async fn a_note_is_updated_and_dismissed() {
     );
 }
 
+/// One note of an alert, whole, as `GET /alert/{id}/notes` gives it.
+async fn note_body(app: &axum::Router, alert_id: &str, note_id: &str) -> Value {
+    let (_, _, body) = send(
+        app,
+        "GET",
+        &format!("/alert/{alert_id}/notes"),
+        ADMIN_KEY,
+        None,
+    )
+    .await;
+    body["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] == note_id)
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+/// 239-P2-RESERVED (`spec/openapi.yaml`, `updateAlertNote`): a body key
+/// `id` or `self` is the reference's 500 after the lookups, and nothing is
+/// written: text, attributes, user, update time and history stay.
+#[tokio::test]
+async fn an_update_with_a_reserved_key_changes_nothing() {
+    let Some((_db, app)) = app().await else {
+        return;
+    };
+    let a = alert(&app, "res-a", "ra", Some("acme")).await;
+    let b = alert(&app, "res-b", "rb", Some("acme")).await;
+    let other = alert(&app, "res-o", "ro", Some("other")).await;
+    let na = note(&app, &a, ADMIN_KEY, "a's note").await;
+    let nb = note(&app, &b, ADMIN_KEY, "b's note").await;
+    let no = note(&app, &other, ADMIN_KEY, "other's note").await;
+    let before = note_body(&app, &a, &na).await;
+    assert_eq!(before["text"], "a's note");
+    assert_eq!(before["user"], "admin");
+    let history_before = history(&app, &a).await;
+    let reserved = [
+        json!({"id": "x", "text": "edited"}),
+        json!({"self": 1, "text": "edited"}),
+        // The key counts, not its value: falsy values too, and alone.
+        json!({"id": null}),
+        json!({"self": false}),
+        json!({"id": 0, "attributes": {"k": "v"}}),
+        json!({"self": "", "text": "edited", "attributes": {"k": "v"}}),
+        // A reserved key is refused before the types are looked at.
+        json!({"id": "x", "text": 5}),
+        json!({"id": [], "self": {}, "attributes": "no object"}),
+    ];
+    for body in &reserved {
+        let (code, _, answer) = send(
+            &app,
+            "PUT",
+            &format!("/alert/{a}/note/{na}"),
+            ACME_KEY,
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(
+            (code, answer["status"].clone()),
+            (StatusCode::INTERNAL_SERVER_ERROR, json!("error")),
+            "{body}: {answer}"
+        );
+        assert_eq!(note_body(&app, &a, &na).await, before, "{body}");
+        assert_eq!(history(&app, &a).await, history_before, "{body}");
+    }
+    // The lookups come first: no alert, an alert the caller cannot see, no
+    // such note, and a note of another alert (SF-NOTES) are all 404.
+    let b_before = note_body(&app, &b, &nb).await;
+    let o_before = note_body(&app, &other, &no).await;
+    for path in [
+        format!("/alert/nosuch/note/{na}"),
+        format!("/alert/{other}/note/{no}"),
+        format!("/alert/{a}/note/nosuch"),
+        format!("/alert/{a}/note/{nb}"),
+        format!("/alert/{a}/note/{no}"),
+    ] {
+        for body in &reserved {
+            let (code, _, answer) = send(&app, "PUT", &path, ACME_KEY, Some(body.clone())).await;
+            assert_eq!(
+                (code, answer["message"].clone()),
+                (StatusCode::NOT_FOUND, json!("not found")),
+                "{path} {body}"
+            );
+        }
+    }
+    assert_eq!(note_body(&app, &a, &na).await, before);
+    assert_eq!(note_body(&app, &b, &nb).await, b_before);
+    assert_eq!(note_body(&app, &other, &no).await, o_before);
+    // A read-only key is refused before the body is looked at.
+    let (code, _, _) = send(
+        &app,
+        "PUT",
+        &format!("/alert/{a}/note/{na}"),
+        READER_KEY,
+        Some(json!({"id": "x"})),
+    )
+    .await;
+    assert_eq!(code, StatusCode::FORBIDDEN);
+    // An ordinary update still works afterwards.
+    let (code, _, answer) = send(
+        &app,
+        "PUT",
+        &format!("/alert/{a}/note/{na}"),
+        ACME_KEY,
+        Some(json!({"text": "edited", "ignored": 1})),
+    )
+    .await;
+    assert_eq!(
+        (code, answer["note"]["text"].clone()),
+        (StatusCode::OK, json!("edited")),
+        "{answer}"
+    );
+}
+
+/// The reference's order for the other update bodies: falsy is 400 before
+/// any lookup; a missing alert or note is 404 before the body's content is
+/// refused; and no refusal writes.
+#[tokio::test]
+async fn update_body_refusals_follow_the_lookups() {
+    let Some((_db, app)) = app().await else {
+        return;
+    };
+    let a = alert(&app, "ord-a", "ra", None).await;
+    let na = note(&app, &a, ADMIN_KEY, "kept").await;
+    let before = note_body(&app, &a, &na).await;
+    let own = format!("/alert/{a}/note/{na}");
+    let no_note = format!("/alert/{a}/note/nosuch");
+    // Falsy bodies: 400 also where the alert or the note does not exist.
+    for body in [
+        json!(null),
+        json!([]),
+        json!(0),
+        json!(false),
+        json!(""),
+        json!({}),
+    ] {
+        for path in [own.as_str(), no_note.as_str(), "/alert/nosuch/note/x"] {
+            let (code, _, answer) = send(&app, "PUT", path, ADMIN_KEY, Some(body.clone())).await;
+            assert_eq!(
+                (code, answer["message"].clone()),
+                (StatusCode::BAD_REQUEST, json!("nothing to change")),
+                "{path} {body}"
+            );
+        }
+    }
+    // Truthy bodies that are refused: 404 first, then their own status.
+    for (body, status) in [
+        (json!([1]), StatusCode::INTERNAL_SERVER_ERROR),
+        (json!("text"), StatusCode::INTERNAL_SERVER_ERROR),
+        (json!(5), StatusCode::INTERNAL_SERVER_ERROR),
+        (json!(true), StatusCode::INTERNAL_SERVER_ERROR),
+        (json!({"text": 5}), StatusCode::BAD_REQUEST),
+        (json!({"attributes": [1]}), StatusCode::BAD_REQUEST),
+        (
+            json!({"text": "new", "attributes": "no object"}),
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        for path in [no_note.as_str(), "/alert/nosuch/note/x"] {
+            let (code, _, answer) = send(&app, "PUT", path, ADMIN_KEY, Some(body.clone())).await;
+            assert_eq!(
+                (code, answer["message"].clone()),
+                (StatusCode::NOT_FOUND, json!("not found")),
+                "{path} {body}"
+            );
+        }
+        let (code, _, answer) = send(&app, "PUT", &own, ADMIN_KEY, Some(body.clone())).await;
+        assert_eq!(code, status, "{body}: {answer}");
+        assert_eq!(note_body(&app, &a, &na).await, before, "{body}");
+    }
+}
+
 /// SF-NOTES vectors: a note is changed or deleted only through its own alert.
 #[tokio::test]
 async fn sf_notes_vectors() {
