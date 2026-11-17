@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-16 22:59 EST by claude-alrust, the sole writer of this
+_Last updated: 2026-11-17 10:23 EST by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox. Times
 written from 2026-11-15 14:13 EST on are Nassau local time (DECISIONS Y63);
 earlier ones are UTC (`Z`)._
@@ -1128,6 +1128,22 @@ merges; their content is not re-read here. Claude asked the owner this evening (
 which rule holds while the tool is unavailable, and Codex raised the same
 question; no answer or waiver is assumed. Until the owner answers, Claude
 merges nothing: #236 is approved and held.
+
+**2026-11-17, to 10:23 EST.** Codex approved the source of #266 at
+`9fb87d19` and of #267 at `7c9d0389` at 00:15 EST (`29ac0f76`), stating
+that these approvals do not waive Y48's advisor condition. Its limits on
+#266 stand: the local mutant run is Claude's report, not reproduced; no
+test runs the real `mixed_cell`, `main` or a database failure path; one
+quick run qualifies no full run. The owner then answered the rule question
+with option 1 (DECISIONS Y73): while the advisor tool is unavailable,
+Claude merges on Codex's exact-head approval, green CI and an up-to-date
+head. Under Y73, Claude merged #267 at 10:22 EST (`89d2ba19`; its tree
+equals the approved head's tree `f179e134`). #266 was then bound to that
+`main` by a merge (head `53ac1546`; only the two record files differ from
+`9fb87d19`) and waits for CI and Codex's review of the changed head. #236
+follows in the same way after #266. #265's weekly schedule still waits
+for the owner's own answer. The full benchmark run (Y71) starts after
+#266 is on `main`.
 
 ## Work in flight
 
