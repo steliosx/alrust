@@ -6,7 +6,8 @@ excerpts from 157 authenticated crates selected by the static default-feature
 target-role packages and 122 host-role packages, with 103 in both roles. Host
 build/proc-macro and inactive-feature notices are conservatively retained.
 This is not a list of 157 libraries linked into the binary, a binary SBOM, or
-complete distribution or legal clearance. No original Alrust license is selected.
+complete distribution or legal clearance. This corpus does not select alrust's
+own licence; that is Apache-2.0 (DECISIONS Y58), in `LICENSE` and `NOTICE`.
 
 `manifest.json` binds every archive to its Cargo.lock checksum and each retained
 text to its literal SHA256 and byte count. Expressions are copied as declared:
