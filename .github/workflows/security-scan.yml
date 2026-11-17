@@ -66,22 +66,34 @@ jobs:
           python -m venv "$RUNNER_TEMP/pip-audit-venv"
           "$RUNNER_TEMP/pip-audit-venv/bin/python" -m pip install -q pip-audit==2.10.1
       # Every entry in these files carries a sha256 hash, so each file is
-      # checked with --require-hashes. --no-deps: the files are already
-      # fully pinned, so pip-audit does not resolve anything.
+      # checked with --require-hashes and nothing is resolved. Every file is
+      # audited even when an earlier one has findings.
+      # conformance/requirements.lock is alrust's own test environment: a
+      # finding there fails the job. The other three are the pinned
+      # reference Alerta's environment, kept as pinned so the reference
+      # stays the reference; it runs only in CI, on synthetic data. Their
+      # findings are printed and annotated as warnings, and do not fail it.
       - name: Audit the lock files
         run: |
-          set -euo pipefail
+          set -uo pipefail
           audit="$RUNNER_TEMP/pip-audit-venv/bin/pip-audit"
+          failed=0
+          for lock in conformance/requirements.lock; do
+            echo "::group::$lock"
+            "$audit" --require-hashes -r "$lock" || failed=1
+            echo "::endgroup::"
+          done
           for lock in \
-            conformance/requirements.lock \
             .github/reference-requirements.lock \
             .github/reference-build.lock \
             scripts/bench/gunicorn.lock
           do
-            echo "::group::$lock"
-            "$audit" --no-deps --require-hashes -r "$lock"
+            echo "::group::$lock (reference environment: reported only)"
+            "$audit" --require-hashes -r "$lock" \
+              || echo "::warning file=$lock::pip-audit did not pass for the pinned reference environment (findings or an error; see the log)"
             echo "::endgroup::"
           done
+          exit "$failed"
 
   zizmor:
     name: zizmor (workflows)
