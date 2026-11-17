@@ -16,6 +16,7 @@ on:
       - .github/reference-build.lock
       - scripts/bench/gunicorn.lock
       - .github/workflows/**
+      - .github/zizmor.yml
 
 permissions:
   contents: read
@@ -115,4 +116,4 @@ jobs:
       - name: Audit the workflows
         run: |
           set -euo pipefail
-          "$RUNNER_TEMP/zizmor-venv/bin/zizmor" .github/workflows/
+          "$RUNNER_TEMP/zizmor-venv/bin/zizmor" --config .github/zizmor.yml .github/workflows/
