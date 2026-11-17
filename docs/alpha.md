@@ -1,6 +1,6 @@
 # alrust alpha: quick start
 
-The first runnable alrust: the Rust API server on PostgreSQL 18.6, speaking
+The first runnable alrust: the Rust API server on PostgreSQL 18.7, speaking
 the core of the Alerta v9.1.0 API. It is an **early alpha**: built to be
 tried, not yet to replace the reference server. Behaviour follows
 `spec/lifecycle.md`; the gaps are listed below.
@@ -51,14 +51,14 @@ Stop with `docker compose down`; add `-v` to delete the database volume.
 
 ### Without Docker
 
-Use a disposable PostgreSQL 18.6 development database. Set its connection
+Use a disposable PostgreSQL 18.7 development database. Set its connection
 URL privately; do not commit real connection strings or credentials. The native
 server defaults to listening on all interfaces, so bind it to loopback explicitly
 for a local trial. Authentication is enabled by default; bootstrap a local admin
 key before using the authenticated examples above:
 
 ```sh
-export DATABASE_URL='<your disposable PostgreSQL 18.6 connection URL>'
+export DATABASE_URL='<your disposable PostgreSQL 18.7 connection URL>'
 export ALRUST_ADMIN_KEY="$(openssl rand -hex 20)"
 export ALRUST_BIND=127.0.0.1:8080
 cargo build --locked --release --bin alrust
@@ -103,8 +103,9 @@ it. At start-up it decides what it was pointed at:
 | `POST /heartbeat`, `GET /heartbeats`, `GET`/`DELETE /heartbeat/{id}` | Upsert by origin and customer; derived latency, since and status |
 | `POST /key`, `GET /keys`, `DELETE /key/{id}` | API keys (`Authorization: Key …`, `X-API-Key`, or `?api-key=`). A new key's scopes must be within the creator's; the secret is shown only in the creation response; lists and `href`s use the public id. As in the reference, `POST /key` may supply its own `key` and `id`: a Python-falsy value (`null`, `false`, `0`, `""`, `[]`, `{}`) generates one, a duplicate is refused (500), and a truthy non-string is rejected with 400, an intentional divergence by the owner's ruling (DECISIONS Y33; the reference passes such values unchanged to the database adapter, and type-specific outcomes have not been qualified). `href`s percent-encode the id as one path segment |
 | `PUT /alert/{id}/note`, `GET /alert/{id}/notes`, `PUT`/`DELETE /alert/{id}/note/{note_id}` | Alert notes. A new note copies the alert's resource, event, environment, severity and status into its `attributes` and adds a `note` history entry (with the note's id); a deleted note adds a `dismiss` entry. SF-NOTES: a note is changed or deleted only through its own alert, else 404 (`not found` for `PUT`, `note not found` for `DELETE`) with no change. As in the reference (customer-mapping C21), the list selects notes whose `alert` matches the alert's id as a case-insensitive regular expression, so a short client-set id also lists notes of alerts whose ids contain it; at most 100, oldest first (the reference has no order). History entries are written to the matched alert only, as everywhere in alrust. Differences: a truthy non-string `text` or `note`, a non-string update `text`, non-object update `attributes` or a non-object body are 400 (the reference's outcome is not established) |
-| `GET /management/gtg`, `/management/healthcheck` | No key needed |
+| `GET /management/gtg`, `/management/healthcheck` | No key needed. `gtg` answers `OK`, or 503 `FAILED` when the database does not answer |
 | `GET`/`POST /management/housekeeping` | Deletion and expiry (K1, K2) |
+| `POST /webhooks/prometheus` | Alertmanager notifications, mapped as the reference's `prometheus.py` (DECISIONS Y27) with the fixes of `spec/security-fixes.md` SF-WEBHOOKS: every item is mapped and processed on its own (Y10), and a batch with a failed item answers with the first failure's status plus `results` (one entry per item: `index`, `inputId`, `resourceId`, `outcome`, `code`, `message`); `moreInfo` is the plain URL (Y11); placeholders follow Y12 (no Python format language, 65,536-byte cap). Scope `write:webhooks`. The request log keeps only the route template, the webhook name and the body length. A null label takes the reference constructor's value (`customer` none, `environment` empty and then refused, `job` `Misc`, `severity` normal when a description or summary gives the text). Not reproduced, so the item is invalid: a label used as an alert field whose value is a boolean, a float, a list or an object (the reference's outcome for these has not been established). A leftover label is the tag `k=v` with Python's `str()` of the value, also for a list or an object. A `timeout` label is read as Python's `int()` reads it; a negative one is refused with the item, and one beyond 64 bits makes the item invalid (never the default timeout). Residuals: integers beyond 64 bits and `NaN`/`Infinity` elsewhere in the body. Other webhook names answer 404 |
 
 ## Configuration
 
@@ -134,6 +135,7 @@ for a container remains separate reviewed configuration and an owner step.
 | `ALRUST_DB_ACQUIRE_TIMEOUT` | `10` | Seconds a request waits for a free database connection (pool of 16) before it fails with 500 |
 | `ALRUST_DB_LOCK_TIMEOUT` / `ALRUST_DB_STATEMENT_TIMEOUT` | `10` / `0` (off) | PostgreSQL `lock_timeout` and `statement_timeout`, in seconds, on serving connections; a statement that exceeds one fails with 500. Start-up (migration, adoption) runs without them |
 | `ALRUST_HOUSEKEEPING_INTERVAL` | `0` (off) | Seconds between automatic housekeeping runs. The reference never schedules it; with it on, closed and expired alerts older than 2 h and informational alerts older than 12 h are **deleted**. |
+| `ALRUST_KEY_USAGE_IMMEDIATE` | `false` | `true` writes an API key's use count and last-used time on every request, as the reference does. By default a request checks its key with a read only, and one writer writes the uses about once a second, and once more at a graceful shutdown: `GET /keys` shows them about a second late. If the database cannot take a write (slow, locked or down), alrust retries for up to 30 seconds, then drops those counts and logs how many; requests never wait for it, and a use is never counted twice. Counts for a key deleted or changed meanwhile, and counts whose write had an unknown outcome, are also dropped and logged, each separately. A crash loses the counts not yet written, never an alert (DECISIONS Y68, Y70) |
 
 ### Bearer verification only
 
@@ -185,7 +187,7 @@ or a key-management procedure.
   matching row, and an exact match is always one of them.
 - **Not yet implemented:** blackouts,
   customers, users, groups, permissions, auth logins (basic, LDAP, OIDC,
-  SAML), webhooks, bulk routes, the top-N counts, auto-unshelve and auto-unack
+  SAML), the webhooks other than Prometheus, bulk routes, the top-N counts, auto-unshelve and auto-unack
   in housekeeping, `q=` queries, the web UI and the desktop app.
 - **Scopes:** `admin` grants everything; `write` and `write:<resource>` grant
   the matching reads. Customer assignment follows `assign_customer`

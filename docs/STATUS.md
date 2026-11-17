@@ -1,7 +1,9 @@
 # Status
 
-_Last updated: 2026-11-09T00:01Z by claude-alrust, the sole writer of this
-file and DECISIONS.md. Codex sends corrections through the mailbox._
+_Last updated: 2026-11-16 11:18 EST by claude-alrust, the sole writer of this
+file and DECISIONS.md. Codex sends corrections through the mailbox. Times
+written from 2026-11-15 14:13 EST on are Nassau local time (DECISIONS Y63);
+earlier ones are UTC (`Z`)._
 
 ## Current phase
 
@@ -803,12 +805,214 @@ while the repository is private. The Y54 candidate is draft PR #216
 booted Alerta 9.1.0, whose health check answered OK; that is a first
 qualification step only, so the PR waits for a qualification ruling before
 it can merge.
-Still open, all owner decisions: public visibility, the license for
-alrust's own code, how to handle the repository history (session links,
-home paths), the security-reporting contact, and whether housekeeping
-should refuse negative hours (the reference accepts them). Before any visibility
-change, self-hosted runners must be unreachable from fork pull requests
-(PUB-F2).
+**2026-11-10 to 2026-11-14.** The owner asked Claude for a full scan and
+improvement list, and on 2026-11-10 directed that alrust become a public
+repository on free GitHub-hosted CI with the self-hosted run code separated
+out. Claude sent Codex a proposal for that split (a private lab repository
+for the Forgehold lane, recording Alerta once and replaying in Rust, later
+moving the custody harness); nothing has moved, and the lab repository, any
+removal and the fate of Y42/Y43/Y46/Y47/Y49 are owner decisions. Draft PRs
+#219 (`/management/gtg` checks the database), #220 (request deadline and
+serving-pool time limits) and #221 (README rewrite) wait for Codex's
+verdicts; on 2026-11-12 the owner chose #221 over #124, which Claude closed
+with its branch kept. On the owner's direct request Codex prepared a Rust
+1.100.0 upgrade (`3534c053`); Claude's review found 11 Clippy 1.100 failures
+in existing code (R100-1) and fixed them in `a607c225`, and Codex approved
+that exact composition. **#222 merged on 2026-11-14 as `30783165`** (tree
+equals the head's; push run `43553280066` green, Compose skipped): Rust
+1.100.0 in `rust-toolchain.toml`, CI and the Docker builder, Cargo
+unused-dependency lints denied, two unused dependency edges removed, a
+seven-day resolution cooldown, and the notice corpus re-bound. Not
+established at that merge: the new Docker builder image was not built
+(Compose skipped), and the declared minimum Rust 1.98 was not recompiled.
+The builder image was first built on 2026-11-14, after the repository
+became public: PR run `43597949533` (#234) and push run `43602055257` on
+`main` `79fca79c`, Compose smoke green in both. MSRV 1.98 is still not
+recompiled. On the owner's
+request Codex assigned Claude a work package (packet `21520154`): **#223
+merged as `35b0380c`** (Codex's `da100d6`, published unchanged after
+Claude's review): the 13 November lab read pilot, in which alrust answered
+five warm single-client read cases over 10,000 alerts 1.4 to 4.1 times
+faster than Alerta 9.1.0 with matched responses, and a PostgreSQL 18.7
+evaluation. That is a lab result, not capacity, search or integration
+evidence. Draft PRs from the package: #224 (`/alerts/count` without the
+unused row fetch), #225 (Zabalack and Voalack probe proposal; nothing
+measured, no adapter registered) and #226 (PostgreSQL 18.7 candidate pins,
+not for merge: Y32 keeps 18.6 until the owner decides). Local builds on
+this host reach 96 to 99 °C even with one job, so Claude leaves full builds
+to hosted CI.
+**2026-11-14, later.** In an owner-requested independent block Claude
+opened drafts #228 to #233; Codex approved #229 and #231 and, later,
+#219, #220 and #230 at exact compositions, and #225 and #232 as proposals.
+At 06:04Z GitHub refused all Actions jobs: the private repository's free
+minutes were used up, after a burst of runs. The owner chose to wait, with
+no billing change. Claude ran a read-only exposure scan of every branch,
+PR ref, commit message, PR text, comment and artifact: no credentials, keys
+or private addresses; the residuals are the owner's Gmail author address,
+Claude session links and `/home/user` paths in these documents. The owner
+chose **Apache-2.0** for alrust's own code (DECISIONS Y58, PR #234) and, at
+13:04Z, directed that the repository be made **public**; Claude switched it
+after checking that no self-hosted runner was registered, then set fork
+pull-request workflows to need approval for all outside contributors. On
+the owner's request Codex enabled `main` protection (pull request, ten
+required checks, up to date, resolved conversations, admins included) and
+secret scanning with push protection. **#229 merged as `79fca79c`**
+(approved head `29ede446`, tree equal; push run `43602055257` all green).
+Its scope is the reference-compatible choice of an exact id where one
+exists; an id with regex characters (for example `a$`) is not the same as
+the reference's regex lookup, and no concurrency or speed property is
+claimed. #233 (Prometheus webhook) was withdrawn by Claude: it contradicted
+Y10, Y11 and Y12 (SF-WEBHOOKS) and is being rewritten.
+**2026-11-14 evening to 2026-11-15.** Through Codex (packet `f66d1d56`)
+the owner asked Claude to work alone for three days, to 2026-11-17T14:38Z;
+Claude accepted at 15:32Z. Three merges, each with Codex's exact-head
+approval, the advisor's no objection and a green push run: **#224 as
+`0f8f55ac`** (head `b7488549`, run `43650253339`), **#220 as `cad79fd9`**
+(head `9c8eda38`, run `43653855526`) and **#234 as `11aede4b`** (head
+`875c7834`, run `43669716735`), so alrust's own code is Apache-2.0 on
+`main`. Codex also approved, at exact sources whose later compositions need
+their own review, #219, #230, #231, #235 and #236, and this record's
+earlier head, and approved #225, #228 and #232 as proposals. Codex declined
+Claude's proposal to skip review for a clean merge with `main`, so
+approved PRs land about one per Codex review round. New drafts: #235
+(a public reproducibility note, an evidence manifest and a check script for
+the 13 November pilot; its 136 checks are consistency checks, not
+benchmark validation), #236 (`GET /environments`, `/services`,
+`/alerts/groups`, `/alerts/tags`; customer-mapping C20 and the
+reference's 1000-row limit kept) and #237 (`spec/zabbix-inbound.md`, a
+proposal with source-derived vectors, all NOT_RUN; the session's safety
+classifier refused a harness that ran the downloaded functions, and Claude
+did not work around it). #233 was rewritten to SF-WEBHOOKS and then
+corrected twice for Codex's findings; it waits for review. The owner
+answered ZBX-1 (DECISIONS Y60). The owner approved a 30-minute inbox
+check in Claude's session through claude-chief-0a and paused it on
+2026-11-15 at about 02:45Z, and approved the deletion of a branch Claude
+had pushed by mistake (`claude/next-comparison`). On 2026-11-15 at about
+03:14Z the owner wrote: "Thanks you can continue alone with your advisor for
+24 hours and don't send anything to codex". Claude reads that as including
+the signed receipts a mailbox fetch delivers to Codex (the tool has no
+separate receipt step), so Claude does not read the mailbox until
+2026-11-16T03:14Z, and nothing merges in that time, because no Codex
+approval can be read. Review packets are kept for one consolidated send
+afterwards.
+Still open, all owner decisions: the repository history (session links,
+home paths, the author address; Claude recommends keeping it, since a
+rewrite breaks the exact-head records), the security-reporting contact,
+whether housekeeping should refuse negative hours (the reference accepts
+them), the bulk and oEmbed choices BULK-Q1, BULK-Q2 and OEMBED-Q1 (asked
+after Codex reads #251), the search proposals P1 to P5 and Q-S3 (after
+review; P3 together with #226), a daily self-check as a safety net for the
+new wake path (proposed, not decided), and moving the Forgehold lane out (PUB-F2: with no self-hosted runner
+registered and outside-contributor approval required, a fork pull request
+cannot reach the self-hosted runners today), and the Zabbix choices ZBX-4
+and ZBX-5a to 5c (with ZBX-2 also for Codex) once Codex has reviewed #237
+(answered on 2026-11-15 after Codex's proposal approval: DECISIONS Y66).
+
+**2026-11-15, the solo window (to 22:14 EST).** The owner's rule held all
+day: Claude neither read nor wrote the mailbox, and nothing merged. Two Codex
+messages wait unread. Every review packet is queued for one consolidated
+send after the window. New draft PRs, on `main` unless stated, with CI 10/10
+at the head named unless stated:
+- #238 top-N lists (`76463649`); #239 alert notes, SF-NOTES (`e2eaed7f`);
+  #240 `GET /config` (`f42bf038`); #241 blackout routes (`71609a09`, 9/10:
+  a Compose flake); #242 blackout suppression (`d9482054`); #243 customer
+  mappings (`ffb4f6f9`); #244 the management manifest and status
+  (`355fae14`); #246 `GET /management/properties`, redacted (`0c3e11d1`).
+- Search (Y61): #245 the reference-faithful `q=` (`879cbd10`); #248 the
+  opt-in `q.mode=lucene` (`d2694370`, on #245); #247 the measurement
+  harness and `docs/performance/search-v2.md` with the proposals P1 to P5
+  (`09e7639b`, on #245); #256 a measurement-only PR on #248, not for merge.
+- The owner's picks (Y62): #249 permissions (`e080252d`); #252 groups
+  (`99ffc039`, on #249); #253 users (`4194523d`, on #252). `POST /user`
+  and password changes wait on the hashing gate. Also #250 auto-unshelve
+  and auto-unack (`a1f8ba03`); #251 the spec entries SF-BULK and SF-OEMBED
+  (`5bd6e9b6`, 9/10, see below); and #254 the four bulk routes that need
+  no owner choice (`ca429946`, 9/10, see below).
+A self-review by three read-only reviewers found defects in five PRs:
+- #248: six value and order checks;
+- #249: three, one of them in `alrust-domain`'s scope check and older than
+  the PR (a held `delete:alerts` did not grant itself);
+- #250: two concurrency cases;
+- #252: one;
+- #253: missing tests.
+All were fixed in new commits, and every new head passed CI with its new
+tests run.
+
+Apart from failures on Claude's own first heads, each fixed by the next
+commit, five CI failures today were the PGDG signing-key download in
+`start-postgres18.sh`, not the code. That script's `--retry 3` does not
+cover curl exit 56. They leave #251 and #254 at 9/10. On #254 the required
+`fmt / clippy / test` job never reached cargo, so the bulk code has no clippy
+or test verdict yet; its rerun waits for the end of the window.
+
+Other events of the day:
+- #255, a performance comparison on PostgreSQL 18.7 run on a Grok VM and
+  opened under the owner's account, is not Claude's.
+- claude-chief-0a, on the owner's instruction, restricted GitHub Actions and
+  enabled two security features (Y65). It also held the laptop quiet for
+  Forgehold lane-35; nothing of Claude's runs locally.
+- Times in records are now EST (Y63).
+- Claude's wake path moves to claude-chief-0a at 22:45 EST (Y64).
+
+**2026-11-15 16:26 EST to 2026-11-16 morning.** The owner lifted the
+no-Codex window early ("Let's do it now don't wait", 16:26 EST). Claude sent
+the consolidated packet, and claude-chief-0a's mail watcher replaced Claude's
+hourly check (Y64). Codex approved four PRs at exact heads, and Claude merged
+each under Y48 with the advisor's no-objection; each merge's tree equals
+its approved head's tree:
+- #219, `/management/gtg` checks the database: 16:30 EST, `b3df6928`;
+- #221, the README rewrite: 22:54 EST, `c64a1c73`;
+- #257, the public documents (the Cargo licence field with its notice
+  corpus, `SECURITY.md`, CONTRIBUTING): 00:24 EST, `49a5e51c`;
+- #233, the Prometheus webhook receiver, rebound onto each new `main`:
+  01:16 EST, `6758e03e`.
+Owner decisions, all in Claude's session: the Zabbix receiver choices (Y66),
+PostgreSQL 18.7 (Y67), the API-key use counter off the request path (Y68)
+and when the benchmark workflow runs (Y69). Open work from the night:
+- #226 moves the pin to 18.7 with version-free required job names. Codex
+  requested documentation corrections at `12704f69` (the candidate
+  document's Compose-smoke condition, stale lines and the rollback list),
+  then approved the corrected `f4389f41`. claude-chief-0a switched the two
+  required checks at 08:24 EST, Claude read the protection back, and #226
+  merged at 08:24 EST as `bddf03c3`. `main` now runs PostgreSQL 18.7.
+- #258 is a diagnostic benchmark of alrust and Alerta 9.1.0 on a
+  GitHub-hosted runner (`docs/performance/2026-11-15-bench-compare.md`,
+  run `43792492613`, 72 of 72 measurements valid); #259 adds a README
+  Performance section from it. Codex reconciled the data with the saved
+  run artifacts and requested changes on both: a saved-row check for the
+  duplicate write (BENCH-R1), field and group checks for reads (BENCH-R2),
+  and narrower wording (BENCH-R3 on eight clients; the 37% to 77% is
+  latency, not speed).
+- #260 is the key-use change (Y68), CI 10/10 at `50073dc8`; Codex holds it
+  as intake.
+Every other open PR is now behind `main` and is rebound in turn.
+
+**2026-11-16, the day (to 11:18 EST).** Codex approved four more PRs at exact
+heads, and Claude merged each under Y48 with the advisor's no-objection; each
+merge's tree equals its approved head's tree:
+- #226, PostgreSQL 18.7 with version-free required check names: 08:24 EST,
+  `bddf03c3`, right after claude-chief-0a switched the two required checks
+  and Claude read the protection back (Y67);
+- #227, the records for 2026-11-15 and Y67 to Y69: 08:54 EST, `50b49e5e`;
+- #258, the diagnostic benchmark with its read and write correctness gates
+  and the triggers the owner chose (Y69): 10:50 EST, `1bb7012b`.
+  `bench-compare.yml` is now on `main`; no full run has been started;
+- #259, the README Performance section: 11:17 EST, `183ee289`. The README
+  on `main` is now the full rewrite with the 18.7 line and the section.
+Owner decisions today: when the benchmark workflow runs (Y69, 07:28 EST)
+and what the key-use writer does under database trouble (Y70, 09:57 EST).
+#260 (the key-use change, Y68 and Y70) had two rounds of Codex findings:
+- `56ffa31d`: R1 shutdown lifecycle, R2 credential identity, R3 the
+  failure bound, R4 no replay of an uncertain commit;
+- `5c744cde`: early comments on the design, items 1 to 6.
+Its review head is `96a53f2f` (CI 10/10, seven key-usage tests run); it is
+rebound onto `main` only after Codex's source verdict.
+The PostgreSQL apt key download in `start-postgres18.sh` failed with curl
+exit 56 in nine CI jobs over 2026-11-15 and 2026-11-16, each passing on
+rerun; its retry flags do not cover that error, and a fix follows. At the
+owner's request Claude reviewed Oxide Computer's 85 public RFDs and sent the
+owner a ranked top 20 for alrust; that review is outside the repository.
+#256 was closed as planned (measurement only).
 
 ## Work in flight
 
@@ -1418,9 +1622,10 @@ The informal smoke run of 2026-09-29, made before the charter on host Python
   confirm, forgot, reset, GitHub and CAS stay at inventory depth, and
   auth-contract changes stay with the owner. Keep STATUS current.
 - **Owner:**
-  - repository protection: approved (Y2); applied when the owner makes the
-    repository public after the beta has been tested (no paid upgrade); until
-    then `main` is unprotected and the guard is not enforced;
+  - repository protection: approved (Y2); applied on 2026-11-14 after the
+    repository became public (Y59): `main` needs a pull request, the ten
+    required checks, an up-to-date branch and resolved conversations,
+    admins included, with secret scanning and push protection on;
   - production-exposure checks: deferred (Y4);
   - the security and behavior items below are DECIDED (Y3): alrust fixes
     each one. Specified and approved in `spec/security-fixes.md` so far:

@@ -347,10 +347,12 @@ async fn authenticate(
     params: &[(String, String)],
 ) -> ApiResult<Caller> {
     match select_credential(headers, params, st.cfg.bearer.as_ref()) {
-        Credential::Key(k) => match st.store.use_key(&k).await? {
+        Credential::Key(k) => match st.store.authenticate_key(&k).await? {
             Some(key) => Ok(Caller {
                 login: Some(key.user),
-                // use_key matches only keys with scopes.
+                // authenticate_key matches only keys with scopes. The use is
+                // recorded before any scope check, so a 403 still counts, as
+                // in the reference's verify_key.
                 scopes: key.scopes.unwrap_or_default(),
                 customer: key.customer,
                 auth_off: false,
@@ -442,6 +444,8 @@ pub fn router(state: Shared) -> Router {
         .route("/alert/{id}/attributes", put(update_attributes))
         .route("/alerts", get(search_alerts))
         .route("/alerts/count", get(count_alerts))
+        .route("/webhooks/{webhook}", get(webhook).post(webhook))
+        .route("/webhooks/{webhook}/{*path}", get(webhook).post(webhook))
         .route("/heartbeat", post(create_heartbeat))
         .route(
             "/heartbeat/{id}",
@@ -622,7 +626,39 @@ async fn receive(
 ) -> ApiResult<Response> {
     let caller = authenticate(&st, &headers, &params).await?;
     caller.require("write:alerts")?;
-    let mut n = parse_alert(&body, &st, st.store.config().alert_timeout)?;
+    let n = parse_alert(&body, &st, st.store.config().alert_timeout)?;
+    match process_alert(&st, &caller, n).await? {
+        Received::Alert(alert) => Ok((
+            StatusCode::CREATED,
+            Json(json!({"status": "ok", "id": alert.id, "alert": alert_json(&st, &alert)})),
+        )
+            .into_response()),
+        Received::Heartbeat(id) => Ok(heartbeat_accepted(&id)),
+    }
+}
+
+/// What the receive path did with one incoming alert.
+enum Received {
+    Alert(Box<Alert>),
+    /// A heartbeat event became this heartbeat (spec HB3.1).
+    Heartbeat(String),
+}
+
+/// The 202 answer for an alert converted to a heartbeat.
+const HEARTBEAT_MESSAGE: &str = "Alert converted to Heartbeat";
+
+fn heartbeat_accepted(id: &str) -> Response {
+    let msg = HEARTBEAT_MESSAGE;
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({"status": "ok", "message": msg, "id": id})),
+    )
+        .into_response()
+}
+
+/// The receive path after parsing, shared by `POST /alert` and the
+/// webhooks (the reference's `assign_customer` and `process_alert`).
+async fn process_alert(st: &AppState, caller: &Caller, mut n: NewAlert) -> ApiResult<Received> {
     n.customer = caller.assign_customer(n.customer.take(), "admin:alerts")?;
 
     // Reject policy (spec R1.2), unless the alert arrives already in blackout.
@@ -667,21 +703,173 @@ async fn receive(
                     n.customer.as_deref(),
                 )
                 .await?;
-            let msg = "Alert converted to Heartbeat";
-            return Ok((
-                StatusCode::ACCEPTED,
-                Json(json!({"status": "ok", "message": msg, "id": hb.id})),
-            )
-                .into_response());
+            return Ok(Received::Heartbeat(hb.id));
         }
     }
 
-    let (alert, _kind) = st.store.receive_with(n, &caller.facts(&st)).await?;
-    Ok((
-        StatusCode::CREATED,
-        Json(json!({"status": "ok", "id": alert.id, "alert": alert_json(&st, &alert)})),
-    )
-        .into_response())
+    let (alert, _kind) = st.store.receive_with(n, &caller.facts(st)).await?;
+    Ok(Received::Alert(Box::new(alert)))
+}
+
+/// The reference's `DEFAULT_ENVIRONMENT` (`settings.py:298`), used by the
+/// webhooks when a source names no environment.
+const WEBHOOK_DEFAULT_ENVIRONMENT: &str = "Production";
+
+/// One webhook item's outcome (SF-WEBHOOKS alrust item 2, `results`).
+struct ItemOutcome {
+    index: usize,
+    input_id: Option<String>,
+    resource_id: Option<String>,
+    outcome: &'static str,
+    code: StatusCode,
+    message: Option<String>,
+    /// The reference's response for this item alone.
+    response: Value,
+    alert: Option<Alert>,
+}
+
+impl ItemOutcome {
+    fn invalid(index: usize) -> Self {
+        let message = format!("Invalid alert at index {index} in webhook payload.");
+        ItemOutcome {
+            index,
+            input_id: None,
+            resource_id: None,
+            outcome: "invalid",
+            code: StatusCode::BAD_REQUEST,
+            response: error_body(StatusCode::BAD_REQUEST, &message),
+            message: Some(message),
+            alert: None,
+        }
+    }
+
+    fn result(&self) -> Value {
+        json!({
+            "index": self.index,
+            "inputId": self.input_id,
+            "resourceId": self.resource_id,
+            "outcome": self.outcome,
+            "code": self.code.as_u16(),
+            "message": self.message,
+        })
+    }
+}
+
+/// The API's error body, with the same redaction as `ApiError`.
+fn error_body(code: StatusCode, message: &str) -> Value {
+    let message = if contains_evidence(message) {
+        REDACTED_ERROR
+    } else {
+        message
+    };
+    json!({"status": "error", "message": message, "code": code.as_u16(), "errors": null})
+}
+
+/// `POST /webhooks/<webhook>[/<path>]` (reference `webhooks/custom.py`, with
+/// SF-WEBHOOKS): only `prometheus` is implemented (DECISIONS Y27). Every
+/// item is mapped and processed on its own (Y10); see `webhook_response`
+/// for the answer.
+async fn webhook(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+    Path(p): Path<std::collections::HashMap<String, String>>,
+    body: axum::body::Bytes,
+) -> ApiResult<Response> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("write:webhooks")?;
+    let name = p.get("webhook").map_or("", String::as_str);
+    let items = match name {
+        "prometheus" => alrust_domain::prometheus::parse(&body, WEBHOOK_DEFAULT_ENVIRONMENT)
+            .map_err(|e| ApiError::bad(e.message))?,
+        _ => {
+            return Err(ApiError::new(
+                StatusCode::NOT_FOUND,
+                format!("Custom webhook '{name}' not found."),
+            ));
+        }
+    };
+    let alert_timeout = st.store.config().alert_timeout;
+    let mut outcomes = Vec::with_capacity(items.len());
+    for (index, item) in items.into_iter().enumerate() {
+        let parsed = match item {
+            alrust_domain::prometheus::Item::Mapped(o) => {
+                parse_alert(&Value::Object(o), &st, alert_timeout).ok()
+            }
+            alrust_domain::prometheus::Item::Invalid => None,
+        };
+        let Some(n) = parsed else {
+            outcomes.push(ItemOutcome::invalid(index));
+            continue;
+        };
+        let input_id = Some(n.id.clone());
+        outcomes.push(match process_alert(&st, &caller, n).await {
+            Ok(Received::Alert(a)) => ItemOutcome {
+                index,
+                input_id,
+                resource_id: Some(a.id.clone()),
+                outcome: "processed",
+                code: StatusCode::CREATED,
+                message: None,
+                response: json!({"status": "ok", "id": a.id, "alert": alert_json(&st, &a)}),
+                alert: Some(*a),
+            },
+            Ok(Received::Heartbeat(id)) => ItemOutcome {
+                index,
+                input_id,
+                response: json!({"status": "ok", "message": HEARTBEAT_MESSAGE, "id": id}),
+                resource_id: Some(id),
+                outcome: "heartbeat",
+                code: StatusCode::ACCEPTED,
+                message: Some(HEARTBEAT_MESSAGE.into()),
+                alert: None,
+            },
+            Err(e) => ItemOutcome {
+                index,
+                input_id,
+                resource_id: None,
+                outcome: if e.code == StatusCode::FORBIDDEN {
+                    "rejected"
+                } else {
+                    "error"
+                },
+                code: e.code,
+                response: error_body(e.code, &e.message),
+                message: Some(e.message),
+                alert: None,
+            },
+        });
+    }
+    Ok(webhook_response(&st, &outcomes))
+}
+
+/// SF-WEBHOOKS alrust item 2, "Response": the reference's answer when every
+/// item was processed, or for a batch of one; otherwise the reference's
+/// answer for the first item not processed, plus `results`.
+fn webhook_response(st: &AppState, outcomes: &[ItemOutcome]) -> Response {
+    let first_failed = outcomes.iter().position(|o| o.outcome != "processed");
+    let (code, mut body) = match (outcomes, first_failed) {
+        ([one], None) => (
+            StatusCode::CREATED,
+            json!({"status": "ok", "id": one.resource_id, "alert": one.alert.as_ref().map(|a| alert_json(st, a))}),
+        ),
+        (_, None) => (
+            StatusCode::CREATED,
+            json!({"status": "ok", "ids": outcomes.iter().map(|o| o.resource_id.clone()).collect::<Vec<_>>()}),
+        ),
+        ([one], Some(_)) => (one.code, one.response.clone()),
+        (all, Some(i)) => (all[i].code, all[i].response.clone()),
+    };
+    if outcomes.len() > 1
+        && first_failed.is_some()
+        && let Some(obj) = body.as_object_mut()
+    {
+        obj.insert(
+            "results".into(),
+            Value::Array(outcomes.iter().map(ItemOutcome::result).collect()),
+        );
+    }
+    (code, Json(body)).into_response()
 }
 
 async fn get_alert(
@@ -1441,8 +1629,17 @@ async fn delete_key(
 
 // ---------------------------------------------------------------- management
 
-async fn gtg() -> &'static str {
-    "OK"
+/// `GET /management/gtg`: `OK` when the database answers, else 503 `FAILED`
+/// (the reference's two answers, `management/views.py:127-134`). The cause is
+/// logged, never returned.
+async fn gtg(State(st): State<Shared>) -> Response {
+    match st.store.ping().await {
+        Ok(()) => "OK".into_response(),
+        Err(e) => {
+            tracing::warn!(error = %redact_diagnostic(e.to_string()), "gtg: the database did not answer");
+            (StatusCode::SERVICE_UNAVAILABLE, "FAILED").into_response()
+        }
+    }
 }
 
 /// `GET /management/healthcheck` (spec HB5). Reproduces the reference's use

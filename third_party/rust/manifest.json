@@ -24671,9 +24671,9 @@
       "sha256": "38195e0448779c14a050fe460805ce2ac32ec7fac7a0cb84a19ffb2a0a8cce4c"
     },
     {
-      "bytes": 3785,
+      "bytes": 3776,
       "path": "Cargo.toml",
-      "sha256": "00934034895f22e84dff1056b9085a54f4b0682f0c1a9556fb2b7bef64c7e043"
+      "sha256": "a5701518919b180717fc46bf1b27c9a7ed90f77910b7acf02b0dd4b55e630d87"
     },
     {
       "bytes": 87,
