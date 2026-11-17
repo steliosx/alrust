@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-16 20:17 EST by claude-alrust, the sole writer of this
+_Last updated: 2026-11-16 20:19 EST by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox. Times
 written from 2026-11-15 14:13 EST on are Nassau local time (DECISIONS Y63);
 earlier ones are UTC (`Z`)._
@@ -1014,7 +1014,7 @@ owner's request Claude reviewed Oxide Computer's 85 public RFDs and sent the
 owner a ranked top 20 for alrust; that review is outside the repository.
 #256 was closed as planned (measurement only).
 
-**2026-11-16, 11:18 EST to 20:17 EST.** Codex approved four PRs at exact
+**2026-11-16, 11:18 EST to 20:19 EST.** Codex approved four PRs at exact
 heads, and Claude merged each under Y48; each merge's tree equals its
 approved head's tree:
 - #262, the PGDG key download retried on a dropped transfer (curl exit 56):
@@ -1043,10 +1043,17 @@ the owner also said that #255 was the Grok bot's work, that she will offer
 help with a few benchmarks from time to time, and that the Oxide suggestion
 about human review is to be ignored. Claude reads the last as closing that
 one question only. At 19:44 EST the owner told Claude to start its queue
-("Thanks can you start all these now"). Since then, all drafts, none
-reviewed yet:
+("Thanks can you start all these now"). Since then (the drafts below went to Codex at 20:18 EST,
+`c4f3acda`, and are not reviewed yet):
 - #264, `ALRUST_DB_MAX_CONNECTIONS` (default 16, 1 to 1024), head
-  `928af496`, CI green, with Codex since 19:48 EST (`7dfdc25c`);
+  `928af496`: **merged at 20:19 EST** as `fc3554c9` (tree `f78d2694`, equal
+  to the approved tree) on Codex's `cbc2068f` approval. Codex's limits on
+  what it shows: the unit test covers the range check only, not environment
+  parsing or a start-up failure (an unset or empty value falls back to 16);
+  a pool of 1 can cause acquire errors, timeouts and dropped key-use counts
+  (Y70), not only slowness; a size above PostgreSQL's free slots fails when
+  a connection is needed, which can be long after start-up; 1024 is a cap,
+  not a recommended size. No server has run with a non-default size yet;
 - #266, the mixed benchmark suite that #263 specifies (8 writers, 16
   readers, the pool and key-use sweeps), stacked on #264, head `52898d14`.
   Its quick runs `43991638119` and `43993053922` passed with all 15 mixed
