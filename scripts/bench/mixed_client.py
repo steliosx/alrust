@@ -25,6 +25,7 @@ import gzip
 import http.client
 import json
 import os
+import re
 import signal
 import socket
 import sys
@@ -42,6 +43,8 @@ def write_body(writer, index):
                        "environment": "Production", "severity": "major",
                        "service": ["web"], "text": "mixed workload"}).encode()
 
+API_TIME = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z")
+
 
 def read_problem(status, raw):
     """What is wrong with one list answer, or None."""
@@ -54,8 +57,10 @@ def read_problem(status, raw):
         return f"the body does not parse as a list of alerts: {e!r}"
     if len(alerts) > 50:
         return f"{len(alerts)} alerts in one page"
-    if any(not isinstance(t, str) or len(t) != len(times[0]) for t in times):
-        return "lastReceiveTime values are not strings of one length"
+    # The served form is fixed (see mixed_checks.py), so strings of that
+    # form compare as their times do.
+    if any(not isinstance(t, str) or not API_TIME.fullmatch(t) for t in times):
+        return "a lastReceiveTime is not a UTC time with three fraction digits and Z"
     if any(a < b for a, b in zip(times, times[1:])):
         return "the alerts are not in descending lastReceiveTime order"
     return None

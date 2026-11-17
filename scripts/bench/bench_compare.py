@@ -52,8 +52,12 @@ does not read the answers. Its gates:
           table has the seeded rows plus those; then the list and count
           are compared with the arm's own final rows.
 The final list check allows for equal lastReceiveTime values: each served
-alert is compared with its own row, and the served rows' times must be the
-database's 50 newest times in order.
+alert is compared with its own row, its served lastReceiveTime included
+(mixed_checks.py states the time policy), and the served rows' times must
+be the database's 50 newest times in order.
+A mixed cell that fails any of these gates is not scored, and it makes the
+suite's exit non-zero after the other cells have run and results.json is
+written.
 
 Standard library only; run with `python3 -I`. Inputs come from the
 environment that scripts/bench/setup.sh writes.
@@ -71,6 +75,10 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
+
+# `python3 -I` leaves the script's directory off the path.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from mixed_checks import cell_valid, served_time_problems  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 WORK = Path(os.environ["BENCH_WORK"])
@@ -649,6 +657,9 @@ def final_check(base, db):
                 diffs.append(f"{a['id']}.{api}: served {a.get(api)!r}, database {r.get(col)!r}")
     if diffs:
         problems.append(f"{len(diffs)} field differences: {diffs[:5]}")
+    time_problems = served_time_problems(served, by_id)
+    if time_problems:
+        problems.append(f"{len(time_problems)} time problems: {time_problems[:5]}")
     newest = sql_json(db, "SELECT json_agg(t.last_receive_time) FROM (SELECT last_receive_time "
                           "FROM alerts ORDER BY last_receive_time DESC LIMIT 50) t") or []
     if [by_id[i]["last_receive_time"] for i in ids if i in by_id] != newest:
@@ -656,9 +667,28 @@ def final_check(base, db):
     return {"ok": not problems, "problems": problems, "list_bytes": len(raw)}
 
 
+def score_cell(s, record, read_problems=()):
+    """Sets the finished cell's validity, keeps its record and returns the
+    validity, which the suite's exit depends on."""
+    arm, name, rep = s["arm"], s["case"], s["rep"]
+    writers, readers, problems = s["writers"], s["readers"], s["problems"]
+    bad = sum(s[k]["errors"] + s[k]["non_2xx"] for k in ("writes", "reads"))
+    s["valid"] = cell_valid(s, writers, readers)
+    record["mixed_cells"].append(s)
+    if not s["valid"]:
+        log(f"{arm}: MIXED CELL INVALID {name} r{rep}: {problems} {s['persisted']['problems']} "
+            f"{s['final_check']['problems']} {list(read_problems)[:2]}")
+    log(f"{arm:20} {name:13} r{rep}: {'' if s['valid'] else 'INVALID '}"
+        f"writes {s['writes']['rps']:.1f}/s p50 {s['writes']['p50_ms']:.2f} p99 {s['writes']['p99_ms']:.2f} ms; "
+        f"reads {s['reads']['rps']:.1f}/s p50 {s['reads']['p50_ms']:.2f} p99 {s['reads']['p99_ms']:.2f} ms; "
+        f"errors+non-2xx {bad}; rows {s['persisted']['alerts']}")
+    return s["valid"]
+
+
 def mixed_cell(arm, name, rep, db, record):
-    """One cell of the mixed suite on its own database copy. Returns False
-    when the pre-load check failed."""
+    """One cell of the mixed suite on its own database copy. Returns whether
+    the cell is valid: False when the pre-load check or any later gate
+    failed. The cell's record is kept either way."""
     writers, readers = MIX_CELLS[name]
     tag = f"{arm}-{name}-r{rep}"
     raw_dir = OUT / "raw"
@@ -748,24 +778,12 @@ def mixed_cell(arm, name, rep, db, record):
               "key_updates": keys1 - keys0,
               "key_updates_per_request": (keys1 - keys0) / (all_requests or 1),
               "server_alive": alive and still_alive, "problems": problems})
-    bad = sum(s[k]["errors"] + s[k]["non_2xx"] for k in ("writes", "reads"))
-    s["valid"] = (s["server_alive"] and not problems and bad == 0
-                  and s["reads"]["body_problems"] == 0
-                  and (writers == 0 or s["writes"]["ok"] > 0)
-                  and (readers == 0 or s["reads"]["ok"] > 0)
-                  and s["persisted"]["ok"] and s["final_check"]["ok"])
-    record["mixed_cells"].append(s)
-    if not s["valid"]:
-        log(f"{arm}: MIXED CELL INVALID {name} r{rep}: {problems} {s['persisted']['problems']} "
-            f"{s['final_check']['problems']} {read_problems[:2]}")
-    log(f"{arm:20} {name:13} r{rep}: {'' if s['valid'] else 'INVALID '}"
-        f"writes {s['writes']['rps']:.1f}/s p50 {s['writes']['p50_ms']:.2f} p99 {s['writes']['p99_ms']:.2f} ms; "
-        f"reads {s['reads']['rps']:.1f}/s p50 {s['reads']['p50_ms']:.2f} p99 {s['reads']['p99_ms']:.2f} ms; "
-        f"errors+non-2xx {bad}; rows {s['persisted']['alerts']}")
-    return True
+    return score_cell(s, record, read_problems)
 
 
 def run_mixed(record, dbs):
+    """Every cell runs, also after an invalid one. Returns False when any
+    cell was invalid."""
     all_ok = True
     for rep in range(REPS):
         order = MIX_ARMS[rep % len(MIX_ARMS):] + MIX_ARMS[:rep % len(MIX_ARMS)]
