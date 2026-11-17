@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-17 10:49 EST by claude-alrust, the sole writer of this
+_Last updated: 2026-11-17 11:18 EST by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox. Times
 written from 2026-11-15 14:13 EST on are Nassau local time (DECISIONS Y63);
 earlier ones are UTC (`Z`)._
@@ -1129,7 +1129,7 @@ which rule holds while the tool is unavailable, and Codex raised the same
 question; no answer or waiver is assumed. Until the owner answers, Claude
 merges nothing: #236 is approved and held.
 
-**2026-11-17, to 10:49 EST.** Codex approved the source of #266 at
+**2026-11-17, to 11:18 EST.** Codex approved the source of #266 at
 `9fb87d19` and of #267 at `7c9d0389` at 00:15 EST (`29ac0f76`), stating
 that these approvals do not waive Y48's advisor condition. Its limits on
 #266 stand: the local mutant run is Claude's report, not reproduced; no
@@ -1161,6 +1161,37 @@ review. The lines of this paragraph are later than Codex's approval of
 At about 10:49 EST the owner granted #265's weekly schedule ("weekly
 schedule for security: yes"; DECISIONS Y74). #265 (`6bb8d6b0`) is behind
 `main` and is bound to it next; its limits are unchanged.
+
+To 11:18 EST. Codex approved #236's composition at `c69c291b` and this
+record's source at `ac93f4ed`, and admitted Y74 as Claude's relay: the
+schedule permission is given, but #265's code and scan gates remain
+(`057c8b38`, 11:17 EST). Claude merged #236 at 11:18 EST (`f1c9d078`; its
+tree equals the approved tree `7c12e355`).
+
+The full run (Y71) is done: run `44118467373`, started by hand by the
+subagent on `main` `d9550949`, 10:48 to 11:12 EST, success. Claude
+recomputed every median of its summary from the raw `results.json` with no
+mismatch; all 45 cells are valid. The results document and the raw file
+are #269 (`docs/performance/2026-11-17-mixed-bench.md`), not reviewed. In
+short, on that runner and workload: a pool of 32 gave about 11% more mixed
+writes than 16, and 64 no more; writes fell from about 4,700/s alone to
+344 to 383/s beside 16 readers at every pool size, so the pool is not the
+main cause; key use written once a second was about 16% faster for writes
+alone. The default pool stays 16. Y71's one run is used up; any further
+full run needs the owner's yes (Y69).
+
+#265 was bound to `main` `d9550949` (head `78f68cd6`, not reviewed). Its
+own scan run `44118797691` failed in cargo-deny: RUSTSEC-2026-0543, the
+`chrono` crate reported as unmaintained with no safe upgrade; `chrono`
+0.4.45 is a direct dependency of four workspace crates and of sqlx. The
+same job was green the evening before. This is read from the job log only.
+`deny.toml` makes an unmaintained direct dependency a failure, so the scan
+did what it is set to do. Claude changed nothing and asked the owner to
+choose: a documented exception, replacing `chrono` now, or leaving the
+scan red. No answer yet; #265 is held.
+
+Next: the refresh wave, #238 first. The lines from "To 11:18 EST" on are
+later than Codex's approval of `ac93f4ed`.
 
 ## Work in flight
 
