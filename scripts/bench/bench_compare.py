@@ -543,6 +543,15 @@ def probe_pool_setting(record):
     log("the binary knows ALRUST_DB_MAX_CONNECTIONS (it refuses 0)")
 
 
+def key_updates(db):
+    """Row updates of the `keys` table so far (statistics; they lag by about
+    a second). It shows the key-use mode: about one update per request when
+    key use is written on every request, about one per second otherwise."""
+    psql(db, "SELECT pg_stat_clear_snapshot()")
+    return int(psql(db, "SELECT coalesce(sum(n_tup_upd), 0) FROM pg_stat_user_tables "
+                        "WHERE relname = 'keys'"))
+
+
 def percentile(sorted_values, q):
     if not sorted_values:
         return 0.0
@@ -662,7 +671,7 @@ def mixed_cell(arm, name, rep, db, record):
                 record["mixed_cells"].append(s)
                 return False
             url = urlsplit(base)
-            pg0 = pg_db_stats(db)
+            pg0, keys0 = pg_db_stats(db), key_updates(db)
             start_at = time.time() + 2.0
             files, clients = [], []
             for role, n in (("write", writers), ("read", readers)):
@@ -691,7 +700,7 @@ def mixed_cell(arm, name, rep, db, record):
                     c.wait()
                     problems.append("a client did not stop in 60 s")
             time.sleep(1.5)
-            pg1 = pg_db_stats(db)
+            pg1, keys1 = pg_db_stats(db), key_updates(db)
             by_role = {"write": [], "read": []}
             per_identity, read_problems = {}, []
             for role, number, out in files:
@@ -736,6 +745,8 @@ def mixed_cell(arm, name, rep, db, record):
               "pg_commits": pg1["xact_commit"] - pg0["xact_commit"],
               "requests_all_phases": all_requests,
               "commits_per_request": (pg1["xact_commit"] - pg0["xact_commit"]) / (all_requests or 1),
+              "key_updates": keys1 - keys0,
+              "key_updates_per_request": (keys1 - keys0) / (all_requests or 1),
               "server_alive": alive and still_alive, "problems": problems})
     bad = sum(s[k]["errors"] + s[k]["non_2xx"] for k in ("writes", "reads"))
     s["valid"] = (s["server_alive"] and not problems and bad == 0
@@ -953,14 +964,15 @@ def mixed_summary(record):
              "are of 2xx answers that ended in the timed phase. CPU is of the server's process tree and "
              "of PostgreSQL, for both classes together, per second and per completed request. "
              "The clients are Python processes on the same runner and take part of its CPU. "
-             "commits/req covers every phase.", "",
+             "commits/req and key updates/req cover every phase; key updates are row updates of "
+             "the `keys` table from PostgreSQL's statistics, and show the key-use mode.", "",
              "A repetition is scored only with no error or non-2xx answer in any phase, every list "
              "answer in order, the server alive, every 2xx write found in the database with the right "
              "duplicate_count, and the final list and count equal to the final rows.", "",
              "| case | arm | valid reps | writes/s | write p50 ms | write p99 ms | reads/s | read p50 ms | "
              "read p99 ms | errors+non-2xx (all reps) | server CPU s/s | postgres CPU s/s | "
-             "server CPU ms/req | postgres CPU ms/req | commits/req | final rows |",
-             "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+             "server CPU ms/req | postgres CPU ms/req | commits/req | key updates/req | final rows |",
+             "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for case in MIX_CELLS:
         for arm in record["mixed_arms"]:
             allc = rows.get((case, arm))
@@ -971,7 +983,7 @@ def mixed_summary(record):
             cs = [x for x in allc if x["valid"]]
             if not cs:
                 lines.append(f"| {case} | {arm} | 0/{len(allc)} | - | - | - | - | - | - | {bad} "
-                             "| - | - | - | - | - | - |")
+                             "| - | - | - | - | - | - | - |")
                 continue
             med = lambda f: statistics.median(f(x) for x in cs)
             cls = lambda k, on: (f"{med(lambda x: x[k]['rps']):.1f} | {med(lambda x: x[k]['p50_ms']):.2f} | "
@@ -983,6 +995,7 @@ def mixed_summary(record):
                          f"{med(lambda x: x['server_cpu_ms_per_request']):.3f} | "
                          f"{med(lambda x: x['postgres_cpu_ms_per_request']):.3f} | "
                          f"{med(lambda x: x['commits_per_request']):.2f} | "
+                         f"{med(lambda x: x['key_updates_per_request']):.4f} | "
                          f"{med(lambda x: x['persisted']['alerts']):.0f} |")
     invalid = [c for c in record["mixed_cells"] if not c["valid"]]
     for c in invalid:
