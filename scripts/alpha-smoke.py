@@ -221,6 +221,17 @@ c, b = call('GET', f'/alerts?resource={NR}')
 for a_ in b.get('alerts', []):
     call('DELETE', f"/alert/{a_.get('id')}")
 
+# --- customer mappings [views/customers.py]
+code, body = call('POST', '/customer', {'match': f'ops-{RUN}@example.test', 'customer': f'cust-{RUN}'})
+cid = body.get('id', '') if isinstance(body, dict) else ''
+check('POST /customer is 201 with the mapping', code == 201 and body.get('customer', {}).get('match') == f'ops-{RUN}@example.test', (code, body))
+code, body = call('GET', f'/customer/{cid}')
+check('GET /customer/<id>', code == 200 and body.get('customer', {}).get('customer') == f'cust-{RUN}', (code, body))
+code, body = call('PUT', f'/customer/{cid}', {'customer': f'cust2-{RUN}'})
+check('PUT /customer/<id> changes the customer', code == 200 and body.get('customer', {}).get('customer') == f'cust2-{RUN}', (code, body))
+code, body = call('DELETE', f'/customer/{cid}')
+check('DELETE /customer/<id>', code == 200, (code, body))
+
 # --- heartbeats [HB]
 origin = f'smoke/{RUN}'
 code, body = call('POST', '/heartbeat', {'origin': origin, 'timeout': 60, 'tags': ['smoke']})

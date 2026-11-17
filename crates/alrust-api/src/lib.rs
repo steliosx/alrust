@@ -453,6 +453,14 @@ pub fn router(state: Shared) -> Router {
         .route("/heartbeats", get(list_heartbeats))
         .route("/key", post(create_key))
         .route("/keys", get(list_keys))
+        .route("/customer", post(create_customer))
+        .route(
+            "/customer/{id}",
+            get(get_customer)
+                .put(update_customer)
+                .delete(delete_customer),
+        )
+        .route("/customers", get(list_customers))
         .route("/key/{id}", axum::routing::delete(delete_key))
         .route("/management/gtg", get(gtg))
         .route("/management/healthcheck", get(healthcheck))
@@ -1478,6 +1486,274 @@ async fn delete_key(
     let caller = authenticate(&st, &headers, &params).await?;
     caller.require("admin:keys")?;
     st.store.delete_key(&id).await?;
+    Ok(Json(json!({"status": "ok"})))
+}
+
+// ---------------------------------------------------------------- customers
+
+/// `admin` or `admin:customers` by exact list membership, else the
+/// caller's key customer must be the mapping's (`views/customers.py:46`,
+/// `:65`).
+fn sees_mapping(caller: &Caller, m: &alrust_store_pg::customers::CustomerMapping) -> bool {
+    caller
+        .scopes
+        .iter()
+        .any(|s| s == "admin" || s == "admin:customers")
+        || (caller.customer.is_some() && caller.customer == m.customer)
+}
+
+/// A `match` or `customer` value: absent or null is none; a non-string is
+/// refused (not established in the reference).
+fn mapping_field(obj: &Map<String, Value>, key: &str) -> ApiResult<Option<String>> {
+    match obj.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s.clone())),
+        Some(_) => Err(ApiError::bad(format!("{key} must be a string"))),
+    }
+}
+
+/// `POST /customer` (`views/customers.py:16-37`). SF-CUSTOMERS applies only
+/// with `CUSTOMER_VIEWS` on, which alrust is not: when that changes, its
+/// items 1 and 2 must be added here and in `update_customer`.
+async fn create_customer(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+    Json(body): Json<Value>,
+) -> ApiResult<Response> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("admin:customers")?;
+    // A non-object body and a missing `match` fail in the reference (an
+    // AttributeError, then the NOT NULL column): 400 here.
+    let Value::Object(obj) = &body else {
+        return Err(ApiError::bad("customer must be a JSON object"));
+    };
+    let pattern = mapping_field(obj, "match")?.ok_or_else(|| ApiError::bad("match is required"))?;
+    let mapping = alrust_store_pg::customers::CustomerMapping {
+        id: supplied(obj, "id")?.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+        pattern,
+        customer: mapping_field(obj, "customer")?,
+    };
+    let m = st.store.create_mapping(&mapping).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({"status": "ok", "id": m.id, "customer": m.body(&st.cfg.base_url)})),
+    )
+        .into_response())
+}
+
+/// `GET /customer/{id}` (`views/customers.py:40-50`). A missing id is 404
+/// here; the reference reads `customer.customer` on `None` (a 500).
+async fn get_customer(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("read:customers")?;
+    let m = st.store.get_mapping(&id).await?;
+    if !sees_mapping(&caller, &m) {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "not found"));
+    }
+    Ok(Json(
+        json!({"status": "ok", "total": 1, "customer": m.body(&st.cfg.base_url)}),
+    ))
+}
+
+/// `Customers.from_params` (`postgres/utils.py:442-462`): `match` and
+/// `customer` filters, `sort-by` on them; `id` is not a filter.
+fn parse_mapping_query(
+    params: &[(String, String)],
+) -> ApiResult<alrust_store_pg::customers::MappingQuery> {
+    let mut q = alrust_store_pg::customers::MappingQuery::default();
+    let mut seen: Vec<&str> = Vec::new();
+    for (key, _) in params {
+        if NOT_CUSTOMER_FILTERS.contains(&key.as_str()) || seen.contains(&key.as_str()) {
+            continue;
+        }
+        seen.push(key);
+        let base = key.replace('!', "");
+        let column = match base.split('.').next().unwrap_or_default() {
+            "match" => "match",
+            "customer" => "customer",
+            _ => return Err(ApiError::bad(format!("Invalid filter parameter: {key}"))),
+        };
+        let values: Vec<String> = params
+            .iter()
+            .filter(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+            .collect();
+        // An empty value among several fails `v[0]` in the reference.
+        if values.len() > 1 && values.iter().any(String::is_empty) {
+            return Err(ApiError::bad(format!(
+                "Filtering by '{key}' field not supported."
+            )));
+        }
+        q.filters.push(alrust_store_pg::customers::MappingFilter {
+            column,
+            negated: key.ends_with('!'),
+            values,
+        });
+    }
+    for (_, value) in params.iter().filter(|(k, _)| k == "sort-by") {
+        let (desc, name) = match value.strip_prefix('-') {
+            Some(n) => (true, n),
+            None => (false, value.as_str()),
+        };
+        let name = if name.starts_with("attributes.") {
+            "attributes"
+        } else {
+            name
+        };
+        let column = match name {
+            "match" => "match",
+            "customer" => "customer",
+            _ => {
+                return Err(ApiError::bad(format!(
+                    "Sorting by '{name}' field not supported."
+                )));
+            }
+        };
+        q.sort.push((column, desc));
+    }
+    Ok(q)
+}
+
+/// Parameters `filter_query` skips (`postgres/utils.py:19-22`).
+const NOT_CUSTOMER_FILTERS: [&str; 16] = [
+    "_",
+    "callback",
+    "token",
+    "api-key",
+    "q",
+    "q.df",
+    "id",
+    "from-date",
+    "to-date",
+    "sort-by",
+    "group-by",
+    "page",
+    "page-size",
+    "limit",
+    "show-raw-data",
+    "show-history",
+];
+
+/// `GET /customers` (`views/customers.py:53-86`): `total` and `pages` come
+/// from the SQL count; the page is then limited to the mappings the caller
+/// may see, so it can hold fewer than `page-size` and, when it holds none,
+/// answers `not found` with `total` 0.
+async fn list_customers(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+) -> ApiResult<Json<Value>> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("read:customers")?;
+    let q = parse_mapping_query(&params)?;
+    let page_of = |key: &str| -> ApiResult<Option<i64>> {
+        params
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| {
+                v.parse()
+                    .map_err(|_| ApiError::bad(format!("{key} must be an integer")))
+            })
+            .transpose()
+    };
+    let page = page_of("page")?.unwrap_or(1);
+    let page_size = page_of("page-size")?.unwrap_or(st.cfg.default_page_size);
+    if page < 1 || page_size < 1 || (page - 1).checked_mul(page_size).is_none() {
+        return Err(ApiError::bad("page or page-size is out of range"));
+    }
+    let total = st.store.count_mappings(&q).await?;
+    let pages = if total == 0 {
+        0
+    } else {
+        (total - 1) / page_size + 1
+    };
+    if total > 0 && page > pages {
+        return Err(ApiError::new(
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            format!("page out of range: 1-{pages}"),
+        ));
+    }
+    let customers: Vec<Value> = st
+        .store
+        .list_mappings(&q, page, page_size)
+        .await?
+        .iter()
+        .filter(|m| sees_mapping(&caller, m))
+        .map(|m| m.body(&st.cfg.base_url))
+        .collect();
+    let found = !customers.is_empty();
+    let mut body = json!({
+        "status": "ok",
+        "page": page,
+        "pageSize": page_size,
+        "pages": pages,
+        "more": page < pages,
+        "customers": customers,
+        "total": if found { total } else { 0 },
+    });
+    if !found {
+        body["message"] = json!("not found");
+    }
+    Ok(Json(body))
+}
+
+/// `PUT /customer/{id}` (`views/customers.py:89-109`): writes `match` and
+/// `customer` when the body names them. See `create_customer` on
+/// SF-CUSTOMERS.
+async fn update_customer(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> ApiResult<Json<Value>> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("admin:customers")?;
+    let obj = match &body {
+        Value::Object(o) if !o.is_empty() => o,
+        _ => return Err(ApiError::bad("nothing to change")),
+    };
+    st.store.get_mapping(&id).await?;
+    // `update(self, **kwargs)`: these keys collide with its arguments (a
+    // TypeError, a 500 in the reference).
+    for key in ["id", "self"] {
+        if obj.contains_key(key) {
+            return Err(ApiError::bad(format!("{key} cannot be changed")));
+        }
+    }
+    let pattern = match obj.get("match") {
+        None => None,
+        Some(_) => {
+            Some(mapping_field(obj, "match")?.ok_or_else(|| ApiError::bad("match is required"))?)
+        }
+    };
+    let customer = if obj.contains_key("customer") {
+        alrust_store_pg::customers::SetCustomer::To(mapping_field(obj, "customer")?)
+    } else {
+        alrust_store_pg::customers::SetCustomer::Keep
+    };
+    let m = st.store.update_mapping(&id, pattern, customer).await?;
+    Ok(Json(
+        json!({"status": "ok", "customer": m.body(&st.cfg.base_url)}),
+    ))
+}
+
+/// `DELETE /customer/{id}` (`views/customers.py:112-126`).
+async fn delete_customer(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("admin:customers")?;
+    st.store.delete_mapping(&id).await?;
     Ok(Json(json!({"status": "ok"})))
 }
 
