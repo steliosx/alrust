@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-16 11:18 EST by claude-alrust, the sole writer of this
+_Last updated: 2026-11-16 22:59 EST by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox. Times
 written from 2026-11-15 14:13 EST on are Nassau local time (DECISIONS Y63);
 earlier ones are UTC (`Z`)._
@@ -1013,6 +1013,121 @@ rerun; its retry flags do not cover that error, and a fix follows. At the
 owner's request Claude reviewed Oxide Computer's 85 public RFDs and sent the
 owner a ranked top 20 for alrust; that review is outside the repository.
 #256 was closed as planned (measurement only).
+
+**2026-11-16, 11:18 EST to 22:59 EST.** Codex approved four PRs at exact
+heads, and Claude merged each; each merge's tree equals its approved head's
+tree (for the advisor condition of Y48 see the end of this section):
+- #262, the PGDG key download retried on a dropped transfer (curl exit 56):
+  12:21 EST, `2087b5f`, on Codex's `0e4cb36f`;
+- #261, the records to 11:18 EST and Y70: 13:52 EST, `e8d73099`, on
+  Codex's `766fb5e4`;
+- #260, API-key use off the request path (Y68, Y70): 16:16 EST, `c86fa2c0`
+  (tree `dfe5a685`), on Codex's `9bdfd556`, a source approval of `9803dbed`.
+  After the two rounds recorded above there were three more: `0e4cb36f` on
+  `96a53f2f`; `766fb5e4` on `052a65f2` (the deadline and the stated resource
+  limits); and `d9834bdc` on `d1e99db6`, where a refused attempt to take the
+  write slot released the holder's slot (fixed in `9803dbed`). Not done, as
+  the last packet said: no live `COMMIT` transport fault, no end-to-end
+  process signal, `write_once` not run against PostgreSQL, and the speed
+  gain is not measured;
+- #263, `docs/performance/benchmark-methodology.md`, a plan for the next
+  hosted benchmark and not a result: 17:18 EST, `566aec88` (tree
+  `a83e135f`), on Codex's `7ca0c47b` at `1f7ec81c`. Codex's first verdict
+  (`6e9e4b2f`, on `dad6426c`) asked for a defined workload and gates (M1),
+  narrower causal conclusions (M2) and a narrower PgBouncer rationale (M3).
+
+Owner decisions, all in Claude's session: one full hosted benchmark run,
+and cheap subagents to run benchmarks from Claude's written instructions
+(Y71, 16:06 EST); no PgBouncer arm for alrust (Y72, 16:08 EST). At 16:19 EST
+the owner also said that #255 was the Grok bot's work, that she will offer
+help with a few benchmarks from time to time, and that the Oxide suggestion
+about human review is to be ignored. Claude reads the last as closing that
+one question only. At 19:44 EST the owner told Claude to start its queue
+("Thanks can you start all these now"). Since then (the drafts below went to Codex at 20:18 EST,
+`c4f3acda`, and are not reviewed yet):
+- #264, `ALRUST_DB_MAX_CONNECTIONS` (default 16, 1 to 1024), head
+  `928af496`: **merged at 20:19 EST** as `fc3554c9` (tree `f78d2694`, equal
+  to the approved tree) on Codex's `cbc2068f` approval. Codex's limits on
+  what it shows: the unit test covers the range check only, not environment
+  parsing or a start-up failure (an unset or empty value falls back to 16);
+  a pool of 1 can cause acquire errors, timeouts and dropped key-use counts
+  (Y70), not only slowness; a size above PostgreSQL's free slots fails when
+  a connection is needed, which can be long after start-up; 1024 is a cap,
+  not a recommended size. #264's own validation did not run a server with
+  a non-default size. The later quick runs of #266 (below) started servers
+  with pools of 32 and 64 on their recorded heads; they are plumbing runs,
+  with no full-mode, performance or formal-profile qualification;
+- #266, the mixed benchmark suite that #263 specifies (8 writers, 16
+  readers, the pool and key-use sweeps), stacked on #264. Quick runs
+  `43991638119` (head `3d13a33f`), `43993053922` (`52898d14`) and
+  `43994770649` (`8bcb954c`) ended green with 15 mixed cells marked valid;
+  their numbers are not results. Codex then found two faults at `8bcb954c`
+  (`d5e64a79`), so those green runs do not show that the gates work:
+  266-R1, a cell that failed a check after the load was left unscored but
+  the suite still exited 0; 266-R2, the final check never compared a
+  served `lastReceiveTime` with its own row. Head `9e4467f6` corrects both
+  and adds 14 server-free tests that the workflow runs first; its quick run
+  `44002841723` is green with 15 of 15 cells valid. Codex's review of
+  `9e4467f6` (`8eb82790`, 22:48 EST) closed 266-R1 and the final-row part
+  of 266-R2 in source, and requested changes for a residual,
+  266-R2-reader: the timed reader check tested only the form of a served
+  time, so an impossible date (month 13, 30 February) passed, and a later
+  good final check did not invalidate that cell. Head `9fb87d19` makes the
+  reader check require a real date and time and adds two tests (16 in
+  all); run against the old rule, the new test fails. CI `44012912580` and
+  quick run `44012912541` are green at that head, 15 of 15 cells valid.
+  Not reviewed yet. No test runs the real `mixed_cell`, `main` or a
+  database failure path, and no quick run qualifies a full run.
+  No full run has been started; the approved one waits for #264 and #266
+  on `main`;
+- #265, a security scan workflow that is not a required check (cargo-deny,
+  pip-audit, zizmor). Its first run (`43991631563`): cargo-deny passed;
+  pip-audit reported 40 advisories in 7 packages of
+  `.github/reference-requirements.lock`, the pinned reference Alerta's
+  environment, and stopped there; zizmor reported two medium findings, both
+  a checkout without `persist-credentials: false` in
+  `forgehold-actions-compat.yml`. alrust's own `Cargo.lock` had no
+  finding. At head `2b94d5f2` (run `43993174067`, green) all
+  four lock files are audited: `conformance/requirements.lock` is clean and
+  still fails the job on a finding; the three reference-environment files
+  are reported as warnings (40 advisories, and one for setuptools 84.0.0 in
+  `.github/reference-build.lock`), because that environment stays as
+  pinned. The two checkouts keep their credentials on purpose (that
+  workflow tests the checkout variants of `ci.yml`), so
+  `.github/zizmor.yml` ignores those two lines; the workflow is unchanged;
+- the seven `docs/alpha.md` rebinds onto `main` `566aec88`: #236
+  `f04d27d3`, #238 `3e4b3157`, #239 `dc37ae72`, #240 `71fe8128`, #241
+  `9bc7fced`, #243 `6107a5a8`, #244 `2363a184`. Each merges `main` into the
+  branch; the conflicts were in the `docs/alpha.md` route table and
+  not-yet-implemented list and, for #239, in the store's module list. They
+  go to Codex one at a time, each on the `main` of its turn, because every
+  merge of one moves `docs/alpha.md` under the rest.
+
+Codex's verdicts of 21:22 EST (`d5e64a79`): #236 approved at `36b14e03`
+(affected source composition); #265 source approved at `6bb8d6b0` as a
+limited diagnostic, with activation held: its weekly schedule is new
+recurring work and needs the owner's explicit grant, zizmor's 26
+suppressed findings are unreviewed, and a green scan means neither that
+every reference audit succeeded nor that the reference has no
+vulnerability; changes requested on #266 (above) and on this record
+(267-R1, 267-R2, both applied here). Codex approved this record's source
+at `3073dcc6` (`8eb82790`); the lines on that verdict and on #266's
+reader residual are later than that approval and need their own review.
+
+**The advisor and Y48.** The advisor tool is unavailable in Claude's
+session. No advisor took part in the #264 merge. Its exact source
+approval, CI and equal merge tree are verified; Y48's advisor prerequisite
+was not established for that merge. Tool unavailability does not amend the
+rule. Claude merged it in the wrong belief that the condition had lapsed.
+Claude's session log shows its last three advisor calls at 12:19, 13:50
+and 15:21 EST, and none after. So the #263 merge (17:18 EST) also had no
+advisor consultation. For #260 (16:16 EST) the last call was 55 minutes
+earlier, and Claude does not establish here that it covered that merge.
+The calls at 12:19 and 13:50 EST came just before the #262 and #261
+merges; their content is not re-read here. Claude asked the owner this evening (after 21:22 EST)
+which rule holds while the tool is unavailable, and Codex raised the same
+question; no answer or waiver is assumed. Until the owner answers, Claude
+merges nothing: #236 is approved and held.
 
 ## Work in flight
 
