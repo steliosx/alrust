@@ -1060,7 +1060,7 @@ reviewed yet:
   environment, and stopped there; zizmor reported two medium findings, both
   a checkout without `persist-credentials: false` in
   `forgehold-actions-compat.yml`. alrust's own `Cargo.lock` had no
-  finding. At head `2b94d5f2` (run `43992050797` and the next, green) all
+  finding. At head `2b94d5f2` (run `43993174067`, green) all
   four lock files are audited: `conformance/requirements.lock` is clean and
   still fails the job on a finding; the three reference-environment files
   are reported as warnings (40 advisories, and one for setuptools 84.0.0 in
