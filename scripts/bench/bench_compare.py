@@ -32,12 +32,41 @@ BENCH_MODE selects "quick" (plumbing: 1 repetition, c=1, 5 s; the default)
 or "full". The workflow passes "quick" on pull requests and the dispatch
 input otherwise (DECISIONS Y69).
 
+BENCH_SUITE selects "compare" (the cases above; the default), "mixed" or
+"both". The mixed suite is specified in
+docs/performance/benchmark-methodology.md: 8 writers, each with its own
+1,000 alert identities, and 16 readers of the 50 newest alerts, alone and
+together, each cell on a fresh copy of the seeded database. Its arms are
+one alrust binary with a pool of 16, 32 and 64 connections, the same binary
+with a pool of 16 that writes key use on every request, and Alerta with one
+worker per vCPU behind pgbouncer. Its clients are scripts/bench/mixed_client.py
+(closed loops, one process each), not oha: oha sends one fixed body and
+does not read the answers. Its gates:
+  before  the read gate above, on the cell's seeded copy;
+  during  every list answer is a 2xx that parses, has at most 50 alerts and
+          is in descending lastReceiveTime order (the client checks it);
+  after   with every client stopped and every request answered: a row for
+          an identity exists exactly when it had a 2xx answer, with
+          duplicate_count = its 2xx answers - 1 (warm-up, timed phase and
+          the requests that were in flight at the stop, together); the
+          table has the seeded rows plus those; then the list and count
+          are compared with the arm's own final rows.
+The final list check allows for equal lastReceiveTime values: each served
+alert is compared with its own row, its served lastReceiveTime included
+(mixed_checks.py states the time policy), and the served rows' times must
+be the database's 50 newest times in order.
+A mixed cell that fails any of these gates is not scored, and it makes the
+suite's exit non-zero after the other cells have run and results.json is
+written.
+
 Standard library only; run with `python3 -I`. Inputs come from the
 environment that scripts/bench/setup.sh writes.
 """
 
+import gzip
 import json
 import os
+import re
 import statistics
 import subprocess
 import sys
@@ -46,6 +75,10 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
+
+# `python3 -I` leaves the script's directory off the path.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from mixed_checks import cell_valid, served_time_problems  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 WORK = Path(os.environ["BENCH_WORK"])
@@ -59,6 +92,9 @@ MODE = os.environ.get("BENCH_MODE", "quick")
 if MODE not in ("quick", "full"):
     sys.exit(f"BENCH_MODE must be quick or full, not {MODE!r}")
 QUICK = MODE == "quick"
+SUITE = os.environ.get("BENCH_SUITE", "compare")
+if SUITE not in ("compare", "mixed", "both"):
+    sys.exit(f"BENCH_SUITE must be compare, mixed or both, not {SUITE!r}")
 
 KEY = "bench-key-0123456789abcdef0123456789abcdef"
 HEADERS = {
@@ -88,6 +124,24 @@ ALERT_FIELDS = [("id", "id"), ("resource", "resource"), ("event", "event"),
                 ("service", "service"), ("group", "group"), ("value", "value"), ("text", "text"),
                 ("tags", "tags"), ("attributes", "attributes"),
                 ("duplicateCount", "duplicate_count"), ("customer", "customer")]
+# The mixed suite (docs/performance/benchmark-methodology.md).
+MIX_CLIENT = Path(__file__).resolve().parent / "mixed_client.py"
+MIX_WRITERS = 8
+MIX_READERS = 16
+MIX_IDENTITIES = 1000
+MIX_CELLS = {"writers-alone": (MIX_WRITERS, 0), "readers-alone": (0, MIX_READERS),
+             "mixed": (MIX_WRITERS, MIX_READERS)}
+# One variable per sweep: the pool size (16, 32, 64) with key use written
+# about once a second, and the key-use mode with the pool at 16. Both
+# settings are given in every alrust arm, so none depends on a default.
+ARM_ENV = {
+    "alrust-p16": {"ALRUST_DB_MAX_CONNECTIONS": "16", "ALRUST_KEY_USAGE_IMMEDIATE": "false"},
+    "alrust-p32": {"ALRUST_DB_MAX_CONNECTIONS": "32", "ALRUST_KEY_USAGE_IMMEDIATE": "false"},
+    "alrust-p64": {"ALRUST_DB_MAX_CONNECTIONS": "64", "ALRUST_KEY_USAGE_IMMEDIATE": "false"},
+    "alrust-p16-immediate": {"ALRUST_DB_MAX_CONNECTIONS": "16",
+                             "ALRUST_KEY_USAGE_IMMEDIATE": "true"},
+}
+MIX_ARMS = [*ARM_ENV, f"alerta-{VCPUS}x4-pgb"]
 CASES = {
     "list": ("GET", "/alerts?page-size=50&sort-by=lastReceiveTime", None),
     "count": ("GET", "/alerts/count", None),
@@ -145,9 +199,9 @@ def db_url(db, port=5432):
 
 def start(arm, db, logf):
     """Start one arm's server on database `db`; returns (process, base url)."""
-    if arm == "alrust":
+    if arm.startswith("alrust"):
         env = dict(os.environ, DATABASE_URL=db_url(db), ALRUST_BIND="127.0.0.1:8080",
-                   ALRUST_AUTH_REQUIRED="true", RUST_LOG="warn")
+                   ALRUST_AUTH_REQUIRED="true", RUST_LOG="warn", **ARM_ENV.get(arm, {}))
         proc = subprocess.Popen([ALRUST], env=env, stdout=logf, stderr=subprocess.STDOUT)
         base = "http://127.0.0.1:8080"
     else:
@@ -473,6 +527,273 @@ def cell(arm, proc, base, case, conc, rep, db, json_flag, record):
     return alive
 
 
+# ------------------------------------------------------------ the mixed suite
+
+def probe_pool_setting(record):
+    """The binary must know ALRUST_DB_MAX_CONNECTIONS, or the pool sweep would
+    silently run three equal arms: with the value 0 it must refuse to start."""
+    env = dict(os.environ, DATABASE_URL=db_url("bench_probe"), ALRUST_BIND="127.0.0.1:8080",
+               ALRUST_AUTH_REQUIRED="true", RUST_LOG="warn", ALRUST_DB_MAX_CONNECTIONS="0")
+    proc = subprocess.Popen([ALRUST], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True)
+    try:
+        out, _ = proc.communicate(timeout=20)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        out, _ = proc.communicate()
+        out = "(still running after 20 s) " + out
+    refused = proc.returncode not in (0, -9) and "ALRUST_DB_MAX_CONNECTIONS" in out
+    record["pool_setting_probe"] = {"refused_zero": refused, "exit": proc.returncode,
+                                    "output": out[-500:]}
+    if not refused:
+        sys.exit("this alrust binary does not refuse ALRUST_DB_MAX_CONNECTIONS=0, so it does "
+                 f"not know the setting; the pool sweep would mean nothing: {out[-300:]!r}")
+    log("the binary knows ALRUST_DB_MAX_CONNECTIONS (it refuses 0)")
+
+
+def key_updates(db):
+    """Row updates of the `keys` table so far (statistics; they lag by about
+    a second). It shows the key-use mode: about one update per request when
+    key use is written on every request, about one per second otherwise."""
+    psql(db, "SELECT pg_stat_clear_snapshot()")
+    return int(psql(db, "SELECT coalesce(sum(n_tup_upd), 0) FROM pg_stat_user_tables "
+                        "WHERE relname = 'keys'"))
+
+
+def percentile(sorted_values, q):
+    if not sorted_values:
+        return 0.0
+    return sorted_values[min(len(sorted_values) - 1, int(q * len(sorted_values)))]
+
+
+def class_stats(requests, t0, t1):
+    """One class's requests: all phases for the checks, the timed window
+    [t0, t1) (seconds after the start time, by each request's end) for the
+    rates. A request is [x, status, start us, end us]."""
+    timed = [r for r in requests if t0 <= r[3] / 1e6 < t1]
+    ok = [r for r in timed if 200 <= r[1] < 300]
+    lat = sorted((r[3] - r[2]) / 1000 for r in ok)
+    return {
+        "requests_all_phases": len(requests),
+        "errors": sum(1 for r in requests if r[1] == 0),
+        "non_2xx": sum(1 for r in requests if r[1] != 0 and not 200 <= r[1] < 300),
+        "ok_warm": sum(1 for r in requests if 200 <= r[1] < 300 and r[3] / 1e6 < t0),
+        "ok": len(ok),
+        "ok_closing": sum(1 for r in requests if 200 <= r[1] < 300 and r[3] / 1e6 >= t1),
+        "requests": len(timed),
+        "rps": len(ok) / (t1 - t0),
+        "p50_ms": percentile(lat, 0.50),
+        "p99_ms": percentile(lat, 0.99),
+    }
+
+
+def mix_persisted(db, per_identity, seed_alerts):
+    """After the load: one row per identity with a 2xx answer, no other, and
+    duplicate_count = its 2xx answers - 1. `per_identity` maps a resource to
+    its 2xx answers over every phase."""
+    rows = sql_json(db, "SELECT json_object_agg(resource, duplicate_count) FROM alerts "
+                        "WHERE resource LIKE 'mix-w%'") or {}
+    want = {res: n - 1 for res, n in per_identity.items() if n > 0}
+    missing = sorted(set(want) - set(rows))
+    extra = sorted(set(rows) - set(want))
+    wrong = sorted(res for res in set(want) & set(rows) if rows[res] != want[res])
+    total = int(psql(db, "SELECT count(*) FROM alerts"))
+    problems = []
+    if missing:
+        problems.append(f"{len(missing)} identities with a 2xx answer have no row: {missing[:5]}")
+    if extra:
+        problems.append(f"{len(extra)} rows have no 2xx answer: {extra[:5]}")
+    if wrong:
+        problems.append(f"{len(wrong)} rows have another duplicate_count, such as "
+                        f"{[(r, rows[r], want[r]) for r in wrong[:5]]} (resource, row, expected)")
+    if total != seed_alerts + len(want):
+        problems.append(f"{total} alerts, {seed_alerts + len(want)} expected")
+    return {"identities_written": len(want), "rows": len(rows),
+            "writes_2xx": sum(per_identity.values()),
+            "duplicate_count_sum": sum(rows.values()), "alerts": total,
+            "problems": problems, "ok": not problems}
+
+
+def final_check(base, db):
+    """The list and the count against this arm's own final rows, nothing
+    being written. Several rows can share a lastReceiveTime, so the order
+    among them is not compared: each served alert must equal its own row,
+    and the served rows' times must be the database's newest times in order."""
+    problems = []
+    status, raw, _ = http("GET", base + CASES["list"][1])
+    status_c, raw_c, _ = http("GET", base + CASES["count"][1])
+    total = int(psql(db, "SELECT count(*) FROM alerts"))
+    try:
+        body, count = json.loads(raw), json.loads(raw_c)
+        served = body["alerts"]
+        ids = [a["id"] for a in served]
+    except (ValueError, KeyError, TypeError) as e:
+        return {"ok": False, "problems": [f"list {status} or count {status_c} does not parse: {e!r}"]}
+    if status != 200 or body.get("total") != total:
+        problems.append(f"list answered {status} with total {body.get('total')!r}, {total} rows")
+    if status_c != 200 or count.get("total") != total:
+        problems.append(f"count answered {status_c} with total {count.get('total')!r}, {total} rows")
+    if (count.get("severityCounts") != expected_groups(db, "severity")
+            or count.get("statusCounts") != expected_groups(db, "status")):
+        problems.append("the count's groups differ from SQL")
+    if len(ids) != min(50, total) or len(set(ids)) != len(ids):
+        problems.append(f"{len(ids)} alerts served ({len(set(ids))} distinct), {min(50, total)} expected")
+    if not all(isinstance(i, str) and re.fullmatch(r"[0-9A-Za-z-]{1,64}", i) for i in ids):
+        problems.append("an alert id is not a plain identifier; the rows are not compared")
+        return {"ok": False, "problems": problems}
+    cols = ", ".join(f'"{c}"' for _, c in ALERT_FIELDS)
+    id_list = ", ".join(f"'{i}'" for i in ids) or "NULL"
+    rows = sql_json(db, f"SELECT json_agg(row_to_json(t)) FROM (SELECT {cols}, last_receive_time "
+                        f"FROM alerts WHERE id IN ({id_list})) t") or []
+    by_id = {r["id"]: r for r in rows}
+    diffs = []
+    for a in served:
+        r = by_id.get(a["id"])
+        if r is None:
+            diffs.append(f"{a['id']}: served, not in the database")
+            continue
+        for api, col in ALERT_FIELDS:
+            if a.get(api) != r.get(col):
+                diffs.append(f"{a['id']}.{api}: served {a.get(api)!r}, database {r.get(col)!r}")
+    if diffs:
+        problems.append(f"{len(diffs)} field differences: {diffs[:5]}")
+    time_problems = served_time_problems(served, by_id)
+    if time_problems:
+        problems.append(f"{len(time_problems)} time problems: {time_problems[:5]}")
+    newest = sql_json(db, "SELECT json_agg(t.last_receive_time) FROM (SELECT last_receive_time "
+                          "FROM alerts ORDER BY last_receive_time DESC LIMIT 50) t") or []
+    if [by_id[i]["last_receive_time"] for i in ids if i in by_id] != newest:
+        problems.append("the served rows' last_receive_time values are not the newest in order")
+    return {"ok": not problems, "problems": problems, "list_bytes": len(raw)}
+
+
+def score_cell(s, record, read_problems=()):
+    """Sets the finished cell's validity, keeps its record and returns the
+    validity, which the suite's exit depends on."""
+    arm, name, rep = s["arm"], s["case"], s["rep"]
+    writers, readers, problems = s["writers"], s["readers"], s["problems"]
+    bad = sum(s[k]["errors"] + s[k]["non_2xx"] for k in ("writes", "reads"))
+    s["valid"] = cell_valid(s, writers, readers)
+    record["mixed_cells"].append(s)
+    if not s["valid"]:
+        log(f"{arm}: MIXED CELL INVALID {name} r{rep}: {problems} {s['persisted']['problems']} "
+            f"{s['final_check']['problems']} {list(read_problems)[:2]}")
+    log(f"{arm:20} {name:13} r{rep}: {'' if s['valid'] else 'INVALID '}"
+        f"writes {s['writes']['rps']:.1f}/s p50 {s['writes']['p50_ms']:.2f} p99 {s['writes']['p99_ms']:.2f} ms; "
+        f"reads {s['reads']['rps']:.1f}/s p50 {s['reads']['p50_ms']:.2f} p99 {s['reads']['p99_ms']:.2f} ms; "
+        f"errors+non-2xx {bad}; rows {s['persisted']['alerts']}")
+    return s["valid"]
+
+
+def mixed_cell(arm, name, rep, db, record):
+    """One cell of the mixed suite on its own database copy. Returns whether
+    the cell is valid: False when the pre-load check or any later gate
+    failed. The cell's record is kept either way."""
+    writers, readers = MIX_CELLS[name]
+    tag = f"{arm}-{name}-r{rep}"
+    raw_dir = OUT / "raw"
+    s = {"arm": arm, "case": name, "rep": rep, "db": db, "writers": writers, "readers": readers}
+    with open(OUT / f"server-{tag}.log", "w") as logf:
+        proc, base = start(arm, db, logf)
+        try:
+            if not check(arm, base, db, record):
+                s.update({"valid": False, "problems": ["the pre-load check failed"]})
+                record["mixed_cells"].append(s)
+                return False
+            url = urlsplit(base)
+            pg0, keys0 = pg_db_stats(db), key_updates(db)
+            start_at = time.time() + 2.0
+            files, clients = [], []
+            for role, n in (("write", writers), ("read", readers)):
+                for number in range(n):
+                    out = raw_dir / f"mixed-{tag}-{role}{number}.json.gz"
+                    files.append((role, number, out))
+                    clients.append(subprocess.Popen(
+                        [sys.executable, "-I", str(MIX_CLIENT), role, url.hostname, str(url.port),
+                         str(number), str(MIX_IDENTITIES), repr(start_at), str(out)],
+                        env=dict(os.environ, BENCH_KEY=KEY)))
+            time.sleep(max(0.0, start_at + WARM_S - time.time()))
+            t0, srv0, pm0 = time.time(), tree_cpu(proc.pid), tree_cpu(postmaster_pid())
+            time.sleep(max(0.0, t0 + TIMED_S - time.time()))
+            t1, srv1, pm1 = time.time(), tree_cpu(proc.pid), tree_cpu(postmaster_pid())
+            alive = proc.poll() is None
+            # SIGTERM: each client finishes the request in flight, then exits.
+            for c in clients:
+                c.terminate()
+            problems = []
+            for c in clients:
+                try:
+                    if c.wait(timeout=60) != 0:
+                        problems.append(f"a client exited with {c.returncode}")
+                except subprocess.TimeoutExpired:
+                    c.kill()
+                    c.wait()
+                    problems.append("a client did not stop in 60 s")
+            time.sleep(1.5)
+            pg1, keys1 = pg_db_stats(db), key_updates(db)
+            by_role = {"write": [], "read": []}
+            per_identity, read_problems = {}, []
+            for role, number, out in files:
+                try:
+                    with gzip.open(out, "rt") as f:
+                        data = json.load(f)
+                except (OSError, ValueError) as e:
+                    problems.append(f"{out.name} is not readable: {e!r}")
+                    continue
+                by_role[role] += data["requests"]
+                read_problems += data["problems"]
+                if role == "write":
+                    for index, status, _, _ in data["requests"]:
+                        if 200 <= status < 300:
+                            res = f"mix-w{number}-{index:04d}"
+                            per_identity[res] = per_identity.get(res, 0) + 1
+            w0, w1 = t0 - start_at, t1 - start_at
+            s["writes"] = class_stats(by_role["write"], w0, w1)
+            s["reads"] = class_stats(by_role["read"], w0, w1)
+            s["reads"]["body_problems"] = sum(1 for r in by_role["read"] if r[0] == 1)
+            s["reads"]["body_problem_examples"] = read_problems[:5]
+            s["persisted"] = mix_persisted(db, per_identity, record["seed"]["alerts"])
+            still_alive = proc.poll() is None
+            s["final_check"] = (final_check(base, db) if still_alive
+                                else {"ok": False, "problems": ["the server is not running"]})
+        finally:
+            stop(proc)
+    hz = os.sysconf("SC_CLK_TCK")
+    wall = t1 - t0
+    done = s["writes"]["ok"] + s["reads"]["ok"]
+    all_requests = s["writes"]["requests_all_phases"] + s["reads"]["requests_all_phases"]
+    s.update({"wall_s": wall, "server_cpu_s": (srv1 - srv0) / hz,
+              "postgres_cpu_s": (pm1 - pm0) / hz,
+              "server_cpu_per_s": (srv1 - srv0) / hz / wall,
+              "postgres_cpu_per_s": (pm1 - pm0) / hz / wall,
+              # Both classes together: the CPU is not split between reads and writes.
+              "completed_requests": done,
+              "server_cpu_ms_per_request": 1000 * (srv1 - srv0) / hz / (done or 1),
+              "postgres_cpu_ms_per_request": 1000 * (pm1 - pm0) / hz / (done or 1),
+              # From before the clients start until after they stop: every phase.
+              "pg_sessions": pg1["sessions"] - pg0["sessions"],
+              "pg_commits": pg1["xact_commit"] - pg0["xact_commit"],
+              "requests_all_phases": all_requests,
+              "commits_per_request": (pg1["xact_commit"] - pg0["xact_commit"]) / (all_requests or 1),
+              "key_updates": keys1 - keys0,
+              "key_updates_per_request": (keys1 - keys0) / (all_requests or 1),
+              "server_alive": alive and still_alive, "problems": problems})
+    return score_cell(s, record, read_problems)
+
+
+def run_mixed(record, dbs):
+    """Every cell runs, also after an invalid one. Returns False when any
+    cell was invalid."""
+    all_ok = True
+    for rep in range(REPS):
+        order = MIX_ARMS[rep % len(MIX_ARMS):] + MIX_ARMS[:rep % len(MIX_ARMS)]
+        for arm in order:
+            for name in MIX_CELLS:
+                if not mixed_cell(arm, name, rep, dbs[(arm, "mixed", name, rep)], record):
+                    all_ok = False
+    return all_ok
+
+
 def start_pgbouncer():
     d = WORK / "pgb"
     d.mkdir(exist_ok=True)
@@ -503,8 +824,13 @@ pidfile = {d}/pgbouncer.pid
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "raw").mkdir(exist_ok=True)
-    record = {"mode": MODE, "arms": ARMS, "reps": REPS, "warm_s": WARM_S, "timed_s": TIMED_S,
+    compare, mixed = SUITE in ("compare", "both"), SUITE in ("mixed", "both")
+    record = {"mode": MODE, "suite": SUITE, "arms": ARMS if compare else [],
+              "reps": REPS, "warm_s": WARM_S, "timed_s": TIMED_S,
               "concurrency": CONCURRENCY, "vcpus": VCPUS, "checks": [], "cells": [],
+              "mixed_arms": MIX_ARMS if mixed else [], "mixed_cells": [],
+              "mixed": {"writers": MIX_WRITERS, "readers": MIX_READERS,
+                        "identities_per_writer": MIX_IDENTITIES, "arm_env": ARM_ENV},
               "env": {"postgres": psql("postgres", "SELECT version()"),
                       "pgbouncer": subprocess.run([PGBOUNCER, "--version"], capture_output=True,
                                                   text=True).stdout.strip(),
@@ -525,12 +851,18 @@ def main():
     # Every copy is made now: a template must have no connection open, and
     # pgbouncer keeps server connections once it starts.
     dbs = {}
-    for arm in ARMS:
+    if mixed:
+        dbs[("probe",)] = "bench_probe"
+    for arm in ARMS if compare else []:
         safe = arm.replace("-", "_")
         dbs[(arm, "read")] = f"bench_read_{safe}"
         for rep in range(REPS):
             for conc in CONCURRENCY:
                 dbs[(arm, "write", rep, conc)] = f"bench_write_{safe}_r{rep}_c{conc}"
+    for arm in MIX_ARMS if mixed else []:
+        for name in MIX_CELLS:
+            for rep in range(REPS):
+                dbs[(arm, "mixed", name, rep)] = (f"bench_mix_{arm}_{name}_r{rep}").replace("-", "_")
     for name in dbs.values():
         # The seeding server's backends may still be exiting: a template with
         # any connection open cannot be copied, so retry briefly.
@@ -543,10 +875,14 @@ def main():
                     raise
                 time.sleep(1)
     log(f"{len(dbs)} database copies created")
+    if mixed:
+        probe_pool_setting(record)
     pgb = start_pgbouncer()
     all_ok = True
     try:
-        for rep in range(REPS):
+        if mixed and not run_mixed(record, dbs):
+            all_ok = False
+        for rep in range(REPS if compare else 0):
             order = ARMS[rep % len(ARMS):] + ARMS[:rep % len(ARMS)]
             for arm in order:
                 db = dbs[(arm, "read")]
@@ -593,10 +929,11 @@ def write_summary(record):
              "Relative numbers on one hosted runner; not a capacity claim.", "",
              "A repetition is scored only with no error, real responses, the server alive at its end "
              "and, for writes, every counted write saved in the database.",
-             "",
-             "| case | c | arm | valid reps | rps | p50 ms | p99 ms | errors+non-2xx (all reps) | sessions/req | "
-             "commits/req | server CPU ms/req | postgres CPU ms/req |",
-             "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+             ""]
+    if record["cells"]:
+        lines += ["| case | c | arm | valid reps | rps | p50 ms | p99 ms | errors+non-2xx (all reps) | sessions/req | "
+                  "commits/req | server CPU ms/req | postgres CPU ms/req |",
+                  "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for case in CASES:
         for conc in record["concurrency"]:
             for arm in record["arms"]:
@@ -628,7 +965,62 @@ def write_summary(record):
                       "repetitions saved exactly the writes counted."]
         for c in bad:
             lines.append(f"- FAILED {c['arm']} c={c['c']} r{c['rep']}: {c['persisted']['problems']}")
+    if record["mixed_cells"]:
+        lines += mixed_summary(record)
     (OUT / "summary.md").write_text("\n".join(lines) + "\n")
+
+
+def mixed_summary(record):
+    m = record["mixed"]
+    rows = {}
+    for c in record["mixed_cells"]:
+        rows.setdefault((c["case"], c["arm"]), []).append(c)
+    lines = ["", "## Mixed load", "",
+             f"{m['writers']} writers, each with its own {m['identities_per_writer']} alert identities "
+             f"in order and again; {m['readers']} readers of the 50 newest alerts; closed loops, one "
+             "connection each; every cell on a fresh copy of the seeded database. Rates and latencies "
+             "are of 2xx answers that ended in the timed phase. CPU is of the server's process tree and "
+             "of PostgreSQL, for both classes together, per second and per completed request. "
+             "The clients are Python processes on the same runner and take part of its CPU. "
+             "commits/req and key updates/req cover every phase; key updates are row updates of "
+             "the `keys` table from PostgreSQL's statistics, and show the key-use mode.", "",
+             "A repetition is scored only with no error or non-2xx answer in any phase, every list "
+             "answer in order, the server alive, every 2xx write found in the database with the right "
+             "duplicate_count, and the final list and count equal to the final rows.", "",
+             "| case | arm | valid reps | writes/s | write p50 ms | write p99 ms | reads/s | read p50 ms | "
+             "read p99 ms | errors+non-2xx (all reps) | server CPU s/s | postgres CPU s/s | "
+             "server CPU ms/req | postgres CPU ms/req | commits/req | key updates/req | final rows |",
+             "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+    for case in MIX_CELLS:
+        for arm in record["mixed_arms"]:
+            allc = rows.get((case, arm))
+            if not allc:
+                continue
+            scored = [x for x in allc if "writes" in x]
+            bad = sum(x[k]["errors"] + x[k]["non_2xx"] for x in scored for k in ("writes", "reads"))
+            cs = [x for x in allc if x["valid"]]
+            if not cs:
+                lines.append(f"| {case} | {arm} | 0/{len(allc)} | - | - | - | - | - | - | {bad} "
+                             "| - | - | - | - | - | - | - |")
+                continue
+            med = lambda f: statistics.median(f(x) for x in cs)
+            cls = lambda k, on: (f"{med(lambda x: x[k]['rps']):.1f} | {med(lambda x: x[k]['p50_ms']):.2f} | "
+                                 f"{med(lambda x: x[k]['p99_ms']):.2f}") if on else "- | - | -"
+            lines.append(f"| {case} | {arm} | {len(cs)}/{len(allc)} | {cls('writes', cs[0]['writers'])} | "
+                         f"{cls('reads', cs[0]['readers'])} | {bad} | "
+                         f"{med(lambda x: x['server_cpu_per_s']):.2f} | "
+                         f"{med(lambda x: x['postgres_cpu_per_s']):.2f} | "
+                         f"{med(lambda x: x['server_cpu_ms_per_request']):.3f} | "
+                         f"{med(lambda x: x['postgres_cpu_ms_per_request']):.3f} | "
+                         f"{med(lambda x: x['commits_per_request']):.2f} | "
+                         f"{med(lambda x: x['key_updates_per_request']):.4f} | "
+                         f"{med(lambda x: x['persisted']['alerts']):.0f} |")
+    invalid = [c for c in record["mixed_cells"] if not c["valid"]]
+    for c in invalid:
+        lines.append("")
+        lines.append(f"- NOT SCORED {c['arm']} {c['case']} r{c['rep']}: {c.get('problems')} "
+                     f"{c.get('persisted', {}).get('problems')} {c.get('final_check', {}).get('problems')}")
+    return lines
 
 
 if __name__ == "__main__":

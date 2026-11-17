@@ -6,11 +6,13 @@
 //! simplifications are listed in the crate README section of the top-level
 //! README ("Alpha limitations").
 
+pub mod aggregates;
 pub mod catalog;
 pub mod hooks;
 pub mod key_usage;
 pub mod notes;
 pub mod startup;
+pub mod topn;
 
 use std::sync::Arc;
 

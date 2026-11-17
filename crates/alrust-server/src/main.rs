@@ -23,6 +23,8 @@
 //!   (DECISIONS Y68, Y70)
 //! - `ALRUST_REQUEST_TIMEOUT` seconds (default 30; 0 = off): a request that
 //!   runs longer is answered 503
+//! - `ALRUST_DB_MAX_CONNECTIONS` (default 16; 1 to 1024): the most database
+//!   connections the serving pool opens
 //! - `ALRUST_DB_ACQUIRE_TIMEOUT` seconds (default 10): the longest wait for a
 //!   free database connection
 //! - `ALRUST_DB_LOCK_TIMEOUT` (default 10) and `ALRUST_DB_STATEMENT_TIMEOUT`
@@ -245,6 +247,10 @@ async fn run() -> anyhow::Result<()> {
             0,
         )?,
     };
+    let db_max_connections = limits::pool_size(
+        "ALRUST_DB_MAX_CONNECTIONS",
+        env_i64("ALRUST_DB_MAX_CONNECTIONS", 16)?,
+    )?;
     let request_timeout = limits::secs_in_range(
         "ALRUST_REQUEST_TIMEOUT",
         env_i64("ALRUST_REQUEST_TIMEOUT", 30)?,
@@ -298,7 +304,7 @@ async fn run() -> anyhow::Result<()> {
     drop(store);
     startup_pool.close().await;
     let store = Store::new(
-        connect(&database_url, 16, Some(db_limits)).await?,
+        connect(&database_url, db_max_connections, Some(db_limits)).await?,
         store_cfg,
     );
 
