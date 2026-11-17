@@ -22,8 +22,8 @@
 
 use alrust_store_pg::catalog;
 use alrust_store_pg::{
-    ALERT_BY_EXACT_ID, ALERT_BY_EXACT_ID_FOR_UPDATE, AlertQuery, NewAlert, Outcome, ReceiveKind,
-    StartupError, Store, StoreConfig, StoreError, session_options, value_text,
+    ALERT_BY_EXACT_ID, ALERT_BY_EXACT_ID_FOR_UPDATE, AlertCounts, AlertQuery, NewAlert, Outcome,
+    ReceiveKind, StartupError, Store, StoreConfig, StoreError, session_options, value_text,
 };
 use chrono::{TimeZone, Utc};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
@@ -1215,6 +1215,88 @@ async fn unrecognised_states_are_refused_without_writing() {
     }
 }
 
+/// `count_alerts` gives exactly the totals and grouped counts of
+/// `find_alerts` for the same query: empty, matching, excluding,
+/// customer-restricted and unrestricted selections.
+#[tokio::test]
+async fn count_alerts_matches_the_list_totals() {
+    let Some(db) = test_db().await else { return };
+    let s = store(&db.pool);
+    s.prepare().await.expect("fresh start");
+    for (id, resource, event, severity, customer) in [
+        ("c1", "web01", "HttpError", "major", None),
+        ("c2", "web02", "HttpError", "critical", None),
+        ("c3", "db01", "DiskFull", "critical", Some("acme")),
+        ("c4", "db02", "DiskFull", "minor", Some("other")),
+    ] {
+        let mut n = new_alert(id, 3600);
+        n.resource = resource.into();
+        n.event = event.into();
+        n.severity = severity.into();
+        n.customer = customer.map(Into::into);
+        s.receive(n, "alice").await.expect("receive");
+    }
+    s.take_action("c2", None, "ack", "seen", None, "alice")
+        .await
+        .expect("ack");
+    let queries = [
+        AlertQuery::default(),
+        AlertQuery {
+            events: vec!["HttpError".into()],
+            ..AlertQuery::default()
+        },
+        AlertQuery {
+            not_events: vec!["HttpError".into()],
+            ..AlertQuery::default()
+        },
+        AlertQuery {
+            severities: vec!["critical".into()],
+            not_statuses: vec!["ack".into()],
+            ..AlertQuery::default()
+        },
+        AlertQuery {
+            events: vec!["NoSuchEvent".into()],
+            ..AlertQuery::default()
+        },
+        AlertQuery {
+            customers: Some(vec!["acme".into()]),
+            ..AlertQuery::default()
+        },
+        AlertQuery {
+            customers: Some(vec![]),
+            ..AlertQuery::default()
+        },
+    ];
+    let mut totals = Vec::new();
+    for q in &queries {
+        let c = s.count_alerts(q).await.expect("count");
+        let p = s
+            .find_alerts(q, 1, 1, alrust_domain::HistoryOutput::Omit)
+            .await
+            .expect("list");
+        assert_eq!(
+            c,
+            AlertCounts {
+                total: p.total,
+                severity_counts: p.severity_counts,
+                status_counts: p.status_counts,
+            },
+            "{q:?}"
+        );
+        totals.push(c.total);
+    }
+    assert_eq!(totals, [4, 2, 2, 1, 0, 1, 0]);
+    let all = s.count_alerts(&AlertQuery::default()).await.unwrap();
+    assert_eq!(
+        serde_json::Value::Object(all.severity_counts),
+        serde_json::json!({"critical": 2, "major": 1, "minor": 1})
+    );
+    assert_eq!(
+        serde_json::Value::Object(all.status_counts),
+        serde_json::json!({"ack": 1, "open": 3})
+    );
+}
+
 /// An exact id wins over a longer id that starts with it and over another
 /// alert's `lastReceiveId`, on the read, lock (action) and delete paths;
 /// prefixes and `lastReceiveId` still find their alert; the customer
@@ -2064,4 +2146,485 @@ async fn alter_type_history_does_not_wait_for_the_alerts_lock() {
         altered.is_ok(),
         "ALTER TYPE history now waits for (or fails on) the alerts lock; revisit ADR-0005 adoption P2: {altered:?}"
     );
+}
+
+/// DECISIONS Y68: a key is verified with a read on every request, and its use
+/// is written by the flush, or at once with `key_usage_immediate`.
+#[tokio::test]
+async fn key_use_is_tallied_and_flushed() {
+    let Some(db) = test_db().await else { return };
+    let s = store(&db.pool);
+    s.prepare().await.expect("fresh start");
+    db.pool
+        .execute(
+            "INSERT INTO keys (id, key, \"user\", scopes, text, expire_time, count, last_used_time, customer)
+             VALUES ('ok', 'secret-ok', 'alice', '{read}', 'k', '2099-01-01 00:00:00', 1, NULL, NULL),
+                    ('nullcount', 'secret-nc', 'alice', '{read}', NULL, '2099-01-01 00:00:00', NULL, NULL, NULL),
+                    ('old', 'secret-old', 'alice', '{read}', NULL, '2000-01-01 00:00:00', 0, NULL, NULL),
+                    ('noexp', 'secret-noexp', 'alice', '{admin}', NULL, NULL, 2, NULL, NULL),
+                    ('noscope', 'secret-noscope', 'alice', NULL, NULL, '2099-01-01 00:00:00', NULL, NULL, NULL)",
+        )
+        .await
+        .unwrap();
+    let row = |id: &'static str| {
+        let pool = db.pool.clone();
+        async move {
+            sqlx::query_as::<_, (Option<i64>, Option<chrono::NaiveDateTime>)>(
+                "SELECT count, last_used_time FROM keys WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+
+    // The read matches exactly the keys use_key matches, and writes nothing.
+    for refused in ["secret-old", "secret-noexp", "secret-noscope", "unknown"] {
+        assert!(s.verify_key(refused).await.unwrap().is_none(), "{refused}");
+        assert!(
+            s.authenticate_key(refused).await.unwrap().is_none(),
+            "{refused}"
+        );
+    }
+    assert_eq!(s.verify_key("secret-ok").await.unwrap().unwrap().count, 1);
+    assert_eq!(s.flush_key_usage().await.unwrap(), 0, "nothing tallied yet");
+
+    // Two uses and one on a NULL count: nothing written until the flush.
+    let before = Utc::now().naive_utc();
+    assert_eq!(
+        s.authenticate_key("secret-ok").await.unwrap().unwrap().id,
+        "ok"
+    );
+    assert!(s.authenticate_key("secret-ok").await.unwrap().is_some());
+    assert!(s.authenticate_key("secret-nc").await.unwrap().is_some());
+    assert_eq!(row("ok").await, (Some(1), None));
+    // A clone shares the tally, as the API's state and the flush loop do.
+    assert_eq!(s.clone().flush_key_usage().await.unwrap(), 2);
+    let (count, used) = row("ok").await;
+    assert_eq!(count, Some(3));
+    assert!(used.unwrap() >= before);
+    // A NULL count stays NULL, as the reference's count + 1 leaves it.
+    let (count, used) = row("nullcount").await;
+    assert_eq!(count, None);
+    assert!(used.is_some());
+    assert_eq!(
+        s.flush_key_usage().await.unwrap(),
+        0,
+        "the flush emptied the tally"
+    );
+    assert_eq!(row("ok").await.0, Some(3));
+
+    // A key deleted between its use and the flush is harmless.
+    assert!(s.authenticate_key("secret-ok").await.unwrap().is_some());
+    db.pool
+        .execute("DELETE FROM keys WHERE id = 'ok'")
+        .await
+        .unwrap();
+    assert_eq!(s.flush_key_usage().await.unwrap(), 0);
+    assert!(
+        s.authenticate_key("secret-ok").await.unwrap().is_none(),
+        "never cached"
+    );
+
+    // The parity switch: the reference's write on every request.
+    db.pool
+        .execute(
+            "INSERT INTO keys (id, key, \"user\", scopes, text, expire_time, count, last_used_time, customer)
+             VALUES ('imm', 'secret-imm', 'alice', '{read}', NULL, '2099-01-01 00:00:00', 5, NULL, NULL)",
+        )
+        .await
+        .unwrap();
+    let immediate = Store::new(
+        db.pool.clone(),
+        StoreConfig {
+            key_usage_immediate: true,
+            ..StoreConfig::default()
+        },
+    );
+    assert_eq!(
+        immediate
+            .authenticate_key("secret-imm")
+            .await
+            .unwrap()
+            .unwrap()
+            .count,
+        6
+    );
+    let (count, used) = row("imm").await;
+    assert_eq!(count, Some(6), "written before the flush");
+    assert!(used.is_some());
+    assert!(
+        immediate
+            .authenticate_key("secret-noexp")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        immediate.flush_key_usage().await.unwrap(),
+        0,
+        "nothing tallied"
+    );
+    assert_eq!(row("imm").await.0, Some(6));
+}
+
+/// cdx 56ffa31d R1 to R3 (DECISIONS Y70): a write blocked by a row lock is
+/// refused within the attempt timeout and its uses stay pending while
+/// authentication keeps working; a cancelled write leaves them pending too;
+/// a key recreated under the same id with a new secret gets none of the old
+/// uses; uses not written within the bound are dropped and reported.
+#[tokio::test]
+async fn key_use_survives_blocked_writes_and_is_bounded() {
+    use alrust_store_pg::key_usage::KeyUsageLosses;
+    use std::time::Duration;
+
+    let Some(db) = test_db().await else { return };
+    let cfg = StoreConfig {
+        key_usage_attempt_timeout: Duration::from_millis(300),
+        ..StoreConfig::default()
+    };
+    let s = Store::new(db.pool.clone(), cfg.clone());
+    s.prepare().await.expect("fresh start");
+    db.pool
+        .execute(
+            "INSERT INTO keys (id, key, \"user\", scopes, text, expire_time, count, last_used_time, customer)
+             VALUES ('a', 'secret-a', 'alice', '{read}', NULL, '2099-01-01 00:00:00', 0, NULL, NULL),
+                    ('b', 'secret-b', 'alice', '{read}', NULL, '2099-01-01 00:00:00', 0, NULL, NULL)",
+        )
+        .await
+        .unwrap();
+    let count = |id: &'static str| {
+        let pool = db.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, Option<i64>>("SELECT count FROM keys WHERE id = $1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    // Another session holds the row lock, as a slow writer would.
+    let locker = db.pool_with(test_session(&db.base)).await;
+
+    // Blocked: each write is refused within the attempt timeout, nothing is
+    // written, the uses stay pending, and authentication still succeeds.
+    let mut lock = locker.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM keys WHERE id = 'a' FOR UPDATE")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    for _ in 0..3 {
+        assert!(s.authenticate_key("secret-a").await.unwrap().is_some());
+    }
+    for _ in 0..2 {
+        let err = s.flush_key_usage().await.expect_err("the row is locked");
+        assert!(
+            matches!(&err, StoreError::Db(sqlx::Error::Database(_))),
+            "{err}"
+        );
+        assert!(s.authenticate_key("secret-a").await.unwrap().is_some());
+    }
+    assert_eq!(s.key_usage_pending(), (1, 5));
+    // A write cancelled before COMMIT (its future dropped) changes nothing,
+    // and its uses stay pending. It has its own pool: the cancelled UPDATE
+    // still waits on the server, so that backend is ended before the lock is
+    // released, which rolls its transaction back.
+    let slow = Store::new(
+        db.pool_with(test_session(&db.base)).await,
+        StoreConfig {
+            key_usage_attempt_timeout: Duration::from_secs(20),
+            ..cfg.clone()
+        },
+    );
+    assert!(slow.authenticate_key("secret-a").await.unwrap().is_some());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(500), slow.flush_key_usage())
+            .await
+            .is_err(),
+        "the write waits for the lock"
+    );
+    assert_eq!(slow.key_usage_pending(), (1, 1));
+    assert_eq!(s.take_key_usage_losses(), KeyUsageLosses::default());
+    assert_eq!(slow.take_key_usage_losses(), KeyUsageLosses::default());
+    let ended: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM (SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+          WHERE datname = current_database() AND pid <> pg_backend_pid()
+            AND state = 'active' AND query LIKE 'UPDATE keys AS k%') t",
+    )
+    .fetch_one(&mut *lock)
+    .await
+    .unwrap();
+    assert_eq!(ended, 1, "the cancelled write was still waiting");
+    lock.rollback().await.unwrap();
+    assert_eq!(count("a").await, Some(0));
+    assert_eq!(s.flush_key_usage().await.unwrap(), 1);
+    assert_eq!(count("a").await, Some(5), "every use once, none twice");
+    assert_eq!(s.key_usage_pending(), (0, 0));
+    assert_eq!(
+        slow.key_usage_pending(),
+        (1, 1),
+        "never written, never lost silently"
+    );
+
+    // The same id with a new secret is a new credential.
+    assert!(s.authenticate_key("secret-b").await.unwrap().is_some());
+    db.pool
+        .execute("DELETE FROM keys WHERE id = 'b'")
+        .await
+        .unwrap();
+    db.pool
+        .execute(
+            "INSERT INTO keys (id, key, \"user\", scopes, text, expire_time, count, last_used_time, customer)
+             VALUES ('b', 'secret-b2', 'alice', '{read}', NULL, '2099-01-01 00:00:00', 0, NULL, NULL)",
+        )
+        .await
+        .unwrap();
+    assert_eq!(s.flush_key_usage().await.unwrap(), 0);
+    assert_eq!(count("b").await, Some(0));
+    assert_eq!(s.key_usage_pending(), (0, 0));
+    assert_eq!(
+        s.take_key_usage_losses(),
+        KeyUsageLosses {
+            unmatched_keys: 1,
+            unmatched_uses: 1,
+            ..KeyUsageLosses::default()
+        },
+        "a committed write that matched no row is a definite, separate loss"
+    );
+
+    // Uses recorded while a write is in progress stay for the next write;
+    // a second write does not start meanwhile.
+    let tallying = Store::new(
+        db.pool.clone(),
+        StoreConfig {
+            key_usage_attempt_timeout: Duration::from_secs(10),
+            ..cfg.clone()
+        },
+    );
+    assert!(
+        tallying
+            .authenticate_key("secret-a")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let mut lock = locker.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM keys WHERE id = 'a' FOR UPDATE")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    let in_progress = {
+        let c = tallying.clone();
+        tokio::spawn(async move { c.flush_key_usage().await })
+    };
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        tallying
+            .authenticate_key("secret-a")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        tallying
+            .authenticate_key("secret-a")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        tallying.flush_key_usage().await.unwrap(),
+        0,
+        "no second write while one is in progress"
+    );
+    lock.rollback().await.unwrap();
+    assert_eq!(in_progress.await.unwrap().unwrap(), 1);
+    assert_eq!(count("a").await, Some(6), "the snapshot's one use");
+    assert_eq!(tallying.key_usage_pending(), (1, 2));
+    assert_eq!(tallying.flush_key_usage().await.unwrap(), 1);
+    assert_eq!(count("a").await, Some(8));
+    assert_eq!(tallying.take_key_usage_losses(), KeyUsageLosses::default());
+
+    // The bound: uses that wait longer are dropped at the next write, and
+    // reported once.
+    let short = Store::new(
+        db.pool.clone(),
+        StoreConfig {
+            key_usage_max_pending: Duration::from_millis(400),
+            ..cfg
+        },
+    );
+    let mut lock = locker.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM keys WHERE id = 'a' FOR UPDATE")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    assert!(short.authenticate_key("secret-a").await.unwrap().is_some());
+    assert!(short.authenticate_key("secret-a").await.unwrap().is_some());
+    assert!(short.flush_key_usage().await.is_err());
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(short.flush_key_usage().await.unwrap(), 0);
+    assert_eq!(
+        short.take_key_usage_losses(),
+        KeyUsageLosses {
+            expired_keys: 1,
+            expired_uses: 2,
+            ..KeyUsageLosses::default()
+        }
+    );
+    assert_eq!(short.take_key_usage_losses(), KeyUsageLosses::default());
+    lock.rollback().await.unwrap();
+    assert_eq!(count("a").await, Some(8));
+}
+
+/// cdx 0e4cb36f R3a: a write that starts just before the bound gets only the
+/// time left (PostgreSQL ends it then, not after a full attempt), and its
+/// uses expire at the next write. Nothing is written after the deadline.
+#[tokio::test]
+async fn key_use_writes_stop_at_the_deadline() {
+    use alrust_store_pg::key_usage::KeyUsageLosses;
+    use std::time::{Duration, Instant};
+
+    let Some(db) = test_db().await else { return };
+    let s = Store::new(
+        db.pool.clone(),
+        StoreConfig {
+            key_usage_max_pending: Duration::from_millis(1500),
+            key_usage_attempt_timeout: Duration::from_secs(10),
+            ..StoreConfig::default()
+        },
+    );
+    s.prepare().await.expect("fresh start");
+    db.pool
+        .execute(
+            "INSERT INTO keys (id, key, \"user\", scopes, text, expire_time, count, last_used_time, customer)
+             VALUES ('a', 'secret-a', 'alice', '{read}', NULL, '2099-01-01 00:00:00', 0, NULL, NULL)",
+        )
+        .await
+        .unwrap();
+    let locker = db.pool_with(test_session(&db.base)).await;
+    let mut lock = locker.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM keys WHERE id = 'a' FOR UPDATE")
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    assert!(s.authenticate_key("secret-a").await.unwrap().is_some());
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+
+    let started = Instant::now();
+    let err = s.flush_key_usage().await.expect_err("the row is locked");
+    let took = started.elapsed();
+    assert!(
+        matches!(&err, StoreError::Db(sqlx::Error::Database(_))),
+        "{err}"
+    );
+    assert!(
+        took < Duration::from_millis(1000),
+        "the write had only the time left, not the 10 s attempt: {took:?}"
+    );
+
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    s.expire_key_usage();
+    assert_eq!(s.key_usage_pending(), (0, 0));
+    assert_eq!(
+        s.take_key_usage_losses(),
+        KeyUsageLosses {
+            expired_keys: 1,
+            expired_uses: 1,
+            ..KeyUsageLosses::default()
+        }
+    );
+    lock.rollback().await.unwrap();
+    let count: Option<i64> = sqlx::query_scalar("SELECT count FROM keys WHERE id = 'a'")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, Some(0), "nothing was written after the deadline");
+}
+
+/// cdx 766fb5e4: a write that waited for a connection past the deadline
+/// sends nothing (the uses stay pending, then expire), and a backlog of
+/// several batches drains in one write.
+#[tokio::test]
+async fn key_use_writes_check_the_deadline_after_waiting_and_drain_in_batches() {
+    use alrust_store_pg::key_usage::KeyUsageLosses;
+    use std::time::Duration;
+
+    let Some(db) = test_db().await else { return };
+    store(&db.pool).prepare().await.expect("fresh start");
+    db.pool
+        .execute(
+            "INSERT INTO keys (id, key, \"user\", scopes, text, expire_time, count, last_used_time, customer)
+             SELECT 'k' || i, 'secret-' || i, 'alice', '{read}', NULL, '2099-01-01 00:00:00', 0, NULL, NULL
+               FROM generate_series(1, 5) AS i",
+        )
+        .await
+        .unwrap();
+    let total = || {
+        let pool = db.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, Option<i64>>("SELECT sum(count)::bigint FROM keys")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+
+    // Every connection of a small pool is held while a write waits for one,
+    // until after the deadline.
+    let small = db.pool_with(test_session(&db.base)).await; // 2 connections
+    let s = Store::new(
+        small.clone(),
+        StoreConfig {
+            key_usage_max_pending: Duration::from_millis(1500),
+            key_usage_attempt_timeout: Duration::from_secs(10),
+            ..StoreConfig::default()
+        },
+    );
+    assert!(s.authenticate_key("secret-1").await.unwrap().is_some());
+    let held = (
+        small.acquire().await.unwrap(),
+        small.acquire().await.unwrap(),
+    );
+    let waiting = {
+        let w = s.clone();
+        tokio::spawn(async move { w.flush_key_usage().await })
+    };
+    tokio::time::sleep(Duration::from_millis(1700)).await;
+    drop(held);
+    assert_eq!(
+        waiting.await.unwrap().unwrap(),
+        0,
+        "nothing is sent once the deadline has passed"
+    );
+    assert_eq!(total().await, Some(0));
+    assert_eq!(s.key_usage_pending(), (1, 1));
+    s.expire_key_usage();
+    assert_eq!(
+        s.take_key_usage_losses(),
+        KeyUsageLosses {
+            expired_keys: 1,
+            expired_uses: 1,
+            ..KeyUsageLosses::default()
+        }
+    );
+
+    // A backlog of three batches of two drains in one write.
+    let batched = Store::new(
+        db.pool.clone(),
+        StoreConfig {
+            key_usage_batch: 2,
+            ..StoreConfig::default()
+        },
+    );
+    for i in 1..=5 {
+        let key = format!("secret-{i}");
+        assert!(batched.authenticate_key(&key).await.unwrap().is_some());
+    }
+    assert_eq!(batched.key_usage_pending(), (5, 5));
+    assert_eq!(batched.flush_key_usage().await.unwrap(), 5);
+    assert_eq!(batched.key_usage_pending(), (0, 0));
+    assert_eq!(total().await, Some(5));
+    assert_eq!(batched.take_key_usage_losses(), KeyUsageLosses::default());
 }

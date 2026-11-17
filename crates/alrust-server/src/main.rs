@@ -16,6 +16,18 @@
 //!   timeout at most 2147483647, the reference's `integer` columns
 //! - `ALRUST_HOUSEKEEPING_INTERVAL` seconds (default 0 = off; the reference
 //!   relies on an external cron calling `/management/housekeeping`)
+//! - `ALRUST_KEY_USAGE_IMMEDIATE` (default `false`): `true` writes an API
+//!   key's `count` and `last_used_time` on every request, as the reference
+//!   does; otherwise uses are tallied and written about once a second, and on
+//!   a graceful shutdown; uses not written within 30 s are dropped and logged
+//!   (DECISIONS Y68, Y70)
+//! - `ALRUST_REQUEST_TIMEOUT` seconds (default 30; 0 = off): a request that
+//!   runs longer is answered 503
+//! - `ALRUST_DB_ACQUIRE_TIMEOUT` seconds (default 10): the longest wait for a
+//!   free database connection
+//! - `ALRUST_DB_LOCK_TIMEOUT` (default 10) and `ALRUST_DB_STATEMENT_TIMEOUT`
+//!   (default 0) seconds, 0 = off: PostgreSQL's `lock_timeout` and
+//!   `statement_timeout` on serving connections; start-up runs without them
 //! - `RUST_LOG` (default `info`)
 //!
 //! Operator Bearer tokens (spec/oidc-caller-facts.md; DECISIONS Y9, Y50,
@@ -29,6 +41,8 @@
 //!   (unset: none do)
 
 mod bearer_settings;
+mod key_usage_writer;
+mod limits;
 mod redacted_log;
 
 use std::net::SocketAddr;
@@ -91,20 +105,28 @@ fn env_bool(name: &str, default: bool) -> anyhow::Result<bool> {
 /// changes, a new value replaces the previous one, which stops authenticating.
 const BOOTSTRAP_KEY_ID: &str = "a1a7b007-5a1e-4b00-8000-000000000001";
 
-async fn connect(url: &str) -> anyhow::Result<sqlx::PgPool> {
+/// Connects a pool of at most `max_connections`. With `limits` it is the
+/// serving pool; without, the start-up pool, which keeps sqlx's default
+/// acquire wait and has no lock or statement limit.
+async fn connect(
+    url: &str,
+    max_connections: u32,
+    limits: Option<limits::DbLimits>,
+) -> anyhow::Result<sqlx::PgPool> {
     // Pin search_path to the reference objects and TimeZone to UTC on every
     // session (ADR-0005 decisions 4 and 5).
-    let opts = alrust_store_pg::session_options(
+    let mut opts = alrust_store_pg::session_options(
         url.parse::<PgConnectOptions>()
             .context("DATABASE_URL is not a valid PostgreSQL URL")?,
     );
+    let mut pool_opts = PgPoolOptions::new().max_connections(max_connections);
+    if let Some(limits) = limits {
+        opts = limits.session(opts);
+        pool_opts = pool_opts.acquire_timeout(limits.acquire);
+    }
     let mut delay = Duration::from_millis(500);
     for attempt in 1..=30 {
-        match PgPoolOptions::new()
-            .max_connections(16)
-            .connect_with(opts.clone())
-            .await
-        {
+        match pool_opts.clone().connect_with(opts.clone()).await {
             Ok(pool) => return Ok(pool),
             Err(e) if attempt < 30 => {
                 tracing::warn!(attempt, error = %redact_diagnostic(e.to_string()), "database not ready; retrying");
@@ -167,6 +189,11 @@ async fn run() -> anyhow::Result<()> {
         history_limit: usize::try_from(env_i64("ALRUST_HISTORY_LIMIT", 100)?.max(1))
             .context("ALRUST_HISTORY_LIMIT is too large")?,
         history_on_value_change: env_bool("ALRUST_HISTORY_ON_VALUE_CHANGE", true)?,
+        key_usage_immediate: env_bool("ALRUST_KEY_USAGE_IMMEDIATE", false)?,
+        // DECISIONS Y70: tallied uses wait at most 30 s for a write.
+        key_usage_max_pending: Duration::from_secs(30),
+        key_usage_attempt_timeout: Duration::from_secs(5),
+        key_usage_batch: 1000,
     };
     for (name, v) in [
         ("ALRUST_ALERT_TIMEOUT", store_cfg.alert_timeout),
@@ -201,8 +228,34 @@ async fn run() -> anyhow::Result<()> {
             tracing::warn!("{w}");
         })?;
 
-    let pool = connect(&database_url).await?;
-    let store = Store::new(pool, store_cfg);
+    let db_limits = limits::DbLimits {
+        acquire: Duration::from_secs(limits::secs_in_range(
+            "ALRUST_DB_ACQUIRE_TIMEOUT",
+            env_i64("ALRUST_DB_ACQUIRE_TIMEOUT", 10)?,
+            1,
+        )?),
+        lock_timeout_s: limits::secs_in_range(
+            "ALRUST_DB_LOCK_TIMEOUT",
+            env_i64("ALRUST_DB_LOCK_TIMEOUT", 10)?,
+            0,
+        )?,
+        statement_timeout_s: limits::secs_in_range(
+            "ALRUST_DB_STATEMENT_TIMEOUT",
+            env_i64("ALRUST_DB_STATEMENT_TIMEOUT", 0)?,
+            0,
+        )?,
+    };
+    let request_timeout = limits::secs_in_range(
+        "ALRUST_REQUEST_TIMEOUT",
+        env_i64("ALRUST_REQUEST_TIMEOUT", 30)?,
+        0,
+    )?;
+
+    // Start-up has its own pool with no lock or statement limit: a migration
+    // may run long, or wait for another instance's. It is closed before the
+    // serving pool opens.
+    let startup_pool = connect(&database_url, 2, None).await?;
+    let store = Store::new(startup_pool.clone(), store_cfg.clone());
     let report = store.prepare().await.context("database start-up refused")?;
     match report.outcome {
         Outcome::Fresh => tracing::info!("database initialised with the reference schema"),
@@ -242,6 +295,12 @@ async fn run() -> anyhow::Result<()> {
             "ALRUST_AUTH_REQUIRED is on but ALRUST_ADMIN_KEY is unset; create keys in the database"
         );
     }
+    drop(store);
+    startup_pool.close().await;
+    let store = Store::new(
+        connect(&database_url, 16, Some(db_limits)).await?,
+        store_cfg,
+    );
 
     // A zero or negative interval is off (`try_from` fails only for negatives).
     if let Ok(hk_secs) = u64::try_from(env_i64("ALRUST_HOUSEKEEPING_INTERVAL", 0)?)
@@ -266,26 +325,92 @@ async fn run() -> anyhow::Result<()> {
         });
     }
 
+    // Key uses are tallied in memory and written about once a second by one
+    // writer task; at shutdown it lets a write in progress finish, then
+    // writes once more (DECISIONS Y68, Y70).
+    let (stop_writer, writer_stop) = tokio::sync::watch::channel(false);
+    let config_max_pending = store.config().key_usage_max_pending;
+    let writer_store = store.clone();
+    let writer = (!store.config().key_usage_immediate).then(|| {
+        let s = store.clone();
+        tokio::spawn(key_usage_writer::run(
+            move |kind| key_usage_writer::write_once(s.clone(), kind),
+            writer_stop,
+            key_usage_writer::INTERVAL,
+        ))
+    });
+
     let bind: SocketAddr = env_or("ALRUST_BIND", "0.0.0.0:8080")
         .parse()
         .context("ALRUST_BIND must be host:port")?;
-    let app = router(Arc::new(AppState {
-        store,
-        cfg: api_cfg,
-    }))
+    let app = limits::with_deadline(
+        router(Arc::new(AppState {
+            store,
+            cfg: api_cfg,
+        })),
+        (request_timeout > 0).then(|| Duration::from_secs(request_timeout)),
+    )
     .layer(CorsLayer::permissive())
     // The span records the path only: a query string can carry `api-key`.
     .layer(
         TraceLayer::new_for_http().make_span_with(|req: &axum::http::Request<_>| {
-            tracing::debug_span!("request", method = %req.method(), path = %req.uri().path())
+            let path = req.uri().path();
+            // SF-WEBHOOKS item 1 (W-SEC-1): a webhook path can carry caller
+            // text, so only the route template, the registered webhook name
+            // (else <unknown>) and the body length are logged.
+            if let Some(rest) = path.strip_prefix("/webhooks/") {
+                let name = match rest.split('/').next() {
+                    Some("prometheus") => "prometheus",
+                    _ => "<unknown>",
+                };
+                let body_len = req
+                    .headers()
+                    .get(axum::http::header::CONTENT_LENGTH)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse::<u64>().ok());
+                tracing::debug_span!(
+                    "request",
+                    method = %req.method(),
+                    path = "/webhooks/<webhook>/<path>",
+                    webhook = name,
+                    body_len,
+                )
+            } else {
+                tracing::debug_span!("request", method = %req.method(), path = %path)
+            }
         }),
     );
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .with_context(|| format!("cannot bind {bind}"))?;
     tracing::info!(%bind, "alrust listening");
-    axum::serve(listener, app)
+    let served = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
-        .await?;
+        .await;
+    if let Some(mut handle) = writer {
+        // Requests have finished: the writer completes any write in
+        // progress, then writes once more.
+        let _ = stop_writer.send(true);
+        // A write in progress and the final one, each within the bound.
+        let deadline = config_max_pending * 2 + Duration::from_secs(5);
+        match tokio::time::timeout(deadline, &mut handle).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::error!(error = %e, "the API-key use writer failed");
+                key_usage_writer::report_losses(&writer_store, key_usage_writer::WriteKind::Final);
+            }
+            Err(_) => {
+                // Not detached: aborting drops its write, which settles by
+                // how far it got; then what is still pending is lost.
+                handle.abort();
+                let _ = handle.await;
+                tracing::error!("the API-key use writer did not finish within {deadline:?}");
+                // The aborted write settled by how far it got; report it and
+                // what is still pending, as the writer would have.
+                key_usage_writer::report_losses(&writer_store, key_usage_writer::WriteKind::Final);
+            }
+        }
+    }
+    served?;
     Ok(())
 }

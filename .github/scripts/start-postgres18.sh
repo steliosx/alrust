@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start a throwaway PostgreSQL 18.6 cluster on a GitHub-hosted ubuntu-24.04
+# Start a throwaway PostgreSQL 18.7 cluster on a GitHub-hosted ubuntu-24.04
 # runner, from the official PostgreSQL apt repository (no container
 # registry, so no Docker Hub or ECR pull limits).
 #
@@ -18,7 +18,7 @@ db=${1:?database name}
 user=${2:-postgres}
 password=${3:-postgres}
 port=${4:-5432}
-version=18.6-1.pgdg24.04+2
+version=18.7-1.pgdg24.04+2
 : "${RUNNER_TEMP:?RUNNER_TEMP is required}"
 
 if ss -ltnH "sport = :$port" | grep -q .; then
@@ -41,7 +41,10 @@ data="$root/data"
 {
   # The PGDG signing key (fingerprint B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8).
   sudo install -d /usr/share/postgresql-common/pgdg
-  sudo curl -fsSL --retry 3 -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+  # --retry alone does not retry a transfer dropped mid-way (curl exit 56,
+  # nine CI jobs on 2026-11-15/16); --retry-all-errors does. The key is still
+  # checked against its fingerprint below.
+  sudo curl -fsSL --retry 5 --retry-all-errors -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
     https://www.postgresql.org/media/keys/ACCC4CF8.asc
   gpg --show-keys --with-colons /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
     | grep -q '^fpr:::::::::B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8:' \
