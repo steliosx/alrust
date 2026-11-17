@@ -135,6 +135,7 @@ class ReaderBodyCheck(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.client = load("mixed_client")
+        cls.checks = load("mixed_checks")
 
     def body(self, times):
         return json.dumps({"alerts": [{"lastReceiveTime": t} for t in times]}).encode()
@@ -152,6 +153,27 @@ class ReaderBodyCheck(unittest.TestCase):
                     self.body(["2026-11-16T01:02:03.456Z"] * 51), b"{", b"{}", b"[]"):
             with self.subTest(raw[:40]):
                 self.assertIsNotNone(self.client.read_problem(200, raw))
+
+    def test_times_of_the_right_form_that_are_no_real_time(self):
+        good = "2026-11-16T01:02:03.456Z"
+        for bad in ("2026-13-16T01:02:03.456Z", "2026-00-16T01:02:03.456Z",
+                    "2026-02-30T01:02:03.456Z", "2026-11-31T01:02:03.456Z",
+                    "2026-11-00T01:02:03.456Z", "2026-02-29T01:02:03.456Z",
+                    "2026-11-16T24:02:03.456Z", "2026-11-16T01:60:03.456Z",
+                    "2026-11-16T01:02:60.456Z", "2026-11-16T01:02:61.456Z",
+                    "0000-11-16T01:02:03.456Z"):
+            with self.subTest(bad):
+                self.assertFalse(self.client.real_time(bad))
+                self.assertIsNone(self.checks.parse_api_time(bad))  # one rule in both
+                for times in ([bad], [bad, bad], [bad, good], ["9999-12-31T23:59:59.999Z", bad]):
+                    self.assertIsNotNone(self.client.read_problem(200, self.body(times)))
+
+    def test_equal_real_times_are_in_order(self):
+        for t in ("2026-11-16T01:02:03.456Z", "2028-02-29T23:59:59.999Z"):
+            with self.subTest(t):
+                self.assertTrue(self.client.real_time(t))
+                self.assertIsNotNone(self.checks.parse_api_time(t))
+                self.assertIsNone(self.client.read_problem(200, self.body([t] * 50)))
 
 
 class SuiteExit(unittest.TestCase):

@@ -30,6 +30,7 @@ import signal
 import socket
 import sys
 import time
+from datetime import datetime
 
 READ_PATH = "/alerts?page-size=50&sort-by=lastReceiveTime"
 
@@ -46,6 +47,19 @@ def write_body(writer, index):
 API_TIME = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z")
 
 
+def real_time(value):
+    """True for a served time of the exact form that is also a real date
+    and time. Same rule as mixed_checks.parse_api_time; repeated here
+    because this client runs alone and imports only the standard library."""
+    if not isinstance(value, str) or not API_TIME.fullmatch(value):
+        return False
+    try:
+        datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ")
+    except ValueError:
+        return False
+    return True
+
+
 def read_problem(status, raw):
     """What is wrong with one list answer, or None."""
     if not 200 <= status < 300:
@@ -58,9 +72,10 @@ def read_problem(status, raw):
     if len(alerts) > 50:
         return f"{len(alerts)} alerts in one page"
     # The served form is fixed (see mixed_checks.py), so strings of that
-    # form compare as their times do.
-    if any(not isinstance(t, str) or not API_TIME.fullmatch(t) for t in times):
-        return "a lastReceiveTime is not a UTC time with three fraction digits and Z"
+    # form compare as their times do. Equal times are in order.
+    if not all(real_time(t) for t in times):
+        return ("a lastReceiveTime is not a real UTC time with three fraction "
+                "digits and Z")
     if any(a < b for a, b in zip(times, times[1:])):
         return "the alerts are not in descending lastReceiveTime order"
     return None
