@@ -4,7 +4,8 @@
 # not a capacity claim. Not a required check. When it runs (the owner's
 # choice, DECISIONS Y69): a full run only when a person starts it
 # (workflow_dispatch, mode "full" by default); a pull request that changes
-# the benchmark runs only the quick check (1 repetition, c=1, 5 s).
+# the benchmark runs only the quick check (1 repetition, c=1, 5 s) of both
+# suites. The mixed suite is docs/performance/benchmark-methodology.md.
 name: bench compare
 
 on:
@@ -15,6 +16,11 @@ on:
         type: choice
         options: [full, quick]
         default: full
+      suite:
+        description: "compare (the four arms), mixed (writers and readers together; pool and key-use sweeps) or both"
+        type: choice
+        options: [compare, mixed, both]
+        default: compare
   pull_request:
     paths:
       - scripts/bench/**
@@ -60,6 +66,11 @@ jobs:
           echo "OHA_BIN=$RUNNER_TEMP/oha/bin/oha" >> "$GITHUB_ENV"
           "$RUNNER_TEMP/oha/bin/oha" --version
           "$RUNNER_TEMP/oha/bin/oha" --help
+      # The mixed suite's gates, tested without a server. First of the
+      # benchmark steps, so a broken gate stops the job before anything runs.
+      - name: Mixed suite gate tests (no server)
+        timeout-minutes: 2
+        run: python3 -I scripts/bench/test_mixed_checks.py
       - name: PostgreSQL 18.7, pgbouncer and the reference Alerta environment
         timeout-minutes: 15
         run: scripts/bench/setup.sh
@@ -67,6 +78,8 @@ jobs:
         timeout-minutes: 45
         env:
           BENCH_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'quick' }}
+          # A pull request checks the plumbing of both suites.
+          BENCH_SUITE: ${{ github.event_name == 'workflow_dispatch' && inputs.suite || 'both' }}
         run: |
           set -euo pipefail
           echo "BENCH_OUT=$RUNNER_TEMP/bench-out" >> "$GITHUB_ENV"
