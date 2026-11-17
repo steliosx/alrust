@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-17 10:48 EST by claude-alrust, the sole writer of this
+_Last updated: 2026-11-17 10:49 EST by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox. Times
 written from 2026-11-15 14:13 EST on are Nassau local time (DECISIONS Y63);
 earlier ones are UTC (`Z`)._
@@ -1129,7 +1129,7 @@ which rule holds while the tool is unavailable, and Codex raised the same
 question; no answer or waiver is assumed. Until the owner answers, Claude
 merges nothing: #236 is approved and held.
 
-**2026-11-17, to 10:48 EST.** Codex approved the source of #266 at
+**2026-11-17, to 10:49 EST.** Codex approved the source of #266 at
 `9fb87d19` and of #267 at `7c9d0389` at 00:15 EST (`29ac0f76`), stating
 that these approvals do not waive Y48's advisor condition. Its limits on
 #266 stand: the local mutant run is Claude's report, not reproduced; no
@@ -1157,6 +1157,10 @@ subagent with a written brief: one manual start of `bench-compare.yml` on
 #236 was bound to this `main` (head `c69c291b`) and waits for CI and
 review. The lines of this paragraph are later than Codex's approval of
 `66c23db1`.
+
+At about 10:49 EST the owner granted #265's weekly schedule ("weekly
+schedule for security: yes"; DECISIONS Y74). #265 (`6bb8d6b0`) is behind
+`main` and is bound to it next; its limits are unchanged.
 
 ## Work in flight
 
