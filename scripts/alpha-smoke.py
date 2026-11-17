@@ -247,6 +247,22 @@ code, body = call('GET', f'/environments?resource={GR}&page=2&page-size=1')
 check('GET /environments page after the last is 416 [utils/paging.py]', code == 416, (code, body))
 call('DELETE', f'/alert/{gid}')
 
+# --- top-N [views/alerts.py:405-483; SF-QUERY alrust item 2]
+TR = f'topn-{RUN}'
+code, body = call('POST', '/alert', alert(resource=TR, event='TopnA'))
+tid = body.get('id', '') if isinstance(body, dict) else ''
+code, body = call('GET', f'/alerts/top10/count?resource={TR}')
+first = (body.get('top10') or [{}])[0] if code == 200 else {}
+check('GET /alerts/top10/count groups by event',
+      body.get('total') == 1 and first.get('event') == 'TopnA' and first.get('count') == 1
+      and [r.get('resource') for r in first.get('resources', [])] == [TR], (code, body))
+code, body = call('GET', f'/alerts/topn/count?resource={TR}&group-by=Bogus')
+check('top-N group-by must be an exact column (400) [SF-QUERY 2]',
+      code == 400 and body.get('message') == "Grouping by 'Bogus' field not supported.", (code, body))
+code, body = call('GET', f'/alerts/top10/count?resource={TR}&page=2')
+check('top-N page after the first is 416 [utils/paging.py]', code == 416, (code, body))
+call('DELETE', f'/alert/{tid}')
+
 # --- heartbeats [HB]
 origin = f'smoke/{RUN}'
 code, body = call('POST', '/heartbeat', {'origin': origin, 'timeout': 60, 'tags': ['smoke']})
