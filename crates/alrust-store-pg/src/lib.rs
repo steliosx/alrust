@@ -9,6 +9,7 @@
 pub mod blackouts;
 pub mod catalog;
 pub mod hooks;
+pub mod key_usage;
 pub mod startup;
 
 use std::sync::Arc;
@@ -79,6 +80,18 @@ pub struct StoreConfig {
     pub shelve_timeout: i64,
     pub history_limit: usize,
     pub history_on_value_change: bool,
+    /// Write a key's use on every request, as the reference does. Off by
+    /// default: uses are tallied in memory and written about once a second
+    /// (`key_usage`, DECISIONS Y68).
+    pub key_usage_immediate: bool,
+    /// How long tallied uses wait for a successful write before they are
+    /// dropped and reported (DECISIONS Y70: 30 seconds).
+    pub key_usage_max_pending: std::time::Duration,
+    /// The longest one write of the tallies may wait for a lock or run.
+    pub key_usage_attempt_timeout: std::time::Duration,
+    /// The most credentials one write carries (the oldest first); clamped
+    /// to 1..=10,000 by [`Store::new`].
+    pub key_usage_batch: usize,
 }
 
 impl Default for StoreConfig {
@@ -89,6 +102,10 @@ impl Default for StoreConfig {
             shelve_timeout: 7200,
             history_limit: 100,
             history_on_value_change: true,
+            key_usage_immediate: false,
+            key_usage_max_pending: std::time::Duration::from_secs(30),
+            key_usage_attempt_timeout: std::time::Duration::from_secs(5),
+            key_usage_batch: 1000,
         }
     }
 }
@@ -230,6 +247,8 @@ pub struct Store {
     cfg: StoreConfig,
     /// Acknowledgement integrations, in call order; empty unless registered.
     hooks: Vec<Arc<dyn AckIntegration>>,
+    /// Key uses not yet written, shared by every clone of this store.
+    usage: Arc<key_usage::KeyUsage>,
 }
 
 /// An action's decisions, made before anything is written.
@@ -632,11 +651,13 @@ fn identity_history<'a>(alert: &'a Alert, event: &str) -> Vec<&'a HistoryEntry> 
 }
 
 impl Store {
-    pub fn new(pool: PgPool, cfg: StoreConfig) -> Self {
+    pub fn new(pool: PgPool, mut cfg: StoreConfig) -> Self {
+        cfg.key_usage_batch = cfg.key_usage_batch.clamp(1, 10_000);
         Store {
             pool,
             cfg,
             hooks: Vec::new(),
+            usage: Arc::new(key_usage::KeyUsage::default()),
         }
     }
 

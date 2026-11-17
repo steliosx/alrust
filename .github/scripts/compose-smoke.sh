@@ -20,7 +20,7 @@ workspace=$(cd -- "$GITHUB_WORKSPACE" && pwd -P)
 # The name inventories below are bound to this reviewed Compose shape. A changed
 # shape requires affected source review, not silent reuse of an old inventory.
 compose_digest=$(sha256sum -- "$workspace/docker-compose.yml")
-[[ ${compose_digest%% *} == daab89860e719129e42a1ff610f33af6aa0e51fd0c1cc027c0310487ba48105c ]] || refuse
+[[ ${compose_digest%% *} == 3dc8accf534388af4b3a29ba9bcf612fdc21bc7e8fe36c9f049dfc8d397db363 ]] || refuse
 
 # Commands below receive a fresh environment and an empty private Docker config:
 # no caller Compose overrides, remote Docker context, credentials or app config.
