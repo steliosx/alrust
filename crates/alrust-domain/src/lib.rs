@@ -32,6 +32,83 @@ pub fn path_segment(id: &str) -> String {
     out
 }
 
+/// The default `ALERTA` alarm model as `GET /config` reports it
+/// (`models/alarms/alerta.py:7-58`, `:81-91`; `version.py:1`). alrust has no
+/// `ALARM_MODEL`, `SEVERITY_MAP` or `COLOR_MAP` setting, so these are always
+/// the model's defaults.
+pub mod alarm_model {
+    use serde_json::{Map, Value, json};
+
+    /// The model's display name at the pinned reference.
+    pub const NAME: &str = "Alerta 9.1.0";
+
+    /// `SEVERITY_MAP`'s names, in the reference's order.
+    pub const SEVERITIES: [&str; 13] = [
+        "security",
+        "critical",
+        "major",
+        "minor",
+        "warning",
+        "indeterminate",
+        "informational",
+        "normal",
+        "ok",
+        "cleared",
+        "debug",
+        "trace",
+        "unknown",
+    ];
+
+    /// `SEVERITY_MAP`: each severity's level.
+    pub fn severity_map() -> Value {
+        let mut map = Map::new();
+        for name in SEVERITIES {
+            map.insert(
+                name.to_owned(),
+                super::severity_level(name).map_or(Value::Null, Value::from),
+            );
+        }
+        Value::Object(map)
+    }
+
+    /// `COLOR_MAP`.
+    pub fn colors() -> Value {
+        json!({
+            "severity": {
+                "security": "blue",
+                "critical": "red",
+                "major": "orange",
+                "minor": "yellow",
+                "warning": "dodgerblue",
+                "indeterminate": "lightblue",
+                "cleared": "#00CC00",
+                "normal": "#00CC00",
+                "ok": "#00CC00",
+                "informational": "#00CC00",
+                "debug": "#9D006D",
+                "trace": "#7554BF",
+                "unknown": "silver"
+            },
+            "status": {"ack": "skyblue", "shelved": "skyblue"},
+            "text": "black"
+        })
+    }
+
+    /// `STATUS_MAP`: each status's rank letter.
+    pub fn status_map() -> Value {
+        json!({
+            "open": "A",
+            "assign": "B",
+            "ack": "C",
+            "shelved": "D",
+            "blackout": "E",
+            "closed": "F",
+            "expired": "G",
+            "unknown": "H"
+        })
+    }
+}
+
 /// Severity levels of the default `ALERTA` alarm model (`sm.py:7-58`).
 /// A lower level is more severe.
 pub fn severity_level(severity: &str) -> Option<u8> {
