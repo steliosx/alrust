@@ -11,6 +11,7 @@ pub mod catalog;
 pub mod hooks;
 pub mod key_usage;
 pub mod startup;
+pub mod topn;
 
 use std::sync::Arc;
 
