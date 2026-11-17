@@ -221,6 +221,32 @@ c, b = call('GET', f'/alerts?resource={NR}')
 for a_ in b.get('alerts', []):
     call('DELETE', f"/alert/{a_.get('id')}")
 
+# --- grouped reads [views/alerts.py:486-593; customer-mapping C20]
+GR = f'grouped-{RUN}'
+code, body = call('POST', '/alert', alert(resource=GR, event='GroupedA', group=f'g-{RUN}',
+                                          service=[f'svc-{RUN}'], tags=[f'tag-{RUN}']))
+gid = body.get('id', '') if isinstance(body, dict) else ''
+code, body = call('GET', f'/environments?resource={GR}')
+prod = [e for e in body.get('environments', []) if e.get('environment') == 'Production'] if code == 200 else []
+check('GET /environments counts the matching alert',
+      body.get('total') == 1 and len(prod) == 1 and prod[0].get('count') == 1
+      and prod[0].get('severityCounts') == {'major': 1}, (code, body))
+code, body = call('GET', f'/services?resource={GR}')
+mine = [v for v in body.get('services', []) if v.get('service') == f'svc-{RUN}'] if code == 200 else []
+check('GET /services lists the service with its count', len(mine) == 1 and mine[0].get('count') == 1, (code, body))
+code, body = call('GET', f'/alerts/groups?resource={GR}')
+check('GET /alerts/groups', code == 200
+      and body.get('groups') == [{'environment': 'Production', 'group': f'g-{RUN}', 'count': 1}], (code, body))
+code, body = call('GET', f'/alerts/tags?resource={GR}')
+check('GET /alerts/tags', code == 200
+      and body.get('tags') == [{'environment': 'Production', 'tag': f'tag-{RUN}', 'count': 1}], (code, body))
+code, body = call('GET', f'/alerts/groups?resource=nothing-{RUN}')
+check('GET /alerts/groups with no match says not found',
+      code == 200 and body == {'status': 'ok', 'message': 'not found', 'groups': [], 'total': 0}, (code, body))
+code, body = call('GET', f'/environments?resource={GR}&page=2&page-size=1')
+check('GET /environments page after the last is 416 [utils/paging.py]', code == 416, (code, body))
+call('DELETE', f'/alert/{gid}')
+
 # --- heartbeats [HB]
 origin = f'smoke/{RUN}'
 code, body = call('POST', '/heartbeat', {'origin': origin, 'timeout': 60, 'tags': ['smoke']})
