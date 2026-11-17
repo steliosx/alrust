@@ -13,6 +13,8 @@ use alrust_domain::{
     contains_evidence, is_restricted_attribute, iso8601, parse_time, redact_diagnostic,
     scope_allows, truncate_ms,
 };
+use alrust_store_pg::aggregates::CubeCounts;
+use alrust_store_pg::topn::{GroupColumn, TopnKind};
 use alrust_store_pg::{AlertEdit, AlertQuery, CallerFacts, NewAlert, Store, StoreError};
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -49,6 +51,8 @@ pub struct ApiConfig {
     /// applies once a verifier is configured; configuring one from the
     /// server's settings is a separate, later slice.
     pub bearer: Option<BearerConfig>,
+    /// `OAUTH2_CLIENT_ID` as configured (empty when unset), for `GET /config`.
+    pub oauth2_client_id: String,
 }
 
 /// The verifier inputs for operator Bearer tokens: the signing key, the
@@ -91,6 +95,7 @@ impl Default for ApiConfig {
             delete_expired_after_s: 7200,
             delete_info_after_s: 43200,
             bearer: None,
+            oauth2_client_id: String::new(),
         }
     }
 }
@@ -434,6 +439,7 @@ async fn redact_error_body(r: Response) -> Response {
 pub fn router(state: Shared) -> Router {
     Router::new()
         .route("/", get(index))
+        .route("/config", get(client_config))
         .route("/alert", post(receive))
         .route("/alert/{id}", get(get_alert).delete(delete_alert))
         .route("/alert/{id}/status", put(set_status))
@@ -460,6 +466,16 @@ pub fn router(state: Shared) -> Router {
             "/management/housekeeping",
             get(housekeeping).post(housekeeping),
         )
+        .route("/environments", get(list_environments))
+        .route("/services", get(list_services))
+        .route("/alerts/groups", get(list_alert_groups))
+        .route("/alerts/tags", get(list_alert_tags))
+        .route("/alerts/top10/count", get(topn_count))
+        .route("/alerts/topn/count", get(topn_count))
+        .route("/alerts/top10/flapping", get(topn_flapping))
+        .route("/alerts/topn/flapping", get(topn_flapping))
+        .route("/alerts/top10/standing", get(topn_standing))
+        .route("/alerts/topn/standing", get(topn_standing))
         .layer(axum::middleware::map_response(redact_error_body))
         .with_state(state)
 }
@@ -473,6 +489,142 @@ async fn index(State(st): State<Shared>) -> Json<Value> {
         "version": env!("CARGO_PKG_VERSION"),
         "uri": st.cfg.base_url,
     }))
+}
+
+/// The `GET /config` values alrust reads no setting for: the reference
+/// defaults (`settings.py`). Built in parts, because one `json!` call this
+/// size exceeds the macro's recursion limit.
+fn config_reference_defaults() -> Map<String, Value> {
+    let dates = json!({
+        "shortTime": "HH:mm",
+        "mediumDate": "ddd D MMM HH:mm",
+        "longDate": "ddd D MMM, YYYY HH:mm:ss.SSS Z",
+    });
+    let font = json!({
+        "font-family": "\"Sintony\", Arial, sans-serif",
+        "font-size": "13px",
+        "font-weight": 500,
+    });
+    let columns = json!([
+        "severity",
+        "status",
+        "lastReceiveTime",
+        "timeoutLeft",
+        "duplicateCount",
+        "customer",
+        "environment",
+        "service",
+        "resource",
+        "event",
+        "value",
+        "text",
+    ]);
+    let indicators = json!({
+        "severity": ["critical", "major", "minor", "warning", "indeterminate", "informational"],
+        "queries": [
+            {"text": "Production", "query": [["environment", "Production"]]},
+            {"text": "Development", "query": [["environment", "Development"]]},
+            {"text": "Heartbeats", "query": {"q": "event:Heartbeat"}},
+            {"text": "Misc.", "query": "group=Misc"},
+        ],
+    });
+    let providers = json!({
+        "azure_tenant": "common",
+        "aws_region": "us-east-1",
+        "cognito_domain": null,
+        "github_url": "https://github.com",
+        "gitlab_url": "https://gitlab.com",
+        "keycloak_url": null,
+        "keycloak_realm": null,
+        "oidc_auth_url": null,
+        "site_logo_url": "",
+    });
+    let mut out = match providers {
+        Value::Object(m) => m,
+        _ => Map::new(),
+    };
+    for (key, value) in [
+        ("blackouts", json!({"duration": 3600})),
+        ("dates", dates),
+        ("font", font),
+        ("audio", json!({"new": null})),
+        ("columns", columns),
+        ("sort_by", json!(["severity", "lastReceiveTime"])),
+        ("filter", json!({"status": ["open", "ack"]})),
+        ("indicators", indicators),
+        ("actions", json!([])),
+        ("tracking_id", Value::Null),
+        ("refresh_interval", json!(5000)),
+        ("clipboard_template", json!("")),
+    ] {
+        out.insert(key.to_owned(), value);
+    }
+    out
+}
+
+/// `GET /config` (`views/config.py:9-74`; `spec/openapi.yaml` `/config`):
+/// the web UI's bootstrap settings, a bare object with the reference's 36
+/// keys. No permission check: credentials are not read, so an invalid key
+/// is not refused.
+///
+/// - alrust's own settings: `endpoint`, `auth_required`, `environments`,
+///   `client_id`, `provider` (when set) and the timeouts (`heartbeat` is the
+///   alert timeout, which alrust applies to a heartbeat without one).
+/// - What alrust does not implement, reported as off: `debug`,
+///   `allow_readonly`, `customer_views` and `signup_enabled` (signup is
+///   out of scope).
+/// - Everything else is the reference's default (`settings.py`), which
+///   alrust does not read from its own settings.
+async fn client_config(State(st): State<Shared>) -> Json<Value> {
+    use alrust_domain::alarm_model;
+    let store = st.store.config();
+    let severity = alarm_model::severity_map();
+    let colors = alarm_model::colors();
+    // An empty AUTH_PROVIDER is alrust's default; the reference's is basic.
+    let provider = st
+        .cfg
+        .bearer
+        .as_ref()
+        .map(|b| b.provider.as_str())
+        .filter(|p| !p.is_empty())
+        .unwrap_or("basic");
+    let alarm_model = json!({
+        "name": alarm_model::NAME,
+        "severity": severity,
+        "colors": colors,
+        "status": alarm_model::status_map(),
+        "defaults": {
+            "status": alrust_domain::status::OPEN,
+            "normal_severity": alrust_domain::NORMAL_SEVERITY,
+            "previous_severity": alrust_domain::DEFAULT_PREVIOUS_SEVERITY,
+        },
+    });
+    let mut body = json!({
+        "debug": false,
+        "endpoint": st.cfg.base_url.trim_end_matches('/'),
+        "alarm_model": alarm_model,
+        "auth_required": st.cfg.auth_required,
+        "allow_readonly": false,
+        "readonly_scopes": ["read"],
+        "provider": provider,
+        "customer_views": false,
+        "signup_enabled": false,
+        "email_verification": false,
+        "client_id": st.cfg.oauth2_client_id,
+        "severity": severity,
+        "colors": colors,
+        "timeouts": {
+            "alert": store.alert_timeout,
+            "heartbeat": store.alert_timeout,
+            "ack": store.ack_timeout,
+            "shelve": store.shelve_timeout,
+        },
+        "environments": st.cfg.allowed_environments,
+    });
+    if let Value::Object(top) = &mut body {
+        top.extend(config_reference_defaults());
+    }
+    Json(body)
 }
 
 // ---------------------------------------------------------------- alerts
@@ -1222,6 +1374,225 @@ async fn search_alerts(
         body["message"] = json!("not found");
     }
     Ok(Json(body))
+}
+
+// ------------------------------------------------------ grouped alert reads
+
+/// A [`CubeCounts`] as the reference's item fields.
+fn cube_fields(item: &mut Map<String, Value>, c: &CubeCounts) {
+    item.insert(
+        "severityCounts".into(),
+        Value::Object(c.severity_counts.clone()),
+    );
+    item.insert(
+        "statusCounts".into(),
+        Value::Object(c.status_counts.clone()),
+    );
+    item.insert("count".into(), json!(c.count));
+}
+
+/// The reference's list answer: `status`, the items and `total` (their
+/// number), with `message: not found` when there are none
+/// (`views/alerts.py:529-542`, `:554-567`, `:579-593`).
+fn listed(key: &str, items: Vec<Value>) -> Json<Value> {
+    let mut body = json!({"status": "ok", "total": items.len()});
+    if items.is_empty() {
+        body["message"] = json!("not found");
+    }
+    body[key] = Value::Array(items);
+    Json(body)
+}
+
+/// `GET /environments` (`views/alerts.py:486-517`). The names are not
+/// filtered (customer-mapping C20); `total` is the filtered number of
+/// distinct environments.
+async fn list_environments(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+) -> ApiResult<Json<Value>> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("read:alerts")?;
+    let s = parse_search(&st, &caller, &params)?;
+    let total = st.store.environment_total(&s.q).await?;
+    // `Page` (`utils/paging.py`): no pages when nothing matches, and 416
+    // for a page after the last.
+    let pages = if total == 0 {
+        0
+    } else {
+        (total - 1) / s.page_size + 1
+    };
+    if total > 0 && s.page > pages {
+        return Err(ApiError::new(
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            format!("page out of range: 1-{pages}"),
+        ));
+    }
+    let environments: Vec<Value> = st
+        .store
+        .environments(&s.q, s.page, s.page_size)
+        .await?
+        .iter()
+        .map(|e| {
+            let mut item = Map::new();
+            item.insert("environment".into(), json!(e.environment));
+            cube_fields(&mut item, &e.counts);
+            Value::Object(item)
+        })
+        .collect();
+    let found = !environments.is_empty();
+    let mut body = json!({
+        "status": "ok",
+        "environments": environments,
+        "page": s.page,
+        "pageSize": s.page_size,
+        "pages": pages,
+        "more": s.page < pages,
+        "total": if found { total } else { 0 },
+    });
+    if !found {
+        body["message"] = json!("not found");
+    }
+    Ok(Json(body))
+}
+
+/// `GET /services` (`views/alerts.py:521-542`). The pairs are not filtered
+/// (customer-mapping C20).
+async fn list_services(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+) -> ApiResult<Json<Value>> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("read:alerts")?;
+    let s = parse_search(&st, &caller, &params)?;
+    let services = st
+        .store
+        .services(&s.q)
+        .await?
+        .iter()
+        .map(|v| {
+            let mut item = Map::new();
+            item.insert("environment".into(), json!(v.environment));
+            item.insert("service".into(), json!(v.service));
+            cube_fields(&mut item, &v.counts);
+            Value::Object(item)
+        })
+        .collect();
+    Ok(listed("services", services))
+}
+
+/// `GET /alerts/groups` (`views/alerts.py:546-567`).
+async fn list_alert_groups(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+) -> ApiResult<Json<Value>> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("read:alerts")?;
+    let s = parse_search(&st, &caller, &params)?;
+    let groups = st
+        .store
+        .alert_groups(&s.q)
+        .await?
+        .iter()
+        .map(|g| json!({"environment": g.environment, "group": g.group, "count": g.count}))
+        .collect();
+    Ok(listed("groups", groups))
+}
+
+/// `GET /alerts/tags` (`views/alerts.py:571-593`).
+async fn list_alert_tags(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+) -> ApiResult<Json<Value>> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("read:alerts")?;
+    let s = parse_search(&st, &caller, &params)?;
+    let tags = st
+        .store
+        .alert_tags(&s.q)
+        .await?
+        .iter()
+        .map(|t| json!({"environment": t.environment, "tag": t.tag, "count": t.count}))
+        .collect();
+    Ok(listed("tags", tags))
+}
+
+// ------------------------------------------------------------------ top-N
+
+/// `GET /alerts/top10/…` and `/alerts/topn/…` (`views/alerts.py:405-483`;
+/// SF-QUERY alrust item 2). Order of checks: the `GET /alerts` filters, then
+/// the reference's single page (`Page.from_params(args, 1)`: a page after
+/// the first is 416), then `group-by`.
+async fn topn_route(
+    st: &AppState,
+    headers: &HeaderMap,
+    params: &[(String, String)],
+    kind: TopnKind,
+) -> ApiResult<Json<Value>> {
+    let caller = authenticate(st, headers, params).await?;
+    caller.require("read:alerts")?;
+    let s = parse_search(st, &caller, params)?;
+    if s.page > 1 {
+        return Err(ApiError::new(
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            "page out of range: 1-1",
+        ));
+    }
+    // The first `group-by` value, default `event`, matched exactly.
+    let wanted = params
+        .iter()
+        .find(|(k, _)| k == "group-by")
+        .map_or("event", |(_, v)| v.as_str());
+    let group = GroupColumn::parse(wanted)
+        .ok_or_else(|| ApiError::bad(format!("Grouping by '{wanted}' field not supported.")))?;
+    let items = st.store.topn(&s.q, kind, group, s.page_size).await?;
+    let top = items
+        .iter()
+        .map(|t| {
+            let mut m = alrust_store_pg::topn::base_fields(t, group);
+            let resources: Vec<Value> = t
+                .resources
+                .iter()
+                .map(|(id, resource)| {
+                    json!({
+                        "id": id,
+                        "resource": resource,
+                        "href": format!("{}/alert/{}", st.cfg.base_url, alrust_domain::path_segment(id)),
+                    })
+                })
+                .collect();
+            m.insert("resources".into(), Value::Array(resources));
+            Value::Object(m)
+        })
+        .collect();
+    Ok(listed("top10", top))
+}
+
+async fn topn_count(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+) -> ApiResult<Json<Value>> {
+    topn_route(&st, &headers, &params, TopnKind::Count).await
+}
+
+async fn topn_flapping(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+) -> ApiResult<Json<Value>> {
+    topn_route(&st, &headers, &params, TopnKind::Flapping).await
+}
+
+async fn topn_standing(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+) -> ApiResult<Json<Value>> {
+    topn_route(&st, &headers, &params, TopnKind::Standing).await
 }
 
 // ---------------------------------------------------------------- heartbeats
