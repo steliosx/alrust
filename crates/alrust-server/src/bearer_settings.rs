@@ -167,6 +167,8 @@ pub(crate) fn install<E: std::error::Error + Send + Sync + 'static>(
     }
     Ok(ApiConfig {
         bearer: Some(bearer),
+        // GET /config reports the configured client id as is.
+        oauth2_client_id: oauth2_client_id.unwrap_or_default(),
         ..cfg
     })
 }

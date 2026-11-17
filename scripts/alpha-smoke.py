@@ -263,6 +263,11 @@ code, body = call('GET', f'/alerts/top10/count?resource={TR}&page=2')
 check('top-N page after the first is 416 [utils/paging.py]', code == 416, (code, body))
 call('DELETE', f'/alert/{tid}')
 
+# --- web UI bootstrap [views/config.py:9-74]
+code, body = call('GET', '/config', key=None)
+check('GET /config without a key is 200 with the 36 keys', code == 200 and isinstance(body, dict) and len(body) == 36
+      and body.get('alarm_model', {}).get('name') == 'Alerta 9.1.0', (code, sorted(body) if isinstance(body, dict) else body))
+
 # --- alert notes [views/alerts.py:596-723; SF-NOTES]
 NA = f'notes-{RUN}'
 code, body = call('POST', '/alert', alert(resource=NA, event='NoteSmoke'))
