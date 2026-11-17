@@ -43,14 +43,14 @@ All 45 cells (5 arms, 3 cases, 3 repetitions) are valid: no error and no
 non-2xx answer in any phase, no list-body problem, every server alive at
 the end, every 2xx write found in the database with the right
 `duplicate_count`, and the final list and count equal to the final rows.
+The checks are those on `main` at the commit above; their limits are in
+the last section.
 
 The columns do not share one denominator. Rates and latencies are of 2xx
 answers that ended in the timed phase. CPU is of both classes together
 over the timed interval, per second and per completed request. Commits
 and key updates per request cover every phase. One must not be divided by
 another.
-The checks are those on `main` at the commit above; their limits are in
-the last section.
 
 ## Results
 
