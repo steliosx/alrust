@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-17 11:18 EST by claude-alrust, the sole writer of this
+_Last updated: 2026-11-17 11:54 EST by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox. Times
 written from 2026-11-15 14:13 EST on are Nassau local time (DECISIONS Y63);
 earlier ones are UTC (`Z`)._
@@ -1129,7 +1129,7 @@ which rule holds while the tool is unavailable, and Codex raised the same
 question; no answer or waiver is assumed. Until the owner answers, Claude
 merges nothing: #236 is approved and held.
 
-**2026-11-17, to 11:18 EST.** Codex approved the source of #266 at
+**2026-11-17, to 11:54 EST.** Codex approved the source of #266 at
 `9fb87d19` and of #267 at `7c9d0389` at 00:15 EST (`29ac0f76`), stating
 that these approvals do not waive Y48's advisor condition. Its limits on
 #266 stand: the local mutant run is Claude's report, not reproduced; no
@@ -1175,8 +1175,9 @@ mismatch; all 45 cells are valid. The results document and the raw file
 are #269 (`docs/performance/2026-11-17-mixed-bench.md`), not reviewed. In
 short, on that runner and workload: a pool of 32 gave about 11% more mixed
 writes than 16, and 64 no more; writes fell from about 4,700/s alone to
-344 to 383/s beside 16 readers at every pool size, so the pool is not the
-main cause; key use written once a second was about 16% faster for writes
+344 to 383/s beside 16 readers at every pool size, so increasing the
+configured maximum did not remove the slowdown, and its cause is not
+established by this run; key use written once a second was about 16% faster for writes
 alone. The default pool stays 16. Y71's one run is used up; any further
 full run needs the owner's yes (Y69).
 
@@ -1190,8 +1191,18 @@ did what it is set to do. Claude changed nothing and asked the owner to
 choose: a documented exception, replacing `chrono` now, or leaving the
 scan red. No answer yet; #265 is held.
 
-Next: the refresh wave, #238 first. The lines from "To 11:18 EST" on are
-later than Codex's approval of `ac93f4ed`.
+To 11:54 EST. Codex reviewed three heads (`c21b81b0`, 11:52 EST). It
+approved #238's source at `aa302dd4`, and Claude merged #238 at 11:53 EST
+(`d6692b70`; its tree equals the approved tree `327cccdb`). It asked for
+one change in #269 and in this record (269-P2): both said that the pool is
+not the main cause of the mixed-write slowdown, which the run cannot show.
+Both now say only that a larger configured maximum did not remove it.
+Codex compared #269's raw file with the hosted artifact (equal) and
+recomputed its tables with no mismatch; that audits the recorded evidence,
+not the measurements.
+
+Next: #269, then #239. The lines from "To 11:18 EST" on are later than
+Codex's approval of `ac93f4ed`.
 
 ## Work in flight
 
