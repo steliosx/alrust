@@ -221,6 +221,15 @@ c, b = call('GET', f'/alerts?resource={NR}')
 for a_ in b.get('alerts', []):
     call('DELETE', f"/alert/{a_.get('id')}")
 
+# --- management manifest and status [management/views.py]
+code, body = call('GET', '/management/manifest')
+check('GET /management/manifest has release, build, date, revision',
+      code == 200 and isinstance(body, dict) and sorted(body) == ['build', 'date', 'release', 'revision'], (code, body))
+code, body = call('GET', '/management/status')
+names = [m.get('name') for m in body.get('metrics', [])] if isinstance(body, dict) else []
+check('GET /management/status reports the alert gauge and the switches',
+      code == 200 and body.get('application') == 'alrust' and names == ['total', 'auto-refresh-allow', 'sender-api-allow'], (code, body))
+
 # --- heartbeats [HB]
 origin = f'smoke/{RUN}'
 code, body = call('POST', '/heartbeat', {'origin': origin, 'timeout': 60, 'tags': ['smoke']})
