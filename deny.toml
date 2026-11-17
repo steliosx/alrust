@@ -1,0 +1,21 @@
+# cargo-deny settings. Run by .github/workflows/security-scan.yml.
+# The licenses check is not run: no allow-list is written yet.
+
+[advisories]
+# A RustSec vulnerability or unsound advisory for any crate fails the
+# check; an unmaintained advisory fails it only for a direct dependency of
+# the workspace; a yanked version fails it.
+unmaintained = "workspace"
+yanked = "deny"
+
+[bans]
+# Two versions of one crate only warn.
+multiple-versions = "warn"
+# The workspace crates name each other by path with no version, which
+# cargo-deny counts as a wildcard; so this only warns.
+wildcards = "warn"
+
+[sources]
+# Only crates.io may supply crates.
+unknown-registry = "deny"
+unknown-git = "deny"
