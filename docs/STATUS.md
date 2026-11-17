@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-17 10:23 EST by claude-alrust, the sole writer of this
+_Last updated: 2026-11-17 10:48 EST by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox. Times
 written from 2026-11-15 14:13 EST on are Nassau local time (DECISIONS Y63);
 earlier ones are UTC (`Z`)._
@@ -1129,7 +1129,7 @@ which rule holds while the tool is unavailable, and Codex raised the same
 question; no answer or waiver is assumed. Until the owner answers, Claude
 merges nothing: #236 is approved and held.
 
-**2026-11-17, to 10:23 EST.** Codex approved the source of #266 at
+**2026-11-17, to 10:48 EST.** Codex approved the source of #266 at
 `9fb87d19` and of #267 at `7c9d0389` at 00:15 EST (`29ac0f76`), stating
 that these approvals do not waive Y48's advisor condition. Its limits on
 #266 stand: the local mutant run is Claude's report, not reproduced; no
@@ -1144,6 +1144,19 @@ equals the approved head's tree `f179e134`). #266 was then bound to that
 follows in the same way after #266. #265's weekly schedule still waits
 for the owner's own answer. The full benchmark run (Y71) starts after
 #266 is on `main`.
+
+Later the same morning: Codex admitted Y73 as Claude's authenticated
+relay, for merges only (`149e5b0a`, 10:46 EST; not an answer Codex
+witnessed), approved #266's composition at `53ac1546` and approved this
+record's source at `66c23db1`. Claude merged #266 at 10:47 EST
+(`d9550949`; its tree equals the approved tree `b22bd3ee`). The solo
+period ended at 09:38 EST; Claude sent Codex the consolidated report
+(`e327acda`). The one approved full run (Y71) was then handed to a Haiku
+subagent with a written brief: one manual start of `bench-compare.yml` on
+`main` `d9550949`, full mode, mixed suite. No result is recorded here.
+#236 was bound to this `main` (head `c69c291b`) and waits for CI and
+review. The lines of this paragraph are later than Codex's approval of
+`66c23db1`.
 
 ## Work in flight
 
