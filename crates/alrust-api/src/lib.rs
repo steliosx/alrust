@@ -1578,7 +1578,8 @@ async fn delete_heartbeat(
 
 /// `PUT /alert/{id}/note` (`views/alerts.py:596-633`; SF-NOTES): the text
 /// is `text`, else `note`, with Python's `or`, checked before the alert
-/// lookup. A truthy non-string is refused, as `supplied` does for keys.
+/// lookup. A truthy non-string is refused, as `supplied` does for keys
+/// (DECISIONS Y75, for notes).
 /// The default plugins do not take notes, so `process_note` changes
 /// nothing.
 async fn add_note(
@@ -1659,8 +1660,8 @@ async fn list_notes(
 /// - a body key `id` or `self`, with any value, is 500 (the reference's
 ///   `note.update(**update)` cannot bind it and fails before its SQL);
 /// - a `text` that is not a string or an `attributes` that is not an
-///   object is 400 (alrust's own refusal; the reference's outcome is not
-///   established).
+///   object is 400 (alrust's own refusal, DECISIONS Y75; the reference's
+///   outcome is not established).
 ///
 /// The 500 messages are alrust's; the reference's are Python's.
 async fn update_note(
