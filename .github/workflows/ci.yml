@@ -97,7 +97,7 @@ jobs:
           # The store tests apply the pinned reference schema.sql (ADR-0005).
           submodules: true
           persist-credentials: false
-      - name: PostgreSQL 18.6 (PGDG apt, no container registry)
+      - name: PostgreSQL 18.7 (PGDG apt, no container registry)
         timeout-minutes: 5
         run: .github/scripts/start-postgres18.sh alrust
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master resolved 2026-11-06
@@ -108,7 +108,7 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace
-      - name: Stop PostgreSQL 18.6
+      - name: Stop PostgreSQL 18.7
         if: always()
         timeout-minutes: 2
         run: .github/scripts/stop-postgres18.sh
@@ -167,7 +167,7 @@ jobs:
         with:
           submodules: true
           persist-credentials: false
-      - name: PostgreSQL 18.6 (PGDG apt, no container registry)
+      - name: PostgreSQL 18.7 (PGDG apt, no container registry)
         timeout-minutes: 5
         run: .github/scripts/start-postgres18.sh alerta
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0 (Node24)
@@ -254,7 +254,7 @@ jobs:
             exit 1
           fi
           echo "cleanup COMPLETE: the supervisor's whole tree ended (ECHILD) and nothing listens on :18081"
-      - name: Stop PostgreSQL 18.6
+      - name: Stop PostgreSQL 18.7
         if: always()
         timeout-minutes: 2
         run: .github/scripts/stop-postgres18.sh
@@ -296,8 +296,8 @@ jobs:
 
   alpha-smoke:
     # The alpha server end to end: build the binary, start it on PostgreSQL
-    # 18.6 and run scripts/alpha-smoke.py against it.
-    name: alpha server smoke (PostgreSQL 18.6)
+    # 18.7 and run scripts/alpha-smoke.py against it.
+    name: alpha server smoke (PostgreSQL 18)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -307,7 +307,7 @@ jobs:
         with:
           submodules: false
           persist-credentials: false
-      - name: PostgreSQL 18.6 (PGDG apt, no container registry)
+      - name: PostgreSQL 18.7 (PGDG apt, no container registry)
         timeout-minutes: 5
         run: .github/scripts/start-postgres18.sh alrust alrust alrust
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master resolved 2026-11-06
@@ -332,7 +332,7 @@ jobs:
         if: always()
         run: |
           if [[ -n "${ALRUST_ROOT:-}" ]]; then cat "$ALRUST_ROOT/alrust.log" || true; else echo "no server was started"; fi
-      - name: Stop alrust and PostgreSQL 18.6
+      - name: Stop alrust and PostgreSQL 18.7
         if: always()
         timeout-minutes: 2
         run: |
@@ -344,12 +344,12 @@ jobs:
 
   store-generate:
     # ADR-0005 generation step, draft pull requests only: run the two
-    # ignored generators against this job's throwaway PostgreSQL 18.6,
+    # ignored generators against this job's throwaway PostgreSQL 18.7,
     # regenerate 0002, prove no test database remains, stop and remove the
     # cluster, and only then upload the three generated files with a
     # manifest and a cleanup record. A successful upload therefore implies
     # completed cleanup. Nothing is committed or pushed from here.
-    name: store catalog generation (PostgreSQL 18.6, draft PRs only)
+    name: store catalog generation (PostgreSQL 18, draft PRs only)
     if: github.event_name == 'pull_request' && github.event.pull_request.draft
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -372,7 +372,7 @@ jobs:
           [ "$actual" = "$HEAD_SHA" ] || { echo "HEAD $actual is not the PR head $HEAD_SHA"; exit 1; }
           [ -z "$(git status --porcelain --untracked-files=all)" ] || { echo "the checkout is not clean"; exit 1; }
           echo "HEAD $actual tree $(git rev-parse 'HEAD^{tree}') reference $(git -C reference/alerta rev-parse HEAD)"
-      - name: PostgreSQL 18.6 (PGDG apt, no container registry)
+      - name: PostgreSQL 18.7 (PGDG apt, no container registry)
         timeout-minutes: 5
         run: .github/scripts/start-postgres18.sh alrust
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master resolved 2026-11-06
@@ -403,7 +403,7 @@ jobs:
             -c "SELECT count(*) FROM pg_database WHERE datname LIKE 'alrust\_t\_ci\_%'")
           [ "$left" = 0 ] || { echo "test databases remain: $left"; exit 1; }
           echo "test databases under alrust_t_ci_: 0 (successful query)"
-      - name: Stop and remove PostgreSQL 18.6
+      - name: Stop and remove PostgreSQL 18.7
         id: stop
         timeout-minutes: 2
         run: .github/scripts/stop-postgres18.sh
@@ -442,7 +442,7 @@ jobs:
           if-no-files-found: error
           overwrite: false
           include-hidden-files: false
-      - name: Stop PostgreSQL 18.6 (only if the normal stop did not succeed)
+      - name: Stop PostgreSQL 18.7 (only if the normal stop did not succeed)
         if: always() && steps.stop.outcome != 'success'
         timeout-minutes: 2
         run: .github/scripts/stop-postgres18.sh
