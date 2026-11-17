@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-16 19:58 EST by claude-alrust, the sole writer of this
+_Last updated: 2026-11-16 20:17 EST by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox. Times
 written from 2026-11-15 14:13 EST on are Nassau local time (DECISIONS Y63);
 earlier ones are UTC (`Z`)._
@@ -1014,7 +1014,7 @@ owner's request Claude reviewed Oxide Computer's 85 public RFDs and sent the
 owner a ranked top 20 for alrust; that review is outside the repository.
 #256 was closed as planned (measurement only).
 
-**2026-11-16, 11:18 EST to 19:58 EST.** Codex approved four PRs at exact
+**2026-11-16, 11:18 EST to 20:17 EST.** Codex approved four PRs at exact
 heads, and Claude merged each under Y48; each merge's tree equals its
 approved head's tree:
 - #262, the PGDG key download retried on a dropped transfer (curl exit 56):
@@ -1048,16 +1048,26 @@ reviewed yet:
 - #264, `ALRUST_DB_MAX_CONNECTIONS` (default 16, 1 to 1024), head
   `928af496`, CI green, with Codex since 19:48 EST (`7dfdc25c`);
 - #266, the mixed benchmark suite that #263 specifies (8 writers, 16
-  readers, the pool and key-use sweeps), stacked on #264. No full run has
-  been started; the approved one waits for #264 and #266 on `main`;
+  readers, the pool and key-use sweeps), stacked on #264, head `52898d14`.
+  Its quick runs `43991638119` and `43993053922` passed with all 15 mixed
+  cells valid; their numbers show that the suite works and are not results.
+  No full run has been started; the approved one waits for #264 and #266
+  on `main`;
 - #265, a security scan workflow that is not a required check (cargo-deny,
   pip-audit, zizmor). Its first run (`43991631563`): cargo-deny passed;
   pip-audit reported 40 advisories in 7 packages of
   `.github/reference-requirements.lock`, the pinned reference Alerta's
   environment, and stopped there; zizmor reported two medium findings, both
   a checkout without `persist-credentials: false` in
-  `forgehold-actions-compat.yml`. Nothing is changed for either yet, and
-  alrust's own `Cargo.lock` had no finding;
+  `forgehold-actions-compat.yml`. alrust's own `Cargo.lock` had no
+  finding. At head `2b94d5f2` (run `43992050797` and the next, green) all
+  four lock files are audited: `conformance/requirements.lock` is clean and
+  still fails the job on a finding; the three reference-environment files
+  are reported as warnings (40 advisories, and one for setuptools 84.0.0 in
+  `.github/reference-build.lock`), because that environment stays as
+  pinned. The two checkouts keep their credentials on purpose (that
+  workflow tests the checkout variants of `ci.yml`), so
+  `.github/zizmor.yml` ignores those two lines; the workflow is unchanged;
 - the seven `docs/alpha.md` rebinds onto `main` `566aec88`: #236
   `f04d27d3`, #238 `3e4b3157`, #239 `dc37ae72`, #240 `71fe8128`, #241
   `9bc7fced`, #243 `6107a5a8`, #244 `2363a184`. Each merges `main` into the
