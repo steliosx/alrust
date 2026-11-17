@@ -759,11 +759,11 @@ async fn a_note_of_an_earlier_alert_with_the_same_id_stays_as_it_is() {
         ("reuse-same", Some("acme"), Some("acme")),
         ("reuse-other", Some("other"), Some("acme")),
     ] {
-        let a = alert(&app, id, "r-first", first).await;
+        let a = alert(&app, id, &format!("{id}-first"), first).await;
         let old = note(&app, &a, ADMIN_KEY, "the earlier alert's note").await;
         let (code, _, _) = send(&app, "DELETE", &format!("/alert/{a}"), ADMIN_KEY, None).await;
         assert_eq!(code, StatusCode::OK, "{id}");
-        let b = alert(&app, id, "r-second", second).await;
+        let b = alert(&app, id, &format!("{id}-second"), second).await;
         assert_eq!(b, a, "{id}: the id is used again");
         // The note is still stored, and the reference's list shows it (C21).
         let before = note_body(&app, &b, &old).await;
