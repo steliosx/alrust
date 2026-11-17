@@ -43,6 +43,12 @@ All 45 cells (5 arms, 3 cases, 3 repetitions) are valid: no error and no
 non-2xx answer in any phase, no list-body problem, every server alive at
 the end, every 2xx write found in the database with the right
 `duplicate_count`, and the final list and count equal to the final rows.
+
+The columns do not share one denominator. Rates and latencies are of 2xx
+answers that ended in the timed phase. CPU is of both classes together
+over the timed interval, per second and per completed request. Commits
+and key updates per request cover every phase. One must not be divided by
+another.
 The checks are those on `main` at the commit above; their limits are in
 the last section.
 
@@ -81,7 +87,8 @@ overlap. Write p50 fell from 23.2 ms to 21.0 ms; write p99 did not fall
 (42.4, 46.6, 47.2 ms). So a larger pool helped mixed writes a little, and
 going past 32 added nothing that this run can see.
 
-**The pool is not what makes mixed writes slow.** Writers alone reach
+**Increasing the configured pool size did not remove the mixed-write
+slowdown in this run.** Writers alone reach
 about 4,700/s; beside 16 readers they reach 344 to 383/s at every pool
 size. In the mixed case PostgreSQL uses about 2.9 of the runner's 4 CPUs
 and the alrust server about 0.5; PostgreSQL's CPU per completed request is
