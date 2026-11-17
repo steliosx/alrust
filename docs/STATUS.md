@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-16 11:18 EST by claude-alrust, the sole writer of this
+_Last updated: 2026-11-16 19:58 EST by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox. Times
 written from 2026-11-15 14:13 EST on are Nassau local time (DECISIONS Y63);
 earlier ones are UTC (`Z`)._
@@ -1013,6 +1013,62 @@ rerun; its retry flags do not cover that error, and a fix follows. At the
 owner's request Claude reviewed Oxide Computer's 85 public RFDs and sent the
 owner a ranked top 20 for alrust; that review is outside the repository.
 #256 was closed as planned (measurement only).
+
+**2026-11-16, 11:18 EST to 19:58 EST.** Codex approved four PRs at exact
+heads, and Claude merged each under Y48; each merge's tree equals its
+approved head's tree:
+- #262, the PGDG key download retried on a dropped transfer (curl exit 56):
+  12:21 EST, `2087b5f`, on Codex's `0e4cb36f`;
+- #261, the records to 11:18 EST and Y70: 13:52 EST, `e8d73099`, on
+  Codex's `766fb5e4`;
+- #260, API-key use off the request path (Y68, Y70): 16:16 EST, `c86fa2c0`
+  (tree `dfe5a685`), on Codex's `9bdfd556`, a source approval of `9803dbed`.
+  After the two rounds recorded above there were three more: `0e4cb36f` on
+  `96a53f2f`; `766fb5e4` on `052a65f2` (the deadline and the stated resource
+  limits); and `d9834bdc` on `d1e99db6`, where a refused attempt to take the
+  write slot released the holder's slot (fixed in `9803dbed`). Not done, as
+  the last packet said: no live `COMMIT` transport fault, no end-to-end
+  process signal, `write_once` not run against PostgreSQL, and the speed
+  gain is not measured;
+- #263, `docs/performance/benchmark-methodology.md`, a plan for the next
+  hosted benchmark and not a result: 17:18 EST, `566aec88` (tree
+  `a83e135f`), on Codex's `7ca0c47b` at `1f7ec81c`. Codex's first verdict
+  (`6e9e4b2f`, on `dad6426c`) asked for a defined workload and gates (M1),
+  narrower causal conclusions (M2) and a narrower PgBouncer rationale (M3).
+
+Owner decisions, all in Claude's session: one full hosted benchmark run,
+and cheap subagents to run benchmarks from Claude's written instructions
+(Y71, 16:06 EST); no PgBouncer arm for alrust (Y72, 16:08 EST). At 16:19 EST
+the owner also said that #255 was the Grok bot's work, that she will offer
+help with a few benchmarks from time to time, and that the Oxide suggestion
+about human review is to be ignored. Claude reads the last as closing that
+one question only. At 19:44 EST the owner told Claude to start its queue
+("Thanks can you start all these now"). Since then, all drafts, none
+reviewed yet:
+- #264, `ALRUST_DB_MAX_CONNECTIONS` (default 16, 1 to 1024), head
+  `928af496`, CI green, with Codex since 19:48 EST (`7dfdc25c`);
+- #266, the mixed benchmark suite that #263 specifies (8 writers, 16
+  readers, the pool and key-use sweeps), stacked on #264. No full run has
+  been started; the approved one waits for #264 and #266 on `main`;
+- #265, a security scan workflow that is not a required check (cargo-deny,
+  pip-audit, zizmor). Its first run (`43991631563`): cargo-deny passed;
+  pip-audit reported 40 advisories in 7 packages of
+  `.github/reference-requirements.lock`, the pinned reference Alerta's
+  environment, and stopped there; zizmor reported two medium findings, both
+  a checkout without `persist-credentials: false` in
+  `forgehold-actions-compat.yml`. Nothing is changed for either yet, and
+  alrust's own `Cargo.lock` had no finding;
+- the seven `docs/alpha.md` rebinds onto `main` `566aec88`: #236
+  `f04d27d3`, #238 `3e4b3157`, #239 `dc37ae72`, #240 `71fe8128`, #241
+  `9bc7fced`, #243 `6107a5a8`, #244 `2363a184`. Each merges `main` into the
+  branch; the conflicts were in the `docs/alpha.md` route table and
+  not-yet-implemented list and, for #239, in the store's module list. They
+  go to Codex one at a time, each on the `main` of its turn, because every
+  merge of one moves `docs/alpha.md` under the rest.
+
+The advisor tool is no longer available in Claude's session. Merges rest on
+Y48's conditions: Codex's approval of the exact head, green CI, and a head
+that is up to date with `main`.
 
 ## Work in flight
 
