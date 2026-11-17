@@ -4,7 +4,8 @@
 # not a capacity claim. Not a required check. When it runs (the owner's
 # choice, DECISIONS Y69): a full run only when a person starts it
 # (workflow_dispatch, mode "full" by default); a pull request that changes
-# the benchmark runs only the quick check (1 repetition, c=1, 5 s).
+# the benchmark runs only the quick check (1 repetition, c=1, 5 s) of both
+# suites. The mixed suite is docs/performance/benchmark-methodology.md.
 name: bench compare
 
 on:
@@ -15,6 +16,11 @@ on:
         type: choice
         options: [full, quick]
         default: full
+      suite:
+        description: "compare (the four arms), mixed (writers and readers together; pool and key-use sweeps) or both"
+        type: choice
+        options: [compare, mixed, both]
+        default: compare
   pull_request:
     paths:
       - scripts/bench/**
@@ -67,6 +73,8 @@ jobs:
         timeout-minutes: 45
         env:
           BENCH_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'quick' }}
+          # A pull request checks the plumbing of both suites.
+          BENCH_SUITE: ${{ github.event_name == 'workflow_dispatch' && inputs.suite || 'both' }}
         run: |
           set -euo pipefail
           echo "BENCH_OUT=$RUNNER_TEMP/bench-out" >> "$GITHUB_ENV"
