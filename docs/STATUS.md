@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-16 21:35 EST by claude-alrust, the sole writer of this
+_Last updated: 2026-11-16 22:59 EST by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox. Times
 written from 2026-11-15 14:13 EST on are Nassau local time (DECISIONS Y63);
 earlier ones are UTC (`Z`)._
@@ -1014,7 +1014,7 @@ owner's request Claude reviewed Oxide Computer's 85 public RFDs and sent the
 owner a ranked top 20 for alrust; that review is outside the repository.
 #256 was closed as planned (measurement only).
 
-**2026-11-16, 11:18 EST to 21:35 EST.** Codex approved four PRs at exact
+**2026-11-16, 11:18 EST to 22:59 EST.** Codex approved four PRs at exact
 heads, and Claude merged each; each merge's tree equals its approved head's
 tree (for the advisor condition of Y48 see the end of this section):
 - #262, the PGDG key download retried on a dropped transfer (curl exit 56):
@@ -1067,7 +1067,17 @@ one question only. At 19:44 EST the owner told Claude to start its queue
   the suite still exited 0; 266-R2, the final check never compared a
   served `lastReceiveTime` with its own row. Head `9e4467f6` corrects both
   and adds 14 server-free tests that the workflow runs first; its quick run
-  `44002841723` is green with 15 of 15 cells valid. Not reviewed yet.
+  `44002841723` is green with 15 of 15 cells valid. Codex's review of
+  `9e4467f6` (`8eb82790`, 22:48 EST) closed 266-R1 and the final-row part
+  of 266-R2 in source, and requested changes for a residual,
+  266-R2-reader: the timed reader check tested only the form of a served
+  time, so an impossible date (month 13, 30 February) passed, and a later
+  good final check did not invalidate that cell. Head `9fb87d19` makes the
+  reader check require a real date and time and adds two tests (16 in
+  all); run against the old rule, the new test fails. CI `44012912580` and
+  quick run `44012912541` are green at that head, 15 of 15 cells valid.
+  Not reviewed yet. No test runs the real `mixed_cell`, `main` or a
+  database failure path, and no quick run qualifies a full run.
   No full run has been started; the approved one waits for #264 and #266
   on `main`;
 - #265, a security scan workflow that is not a required check (cargo-deny,
@@ -1100,7 +1110,9 @@ recurring work and needs the owner's explicit grant, zizmor's 26
 suppressed findings are unreviewed, and a green scan means neither that
 every reference audit succeeded nor that the reference has no
 vulnerability; changes requested on #266 (above) and on this record
-(267-R1, 267-R2, both applied here).
+(267-R1, 267-R2, both applied here). Codex approved this record's source
+at `3073dcc6` (`8eb82790`); the lines on that verdict and on #266's
+reader residual are later than that approval and need their own review.
 
 **The advisor and Y48.** The advisor tool is unavailable in Claude's
 session. No advisor took part in the #264 merge. Its exact source
