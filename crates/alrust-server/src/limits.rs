@@ -29,6 +29,23 @@ pub(crate) fn secs_in_range(name: &str, value: i64, min: u64) -> anyhow::Result<
         })
 }
 
+/// The most connections a serving pool may be set to open. PostgreSQL's own
+/// `max_connections` (default 100) is the real ceiling; this bound only
+/// refuses values that cannot be meant.
+const MAX_POOL: u32 = 1024;
+
+/// A serving-pool size from an environment value.
+///
+/// # Errors
+///
+/// The value is below 1 or above `MAX_POOL`.
+pub(crate) fn pool_size(name: &str, value: i64) -> anyhow::Result<u32> {
+    u32::try_from(value)
+        .ok()
+        .filter(|v| (1..=MAX_POOL).contains(v))
+        .ok_or_else(|| anyhow::anyhow!("{name} must be between 1 and {MAX_POOL}, not {value}"))
+}
+
 /// Limits of the serving pool. A lock or statement limit of zero is off, as
 /// in PostgreSQL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +104,20 @@ mod tests {
     use tower::ServiceExt as _;
 
     use super::*;
+
+    #[test]
+    fn a_pool_size_is_between_one_and_the_bound() {
+        assert_eq!(pool_size("N", 16).expect("16"), 16);
+        assert_eq!(pool_size("N", 1).expect("1"), 1);
+        assert_eq!(pool_size("N", 1024).expect("1024"), 1024);
+        for bad in [0, -1, 1025, i64::MAX] {
+            let e = pool_size("N", bad).expect_err("refused");
+            assert!(
+                e.to_string().contains("N must be between 1 and 1024"),
+                "{e}"
+            );
+        }
+    }
 
     #[test]
     fn limits_are_range_checked() {
