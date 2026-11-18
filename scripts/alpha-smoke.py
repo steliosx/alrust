@@ -221,6 +221,53 @@ c, b = call('GET', f'/alerts?resource={NR}')
 for a_ in b.get('alerts', []):
     call('DELETE', f"/alert/{a_.get('id')}")
 
+# --- grouped reads [views/alerts.py:486-593; customer-mapping C20]
+GR = f'grouped-{RUN}'
+code, body = call('POST', '/alert', alert(resource=GR, event='GroupedA', group=f'g-{RUN}',
+                                          service=[f'svc-{RUN}'], tags=[f'tag-{RUN}']))
+gid = body.get('id', '') if isinstance(body, dict) else ''
+code, body = call('GET', f'/environments?resource={GR}')
+prod = [e for e in body.get('environments', []) if e.get('environment') == 'Production'] if code == 200 else []
+check('GET /environments counts the matching alert',
+      body.get('total') == 1 and len(prod) == 1 and prod[0].get('count') == 1
+      and prod[0].get('severityCounts') == {'major': 1}, (code, body))
+code, body = call('GET', f'/services?resource={GR}')
+mine = [v for v in body.get('services', []) if v.get('service') == f'svc-{RUN}'] if code == 200 else []
+check('GET /services lists the service with its count', len(mine) == 1 and mine[0].get('count') == 1, (code, body))
+code, body = call('GET', f'/alerts/groups?resource={GR}')
+check('GET /alerts/groups', code == 200
+      and body.get('groups') == [{'environment': 'Production', 'group': f'g-{RUN}', 'count': 1}], (code, body))
+code, body = call('GET', f'/alerts/tags?resource={GR}')
+check('GET /alerts/tags', code == 200
+      and body.get('tags') == [{'environment': 'Production', 'tag': f'tag-{RUN}', 'count': 1}], (code, body))
+code, body = call('GET', f'/alerts/groups?resource=nothing-{RUN}')
+check('GET /alerts/groups with no match says not found',
+      code == 200 and body == {'status': 'ok', 'message': 'not found', 'groups': [], 'total': 0}, (code, body))
+code, body = call('GET', f'/environments?resource={GR}&page=2&page-size=1')
+check('GET /environments page after the last is 416 [utils/paging.py]', code == 416, (code, body))
+call('DELETE', f'/alert/{gid}')
+
+# --- top-N [views/alerts.py:405-483; SF-QUERY alrust item 2]
+TR = f'topn-{RUN}'
+code, body = call('POST', '/alert', alert(resource=TR, event='TopnA'))
+tid = body.get('id', '') if isinstance(body, dict) else ''
+code, body = call('GET', f'/alerts/top10/count?resource={TR}')
+first = (body.get('top10') or [{}])[0] if code == 200 else {}
+check('GET /alerts/top10/count groups by event',
+      body.get('total') == 1 and first.get('event') == 'TopnA' and first.get('count') == 1
+      and [r.get('resource') for r in first.get('resources', [])] == [TR], (code, body))
+code, body = call('GET', f'/alerts/topn/count?resource={TR}&group-by=Bogus')
+check('top-N group-by must be an exact column (400) [SF-QUERY 2]',
+      code == 400 and body.get('message') == "Grouping by 'Bogus' field not supported.", (code, body))
+code, body = call('GET', f'/alerts/top10/count?resource={TR}&page=2')
+check('top-N page after the first is 416 [utils/paging.py]', code == 416, (code, body))
+call('DELETE', f'/alert/{tid}')
+
+# --- web UI bootstrap [views/config.py:9-74]
+code, body = call('GET', '/config', key=None)
+check('GET /config without a key is 200 with the 36 keys', code == 200 and isinstance(body, dict) and len(body) == 36
+      and body.get('alarm_model', {}).get('name') == 'Alerta 9.1.0', (code, sorted(body) if isinstance(body, dict) else body))
+
 # --- blackout routes [views/blackouts.py; SF-BLACKOUTS]
 code, body = call('POST', '/blackout', {'environment': 'Production', 'resource': f'blk-{RUN}'})
 bid = body.get('id', '') if isinstance(body, dict) else ''
