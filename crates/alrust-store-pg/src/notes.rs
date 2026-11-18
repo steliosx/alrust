@@ -245,15 +245,24 @@ async fn bindings_in_force(conn: &mut PgConnection) -> Result<bool, sqlx::Error>
     Ok(bindings_state(conn).await? == NoteBindings::InForce)
 }
 
+/// Whether [`owns_note`] locks the note's row.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NoteLock {
+    /// Read only.
+    None,
+    /// `FOR UPDATE`, for the write that follows.
+    ForUpdate,
+}
+
 /// Whether the stored alert `alert_id` received the note `note_id` and the
 /// note's row is still the bound one: the bindings are in force and have
-/// that pair with the row's `xmin`. With `lock`, the note's row is locked
-/// for the write that follows; the caller holds the alert's row lock.
+/// that pair with the row's `xmin`. For [`NoteLock::ForUpdate`] the caller
+/// holds the alert's row lock.
 async fn owns_note(
     conn: &mut PgConnection,
     alert_id: &str,
     note_id: &str,
-    lock: bool,
+    lock: NoteLock,
 ) -> Result<bool, sqlx::Error> {
     if !bindings_in_force(&mut *conn).await? {
         return Ok(false);
@@ -262,7 +271,7 @@ async fn owns_note(
         "SELECT 1 FROM alrust_note_bindings b JOIN notes n ON n.id = b.note
           WHERE b.note = $1 AND b.alert = $2 AND n.alert = b.alert AND n.xmin = b.note_xmin",
     );
-    if lock {
+    if lock == NoteLock::ForUpdate {
         sql.push_str(" FOR UPDATE OF n");
     }
     Ok(sqlx::query(&sql)
@@ -395,7 +404,7 @@ impl Store {
     ) -> Result<(), StoreError> {
         let a = self.get_alert(id, customers).await?;
         let mut conn = self.pool.acquire().await?;
-        if !owns_note(&mut conn, &a.id, note_id, false).await? {
+        if !owns_note(&mut conn, &a.id, note_id, NoteLock::None).await? {
             return Err(StoreError::NotFound);
         }
         drop(conn);
@@ -427,7 +436,7 @@ impl Store {
     ) -> Result<Note, StoreError> {
         let mut tx = self.pool.begin().await?;
         let a = Self::lock_alert(&mut tx, id, customers).await?;
-        if !owns_note(&mut tx, &a.id, note_id, true).await? {
+        if !owns_note(&mut tx, &a.id, note_id, NoteLock::ForUpdate).await? {
             tx.rollback().await?;
             return Err(StoreError::NotFound);
         }
@@ -474,7 +483,7 @@ impl Store {
     ) -> Result<bool, StoreError> {
         let mut tx = self.pool.begin().await?;
         let mut a = Self::lock_alert(&mut tx, id, customers).await?;
-        if !owns_note(&mut tx, &a.id, note_id, true).await? {
+        if !owns_note(&mut tx, &a.id, note_id, NoteLock::ForUpdate).await? {
             tx.rollback().await?;
             return Ok(false);
         }
