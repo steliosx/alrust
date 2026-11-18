@@ -1427,6 +1427,17 @@ async fn a_redefined_trigger_or_function_is_reported_and_not_used() {
             "{case}: restored"
         );
     }
+}
+
+/// Y77: an extra trigger with alrust's prefix and a function of another
+/// body are reported; the function refuses to run on another table.
+#[tokio::test]
+async fn an_extra_trigger_or_another_function_is_reported_and_not_used() {
+    let Some((db, app)) = app().await else {
+        return;
+    };
+    let a = alert(&app, "extra", "r-extra", Some("acme")).await;
+    let n = note(&app, &a, ACME_KEY, "bound").await;
 
     // A fifth trigger with alrust's prefix.
     sqlx::query(
