@@ -964,7 +964,11 @@ async fn a_note_is_changed_and_deleted_after_the_history_dropped_its_entry() {
             .fetch_all(&db.pool)
             .await
             .unwrap();
-    assert_eq!(entries, [second.clone()], "only the newest entry is kept");
+    assert_eq!(
+        entries,
+        std::slice::from_ref(&second),
+        "only the newest entry is kept"
+    );
     assert_eq!(binding(&db.pool, &first).await, Some(a.clone()));
     let (code, _, body) = send(
         &app,
