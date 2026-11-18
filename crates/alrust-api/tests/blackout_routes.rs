@@ -599,6 +599,9 @@ async fn the_list_filters_sorts_and_pages() {
         ("/blackouts?q=", 3),
         // A page or a size that is not an integer gives the default.
         ("/blackouts?page=abc&page-size=x&limit=y", 3),
+        ("/blackouts?page=1__0&page-size=_5&limit=5_", 3),
+        ("/blackouts?page=%2B1&page-size=1_0", 3),
+        ("/blackouts?page=%201%20&limit=0_3", 3),
     ] {
         let (code, _, out) = list(uri, ADMIN_KEY).await;
         assert_eq!(
@@ -675,9 +678,19 @@ async fn the_list_filters_sorts_and_pages() {
             "Sorting by '' field not supported.",
         ),
         ("/blackouts?q=web01", "q queries are not supported yet"),
+        // A negative size with one row and page 1 is in range in the
+        // reference and reaches its LIMIT; so does one with no rows.
         (
-            "/blackouts?page-size=-1",
+            "/blackouts?page-size=-1&environment=Development",
             "page-size must be greater than 0",
+        ),
+        (
+            "/blackouts?page-size=-1&environment=Nowhere",
+            "page-size must be greater than 0",
+        ),
+        (
+            "/blackouts?page-size=9223372036854775808",
+            "page-size is out of range",
         ),
         (
             "/blackouts?priority=~8",
@@ -702,6 +715,16 @@ async fn the_list_filters_sorts_and_pages() {
     // A page below 1 is 416, as in the reference, also when nothing matches.
     for (uri, message) in [
         ("/blackouts?page=0", "page out of range: 1-1"),
+        // Python's int reads these; they are pages after the last one.
+        ("/blackouts?page=1_000", "page out of range: 1-1"),
+        (
+            "/blackouts?page=9223372036854775808",
+            "page out of range: 1-1",
+        ),
+        ("/blackouts?page=1_0&limit=1", "page out of range: 1-3"),
+        // A negative size: the reference's page count, checked first.
+        ("/blackouts?page-size=-1", "page out of range: 1--1"),
+        ("/blackouts?page-size=-2", "page out of range: 1-0"),
         ("/blackouts?page=-3&page-size=2", "page out of range: 1-2"),
         (
             "/blackouts?page=0&environment=Nowhere",

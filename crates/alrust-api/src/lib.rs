@@ -2151,29 +2151,71 @@ fn parse_blackout_query(
     Ok(q)
 }
 
+/// Python's `int(text)` for a decimal string, as Flask's
+/// `params.get(key, default, int)` uses it: surrounding whitespace, one
+/// optional sign, ASCII digits, and single underscores between digits
+/// (`1_000`). `None` is Python's `ValueError` (Flask then gives the
+/// default). Python has no upper limit; a value outside `i64` is clamped
+/// to it and reported with `true`. Digits outside ASCII, which Python
+/// also reads, are `None` here.
+fn py_int(text: &str) -> Option<(i64, bool)> {
+    let text = text.trim();
+    let (negative, digits) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text.strip_prefix('+').unwrap_or(text)),
+    };
+    let well_formed = digits.starts_with(|c: char| c.is_ascii_digit())
+        && digits.ends_with(|c: char| c.is_ascii_digit())
+        && digits.chars().all(|c| c.is_ascii_digit() || c == '_')
+        && !digits.contains("__");
+    if !well_formed {
+        return None;
+    }
+    let mut value: i64 = 0;
+    for c in digits.chars() {
+        let Some(d) = c.to_digit(10) else { continue };
+        let d = i64::from(d);
+        let next = value.checked_mul(10).and_then(|v| {
+            if negative {
+                v.checked_sub(d)
+            } else {
+                v.checked_add(d)
+            }
+        });
+        match next {
+            Some(v) => value = v,
+            None => return Some((if negative { i64::MIN } else { i64::MAX }, true)),
+        }
+    }
+    Some((value, false))
+}
+
 /// `Page.from_params` (`utils/paging.py`): the first `page`, `limit` and
-/// `page-size`; a value that is not an integer gives the default (page 1,
-/// limit 0, page-size = limit), and a page size of 0 gives the configured
-/// default. A negative page size is 400 (in the reference it reaches
-/// `LIMIT`, an SQL error inferred from the source). The range of `page`
-/// is checked by the caller, after the count.
+/// `page-size`, each read as Python's `int`; a value that is not an
+/// integer gives the default (page 1, limit 0, page-size = limit), and a
+/// page size of 0 gives the configured default. A `page` outside `i64` is
+/// clamped (it stays out of range for any list with rows); a size outside
+/// `i64` is 400 (in the reference it reaches `LIMIT`; outcome inferred).
+/// The range of `page` and a negative size are checked by the caller,
+/// after the count, because the reference checks the range first.
 fn blackout_paging(st: &AppState, params: &[(String, String)]) -> ApiResult<(i64, i64)> {
-    let int = |key: &str, default: i64| -> i64 {
+    let int = |key: &str| {
         params
             .iter()
             .find(|(k, _)| k == key)
-            .and_then(|(_, v)| v.trim().parse().ok())
-            .unwrap_or(default)
+            .and_then(|(_, v)| py_int(v))
     };
-    let page = int("page", 1);
-    let limit = int("limit", 0);
-    let page_size = match int("page-size", limit) {
-        0 => st.cfg.default_page_size,
-        s => s,
-    };
-    if page_size < 1 {
-        return Err(ApiError::bad("page-size must be greater than 0"));
+    let page = int("page").map_or(1, |(v, _)| v);
+    let limit = int("limit").unwrap_or((0, false));
+    let (size, clamped) = int("page-size").unwrap_or(limit);
+    if clamped {
+        return Err(ApiError::bad("page-size is out of range"));
     }
+    let page_size = if size == 0 {
+        st.cfg.default_page_size
+    } else {
+        size
+    };
     Ok((page, page_size))
 }
 
@@ -2233,17 +2275,25 @@ async fn list_blackouts(
         ));
     }
     let total = st.store.count_blackouts(&q).await?;
-    let pages = if total == 0 {
-        0
-    } else {
-        (total - 1) / page_size + 1
-    };
-    // `if items and self.page > self.pages or self.page < 1` (416).
+    // `pages = (items - 1) // page_size + 1`, Python's floor division: 0
+    // for no rows with a positive size, and 1 or less for a negative size.
+    let pages = (total - 1).div_euclid(page_size)
+        - i64::from(page_size < 0 && (total - 1).rem_euclid(page_size) != 0)
+        + 1;
+    // `if items and self.page > self.pages or self.page < 1` (416). The
+    // reference checks this before it reads the page, so a negative size
+    // is 416 when the page is out of range for it.
     if (total > 0 && page > pages) || page < 1 {
         return Err(ApiError::new(
             StatusCode::RANGE_NOT_SATISFIABLE,
             format!("page out of range: 1-{pages}"),
         ));
+    }
+    // What is left of a negative size (no rows, or one row and page 1)
+    // reaches `LIMIT` in the reference: an SQL error inferred from the
+    // source. 400 here.
+    if page_size < 1 {
+        return Err(ApiError::bad("page-size must be greater than 0"));
     }
     if (page - 1).checked_mul(page_size).is_none() {
         return Err(ApiError::bad("page is out of range for this page-size"));
