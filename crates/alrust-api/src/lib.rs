@@ -24,6 +24,9 @@ use axum::{Json, Router};
 use chrono::{Duration, Utc};
 use serde_json::{Map, Value, json};
 
+// The bulk alert routes (SF-BULK).
+mod bulk;
+
 /// Server configuration (environment-driven; see `alrust-server`).
 #[derive(Debug, Clone)]
 pub struct ApiConfig {
@@ -456,6 +459,10 @@ pub fn router(state: Shared) -> Router {
             "/heartbeat/{id}",
             get(get_heartbeat).delete(delete_heartbeat),
         )
+        .route("/_bulk/alerts/status", put(bulk::set_status))
+        .route("/_bulk/alerts/tag", put(bulk::tag))
+        .route("/_bulk/alerts/untag", put(bulk::untag))
+        .route("/_bulk/alerts/attributes", put(bulk::attributes))
         .route("/heartbeats", get(list_heartbeats))
         .route("/key", post(create_key))
         .route("/keys", get(list_keys))
