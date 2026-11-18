@@ -253,8 +253,6 @@ pub async fn read(conn: &mut PgConnection) -> Result<Catalog, sqlx::Error> {
 
 /// Non-internal triggers on the reference tables, as "table: trigger".
 /// They are allowed (integrations attach their own) and only logged.
-/// alrust's own note-binding triggers (migration `0003`) are left out;
-/// `startup::Report::note_bindings` reports those.
 ///
 /// # Errors
 ///
@@ -265,11 +263,9 @@ pub async fn triggers(conn: &mut PgConnection) -> Result<Vec<String>, sqlx::Erro
            FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
           WHERE NOT t.tgisinternal AND c.relnamespace = 'public'::regnamespace
             AND c.relname = ANY($1)
-            AND NOT (c.relname = 'alerts' AND t.tgname::text = ANY($2))
           ORDER BY 1",
     )
     .bind(&TABLES[..])
-    .bind(&crate::notes::BINDING_TRIGGERS[..])
     .fetch_all(&mut *conn)
     .await
 }

@@ -10,25 +10,37 @@
 //! alert can have the id of an earlier one. A note is changed or deleted
 //! only when it is bound to the alert ([`owns_note`], DECISIONS Y77).
 //!
-//! The binding is a row of `alrust_note_bindings` (migration `0003`), the
-//! note's id with the id of the alert that received it. [`Store::add_note`]
-//! writes it in the transaction that stores the note. Triggers on `alerts`
-//! remove an alert's bindings when any program deletes the alert, stores an
-//! alert with that id, changes an alert's id or truncates the table. So a
-//! binding lasts as long as its alert, whatever the history keeps, and a
-//! later alert with the same id owns none of the earlier notes.
+//! The binding is a row of `alrust_note_bindings` (migration `0003`): the
+//! note's id, the id of the alert that received it, and the `xmin` of the
+//! note's stored row. [`Store::add_note`] writes it in the transaction that
+//! stores the note.
+//! - *The alert's lifetime.* Triggers on `alerts` remove an alert's
+//!   bindings when any program deletes the alert, stores an alert with that
+//!   id, changes an alert's id or truncates the table. So a binding lasts as
+//!   long as its alert, whatever the history keeps, and a later alert with
+//!   the same id owns none of the earlier notes.
+//! - *The note's lifetime.* A binding counts only while the note's row
+//!   still has the bound `xmin`, which every insert and update by any
+//!   program replaces. A note that another program deleted and stored
+//!   again, or changed, is therefore no longer bound. alrust's own update
+//!   binds the new row version in the same transaction.
 //!
-//! A note with no binding is protected: it is listed, and it is not changed
-//! or deleted (the same 404). That is every note another program wrote, and
-//! every note stored while the bindings were not in force. They are in
-//! force only when the table, the function and the four triggers exist and
-//! the triggers are enabled ([`bindings_in_force`], read in the same
-//! transaction as each write). An adopted reference database has none of
-//! them (alrust writes no DDL there, ADR-0005 decision 4), so notes are
-//! added and listed there and never changed or deleted. Not covered: a
-//! trigger that was disabled and enabled again, or bypassed by
-//! `session_replication_role = replica`, leaves bindings that alrust
-//! cannot tell from current ones.
+//! A note with no valid binding is protected: it is listed, and it is not
+//! changed or deleted (the same 404). That is every note another program
+//! wrote or changed, every note of a restored dump, and every note stored
+//! while the bindings were not in force. They are in force only when the
+//! table, the function and the four triggers are exactly what `0003`
+//! creates and the triggers are enabled ([`bindings_state`], read in the
+//! same transaction as each write). An adopted reference database has none
+//! of them (alrust writes no DDL there, ADR-0005 decision 4), so notes are
+//! added and listed there and never changed or deleted.
+//!
+//! This holds for programs that write rows. It does not hold against a
+//! role that changes the schema or bypasses triggers: a trigger that was
+//! disabled and enabled again, or `session_replication_role = replica`,
+//! can leave a binding whose alert was replaced, and alrust cannot see
+//! that afterwards. After such a gap an operator empties
+//! `alrust_note_bindings`; every note is then protected.
 //!
 //! As in the reference:
 //! - a new note copies the alert's resource, event, environment, severity
@@ -121,54 +133,158 @@ pub struct NoteUpdate {
     pub attributes: Option<Map<String, Value>>,
 }
 
-/// The four triggers of migration `0003` on `alerts`.
-pub const BINDING_TRIGGERS: [&str; 4] = [
-    "alrust_note_bindings_delete",
-    "alrust_note_bindings_insert",
-    "alrust_note_bindings_truncate",
-    "alrust_note_bindings_update",
-];
+static MIGRATION_0003: &str = include_str!("../migrations/0003_note_bindings.sql");
 
-/// Whether the note bindings are in force: the table exists, and each of
-/// the four triggers is on `alerts`, enabled, and calls the `0003`
-/// function. See the module text for what this does not show.
+/// The body of `alrust_note_bindings_clear()` as `0003` creates it: the
+/// text between the two `$alrust$` marks.
+fn clear_function_body() -> &'static str {
+    MIGRATION_0003.split("$alrust$").nth(1).unwrap_or_default()
+}
+
+/// What the database has of the note bindings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NoteBindings {
+    /// The table, the function and the four triggers are what `0003`
+    /// creates, and the triggers are enabled.
+    InForce,
+    /// None of them exists (an adopted reference database).
+    Absent,
+    /// Some exist and something is missing, different or disabled. Each
+    /// line names one difference.
+    Malformed(Vec<String>),
+}
+
+/// The four triggers: name, `pg_trigger.tgtype` (row 1, insert 4, delete 8,
+/// update 16, truncate 32; no "before" bit) and whether a `WHEN` is needed.
+const BINDINGS_STATE: &str = r"
+WITH want(tgname, tgtype, has_when) AS (VALUES
+    ('alrust_note_bindings_delete'::text, 9, false),
+    ('alrust_note_bindings_insert', 5, false),
+    ('alrust_note_bindings_truncate', 32, false),
+    ('alrust_note_bindings_update', 17, true)),
+tbl AS (
+    SELECT c.oid, c.relkind::text AS relkind, c.relpersistence::text AS persistence
+      FROM pg_class c WHERE c.oid = to_regclass('public.alrust_note_bindings')),
+cols AS (
+    SELECT coalesce(string_agg(a.attname || ' ' || format_type(a.atttypid, a.atttypmod)
+                               || CASE WHEN a.attnotnull THEN ' not null' ELSE '' END,
+                               ', ' ORDER BY a.attnum), '') AS found
+      FROM tbl JOIN pg_attribute a ON a.attrelid = tbl.oid AND a.attnum > 0 AND NOT a.attisdropped),
+fn AS (
+    SELECT p.oid, p.prosecdef, p.prosrc, p.proconfig, p.prorettype::regtype::text AS returns
+      FROM pg_proc p WHERE p.oid = to_regproc('public.alrust_note_bindings_clear')),
+trg AS (
+    SELECT t.tgname::text AS tgname, t.tgtype::int AS tgtype, t.tgenabled::text AS enabled,
+           t.tgfoid, t.tgqual IS NOT NULL AS has_when, pg_get_triggerdef(t.oid) AS def
+      FROM pg_trigger t
+     WHERE t.tgrelid = to_regclass('public.alerts')::oid AND NOT t.tgisinternal
+       AND starts_with(t.tgname::text, 'alrust_note_bindings_'))
+SELECT (EXISTS (SELECT 1 FROM tbl) OR EXISTS (SELECT 1 FROM fn) OR EXISTS (SELECT 1 FROM trg)) AS present,
+       ARRAY(
+           SELECT 'the table public.alrust_note_bindings is missing'
+            WHERE NOT EXISTS (SELECT 1 FROM tbl)
+           UNION ALL
+           SELECT 'public.alrust_note_bindings is not an ordinary permanent table'
+             FROM tbl WHERE relkind <> 'r' OR persistence <> 'p'
+           UNION ALL
+           SELECT 'the columns of public.alrust_note_bindings are: ' || cols.found
+             FROM cols WHERE EXISTS (SELECT 1 FROM tbl)
+              AND cols.found <> 'note text not null, alert text not null, note_xmin xid not null'
+           UNION ALL
+           SELECT 'public.alrust_note_bindings has no valid primary key on (note)'
+             FROM tbl WHERE NOT EXISTS (
+                 SELECT 1 FROM pg_index i
+                   JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attname = 'note'
+                  WHERE i.indrelid = tbl.oid AND i.indisprimary AND i.indisvalid
+                    AND i.indnatts = 1 AND i.indkey[0] = a.attnum)
+           UNION ALL
+           SELECT 'the function public.alrust_note_bindings_clear() is missing'
+            WHERE NOT EXISTS (SELECT 1 FROM fn)
+           UNION ALL
+           SELECT 'the function public.alrust_note_bindings_clear() is not the one of migration 0003 (settings: '
+                  || coalesce(fn.proconfig::text, 'none') || ')'
+             FROM fn WHERE NOT fn.prosecdef OR fn.returns <> 'trigger' OR fn.prosrc <> $1
+               OR fn.proconfig IS DISTINCT FROM ARRAY['search_path=pg_catalog, pg_temp']
+           UNION ALL
+           SELECT 'the trigger ' || w.tgname || ' on public.alerts is missing'
+             FROM want w WHERE NOT EXISTS (SELECT 1 FROM trg WHERE trg.tgname = w.tgname)
+           UNION ALL
+           SELECT 'the trigger ' || w.tgname || ' on public.alerts is not the one of migration 0003, or is disabled (enabled '
+                  || trg.enabled || '): ' || trg.def
+             FROM want w JOIN trg ON trg.tgname = w.tgname
+            WHERE trg.tgtype <> w.tgtype OR trg.enabled NOT IN ('O', 'A')
+               OR trg.tgfoid IS DISTINCT FROM (SELECT fn.oid FROM fn)
+               OR trg.has_when <> w.has_when
+               OR (w.has_when AND position('WHEN ((old.id IS DISTINCT FROM new.id))' IN trg.def) = 0)
+           UNION ALL
+           SELECT 'unknown trigger ' || trg.tgname || ' on public.alerts'
+             FROM trg WHERE NOT EXISTS (SELECT 1 FROM want w WHERE w.tgname = trg.tgname)
+       ) AS problems";
+
+/// What the database has of the note bindings, from the catalogs. See the
+/// module text for what `InForce` cannot show.
 ///
 /// # Errors
 ///
 /// The database error.
-pub async fn bindings_in_force(conn: &mut PgConnection) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar(
-        "SELECT to_regclass('public.alrust_note_bindings') IS NOT NULL
-            AND (SELECT count(*) FROM pg_trigger t
-                  WHERE t.tgrelid = to_regclass('public.alerts')::oid
-                    AND NOT t.tgisinternal
-                    AND t.tgname::text = ANY($1)
-                    AND t.tgenabled IN ('O', 'A')
-                    AND t.tgfoid = to_regproc('public.alrust_note_bindings_clear')::oid) = 4",
-    )
-    .bind(&BINDING_TRIGGERS[..])
-    .fetch_one(conn)
-    .await
+pub async fn bindings_state(conn: &mut PgConnection) -> Result<NoteBindings, sqlx::Error> {
+    let (present, problems): (bool, Vec<String>) = sqlx::query_as(BINDINGS_STATE)
+        .bind(clear_function_body())
+        .fetch_one(conn)
+        .await?;
+    Ok(if problems.is_empty() {
+        NoteBindings::InForce
+    } else if present {
+        NoteBindings::Malformed(problems)
+    } else {
+        NoteBindings::Absent
+    })
 }
 
-/// Whether the stored alert `alert_id` received the note `note_id`: the
-/// bindings are in force and have that pair. The caller holds the alert's
-/// row lock when a write follows.
+async fn bindings_in_force(conn: &mut PgConnection) -> Result<bool, sqlx::Error> {
+    Ok(bindings_state(conn).await? == NoteBindings::InForce)
+}
+
+/// Whether the stored alert `alert_id` received the note `note_id` and the
+/// note's row is still the bound one: the bindings are in force and have
+/// that pair with the row's `xmin`. With `lock`, the note's row is locked
+/// for the write that follows; the caller holds the alert's row lock.
 async fn owns_note(
     conn: &mut PgConnection,
     alert_id: &str,
     note_id: &str,
+    lock: bool,
 ) -> Result<bool, sqlx::Error> {
     if !bindings_in_force(&mut *conn).await? {
         return Ok(false);
     }
-    sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM alrust_note_bindings WHERE note = $1 AND alert = $2)",
+    let mut sql = String::from(
+        "SELECT 1 FROM alrust_note_bindings b JOIN notes n ON n.id = b.note
+          WHERE b.note = $1 AND b.alert = $2 AND n.alert = b.alert AND n.xmin = b.note_xmin",
+    );
+    if lock {
+        sql.push_str(" FOR UPDATE OF n");
+    }
+    Ok(sqlx::query(&sql)
+        .bind(note_id)
+        .bind(alert_id)
+        .fetch_optional(conn)
+        .await?
+        .is_some())
+}
+
+/// Bind the note to its alert at the note row's present `xmin`. The caller
+/// has just written that row in this transaction.
+async fn bind_note(conn: &mut PgConnection, note_id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO alrust_note_bindings (note, alert, note_xmin)
+         SELECT n.id, n.alert, n.xmin FROM notes n WHERE n.id = $1
+         ON CONFLICT (note) DO UPDATE SET alert = EXCLUDED.alert, note_xmin = EXCLUDED.note_xmin",
     )
     .bind(note_id)
-    .bind(alert_id)
-    .fetch_one(conn)
-    .await
+    .execute(conn)
+    .await?;
+    Ok(())
 }
 
 impl Store {
@@ -217,14 +333,7 @@ impl Store {
         if bindings_in_force(&mut tx).await? {
             // A binding left for this id by a note that another program
             // removed is replaced.
-            sqlx::query(
-                "INSERT INTO alrust_note_bindings (note, alert) VALUES ($1, $2)
-                 ON CONFLICT (note) DO UPDATE SET alert = EXCLUDED.alert",
-            )
-            .bind(note_id)
-            .bind(&a.id)
-            .execute(&mut *tx)
-            .await?;
+            bind_note(&mut tx, note_id).await?;
         }
         let entry = HistoryEntry {
             id: note_id.to_owned(),
@@ -286,7 +395,7 @@ impl Store {
     ) -> Result<(), StoreError> {
         let a = self.get_alert(id, customers).await?;
         let mut conn = self.pool.acquire().await?;
-        if !owns_note(&mut conn, &a.id, note_id).await? {
+        if !owns_note(&mut conn, &a.id, note_id, false).await? {
             return Err(StoreError::NotFound);
         }
         drop(conn);
@@ -318,7 +427,7 @@ impl Store {
     ) -> Result<Note, StoreError> {
         let mut tx = self.pool.begin().await?;
         let a = Self::lock_alert(&mut tx, id, customers).await?;
-        if !owns_note(&mut tx, &a.id, note_id).await? {
+        if !owns_note(&mut tx, &a.id, note_id, true).await? {
             tx.rollback().await?;
             return Err(StoreError::NotFound);
         }
@@ -343,6 +452,8 @@ impl Store {
             return Err(StoreError::NotFound);
         };
         let note = row_to_note(&row)?;
+        // The update gave the row a new xmin; bind that version.
+        bind_note(&mut tx, note_id).await?;
         tx.commit().await?;
         Ok(note)
     }
@@ -363,7 +474,7 @@ impl Store {
     ) -> Result<bool, StoreError> {
         let mut tx = self.pool.begin().await?;
         let mut a = Self::lock_alert(&mut tx, id, customers).await?;
-        if !owns_note(&mut tx, &a.id, note_id).await? {
+        if !owns_note(&mut tx, &a.id, note_id, true).await? {
             tx.rollback().await?;
             return Ok(false);
         }

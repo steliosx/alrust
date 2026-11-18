@@ -54,7 +54,7 @@ use std::time::Duration;
 
 use alrust_api::{ApiConfig, AppState, MAX_TIMEOUT, router};
 use alrust_domain::{ApiKey, redact_diagnostic};
-use alrust_store_pg::{Outcome, Store, StoreConfig};
+use alrust_store_pg::{NoteBindings, Outcome, Store, StoreConfig};
 use anyhow::Context;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use tower_http::cors::CorsLayer;
@@ -271,10 +271,19 @@ async fn run() -> anyhow::Result<()> {
     for t in &report.triggers {
         tracing::info!(trigger = %t, "trigger on a reference table");
     }
-    if !report.note_bindings {
-        tracing::warn!(
-            "the note bindings are not in force on this database; notes can be added and listed, but not changed or deleted"
-        );
+    match &report.note_bindings {
+        NoteBindings::InForce => {}
+        NoteBindings::Absent => tracing::warn!(
+            "this database has no note bindings; notes can be added and listed, but not changed or deleted"
+        ),
+        NoteBindings::Malformed(problems) => {
+            for problem in problems {
+                tracing::warn!(%problem, "the note bindings are not as migration 0003 creates them");
+            }
+            tracing::warn!(
+                "the note bindings are not in force; notes can be added and listed, but not changed or deleted"
+            );
+        }
     }
     if report.inactive_keys > 0 {
         tracing::warn!(

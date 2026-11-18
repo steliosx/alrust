@@ -22,8 +22,9 @@
 
 use alrust_store_pg::catalog;
 use alrust_store_pg::{
-    ALERT_BY_EXACT_ID, ALERT_BY_EXACT_ID_FOR_UPDATE, AlertCounts, AlertQuery, NewAlert, Outcome,
-    ReceiveKind, StartupError, Store, StoreConfig, StoreError, session_options, value_text,
+    ALERT_BY_EXACT_ID, ALERT_BY_EXACT_ID_FOR_UPDATE, AlertCounts, AlertQuery, NewAlert,
+    NoteBindings, Outcome, ReceiveKind, StartupError, Store, StoreConfig, StoreError,
+    session_options, value_text,
 };
 use chrono::{TimeZone, Utc};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
@@ -367,8 +368,21 @@ async fn fresh_database_gets_the_reference_layout_and_repeat_start_is_a_no_op() 
     let s = store(&db.pool);
     let r = s.prepare().await.expect("fresh start");
     assert_eq!(r.outcome, Outcome::Fresh);
-    assert_eq!(r.triggers, Vec::<String>::new());
-    assert!(r.note_bindings, "0003 puts the note bindings in force");
+    assert_eq!(
+        r.triggers,
+        [
+            "alerts: alrust_note_bindings_delete",
+            "alerts: alrust_note_bindings_insert",
+            "alerts: alrust_note_bindings_truncate",
+            "alerts: alrust_note_bindings_update",
+        ],
+        "only the triggers of 0003"
+    );
+    assert_eq!(
+        r.note_bindings,
+        NoteBindings::InForce,
+        "0003 puts the note bindings in force"
+    );
     assert_eq!(
         catalog::diff(&catalog::expected(), &catalog_of(&db.pool).await),
         Vec::<String>::new()
@@ -1107,7 +1121,11 @@ async fn adoption_writes_nothing_and_changes_no_row() {
     let r = s.prepare().await.expect("adopt");
     assert_eq!(r.outcome, Outcome::Adopted);
     assert_eq!(r.inactive_keys, 2);
-    assert!(!r.note_bindings, "adoption installs nothing");
+    assert_eq!(
+        r.note_bindings,
+        NoteBindings::Absent,
+        "adoption installs nothing"
+    );
     assert_eq!(
         r.triggers.len(),
         10,

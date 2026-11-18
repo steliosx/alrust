@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use alrust_api::{ApiConfig, AppState, router};
 use alrust_domain::ApiKey;
-use alrust_store_pg::{Store, StoreConfig};
+use alrust_store_pg::{NoteBindings, Store, StoreConfig};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use chrono::Utc;
@@ -900,6 +900,22 @@ async fn the_list_matches_the_alert_id_as_a_regular_expression() {
     );
 }
 
+/// What the database has of the note bindings (`notes::bindings_state`).
+async fn bindings_state(pool: &PgPool) -> NoteBindings {
+    let mut conn = pool.acquire().await.unwrap();
+    alrust_store_pg::notes::bindings_state(&mut conn)
+        .await
+        .unwrap()
+}
+
+/// The problems of a malformed state; panics on another state.
+async fn malformed(pool: &PgPool, case: &str) -> String {
+    match bindings_state(pool).await {
+        NoteBindings::Malformed(problems) => problems.join("\n"),
+        other => panic!("{case}: expected a malformed state, found {other:?}"),
+    }
+}
+
 /// The alert a note is bound to (`alrust_note_bindings`, DECISIONS Y77).
 async fn binding(pool: &PgPool, note_id: &str) -> Option<String> {
     sqlx::query_scalar("SELECT alert FROM alrust_note_bindings WHERE note = $1")
@@ -1102,12 +1118,18 @@ async fn without_the_bindings_in_force_a_note_is_added_and_listed_but_not_change
     let Some((db, app)) = app().await else {
         return;
     };
+    assert_eq!(bindings_state(&db.pool).await, NoteBindings::InForce);
     let a = alert(&app, "not-in-force", "r-not-in-force", Some("acme")).await;
     let bound = note(&app, &a, ACME_KEY, "bound").await;
     sqlx::query("ALTER TABLE alerts DISABLE TRIGGER alrust_note_bindings_update")
         .execute(&db.pool)
         .await
         .unwrap();
+    let problems = malformed(&db.pool, "a trigger is disabled").await;
+    assert!(
+        problems.contains("alrust_note_bindings_update") && problems.contains("(enabled D)"),
+        "{problems}"
+    );
     refused(&app, &a, &bound, "a trigger is disabled").await;
     let unbound = note(&app, &a, ACME_KEY, "added while a trigger was disabled").await;
     assert_eq!(binding(&db.pool, &unbound).await, None);
@@ -1132,6 +1154,7 @@ async fn without_the_bindings_in_force_a_note_is_added_and_listed_but_not_change
     .execute(&db.pool)
     .await
     .unwrap();
+    assert_eq!(bindings_state(&db.pool).await, NoteBindings::Absent);
     let plain = note(&app, &a, ACME_KEY, "added with no bindings").await;
     assert_eq!(
         note_body(&app, &a, &plain).await["text"],
@@ -1184,6 +1207,13 @@ async fn a_role_with_no_right_on_the_bindings_can_delete_an_alert() {
     .await
     .unwrap();
     assert_eq!(rights, (false, false));
+    let may_execute: bool = sqlx::query_scalar(
+        "SELECT has_function_privilege('public.alrust_note_bindings_clear()', 'EXECUTE')",
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    assert!(!may_execute, "EXECUTE is revoked from PUBLIC");
     let deleted = sqlx::query("DELETE FROM alerts WHERE id = $1")
         .bind(&a)
         .execute(&mut *tx)
@@ -1198,4 +1228,257 @@ async fn a_role_with_no_right_on_the_bindings_can_delete_an_alert() {
         .unwrap();
     assert_eq!(left, 0);
     tx.rollback().await.unwrap();
+    // After the rollback the alert, the note's binding and no role remain.
+    assert_eq!(binding(&db.pool, &n).await, Some(a.clone()));
+    let (alerts, roles): (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM alerts WHERE id = $1),
+                (SELECT count(*) FROM pg_roles WHERE rolname = $2)",
+    )
+    .bind(&a)
+    .bind(&role)
+    .fetch_one(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!((alerts, roles), (1, 0));
+    assert_eq!(bindings_state(&db.pool).await, NoteBindings::InForce);
+}
+
+/// Y77: a binding belongs to one stored version of the note's row. A note
+/// that another program deleted and stored again with the same id and
+/// alert, or changed, is no longer bound. alrust's own update keeps the
+/// note bound.
+#[tokio::test]
+async fn a_write_to_notes_by_another_program_ends_the_binding() {
+    let Some((db, app)) = app().await else {
+        return;
+    };
+    let a = alert(&app, "note-side", "r-note-side", Some("acme")).await;
+
+    // alrust's own updates, twice: still bound.
+    let own = note(&app, &a, ACME_KEY, "own").await;
+    for text in ["edited once", "edited twice"] {
+        let (code, _, body) = send(
+            &app,
+            "PUT",
+            &format!("/alert/{a}/note/{own}"),
+            ACME_KEY,
+            Some(json!({"text": text})),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK, "{body}");
+    }
+    assert_eq!(note_body(&app, &a, &own).await["text"], "edited twice");
+
+    // Deleted and stored again by SQL, with the same id and alert.
+    let replaced = note(&app, &a, ACME_KEY, "first").await;
+    sqlx::raw_sql(&format!(
+        "CREATE TEMP TABLE kept_note AS SELECT * FROM notes WHERE id = '{replaced}';
+         DELETE FROM notes WHERE id = '{replaced}';
+         UPDATE kept_note SET text = 'written by another program';
+         INSERT INTO notes SELECT * FROM kept_note;
+         DROP TABLE kept_note;"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        binding(&db.pool, &replaced).await,
+        Some(a.clone()),
+        "the row of the binding is left; it no longer counts"
+    );
+    refused(&app, &a, &replaced, "deleted and stored again").await;
+    assert_eq!(
+        note_body(&app, &a, &replaced).await["text"],
+        "written by another program"
+    );
+
+    // Changed by SQL.
+    let changed = note(&app, &a, ACME_KEY, "first").await;
+    sqlx::query("UPDATE notes SET text = 'changed by another program' WHERE id = $1")
+        .bind(&changed)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    refused(&app, &a, &changed, "changed by SQL").await;
+
+    // Truncated by SQL, then the same ids again.
+    let gone = note(&app, &a, ACME_KEY, "first").await;
+    sqlx::raw_sql(&format!(
+        "CREATE TEMP TABLE kept_note AS SELECT * FROM notes WHERE id = '{gone}';
+         TRUNCATE notes;
+         INSERT INTO notes SELECT * FROM kept_note;
+         DROP TABLE kept_note;"
+    ))
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    refused(&app, &a, &gone, "truncated and stored again").await;
+}
+
+/// Y77: a part of the bindings is not the bindings. With the table gone, or
+/// another table under its name, the state is reported with its difference,
+/// no note is changed or deleted, notes are still added, and writes to
+/// `alerts` still succeed.
+#[tokio::test]
+async fn a_malformed_installation_is_reported_and_not_used() {
+    // The table gone, the function and the triggers left.
+    let Some((db, app)) = app().await else {
+        return;
+    };
+    let a = alert(&app, "partial", "r-partial", Some("acme")).await;
+    let n = note(&app, &a, ACME_KEY, "bound").await;
+    sqlx::query("DROP TABLE alrust_note_bindings")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let problems = malformed(&db.pool, "table dropped").await;
+    assert!(
+        problems.contains("the table public.alrust_note_bindings is missing"),
+        "{problems}"
+    );
+    refused(&app, &a, &n, "table dropped").await;
+    note(&app, &a, ACME_KEY, "added with no table").await;
+    // The triggers still fire and do nothing: alerts are stored, changed
+    // and deleted.
+    let other = alert(&app, "partial-2", "r-partial-2", Some("acme")).await;
+    sqlx::raw_sql(
+        "UPDATE alerts SET id = 'partial-3' WHERE id = 'partial-2';
+         DELETE FROM alerts WHERE id = 'partial-3';",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(other, "partial-2");
+
+    // A table of another shape under the name.
+    sqlx::query("CREATE TABLE alrust_note_bindings (note text, alert text, note_xmin xid)")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    let problems = malformed(&db.pool, "another table").await;
+    assert!(
+        problems.contains("the columns of public.alrust_note_bindings are")
+            && problems.contains("no valid primary key"),
+        "{problems}"
+    );
+    refused(&app, &a, &n, "another table").await;
+}
+
+/// Y77: a trigger or a function of another definition under alrust's name
+/// is reported, and the bindings are not used while it is there.
+#[tokio::test]
+async fn a_redefined_trigger_or_function_is_reported_and_not_used() {
+    let Some((db, app)) = app().await else {
+        return;
+    };
+    let a = alert(&app, "redefined", "r-redefined", Some("acme")).await;
+    let n = note(&app, &a, ACME_KEY, "bound").await;
+    for (case, name, definition) in [
+        ("no WHEN", "update", "AFTER UPDATE ON alerts FOR EACH ROW"),
+        (
+            "another WHEN",
+            "update",
+            "AFTER UPDATE ON alerts FOR EACH ROW WHEN (OLD.id IS DISTINCT FROM NEW.resource)",
+        ),
+        (
+            "another event",
+            "delete",
+            "AFTER INSERT ON alerts FOR EACH ROW",
+        ),
+        (
+            "for each statement",
+            "insert",
+            "AFTER INSERT ON alerts FOR EACH STATEMENT",
+        ),
+    ] {
+        sqlx::raw_sql(&format!(
+            "DROP TRIGGER alrust_note_bindings_{name} ON alerts;
+             CREATE TRIGGER alrust_note_bindings_{name} {definition}
+                 EXECUTE FUNCTION alrust_note_bindings_clear();"
+        ))
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let problems = malformed(&db.pool, case).await;
+        assert!(
+            problems.contains(&format!(
+                "the trigger alrust_note_bindings_{name} on public.alerts is not the one"
+            )),
+            "{case}: {problems}"
+        );
+        refused(&app, &a, &n, case).await;
+        // Put the trigger of 0003 back.
+        let original = match name {
+            "update" => "AFTER UPDATE ON alerts FOR EACH ROW WHEN (OLD.id IS DISTINCT FROM NEW.id)",
+            "delete" => "AFTER DELETE ON alerts FOR EACH ROW",
+            _ => "AFTER INSERT ON alerts FOR EACH ROW",
+        };
+        sqlx::raw_sql(&format!(
+            "DROP TRIGGER alrust_note_bindings_{name} ON alerts;
+             CREATE TRIGGER alrust_note_bindings_{name} {original}
+                 EXECUTE FUNCTION alrust_note_bindings_clear();"
+        ))
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            bindings_state(&db.pool).await,
+            NoteBindings::InForce,
+            "{case}: restored"
+        );
+    }
+
+    // A fifth trigger with alrust's prefix.
+    sqlx::query(
+        "CREATE TRIGGER alrust_note_bindings_extra AFTER DELETE ON alerts
+             FOR EACH ROW EXECUTE FUNCTION alrust_note_bindings_clear()",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    let problems = malformed(&db.pool, "extra trigger").await;
+    assert!(
+        problems.contains("unknown trigger alrust_note_bindings_extra"),
+        "{problems}"
+    );
+    sqlx::query("DROP TRIGGER alrust_note_bindings_extra ON alerts")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+    // The function on another table: it refuses to run there.
+    let wrong = sqlx::raw_sql(
+        "CREATE TRIGGER alrust_note_bindings_delete AFTER DELETE ON notes
+             FOR EACH ROW EXECUTE FUNCTION alrust_note_bindings_clear();
+         DELETE FROM notes;",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap_err();
+    assert!(
+        wrong
+            .to_string()
+            .contains("runs only as an AFTER trigger on public.alerts"),
+        "{wrong}"
+    );
+    sqlx::query("DROP TRIGGER IF EXISTS alrust_note_bindings_delete ON notes")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+    // The function with another body, same name and settings.
+    sqlx::query(
+        "CREATE OR REPLACE FUNCTION public.alrust_note_bindings_clear() RETURNS trigger
+             LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp
+         AS $$ BEGIN RETURN NULL; END $$",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    let problems = malformed(&db.pool, "another body").await;
+    assert!(
+        problems.contains("alrust_note_bindings_clear() is not the one of migration 0003"),
+        "{problems}"
+    );
+    refused(&app, &a, &n, "another body").await;
 }

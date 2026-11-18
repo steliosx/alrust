@@ -32,10 +32,10 @@ pub struct Report {
     pub triggers: Vec<String>,
     /// Keys that can never authenticate because their expiry or scopes are NULL.
     pub inactive_keys: i64,
-    /// Whether the note bindings are in force (`notes::bindings_in_force`).
-    /// Never on an adopted database unless an operator installed them:
-    /// notes are then added and listed, and not changed or deleted.
-    pub note_bindings: bool,
+    /// The note bindings (`notes::bindings_state`). Unless they are in
+    /// force, notes are added and listed, and not changed or deleted.
+    /// Adoption installs nothing, so an adopted database has none.
+    pub note_bindings: crate::notes::NoteBindings,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -191,7 +191,7 @@ async fn prepare_locked(conn: &mut PgConnection) -> Result<Report, StartupError>
         sqlx::query_scalar("SELECT count(*) FROM keys WHERE expire_time IS NULL OR scopes IS NULL")
             .fetch_one(&mut *tx)
             .await?;
-    let note_bindings = crate::notes::bindings_in_force(&mut tx).await?;
+    let note_bindings = crate::notes::bindings_state(&mut tx).await?;
     tx.rollback().await?;
     if !differences.is_empty() {
         return Err(if outcome == Outcome::Adopted {

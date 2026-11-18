@@ -613,25 +613,32 @@ deleted alert leaves its notes in the table (the reference does the same;
 alrust does not delete them). A later alert can therefore have the id of an
 earlier one, also for another customer. Equal ids are then not enough: the
 note must have been added to the alert that is stored now. alrust keeps
-this in its own table, `alrust_note_bindings` (the note's id with its
-alert's id; DECISIONS Y77, ADR-0005 decision 10). The row is written in the
-transaction that stores the note. Triggers on `alerts` remove an alert's
-rows when any program (the API, the housekeeping, Alerta, an integration)
-deletes the alert, stores an alert with that id, changes an alert's id or
-truncates the table. The check and the write are in one transaction that
-locks the alert's row. The binding does not depend on the alert's history,
-so a note stays changeable for as long as its alert is stored.
+this in its own table, `alrust_note_bindings` (the note's id, its alert's
+id, and the stored version of the note's row; DECISIONS Y77, ADR-0005
+decision 10). The row is written in the transaction that stores the note.
+Triggers on `alerts` remove an alert's rows when any program (the API, the
+housekeeping, Alerta, an integration) deletes the alert, stores an alert
+with that id, changes an alert's id or truncates the table. A binding
+counts only while the note's row is the version alrust wrote, so a note
+that another program deleted and stored again, or changed, is not bound.
+The check and the write are in one transaction that locks the alert's row.
+The binding does not depend on the alert's history, so a note stays
+changeable for as long as its alert is stored.
 
-*A note with no binding is protected:* it is listed and it is not changed
-or deleted (the same 404). This applies to a note that another program
-wrote to the `notes` table, to a note stored before the bindings existed,
-and to every note while the bindings are not in force (the table, the
-function or a trigger is absent, or a trigger is disabled). An adopted
-reference database has no bindings, because alrust writes no DDL there:
-its notes are added and listed and never changed or deleted through
-alrust. *Limit:* if a trigger was disabled and enabled again, or bypassed
-with `session_replication_role = replica`, a binding can outlive its
-alert; alrust cannot detect that. Storing an alert with that id removes it.
+*A note with no valid binding is protected:* it is listed and it is not
+changed or deleted (the same 404). This applies to a note that another
+program wrote to or changed in the `notes` table, to a note stored before
+the bindings existed, to every note of a restored dump, and to every note
+while the bindings are not in force (the table, the function and the four
+triggers must be exactly those of migration `0003`, and enabled). An
+adopted reference database has no bindings, because alrust writes no DDL
+there: its notes are added and listed and never changed or deleted through
+alrust. *Limit:* this holds for programs that write rows. A role that
+disables a trigger and enables it again, writes with
+`session_replication_role = replica`, or replicates into `alerts` can
+leave a binding that outlived its alert; alrust cannot detect that
+afterwards. After such a gap the operator empties `alrust_note_bindings`
+(ADR-0005 decision 10); every note is then protected.
 
 `GET /alert/{id}/notes` is not changed by this: it still lists by the
 reference's expression (C21), earlier notes included.
@@ -650,7 +657,7 @@ reference's expression (C21), earlier notes included.
 | a note added to the later alert | 200 | 200 | parity |
 | the alert's own note after its `note` entry left the history | 200 | 200 | parity |
 | the alert deleted, its id changed or the table truncated by SQL, then an alert with the same id | 200 | 404, no change | divergence |
-| a note with no binding (written by another program, or stored while the bindings were not in force) | 200 | 404, no change | divergence |
+| a note with no valid binding (written, replaced or changed by another program, or stored while the bindings were not in force) | 200 | 404, no change | divergence |
 
 ## SF-BLACKOUTS: an edit keeps the blackout's customer unless it sets one
 
