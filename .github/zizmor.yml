@@ -1,0 +1,12 @@
+# zizmor configuration for .github/workflows/security-scan.yml.
+#
+# forgehold-actions-compat.yml checks out with persisted credentials on
+# purpose at these two steps (variants v1 and v4): it exists to test the
+# checkout variants that ci.yml and executing.yml use, and it uploads no
+# artifact. The entries are bound to the line numbers, so a change to that
+# file that moves the steps brings the findings back for a new decision.
+rules:
+  artipacked:
+    ignore:
+      - forgehold-actions-compat.yml:39
+      - forgehold-actions-compat.yml:55
