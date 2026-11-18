@@ -2,16 +2,21 @@
 # The licenses check is not run: no allow-list is written yet.
 
 [advisories]
-# A RustSec vulnerability or unsound advisory for any crate fails the
-# check; an unmaintained advisory fails it only for a direct dependency of
-# the workspace; a yanked version fails it.
+# A RustSec vulnerability advisory for any crate fails the check. An
+# unmaintained advisory fails it only for a direct dependency of the
+# workspace (the setting below); an unsound advisory likewise (the default
+# of cargo-deny 0.20.2, not set here). For a crate that arrives only
+# through another crate, those two kinds can pass. A yanked version fails
+# the check.
 unmaintained = "workspace"
 yanked = "deny"
 # The one accepted advisory (DECISIONS Y76, the owner, 2026-11-17). It says
 # that chrono is unmaintained and reports no vulnerability; no chrono
-# version clears it. Every other advisory still fails the check, also a
-# later vulnerability in chrono. Review on or before 2027-02-15 and at each
-# chrono update. Replacing chrono is a backlog item.
+# version clears it. This exception matches only RUSTSEC-2026-0543. Other
+# advisories keep their configured handling. A separately identified
+# vulnerability in the scanned chrono dependency still fails the check.
+# Review on or before 2027-02-15 and at each chrono update; the entry does
+# not expire by itself. Replacing chrono is a backlog item.
 ignore = [
     { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained; no vulnerability reported; accepted by the owner 2026-11-17 (DECISIONS Y76); review by 2027-02-15" },
 ]
