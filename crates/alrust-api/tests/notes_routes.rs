@@ -1381,6 +1381,16 @@ async fn a_redefined_trigger_or_function_is_reported_and_not_used() {
             "AFTER UPDATE ON alerts FOR EACH ROW WHEN (OLD.id IS DISTINCT FROM NEW.resource)",
         ),
         (
+            "a column list",
+            "update",
+            "AFTER UPDATE OF text ON alerts FOR EACH ROW WHEN (OLD.id IS DISTINCT FROM NEW.id)",
+        ),
+        (
+            "a longer WHEN",
+            "update",
+            "AFTER UPDATE ON alerts FOR EACH ROW WHEN (OLD.id IS DISTINCT FROM NEW.id AND OLD.text IS DISTINCT FROM NEW.text)",
+        ),
+        (
             "another event",
             "delete",
             "AFTER INSERT ON alerts FOR EACH ROW",

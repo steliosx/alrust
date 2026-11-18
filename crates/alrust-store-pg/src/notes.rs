@@ -156,6 +156,8 @@ pub enum NoteBindings {
 
 /// The four triggers: name, `pg_trigger.tgtype` (row 1, insert 4, delete 8,
 /// update 16, truncate 32; no "before" bit) and whether a `WHEN` is needed.
+/// A trigger must also have no column list, no arguments, no transition
+/// table and no constraint, and the `WHEN` must be exactly the id test.
 const BINDINGS_STATE: &str = r"
 WITH want(tgname, tgtype, has_when) AS (VALUES
     ('alrust_note_bindings_delete'::text, 9, false),
@@ -175,7 +177,9 @@ fn AS (
       FROM pg_proc p WHERE p.oid = to_regproc('public.alrust_note_bindings_clear')),
 trg AS (
     SELECT t.tgname::text AS tgname, t.tgtype::int AS tgtype, t.tgenabled::text AS enabled,
-           t.tgfoid, t.tgqual IS NOT NULL AS has_when, pg_get_triggerdef(t.oid) AS def
+           t.tgfoid, t.tgqual IS NOT NULL AS has_when, pg_get_triggerdef(t.oid) AS def,
+           (t.tgattr::text = '' AND t.tgconstraint = 0 AND t.tgnargs = 0
+            AND t.tgoldtable IS NULL AND t.tgnewtable IS NULL) AS plain
       FROM pg_trigger t
      WHERE t.tgrelid = to_regclass('public.alerts')::oid AND NOT t.tgisinternal
        AND starts_with(t.tgname::text, 'alrust_note_bindings_'))
@@ -215,7 +219,9 @@ SELECT (EXISTS (SELECT 1 FROM tbl) OR EXISTS (SELECT 1 FROM fn) OR EXISTS (SELEC
             WHERE trg.tgtype <> w.tgtype OR trg.enabled NOT IN ('O', 'A')
                OR trg.tgfoid IS DISTINCT FROM (SELECT fn.oid FROM fn)
                OR trg.has_when <> w.has_when
-               OR (w.has_when AND position('WHEN ((old.id IS DISTINCT FROM new.id))' IN trg.def) = 0)
+               OR NOT trg.plain
+               OR (w.has_when AND substring(trg.def FROM ' WHEN \((.*)\) EXECUTE FUNCTION ')
+                                  IS DISTINCT FROM '(old.id IS DISTINCT FROM new.id)')
            UNION ALL
            SELECT 'unknown trigger ' || trg.tgname || ' on public.alerts'
              FROM trg WHERE NOT EXISTS (SELECT 1 FROM want w WHERE w.tgname = trg.tgname)

@@ -518,8 +518,9 @@ layout.
   only the owner (the role that ran the migration) or a superuser can
   attach it to a table. It refuses to run unless it is an `AFTER` trigger
   on `public.alerts` at the right level, and it only deletes rows of the
-  bindings table. If that table is gone it does nothing, so a partly
-  removed installation does not make writes to `alerts` fail.
+  bindings table. If that table is gone it does nothing, so that one
+  partial state does not make writes to `alerts` fail. Other damaged
+  states (for example a table of another shape) can still make them fail.
 - **The note's side.** A binding holds the `xmin` of the note's row when
   alrust wrote it. PostgreSQL gives every inserted or updated row version
   the id of the writing transaction as `xmin`, so a note that another
@@ -544,7 +545,8 @@ layout.
   `SECURITY DEFINER`, returns `trigger`, has exactly that search path and
   the body of `0003` (compared as text); each of the four triggers is on
   `public.alerts`, enabled (`O` or `A`), calls that function, and has the
-  event, the timing, the level and (for `_update`) the `WHEN` of `0003`;
+  event, the timing, the level and (for `_update`) exactly the `WHEN` of
+  `0003`, with no column list, argument, transition table or constraint;
   and no other trigger named `alrust_note_bindings_…` is on `alerts`.
   Anything else is "malformed": a new note is stored without a binding and
   no note is changed or deleted. A database in that state still starts.
