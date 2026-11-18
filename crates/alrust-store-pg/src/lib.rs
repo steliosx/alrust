@@ -7,6 +7,7 @@
 //! README ("Alpha limitations").
 
 pub mod aggregates;
+pub mod blackouts;
 pub mod catalog;
 pub mod hooks;
 pub mod key_usage;
