@@ -271,6 +271,11 @@ async fn run() -> anyhow::Result<()> {
     for t in &report.triggers {
         tracing::info!(trigger = %t, "trigger on a reference table");
     }
+    if !report.note_bindings {
+        tracing::warn!(
+            "the note bindings are not in force on this database; notes can be added and listed, but not changed or deleted"
+        );
+    }
     if report.inactive_keys > 0 {
         tracing::warn!(
             count = report.inactive_keys,

@@ -8,12 +8,27 @@
 //! an alert with the same id. An alert's id can be set by the client, and a
 //! deleted alert leaves its notes behind (as in the reference), so a later
 //! alert can have the id of an earlier one. A note is changed or deleted
-//! only when the alert's history still has that note's `note` entry
-//! ([`owns_note`]). A new alert starts with a new history, so it owns none
-//! of the earlier notes, whoever deleted the earlier alert and however.
-//! The cost: when an alert's history has dropped a note's entry (the
-//! history limit, 100 entries by default), that note can no longer be
-//! changed or deleted, and the answer is the same 404.
+//! only when it is bound to the alert ([`owns_note`], DECISIONS Y77).
+//!
+//! The binding is a row of `alrust_note_bindings` (migration `0003`), the
+//! note's id with the id of the alert that received it. [`Store::add_note`]
+//! writes it in the transaction that stores the note. Triggers on `alerts`
+//! remove an alert's bindings when any program deletes the alert, stores an
+//! alert with that id, changes an alert's id or truncates the table. So a
+//! binding lasts as long as its alert, whatever the history keeps, and a
+//! later alert with the same id owns none of the earlier notes.
+//!
+//! A note with no binding is protected: it is listed, and it is not changed
+//! or deleted (the same 404). That is every note another program wrote, and
+//! every note stored while the bindings were not in force. They are in
+//! force only when the table, the function and the four triggers exist and
+//! the triggers are enabled ([`bindings_in_force`], read in the same
+//! transaction as each write). An adopted reference database has none of
+//! them (alrust writes no DDL there, ADR-0005 decision 4), so notes are
+//! added and listed there and never changed or deleted. Not covered: a
+//! trigger that was disabled and enabled again, or bypassed by
+//! `session_replication_role = replica`, leaves bindings that alrust
+//! cannot tell from current ones.
 //!
 //! As in the reference:
 //! - a new note copies the alert's resource, event, environment, severity
@@ -32,11 +47,11 @@
 //! starts with that id; `docs/alpha.md`, id lookup). The list adds an order
 //! (creation time, then id); the reference has none.
 
-use alrust_domain::{Alert, HistoryEntry, change_type, truncate_ms};
+use alrust_domain::{HistoryEntry, change_type, truncate_ms};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde_json::{Map, Value, json};
 use sqlx::postgres::PgRow;
-use sqlx::{Postgres, QueryBuilder, Row};
+use sqlx::{PgConnection, Postgres, QueryBuilder, Row};
 
 use crate::{Col, Store, StoreError, naive, object, opt_time, user_of, utc};
 
@@ -106,17 +121,61 @@ pub struct NoteUpdate {
     pub attributes: Option<Map<String, Value>>,
 }
 
-/// Whether the stored alert `a` received the note `note_id`: its history
-/// has the `note` entry that `add_note` wrote for it. See the module text.
-fn owns_note(a: &Alert, note_id: &str) -> bool {
-    a.history
-        .iter()
-        .any(|h| h.id == note_id && h.change_type == change_type::NOTE)
+/// The four triggers of migration `0003` on `alerts`.
+pub const BINDING_TRIGGERS: [&str; 4] = [
+    "alrust_note_bindings_delete",
+    "alrust_note_bindings_insert",
+    "alrust_note_bindings_truncate",
+    "alrust_note_bindings_update",
+];
+
+/// Whether the note bindings are in force: the table exists, and each of
+/// the four triggers is on `alerts`, enabled, and calls the `0003`
+/// function. See the module text for what this does not show.
+///
+/// # Errors
+///
+/// The database error.
+pub async fn bindings_in_force(conn: &mut PgConnection) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT to_regclass('public.alrust_note_bindings') IS NOT NULL
+            AND (SELECT count(*) FROM pg_trigger t
+                  WHERE t.tgrelid = to_regclass('public.alerts')::oid
+                    AND NOT t.tgisinternal
+                    AND t.tgname::text = ANY($1)
+                    AND t.tgenabled IN ('O', 'A')
+                    AND t.tgfoid = to_regproc('public.alrust_note_bindings_clear')::oid) = 4",
+    )
+    .bind(&BINDING_TRIGGERS[..])
+    .fetch_one(conn)
+    .await
+}
+
+/// Whether the stored alert `alert_id` received the note `note_id`: the
+/// bindings are in force and have that pair. The caller holds the alert's
+/// row lock when a write follows.
+async fn owns_note(
+    conn: &mut PgConnection,
+    alert_id: &str,
+    note_id: &str,
+) -> Result<bool, sqlx::Error> {
+    if !bindings_in_force(&mut *conn).await? {
+        return Ok(false);
+    }
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM alrust_note_bindings WHERE note = $1 AND alert = $2)",
+    )
+    .bind(note_id)
+    .bind(alert_id)
+    .fetch_one(conn)
+    .await
 }
 
 impl Store {
     /// Add a note to the alert `id` (the usual lookup and customer filter)
-    /// with the given new note id.
+    /// with the given new note id. The note is bound to the alert when the
+    /// bindings are in force; otherwise it is stored without a binding and
+    /// stays protected.
     ///
     /// # Errors
     ///
@@ -155,6 +214,18 @@ impl Store {
         .fetch_one(&mut *tx)
         .await?;
         let note = row_to_note(&row)?;
+        if bindings_in_force(&mut tx).await? {
+            // A binding left for this id by a note that another program
+            // removed is replaced.
+            sqlx::query(
+                "INSERT INTO alrust_note_bindings (note, alert) VALUES ($1, $2)
+                 ON CONFLICT (note) DO UPDATE SET alert = EXCLUDED.alert",
+            )
+            .bind(note_id)
+            .bind(&a.id)
+            .execute(&mut *tx)
+            .await?;
+        }
         let entry = HistoryEntry {
             id: note_id.to_owned(),
             event: a.event.clone(),
@@ -214,9 +285,11 @@ impl Store {
         note_id: &str,
     ) -> Result<(), StoreError> {
         let a = self.get_alert(id, customers).await?;
-        if !owns_note(&a, note_id) {
+        let mut conn = self.pool.acquire().await?;
+        if !owns_note(&mut conn, &a.id, note_id).await? {
             return Err(StoreError::NotFound);
         }
+        drop(conn);
         sqlx::query("SELECT 1 FROM notes WHERE id = $1 AND alert = $2")
             .bind(note_id)
             .bind(&a.id)
@@ -245,7 +318,7 @@ impl Store {
     ) -> Result<Note, StoreError> {
         let mut tx = self.pool.begin().await?;
         let a = Self::lock_alert(&mut tx, id, customers).await?;
-        if !owns_note(&a, note_id) {
+        if !owns_note(&mut tx, &a.id, note_id).await? {
             tx.rollback().await?;
             return Err(StoreError::NotFound);
         }
@@ -290,7 +363,7 @@ impl Store {
     ) -> Result<bool, StoreError> {
         let mut tx = self.pool.begin().await?;
         let mut a = Self::lock_alert(&mut tx, id, customers).await?;
-        if !owns_note(&a, note_id) {
+        if !owns_note(&mut tx, &a.id, note_id).await? {
             tx.rollback().await?;
             return Ok(false);
         }
@@ -303,6 +376,10 @@ impl Store {
             tx.rollback().await?;
             return Ok(false);
         }
+        sqlx::query("DELETE FROM alrust_note_bindings WHERE note = $1")
+            .bind(note_id)
+            .execute(&mut *tx)
+            .await?;
         let entry = HistoryEntry {
             id: note_id.to_owned(),
             event: a.event.clone(),

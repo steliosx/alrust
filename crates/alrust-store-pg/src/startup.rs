@@ -16,7 +16,7 @@ pub(crate) static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 /// What start-up found and did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
-    /// An empty database: `0001` and `0002` applied.
+    /// An empty database: every migration applied.
     Fresh,
     /// An alrust database: pending migrations applied (none on a repeat start).
     Migrated,
@@ -32,6 +32,10 @@ pub struct Report {
     pub triggers: Vec<String>,
     /// Keys that can never authenticate because their expiry or scopes are NULL.
     pub inactive_keys: i64,
+    /// Whether the note bindings are in force (`notes::bindings_in_force`).
+    /// Never on an adopted database unless an operator installed them:
+    /// notes are then added and listed, and not changed or deleted.
+    pub note_bindings: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -187,6 +191,7 @@ async fn prepare_locked(conn: &mut PgConnection) -> Result<Report, StartupError>
         sqlx::query_scalar("SELECT count(*) FROM keys WHERE expire_time IS NULL OR scopes IS NULL")
             .fetch_one(&mut *tx)
             .await?;
+    let note_bindings = crate::notes::bindings_in_force(&mut tx).await?;
     tx.rollback().await?;
     if !differences.is_empty() {
         return Err(if outcome == Outcome::Adopted {
@@ -199,6 +204,7 @@ async fn prepare_locked(conn: &mut PgConnection) -> Result<Report, StartupError>
         outcome,
         triggers,
         inactive_keys,
+        note_bindings,
     })
 }
 

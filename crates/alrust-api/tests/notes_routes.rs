@@ -120,8 +120,12 @@ async fn test_db() -> Option<TestDb> {
 }
 
 async fn app() -> Option<(TestDb, axum::Router)> {
+    app_with(StoreConfig::default()).await
+}
+
+async fn app_with(store_cfg: StoreConfig) -> Option<(TestDb, axum::Router)> {
     let db = test_db().await?;
-    let store = Store::new(db.pool.clone(), StoreConfig::default());
+    let store = Store::new(db.pool.clone(), store_cfg);
     store.prepare().await.unwrap();
     for (id, key, user, scopes, customer) in [
         ("k-admin", ADMIN_KEY, "admin", vec!["admin"], None),
@@ -894,4 +898,300 @@ async fn the_list_matches_the_alert_id_as_a_regular_expression() {
         notes_of(&app, &long).await,
         vec![(n_long, "on zz-ab".to_owned())]
     );
+}
+
+/// The alert a note is bound to (`alrust_note_bindings`, DECISIONS Y77).
+async fn binding(pool: &PgPool, note_id: &str) -> Option<String> {
+    sqlx::query_scalar("SELECT alert FROM alrust_note_bindings WHERE note = $1")
+        .bind(note_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap()
+}
+
+/// The note is not changed and not deleted through the alert, and stays as
+/// it was.
+async fn refused(app: &axum::Router, alert_id: &str, note_id: &str, case: &str) {
+    let before = note_body(app, alert_id, note_id).await;
+    let (code, _, answer) = send(
+        app,
+        "PUT",
+        &format!("/alert/{alert_id}/note/{note_id}"),
+        ADMIN_KEY,
+        Some(json!({"text": "changed"})),
+    )
+    .await;
+    assert_eq!(
+        (code, answer["message"].clone()),
+        (StatusCode::NOT_FOUND, json!("not found")),
+        "{case}"
+    );
+    let (code, _, answer) = send(
+        app,
+        "DELETE",
+        &format!("/alert/{alert_id}/note/{note_id}"),
+        ADMIN_KEY,
+        None,
+    )
+    .await;
+    assert_eq!(
+        (code, answer["message"].clone()),
+        (StatusCode::NOT_FOUND, json!("note not found")),
+        "{case}"
+    );
+    assert_eq!(note_body(app, alert_id, note_id).await, before, "{case}");
+}
+
+/// Y77: a note stays its alert's own for as long as the alert is stored,
+/// also after the history has dropped the note's entry. With a history
+/// limit of 1, the second note's entry pushes the first one's out.
+#[tokio::test]
+async fn a_note_is_changed_and_deleted_after_the_history_dropped_its_entry() {
+    let Some((db, app)) = app_with(StoreConfig {
+        history_limit: 1,
+        ..StoreConfig::default()
+    })
+    .await
+    else {
+        return;
+    };
+    let a = alert(&app, "evict", "r-evict", Some("acme")).await;
+    let first = note(&app, &a, ACME_KEY, "first").await;
+    let second = note(&app, &a, ACME_KEY, "second").await;
+    let entries: Vec<String> =
+        sqlx::query_scalar("SELECT h.id FROM alerts a, unnest(a.history) AS h WHERE a.id = $1")
+            .bind(&a)
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+    assert_eq!(entries, [second.clone()], "only the newest entry is kept");
+    assert_eq!(binding(&db.pool, &first).await, Some(a.clone()));
+    let (code, _, body) = send(
+        &app,
+        "PUT",
+        &format!("/alert/{a}/note/{first}"),
+        ACME_KEY,
+        Some(json!({"text": "edited"})),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{body}");
+    assert_eq!(note_body(&app, &a, &first).await["text"], "edited");
+    for n in [&first, &second] {
+        let (code, _, body) = send(
+            &app,
+            "DELETE",
+            &format!("/alert/{a}/note/{n}"),
+            ACME_KEY,
+            None,
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK, "{body}");
+        assert_eq!(
+            binding(&db.pool, n).await,
+            None,
+            "the binding goes with the note"
+        );
+        assert_eq!(note_body(&app, &a, n).await, Value::Null);
+    }
+}
+
+/// Y77: the triggers end a binding when another program, writing SQL,
+/// deletes the alert, changes its id or truncates the table; and when an
+/// alert with that id is stored while a binding was left in place.
+#[tokio::test]
+async fn a_write_to_alerts_by_another_program_ends_the_binding() {
+    let Some((db, app)) = app().await else {
+        return;
+    };
+    // Deleted by SQL, then the same id again.
+    let a = alert(&app, "sql-delete", "r-sql-delete", Some("acme")).await;
+    let n = note(&app, &a, ACME_KEY, "kept").await;
+    assert_eq!(binding(&db.pool, &n).await, Some(a.clone()));
+    sqlx::query("DELETE FROM alerts WHERE id = $1")
+        .bind(&a)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(binding(&db.pool, &n).await, None, "delete");
+    let b = alert(&app, "sql-delete", "r-sql-delete-2", Some("acme")).await;
+    assert_eq!(b, a);
+    refused(&app, &b, &n, "delete").await;
+
+    // The id changed by SQL, then the first id again.
+    let a = alert(&app, "sql-move", "r-sql-move", Some("acme")).await;
+    let n = note(&app, &a, ACME_KEY, "kept").await;
+    sqlx::query("UPDATE alerts SET id = 'sql-moved' WHERE id = $1")
+        .bind(&a)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(binding(&db.pool, &n).await, None, "id change");
+    let b = alert(&app, "sql-move", "r-sql-move-2", Some("acme")).await;
+    assert_eq!(b, a);
+    refused(&app, &b, &n, "id change").await;
+
+    // An update that keeps the id keeps the binding.
+    let a = alert(&app, "sql-keep", "r-sql-keep", Some("acme")).await;
+    let n = note(&app, &a, ACME_KEY, "kept").await;
+    sqlx::query("UPDATE alerts SET id = id, text = 'changed by SQL' WHERE id = $1")
+        .bind(&a)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(binding(&db.pool, &n).await, Some(a.clone()), "same id");
+    let (code, _, body) = send(
+        &app,
+        "PUT",
+        &format!("/alert/{a}/note/{n}"),
+        ACME_KEY,
+        Some(json!({"text": "edited"})),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{body}");
+
+    // A binding left in place while the delete trigger was off is removed
+    // when an alert with that id is stored.
+    let a = alert(&app, "sql-stale", "r-sql-stale", Some("acme")).await;
+    let n = note(&app, &a, ACME_KEY, "kept").await;
+    sqlx::raw_sql(
+        "ALTER TABLE alerts DISABLE TRIGGER alrust_note_bindings_delete;
+         DELETE FROM alerts WHERE id = 'sql-stale';
+         ALTER TABLE alerts ENABLE TRIGGER alrust_note_bindings_delete;",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        binding(&db.pool, &n).await,
+        Some(a.clone()),
+        "left in place"
+    );
+    let b = alert(&app, "sql-stale", "r-sql-stale-2", Some("acme")).await;
+    assert_eq!(b, a);
+    assert_eq!(binding(&db.pool, &n).await, None, "insert");
+    refused(&app, &b, &n, "insert").await;
+
+    // Truncated, then the same id again.
+    let a = alert(&app, "sql-truncate", "r-sql-truncate", Some("acme")).await;
+    let n = note(&app, &a, ACME_KEY, "kept").await;
+    sqlx::query("TRUNCATE alerts")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(binding(&db.pool, &n).await, None, "truncate");
+    let bindings: i64 = sqlx::query_scalar("SELECT count(*) FROM alrust_note_bindings")
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+    assert_eq!(bindings, 0, "truncate removes every binding");
+    let b = alert(&app, "sql-truncate", "r-sql-truncate-2", Some("acme")).await;
+    assert_eq!(b, a);
+    refused(&app, &b, &n, "truncate").await;
+}
+
+/// Y77: while the bindings are not in force, notes are added and listed and
+/// none is changed or deleted. First with one trigger disabled, then with
+/// the table, the function and the triggers absent, as on an adopted
+/// reference database.
+#[tokio::test]
+async fn without_the_bindings_in_force_a_note_is_added_and_listed_but_not_changed() {
+    let Some((db, app)) = app().await else {
+        return;
+    };
+    let a = alert(&app, "not-in-force", "r-not-in-force", Some("acme")).await;
+    let bound = note(&app, &a, ACME_KEY, "bound").await;
+    sqlx::query("ALTER TABLE alerts DISABLE TRIGGER alrust_note_bindings_update")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    refused(&app, &a, &bound, "a trigger is disabled").await;
+    let unbound = note(&app, &a, ACME_KEY, "added while a trigger was disabled").await;
+    assert_eq!(binding(&db.pool, &unbound).await, None);
+    assert_eq!(
+        note_body(&app, &a, &unbound).await["text"],
+        "added while a trigger was disabled"
+    );
+    sqlx::query("ALTER TABLE alerts ENABLE TRIGGER alrust_note_bindings_update")
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    refused(&app, &a, &unbound, "stored without a binding").await;
+
+    sqlx::raw_sql(
+        "DROP TRIGGER alrust_note_bindings_insert ON alerts;
+         DROP TRIGGER alrust_note_bindings_delete ON alerts;
+         DROP TRIGGER alrust_note_bindings_update ON alerts;
+         DROP TRIGGER alrust_note_bindings_truncate ON alerts;
+         DROP FUNCTION alrust_note_bindings_clear();
+         DROP TABLE alrust_note_bindings;",
+    )
+    .execute(&db.pool)
+    .await
+    .unwrap();
+    let plain = note(&app, &a, ACME_KEY, "added with no bindings").await;
+    assert_eq!(
+        note_body(&app, &a, &plain).await["text"],
+        "added with no bindings"
+    );
+    for (n, case) in [(&bound, "bound earlier"), (&plain, "no bindings")] {
+        refused(&app, &a, n, case).await;
+    }
+    // Alerts are still stored and deleted.
+    let other = alert(&app, "not-in-force-2", "r-not-in-force-2", Some("acme")).await;
+    let (code, _, _) = send(&app, "DELETE", &format!("/alert/{other}"), ADMIN_KEY, None).await;
+    assert_eq!(code, StatusCode::OK);
+}
+
+/// Y77: the trigger function runs with its owner's rights, so a role that
+/// may delete alerts and has no right on the bindings is not refused, and
+/// the binding is removed. Everything runs in one transaction that is
+/// rolled back, the role included. Needs a superuser.
+#[tokio::test]
+async fn a_role_with_no_right_on_the_bindings_can_delete_an_alert() {
+    let Some((db, app)) = app().await else {
+        return;
+    };
+    let superuser: bool =
+        sqlx::query_scalar("SELECT rolsuper FROM pg_roles WHERE rolname = current_user")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+    if !superuser {
+        eprintln!("NOT_RUN (needs superuser): delete by a role with no right on the bindings");
+        return;
+    }
+    let a = alert(&app, "other-role", "r-other-role", Some("acme")).await;
+    let n = note(&app, &a, ACME_KEY, "kept").await;
+    let role = format!("alrust_t_role_{}", std::process::id());
+    let mut tx = db.pool.begin().await.unwrap();
+    sqlx::raw_sql(&format!(
+        "CREATE ROLE \"{role}\" NOLOGIN;
+         GRANT SELECT, DELETE ON alerts TO \"{role}\";
+         SET LOCAL ROLE \"{role}\";"
+    ))
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    let rights: (bool, bool) = sqlx::query_as(
+        "SELECT has_table_privilege('alrust_note_bindings', 'SELECT'),
+                has_table_privilege('alrust_note_bindings', 'DELETE')",
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    assert_eq!(rights, (false, false));
+    let deleted = sqlx::query("DELETE FROM alerts WHERE id = $1")
+        .bind(&a)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(deleted.rows_affected(), 1);
+    sqlx::query("RESET ROLE").execute(&mut *tx).await.unwrap();
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM alrust_note_bindings WHERE note = $1")
+        .bind(&n)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(left, 0);
+    tx.rollback().await.unwrap();
 }

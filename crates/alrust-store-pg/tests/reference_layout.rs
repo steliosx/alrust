@@ -368,6 +368,7 @@ async fn fresh_database_gets_the_reference_layout_and_repeat_start_is_a_no_op() 
     let r = s.prepare().await.expect("fresh start");
     assert_eq!(r.outcome, Outcome::Fresh);
     assert_eq!(r.triggers, Vec::<String>::new());
+    assert!(r.note_bindings, "0003 puts the note bindings in force");
     assert_eq!(
         catalog::diff(&catalog::expected(), &catalog_of(&db.pool).await),
         Vec::<String>::new()
@@ -378,7 +379,7 @@ async fn fresh_database_gets_the_reference_layout_and_repeat_start_is_a_no_op() 
     .fetch_all(&db.pool)
     .await
     .unwrap();
-    assert_eq!(before.iter().map(|r| r.0).collect::<Vec<_>>(), [1, 2]);
+    assert_eq!(before.iter().map(|r| r.0).collect::<Vec<_>>(), [1, 2, 3]);
     assert_eq!(s.prepare().await.unwrap().outcome, Outcome::Migrated);
     let after: Vec<(i64, String, chrono::DateTime<Utc>)> = sqlx::query_as(
         "SELECT version, description, installed_on FROM _sqlx_migrations ORDER BY 1",
@@ -888,7 +889,7 @@ async fn owned_sequences_are_refused_and_unowned_ones_survive() {
         .into_iter()
         .map(|v| v.0)
         .collect();
-    assert_eq!(versions, [1, 2]);
+    assert_eq!(versions, [1, 2, 3]);
 }
 
 /// ADR-0005 decision 8 (b): a float, array or object `value` becomes its
@@ -1106,6 +1107,7 @@ async fn adoption_writes_nothing_and_changes_no_row() {
     let r = s.prepare().await.expect("adopt");
     assert_eq!(r.outcome, Outcome::Adopted);
     assert_eq!(r.inactive_keys, 2);
+    assert!(!r.note_bindings, "adoption installs nothing");
     assert_eq!(
         r.triggers.len(),
         10,

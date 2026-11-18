@@ -496,6 +496,42 @@ migration, the allowed list, the catalog check, the upgrade fixture and
 tests), reviewed on its exact head. Neither this document's approval nor
 the measurement plan authorizes creating an index.
 
+### 10. The note bindings: one alrust-owned table and triggers on `alerts` (DECISIONS Y77)
+
+The owner chose this on 2026-11-17 for SF-NOTES (`spec/security-fixes.md`).
+It is the first table and the first triggers outside the reference layout.
+
+- **Objects** (migration `0003_note_bindings.sql`, all in `public`): the
+  table `alrust_note_bindings (note text PRIMARY KEY, alert text NOT NULL)`
+  with the index `alrust_note_bindings_alert_idx`; the function
+  `alrust_note_bindings_clear()`; and four triggers on `alerts`, named
+  `alrust_note_bindings_insert`, `_delete`, `_update` (only when the id
+  changes) and `_truncate`. The function is `SECURITY DEFINER` with a
+  pinned search path and only deletes rows of the bindings table, so a
+  program that writes `alerts` under another role needs no privilege on
+  that table. No reference table, column, constraint or index changes.
+- **The catalog check is unchanged.** `reference-catalog.json` describes
+  the ten tables and the type; other relations in `public` and non-internal
+  triggers were already outside it (decision 2). alrust's four triggers
+  are left out of the start-up trigger list; `Report::note_bindings` says
+  whether the bindings are in force.
+- **By database mode.** Managed databases (fresh, or upgraded) get `0003`
+  from the migrator. An adopted reference database gets nothing, as
+  decision 4 requires: there notes are added and listed and never changed
+  or deleted, and start-up logs a warning. Installing the objects on an
+  adopted database is not designed here.
+- **At run time** every note write checks, in its own transaction, that
+  the table exists and that the four triggers are on `alerts`, enabled,
+  and call the function. If not, a new note is stored without a binding
+  and no note is changed or deleted. A managed database in that state
+  still starts, with the same warning.
+- **Not covered:** a trigger disabled and enabled again, or bypassed with
+  `session_replication_role = replica`; a replaced function body; whether
+  Zabalack, Voalack or Alerta refuse or mind an unknown trigger or table
+  (not checked against their sources for this change).
+- **Cost:** one trigger call for each alert stored, deleted or given a new
+  id, and a `WHEN` test on each other alert update. Not measured.
+
 ## Open questions
 
 1. The `value` rule (decision 8): decided, (b).
