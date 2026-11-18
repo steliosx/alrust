@@ -600,8 +600,6 @@ async fn the_list_filters_sorts_and_pages() {
         // A page or a size that is not an integer gives the default.
         ("/blackouts?page=abc&page-size=x&limit=y", 3),
         ("/blackouts?page=1__0&page-size=_5&limit=5_", 3),
-        ("/blackouts?page=%2B1&page-size=1_0", 3),
-        ("/blackouts?page=%201%20&limit=0_3", 3),
     ] {
         let (code, _, out) = list(uri, ADMIN_KEY).await;
         assert_eq!(
@@ -692,6 +690,16 @@ async fn the_list_filters_sorts_and_pages() {
             "/blackouts?page-size=9223372036854775808",
             "page-size is out of range",
         ),
+        // No rows match, so no range applies: a page beyond 64 bits is
+        // refused, whatever the size, and is not answered as another page.
+        (
+            "/blackouts?page=9223372036854775808&page-size=1&environment=Nowhere",
+            "page is out of range",
+        ),
+        (
+            "/blackouts?page=9223372036854775808&environment=Nowhere",
+            "page is out of range",
+        ),
         (
             "/blackouts?priority=~8",
             "Filtering by 'priority' field not supported.",
@@ -736,6 +744,19 @@ async fn the_list_filters_sorts_and_pages() {
             (code, out["message"].clone()),
             (StatusCode::RANGE_NOT_SATISFIABLE, json!(message)),
             "{uri}"
+        );
+    }
+    // A sign, surrounding spaces and underscores are read, not defaulted.
+    for (uri, page, size) in [
+        ("/blackouts?page=%2B2&page-size=0_2", 2, 2),
+        ("/blackouts?page=%201%20&limit=1_0", 1, 10),
+        ("/blackouts?page=3&page-size=x&limit=%2B1", 3, 1),
+    ] {
+        let (code, _, out) = list(uri, ADMIN_KEY).await;
+        assert_eq!(
+            (code, out["page"].clone(), out["pageSize"].clone()),
+            (StatusCode::OK, json!(page), json!(size)),
+            "{uri} {out}"
         );
     }
     // A page size of 0 is the default size.
@@ -1102,4 +1123,34 @@ async fn a_customer_that_is_not_a_string_is_not_read_as_absent() {
         (code, out["blackout"]["customer"].clone()),
         (StatusCode::OK, Value::Null)
     );
+}
+
+/// A configured default page size of 0 is refused; it does not reach the
+/// division that counts the pages.
+#[tokio::test]
+async fn a_default_page_size_of_zero_is_refused() {
+    let Some((db, _app)) = app().await else {
+        return;
+    };
+    let app = router(Arc::new(AppState {
+        store: store_of(&db),
+        cfg: ApiConfig {
+            auth_required: true,
+            default_page_size: 0,
+            ..ApiConfig::default()
+        },
+    }));
+    for uri in ["/blackouts", "/blackouts?page-size=0", "/blackouts?limit=x"] {
+        let (code, _, out) = send(&app, "GET", uri, ADMIN_KEY, None).await;
+        assert_eq!(
+            (code, out["message"].clone()),
+            (
+                StatusCode::BAD_REQUEST,
+                json!("page-size must be greater than 0")
+            ),
+            "{uri}"
+        );
+    }
+    let (code, _, out) = send(&app, "GET", "/blackouts?page-size=5", ADMIN_KEY, None).await;
+    assert_eq!((code, out["pageSize"].clone()), (StatusCode::OK, json!(5)));
 }

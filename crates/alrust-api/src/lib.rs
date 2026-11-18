@@ -2194,18 +2194,20 @@ fn py_int(text: &str) -> Option<(i64, bool)> {
 /// `page-size`, each read as Python's `int`; a value that is not an
 /// integer gives the default (page 1, limit 0, page-size = limit), and a
 /// page size of 0 gives the configured default. A `page` outside `i64` is
-/// clamped (it stays out of range for any list with rows); a size outside
-/// `i64` is 400 (in the reference it reaches `LIMIT`; outcome inferred).
-/// The range of `page` and a negative size are checked by the caller,
-/// after the count, because the reference checks the range first.
-fn blackout_paging(st: &AppState, params: &[(String, String)]) -> ApiResult<(i64, i64)> {
+/// clamped and flagged (the second value): the caller gives it the
+/// reference's 416 where the range check applies and refuses it where a
+/// 200 would name another page. A size outside `i64` is 400 (the
+/// reference's outcome is not established). The range of `page` and a
+/// negative size are checked by the caller, after the count, because the
+/// reference checks the range first. The size returned is never 0.
+fn blackout_paging(st: &AppState, params: &[(String, String)]) -> ApiResult<(i64, bool, i64)> {
     let int = |key: &str| {
         params
             .iter()
             .find(|(k, _)| k == key)
             .and_then(|(_, v)| py_int(v))
     };
-    let page = int("page").map_or(1, |(v, _)| v);
+    let (page, page_clamped) = int("page").unwrap_or((1, false));
     let limit = int("limit").unwrap_or((0, false));
     let (size, clamped) = int("page-size").unwrap_or(limit);
     if clamped {
@@ -2216,7 +2218,11 @@ fn blackout_paging(st: &AppState, params: &[(String, String)]) -> ApiResult<(i64
     } else {
         size
     };
-    Ok((page, page_size))
+    // A configured default of 0 (the caller divides by the size).
+    if page_size == 0 {
+        return Err(ApiError::bad("page-size must be greater than 0"));
+    }
+    Ok((page, page_clamped, page_size))
 }
 
 /// `POST /blackout` (`views/blackouts.py:17-45`).
@@ -2268,7 +2274,7 @@ async fn list_blackouts(
     let caller = authenticate(&st, &headers, &params).await?;
     caller.require("read:blackouts")?;
     let q = parse_blackout_query(&caller, &params)?;
-    let (page, page_size) = blackout_paging(&st, &params)?;
+    let (page, page_clamped, page_size) = blackout_paging(&st, &params)?;
     if !st.store.blackout_filter_values_valid(&q).await? {
         return Err(ApiError::bad(
             "a filter value is not valid for the type of its field",
@@ -2294,6 +2300,11 @@ async fn list_blackouts(
     // source. 400 here.
     if page_size < 1 {
         return Err(ApiError::bad("page-size must be greater than 0"));
+    }
+    // A page beyond `i64` that passed the range check (no rows match): a
+    // 200 would carry the clamped number, not the page that was asked for.
+    if page_clamped {
+        return Err(ApiError::bad("page is out of range"));
     }
     if (page - 1).checked_mul(page_size).is_none() {
         return Err(ApiError::bad("page is out of range for this page-size"));
