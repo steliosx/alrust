@@ -201,8 +201,32 @@ async fn send(
     )
 }
 
-const PAST: &str = "2026-01-01T00:00:00.000Z";
-const SOON: &str = "2030-01-01T00:00:00.000Z";
+/// The time `days` after the second `base`, in the reference format.
+/// Every expected state (active, pending, expired) follows from the clock
+/// of the run, not from a fixed date.
+fn at(base: i64, days: i64) -> String {
+    alrust_domain::iso8601(&chrono::DateTime::from_timestamp(base + days * 86_400, 0).unwrap())
+}
+
+/// `days` from now.
+fn days(days: i64) -> String {
+    at(Utc::now().timestamp(), days)
+}
+
+/// 30 days ago.
+fn past() -> String {
+    days(-30)
+}
+
+/// In 365 days.
+fn soon() -> String {
+    days(365)
+}
+
+/// A second store on the test database, for calls below the router.
+fn store_of(db: &TestDb) -> Store {
+    Store::new(db.pool.clone(), StoreConfig::default())
+}
 
 /// Create a blackout with `key`; returns the response body.
 async fn create(app: &axum::Router, key: &str, body: Value) -> Value {
@@ -220,12 +244,14 @@ async fn a_blackout_is_created_and_read_back() {
     let Some((_db, app)) = app().await else {
         return;
     };
+    let now = Utc::now().timestamp();
+    let (past, soon) = (at(now, -30), at(now, 365));
     let (code, location, out) = send(
         &app,
         "POST",
         "/blackout",
         ADMIN_KEY,
-        Some(json!({"environment": "Production", "resource": "r1", "startTime": PAST, "endTime": SOON})),
+        Some(json!({"environment": "Production", "resource": "r1", "startTime": past, "endTime": soon})),
     )
     .await;
     assert_eq!(code, StatusCode::CREATED, "{out}");
@@ -235,7 +261,7 @@ async fn a_blackout_is_created_and_read_back() {
         Some(format!("http://localhost:8080/blackout/{id}").as_str())
     );
     let b = &out["blackout"];
-    let seconds = 1461 * 86400; // 2026-01-01 to 2030-01-01, with 29 February 2028
+    let seconds = 395 * 86400; // 30 days before the run to 365 days after it
     assert_eq!(b["duration"], seconds);
     assert_eq!(b["priority"], 2);
     assert_eq!(b["status"], "active");
@@ -244,7 +270,7 @@ async fn a_blackout_is_created_and_read_back() {
     assert_eq!(b["remaining"], seconds);
     assert_eq!(
         (b["startTime"].clone(), b["endTime"].clone()),
-        (json!(PAST), json!(SOON))
+        (json!(past), json!(soon))
     );
     assert_eq!(b["href"], format!("http://localhost:8080/blackout/{id}"));
     let (code, _, read) = send(&app, "GET", &format!("/blackout/{id}"), READER_KEY, None).await;
@@ -290,9 +316,19 @@ async fn priority_status_and_the_creation_rules() {
             "{extra}"
         );
     }
-    let pending = create(&app, ADMIN_KEY, json!({"environment": "Production", "startTime": "2029-01-01T00:00:00.000Z", "endTime": SOON})).await;
+    let pending = create(
+        &app,
+        ADMIN_KEY,
+        json!({"environment": "Production", "startTime": days(180), "endTime": soon()}),
+    )
+    .await;
     assert_eq!(pending["blackout"]["status"], "pending");
-    let expired = create(&app, ADMIN_KEY, json!({"environment": "Production", "startTime": "2020-01-01T00:00:00.000Z", "endTime": "2021-01-01T00:00:00.000Z"})).await;
+    let expired = create(
+        &app,
+        ADMIN_KEY,
+        json!({"environment": "Production", "startTime": days(-730), "endTime": days(-365)}),
+    )
+    .await;
     assert_eq!(expired["blackout"]["status"], "expired");
     let (_, _, read) = send(
         &app,
@@ -524,9 +560,9 @@ async fn the_list_filters_sorts_and_pages() {
     let Some((_db, app)) = app().await else {
         return;
     };
-    create(&app, ADMIN_KEY, json!({"environment": "Production", "resource": "web01", "customer": "acme", "startTime": PAST, "endTime": SOON})).await;
-    create(&app, ADMIN_KEY, json!({"environment": "Production", "origin": "o", "customer": "other", "startTime": "2029-01-01T00:00:00.000Z", "endTime": SOON})).await;
-    create(&app, ADMIN_KEY, json!({"environment": "Development", "event": "e", "startTime": "2020-01-01T00:00:00.000Z", "endTime": "2021-01-01T00:00:00.000Z"})).await;
+    create(&app, ADMIN_KEY, json!({"environment": "Production", "resource": "web01", "service": ["s"], "tags": ["t"], "customer": "acme", "startTime": past(), "endTime": soon()})).await;
+    create(&app, ADMIN_KEY, json!({"environment": "Production", "origin": "o", "customer": "other", "startTime": days(180), "endTime": soon()})).await;
+    create(&app, ADMIN_KEY, json!({"environment": "Development", "event": "e", "startTime": days(-730), "endTime": days(-365)})).await;
     let list = |uri: &str, key: &'static str| {
         let app = app.clone();
         let uri = uri.to_owned();
@@ -547,6 +583,21 @@ async fn the_list_filters_sorts_and_pages() {
         ("/blackouts?environment!=Development", 2),
         ("/blackouts?resource=~EB0", 1),
         ("/blackouts?priority=8", 1),
+        ("/blackouts?priority=8&priority=9999", 1),
+        // The exclusion list applies to the normalized name.
+        ("/blackouts?id!=x&page.x=y", 3),
+        // `service` is an overlap, also with an empty value among several.
+        ("/blackouts?service=s&service=", 1),
+        // `tag` and `service!` compare with one array literal, as the
+        // reference's SQL does.
+        ("/blackouts?tag=%7Bt%7D", 1),
+        ("/blackouts?tag!=%7Bt%7D", 2),
+        ("/blackouts?service!=%7Bs%7D", 2),
+        // An empty first sort-by means no order was asked for.
+        ("/blackouts?sort-by=&sort-by=bogus", 3),
+        ("/blackouts?q=", 3),
+        // A page or a size that is not an integer gives the default.
+        ("/blackouts?page=abc&page-size=x&limit=y", 3),
     ] {
         let (code, _, out) = list(uri, ADMIN_KEY).await;
         assert_eq!(
@@ -584,7 +635,48 @@ async fn the_list_filters_sorts_and_pages() {
         ("/blackouts?bogus=1", "Invalid filter parameter: bogus"),
         (
             "/blackouts?tag=t",
+            "a filter value is not valid for the type of its field",
+        ),
+        (
+            "/blackouts?service!=s",
+            "a filter value is not valid for the type of its field",
+        ),
+        (
+            "/blackouts?priority=abc",
+            "a filter value is not valid for the type of its field",
+        ),
+        (
+            "/blackouts?startTime=never-o-clock",
+            "a filter value is not valid for the type of its field",
+        ),
+        (
+            "/blackouts?tag=%7Bt%7D&tag=%7Bu%7D",
             "Filtering by 'tag' field not supported.",
+        ),
+        (
+            "/blackouts?tag=~t",
+            "Filtering by 'tag' field not supported.",
+        ),
+        (
+            "/blackouts?remaining=5",
+            "Filtering by 'remaining' field not supported.",
+        ),
+        (
+            "/blackouts?status!=active",
+            "Filtering by 'status!' field not supported.",
+        ),
+        (
+            "/blackouts?resource=a&resource=",
+            "Filtering by 'resource' field not supported.",
+        ),
+        (
+            "/blackouts?sort-by=priority&sort-by=",
+            "Sorting by '' field not supported.",
+        ),
+        ("/blackouts?q=web01", "q queries are not supported yet"),
+        (
+            "/blackouts?page-size=-1",
+            "page-size must be greater than 0",
         ),
         (
             "/blackouts?priority=~8",
@@ -606,6 +698,32 @@ async fn the_list_filters_sorts_and_pages() {
             "{uri}"
         );
     }
+    // A page below 1 is 416, as in the reference, also when nothing matches.
+    for (uri, message) in [
+        ("/blackouts?page=0", "page out of range: 1-1"),
+        ("/blackouts?page=-3&page-size=2", "page out of range: 1-2"),
+        (
+            "/blackouts?page=0&environment=Nowhere",
+            "page out of range: 1-0",
+        ),
+    ] {
+        let (code, _, out) = list(uri, ADMIN_KEY).await;
+        assert_eq!(
+            (code, out["message"].clone()),
+            (StatusCode::RANGE_NOT_SATISFIABLE, json!(message)),
+            "{uri}"
+        );
+    }
+    // A page size of 0 is the default size.
+    let (code, _, out) = list("/blackouts?page-size=0", ADMIN_KEY).await;
+    assert_eq!(
+        (code, out["pageSize"].clone()),
+        (
+            StatusCode::OK,
+            json!(ApiConfig::default().default_page_size)
+        ),
+        "{out}"
+    );
     let (code, _, out) = list("/blackouts?environment=Nowhere", READER_KEY).await;
     assert_eq!(
         (code, out["message"].clone(), out["total"].clone()),
@@ -624,11 +742,18 @@ async fn remaining_sorts_as_a_number() {
         &create(
             &app,
             ADMIN_KEY,
-            json!({"environment": "Production", "startTime": PAST, "endTime": SOON}),
+            json!({"environment": "Production", "startTime": past(), "endTime": soon()}),
         )
         .await,
     );
-    let far = id_of(&create(&app, ADMIN_KEY, json!({"environment": "Production", "startTime": PAST, "endTime": "2031-01-01T00:00:00.000Z"})).await);
+    let far = id_of(
+        &create(
+            &app,
+            ADMIN_KEY,
+            json!({"environment": "Production", "startTime": past(), "endTime": days(730)}),
+        )
+        .await,
+    );
     let soonest = id_of(
         &create(
             &app,
@@ -645,4 +770,312 @@ async fn remaining_sorts_as_a_number() {
         .map(|b| b["id"].clone())
         .collect();
     assert_eq!(ids, vec![json!(far), json!(near), json!(soonest)]);
+}
+
+/// The customer rule is part of the write: a blackout that is not one of
+/// the caller's customers' at the moment of the `UPDATE` is not changed,
+/// its `user` included.
+#[tokio::test]
+async fn the_update_itself_carries_the_customer_rule() {
+    use alrust_store_pg::StoreError;
+    use alrust_store_pg::blackouts::{BlackoutUpdate, Change};
+    let Some((db, app)) = app().await else {
+        return;
+    };
+    let store = store_of(&db);
+    let id = id_of(
+        &create(
+            &app,
+            ADMIN_KEY,
+            json!({"environment": "Production", "customer": "acme", "text": "first"}),
+        )
+        .await,
+    );
+    let edit = |text: &str| BlackoutUpdate {
+        text: Change::Set(Some(text.to_owned())),
+        user: Some("intruder".into()),
+        ..BlackoutUpdate::default()
+    };
+    let read = || async {
+        let (_, _, out) = send(&app, "GET", &format!("/blackout/{id}"), ADMIN_KEY, None).await;
+        (
+            out["blackout"]["text"].clone(),
+            out["blackout"]["user"].clone(),
+            out["blackout"]["customer"].clone(),
+        )
+    };
+    // No lookup precedes this call: the statement itself refuses.
+    let other = ["other".to_owned()];
+    let refused = store
+        .update_blackout(&id, Some(&other), edit("stolen"))
+        .await;
+    assert!(matches!(refused, Err(StoreError::NotFound)), "{refused:?}");
+    assert_eq!(
+        read().await,
+        (json!("first"), json!("admin"), json!("acme"))
+    );
+
+    // A reassignment that commits while the write waits for the row: the
+    // write sees the new customer, matches no row and changes nothing.
+    let mut tx = db.pool.begin().await.unwrap();
+    sqlx::query("UPDATE blackouts SET customer = 'other' WHERE id = $1")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let waiting = {
+        let (store, id) = (store.clone(), id.clone());
+        tokio::spawn(async move {
+            let acme = ["acme".to_owned()];
+            store.update_blackout(&id, Some(&acme), edit("late")).await
+        })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert!(!waiting.is_finished(), "the write did not wait for the row");
+    tx.commit().await.unwrap();
+    let late = waiting.await.unwrap();
+    assert!(matches!(late, Err(StoreError::NotFound)), "{late:?}");
+    assert_eq!(
+        read().await,
+        (json!("first"), json!("admin"), json!("other"))
+    );
+
+    // No customer limit, and the matching customer: written.
+    let done = store
+        .update_blackout(&id, None, edit("open"))
+        .await
+        .unwrap();
+    assert_eq!(done.text.as_deref(), Some("open"));
+    let done = store
+        .update_blackout(&id, Some(&other), edit("mine"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (done.text.as_deref(), done.user.as_deref()),
+        (Some("mine"), Some("intruder"))
+    );
+}
+
+/// The reference's order on `PUT`: a falsy body is 400, then a blackout
+/// the caller cannot see is 404, and only then is the body checked.
+#[tokio::test]
+async fn an_update_looks_the_blackout_up_before_it_checks_the_body() {
+    let Some((_db, app)) = app().await else {
+        return;
+    };
+    let other = id_of(
+        &create(
+            &app,
+            ADMIN_KEY,
+            json!({"environment": "Production", "customer": "other", "text": "kept"}),
+        )
+        .await,
+    );
+    for body in [
+        json!({"startTime": "soon"}),
+        json!({"customer": "elsewhere"}),
+        json!({"customer": 5}),
+        json!({"id": "x"}),
+        json!({"environment": ""}),
+        json!({"service": "not-a-list"}),
+        json!([1]),
+        json!("text"),
+    ] {
+        for uri in [format!("/blackout/{other}"), "/blackout/nosuch".to_owned()] {
+            let (code, _, out) = send(&app, "PUT", &uri, ACME_KEY, Some(body.clone())).await;
+            assert_eq!(
+                (code, out["message"].clone()),
+                (StatusCode::NOT_FOUND, json!("not found")),
+                "{uri} {body}"
+            );
+        }
+    }
+    // A falsy body is refused first, whatever the id.
+    for body in [
+        json!({}),
+        json!([]),
+        json!(0),
+        json!(""),
+        json!(false),
+        Value::Null,
+    ] {
+        let (code, _, out) = send(
+            &app,
+            "PUT",
+            "/blackout/nosuch",
+            ACME_KEY,
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(
+            (code, out["message"].clone()),
+            (StatusCode::BAD_REQUEST, json!("nothing to change")),
+            "{body}"
+        );
+    }
+    // For a blackout the caller can see, the body is checked: the
+    // customer first, then the fields. Nothing is written.
+    let mine = id_of(&create(&app, ACME_KEY, json!({"environment": "Production"})).await);
+    for (key, id, body, message) in [
+        (
+            ACME_KEY,
+            &mine,
+            json!({"customer": "elsewhere", "startTime": "soon"}),
+            "not allowed to set customer to 'elsewhere'",
+        ),
+        (
+            ADMIN_KEY,
+            &other,
+            json!({"customer": 5, "id": "x"}),
+            "customer must be a string",
+        ),
+        (
+            ADMIN_KEY,
+            &other,
+            json!({"id": "x"}),
+            "id cannot be changed",
+        ),
+        (
+            ADMIN_KEY,
+            &other,
+            json!({"environment": "", "text": "changed"}),
+            "Missing mandatory value for \"environment\"",
+        ),
+        (
+            ADMIN_KEY,
+            &other,
+            json!([1]),
+            "blackout must be a JSON object",
+        ),
+    ] {
+        let (code, _, out) = send(
+            &app,
+            "PUT",
+            &format!("/blackout/{id}"),
+            key,
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(
+            (code, out["message"].clone()),
+            (StatusCode::BAD_REQUEST, json!(message)),
+            "{body}"
+        );
+    }
+    let (_, _, out) = send(&app, "GET", &format!("/blackout/{other}"), ADMIN_KEY, None).await;
+    assert_eq!(
+        (
+            out["blackout"]["text"].clone(),
+            out["blackout"]["user"].clone(),
+            out["blackout"]["customer"].clone(),
+            out["blackout"]["environment"].clone()
+        ),
+        (
+            json!("kept"),
+            json!("admin"),
+            json!("other"),
+            json!("Production")
+        )
+    );
+}
+
+/// `customer` in a body: absent, Python-falsy, a string, or refused. A
+/// value of another type is never read as "absent".
+#[tokio::test]
+async fn a_customer_that_is_not_a_string_is_not_read_as_absent() {
+    let Some((_db, app)) = app().await else {
+        return;
+    };
+    // Create. A falsy value of any type is "none wanted": the scoped
+    // caller gets its own customer, the admin none.
+    for falsy in [
+        json!(""),
+        json!(0),
+        json!(false),
+        json!([]),
+        json!({}),
+        Value::Null,
+    ] {
+        let made = create(
+            &app,
+            ACME_KEY,
+            json!({"environment": "Production", "customer": falsy}),
+        )
+        .await;
+        assert_eq!(made["blackout"]["customer"], "acme", "{falsy}");
+        let made = create(
+            &app,
+            ADMIN_KEY,
+            json!({"environment": "Production", "customer": falsy}),
+        )
+        .await;
+        assert_eq!(made["blackout"]["customer"], Value::Null, "{falsy}");
+    }
+    for truthy in [
+        json!(5),
+        json!(true),
+        json!(["acme"]),
+        json!({"a": 1}),
+        json!(1.5),
+    ] {
+        for key in [ACME_KEY, ADMIN_KEY, BLK_ADMIN_KEY] {
+            let (code, _, out) = send(
+                &app,
+                "POST",
+                "/blackout",
+                key,
+                Some(json!({"environment": "Production", "customer": truthy})),
+            )
+            .await;
+            assert_eq!(
+                (code, out["message"].clone()),
+                (StatusCode::BAD_REQUEST, json!("customer must be a string")),
+                "{truthy}"
+            );
+        }
+    }
+    // Update. A malformed value does not clear the stored customer.
+    let id = id_of(
+        &create(
+            &app,
+            ADMIN_KEY,
+            json!({"environment": "Production", "customer": "acme"}),
+        )
+        .await,
+    );
+    let put = |key: &'static str, body: Value| {
+        let (app, uri) = (app.clone(), format!("/blackout/{id}"));
+        async move { send(&app, "PUT", &uri, key, Some(body)).await }
+    };
+    for truthy in [json!(5), json!(true), json!(["acme"]), json!({"a": 1})] {
+        for key in [ADMIN_KEY, ACME_KEY] {
+            let (code, _, out) = put(key, json!({"customer": truthy, "text": "x"})).await;
+            assert_eq!(
+                (code, out["message"].clone()),
+                (StatusCode::BAD_REQUEST, json!("customer must be a string")),
+                "{truthy}"
+            );
+        }
+    }
+    let (_, _, out) = send(&app, "GET", &format!("/blackout/{id}"), ADMIN_KEY, None).await;
+    assert_eq!(
+        (
+            out["blackout"]["customer"].clone(),
+            out["blackout"]["text"].clone()
+        ),
+        (json!("acme"), Value::Null)
+    );
+    // A scoped caller that names a falsy customer keeps its own.
+    let (code, _, out) = put(ACME_KEY, json!({"customer": ""})).await;
+    assert_eq!(
+        (code, out["blackout"]["customer"].clone()),
+        (StatusCode::OK, json!("acme"))
+    );
+    // An unscoped caller that names null clears it, as in the reference
+    // (SF-BLACKOUTS covers only a body without the key).
+    let (code, _, out) = put(ADMIN_KEY, json!({"customer": null})).await;
+    assert_eq!(
+        (code, out["blackout"]["customer"].clone()),
+        (StatusCode::OK, Value::Null)
+    );
 }

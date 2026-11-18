@@ -248,6 +248,23 @@ pub enum ColumnKind {
     Timestamp,
     /// `service`: array overlap.
     Array,
+    /// An array column compared with one value by `=` or `!=` (`tag`,
+    /// `service!`): the value is a PostgreSQL array literal, as in the
+    /// reference, whose statement gives the column a quoted string.
+    ArrayLiteral,
+}
+
+impl ColumnKind {
+    /// The PostgreSQL type a compared value must be valid input for;
+    /// `None` when every string is valid.
+    fn input_type(self) -> Option<&'static str> {
+        match self {
+            Self::Integer => Some("integer"),
+            Self::Timestamp => Some("timestamp"),
+            Self::ArrayLiteral => Some("text[]"),
+            Self::Text | Self::Array => None,
+        }
+    }
 }
 
 /// One `GET /blackouts` filter.
@@ -312,6 +329,7 @@ fn push_filter(qb: &mut QueryBuilder<'_, Postgres>, f: &BlackoutFilter) {
     let cast = match f.kind {
         ColumnKind::Integer => "::integer",
         ColumnKind::Timestamp => "::timestamp",
+        ColumnKind::ArrayLiteral => "::text[]",
         ColumnKind::Text | ColumnKind::Array => "",
     };
     let regex = f.values.iter().any(|v| v.starts_with('~'));
@@ -414,6 +432,41 @@ impl Store {
         Ok(row_to_blackout(&row, Read::Stored)?)
     }
 
+    /// Whether every value that a filter compares as an integer, a
+    /// timestamp or an array literal is valid input for that type. The
+    /// reference sends such a value as a quoted literal and fails in SQL
+    /// when it is not; the API asks first and refuses with 400.
+    ///
+    /// # Errors
+    ///
+    /// The database error.
+    pub async fn blackout_filter_values_valid(
+        &self,
+        q: &BlackoutQuery,
+    ) -> Result<bool, StoreError> {
+        let (mut values, mut types) = (Vec::new(), Vec::new());
+        for f in &q.filters {
+            if let Some(t) = f.kind.input_type() {
+                for v in &f.values {
+                    values.push(v.clone());
+                    types.push(t.to_owned());
+                }
+            }
+        }
+        if values.is_empty() {
+            return Ok(true);
+        }
+        let row = sqlx::query(
+            "SELECT COALESCE(bool_and(pg_input_is_valid(v, t)), true) AS ok \
+             FROM unnest($1::text[], $2::text[]) AS x(v, t)",
+        )
+        .bind(values)
+        .bind(types)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.try_get("ok")?)
+    }
+
     /// `GET /blackouts` total.
     ///
     /// # Errors
@@ -474,6 +527,12 @@ impl Store {
     /// `PUT /blackout/{id}`: write the given columns of the blackout
     /// visible to `customers` (`None`: any).
     ///
+    /// The customer rule is part of the `UPDATE` itself. A row that is
+    /// not (or is no longer) one of `customers`' matches no row, so
+    /// nothing is written, the `user` column included, and the answer is
+    /// `NotFound`. PostgreSQL checks the predicate again on the newest
+    /// row version after it waits for a concurrent writer.
+    ///
     /// # Errors
     ///
     /// `NotFound`, otherwise the database error.
@@ -483,7 +542,6 @@ impl Store {
         customers: Option<&[String]>,
         u: BlackoutUpdate,
     ) -> Result<Blackout, StoreError> {
-        self.get_blackout(id, customers).await?;
         let remaining = remaining_column();
         let mut qb: QueryBuilder<'_, Postgres> = QueryBuilder::new("UPDATE blackouts SET ");
         if let Some(v) = u.environment {
@@ -519,8 +577,13 @@ impl Store {
         qb.push("\"user\" = COALESCE(")
             .push_bind(u.user)
             .push(", \"user\") WHERE id = ")
-            .push_bind(id.to_owned())
-            .push(format!(" RETURNING *, {remaining}"));
+            .push_bind(id.to_owned());
+        if let Some(c) = customers {
+            qb.push(" AND customer = ANY(")
+                .push_bind(c.to_vec())
+                .push(")");
+        }
+        qb.push(format!(" RETURNING *, {remaining}"));
         let row = qb
             .build()
             .fetch_optional(&self.pool)
