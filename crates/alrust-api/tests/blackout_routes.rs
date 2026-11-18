@@ -10,6 +10,7 @@
 #![expect(
     clippy::unwrap_used,
     clippy::print_stderr,
+    clippy::too_many_lines,
     reason = "integration test: helpers unwrap, skips are printed, and each scenario stays in one function"
 )]
 
