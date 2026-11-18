@@ -1776,7 +1776,9 @@ fn opt_string(v: Option<&Value>, key: &str) -> ApiResult<Option<String>> {
 /// in no customer list; the reference's text carries Python's rendering of
 /// the value), and for the others the reference gives it to the database
 /// adapter (outcome not established). It is never read as "absent".
-fn wanted_customer(v: Option<&Value>) -> ApiResult<Option<String>> {
+/// Unlike `wanted_customer` (C5), an empty string is not refused here: the
+/// blackout routes keep the reference's reading of it.
+fn blackout_customer(v: Option<&Value>) -> ApiResult<Option<String>> {
     match v {
         Some(Value::String(s)) if !s.is_empty() => Ok(Some(s.clone())),
         Some(v) if !py_falsy(v) => Err(ApiError::bad("customer must be a string")),
@@ -1861,7 +1863,7 @@ fn parse_new_blackout(
         caller.login.clone()
     };
     let customer =
-        caller.assign_customer(wanted_customer(obj.get("customer"))?, "admin:blackouts")?;
+        caller.assign_customer(blackout_customer(obj.get("customer"))?, "admin:blackouts")?;
     Ok(alrust_store_pg::blackouts::NewBlackout {
         id,
         environment,
@@ -1914,7 +1916,7 @@ fn parse_blackout_update(
     };
     let customer = match obj.get("customer") {
         None => Change::Keep,
-        v => Change::Set(caller.assign_customer(wanted_customer(v)?, "admin:blackouts")?),
+        v => Change::Set(caller.assign_customer(blackout_customer(v)?, "admin:blackouts")?),
     };
     // These keys collide with arguments of the reference's update calls
     // (`self` at `Blackout.update`, `id` at `db.update_blackout`): an
