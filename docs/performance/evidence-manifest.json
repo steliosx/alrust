@@ -1,0 +1,30 @@
+{
+  "schema": "alrust-evidence-manifest/1",
+  "project": "alrust",
+  "task": "ALRUST-X64-BETA-01",
+  "kind": "derived docs/numeric evidence only; not raw logs",
+  "source": {
+    "commit": "da100d6eb931683fe9176394eb83a256eb945827",
+    "branch": "codex/alerta-performance-evidence",
+    "author": "codex-alrust",
+    "base": "8a30c19fd6663c42d7fdebc9adb86de276bda7d8",
+    "pull_request": 223,
+    "merged_as": "35b0380c3cfc9e0b1a77954e03c34448ca62ef13"
+  },
+  "files": {
+    "docs/performance/2026-11-13-alerta-comparison.md": {
+      "sha256": "625d43164a915c3561e4fac092cd96652741a9812f6db24e67c624cc532e65f7",
+      "bytes": 7028
+    },
+    "docs/performance/2026-11-13-results.json": {
+      "sha256": "a362f11b2cbee8099e66e32cf179a77c24d83561d560a59d08331dbd2a2bf423",
+      "bytes": 10785
+    },
+    "docs/performance/postgresql-evaluation-2026-11-14.md": {
+      "sha256": "5fcd16a860ec73de74343d923264a5311cfbe2ca714ec85e47d0e3cd230b820f",
+      "bytes": 4464
+    }
+  },
+  "private_evidence": "The SHA256 and size of each private run record are in the private_evidence fields of 2026-11-13-results.json. The records, the harness, the VM images and the runtime logs stay in Codex laboratory custody and are not in this repository.",
+  "status": "LAB_PILOTS_ONLY; all 19 formal runtime profiles NOT_RUN"
+}
