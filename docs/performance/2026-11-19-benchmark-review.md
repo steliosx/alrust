@@ -6,9 +6,10 @@ benchmark or change deployment settings.
 
 ## What the runs show
 
-[Round 2 (draft PR #270)](https://github.com/steliosx/alrust/pull/270)
+[Round 2 (PR #270)](https://github.com/steliosx/alrust/pull/270)
 pinned four CPUs for the app, two for PostgreSQL 18.7, and two for load
-generation and sampling. Each reported number is a median of three
+generation and sampling. The report verifies CPU-set assignments, not
+physical-core or SMT sibling isolation. Each reported number is a median of three
 repetitions. Alrust used its 16-connection default.
 
 | Workload | Alrust | Alerta uWSGI (5) | Alerta Gunicorn (8 × 4) |
@@ -61,10 +62,14 @@ database CPU, but did not remove the app-side CPU gap.
 
 ## Proposed next benchmark
 
-1. Recover the exact seed generator noted as missing in PR #270 and
-   verify a fresh setup from an empty database before scheduling load.
-   Pin the benchmark and server revisions, DB image, seed checksum,
-   client schedule, and resource limits.
+1. Recover the exact seed generator noted as missing in PR #270. The
+   [archived launcher](https://github.com/steliosx/alrust/blob/60411a2ebbd80de38e9afe06adcaa9e953cc902d/docs/performance/2026-11-18-alerta-round2-4core/scripts/run_all.py#L83-L88)
+   links to the copy on the original benchmark machine. If that copy
+   cannot be recovered, the [main-branch seeder](https://github.com/steliosx/alrust/blob/38c671382e8aa0860d616e4931a0a82dfeafc9de/scripts/bench/bench_compare.py#L328-L348)
+   can start a new baseline; its equivalence to Round 2 is unproven.
+   Verify a fresh setup from an empty database. Pin the benchmark and
+   server revisions, DB image, seed checksum, client schedule and
+   resource limits. Record physical-core and SMT topology.
 2. Use identical seeded data and a fixed, predeclared offered rate.
    Start with a repeat-heavy fixed-identity cell to hold cardinality
    constant, then add a separate, controlled new-alert mix. Compare
