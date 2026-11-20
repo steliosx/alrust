@@ -9,7 +9,8 @@
 # tuning suite compares deployment settings of Alerta (no change to its
 # code): its arms are listed at the top of bench_compare.py. The cache suite
 # puts a short-lived response cache in front of Alerta
-# (scripts/bench/cache_suite.py).
+# (scripts/bench/cache_suite.py). The pg19 suite runs Alerta on PostgreSQL
+# 18.7 and 19 side by side (scripts/bench/pg_suite.py).
 name: bench compare
 
 on:
@@ -21,9 +22,9 @@ on:
         options: [full, quick]
         default: full
       suite:
-        description: "compare (the four arms), mixed (writers and readers together; pool and key-use sweeps), both, tuning (Alerta deployment settings), addon (alerta_fast.py patches), cache (a response cache in front of Alerta) or all (quick mode only)"
+        description: "compare (the four arms), mixed (writers and readers together; pool and key-use sweeps), both, tuning (Alerta deployment settings), addon (alerta_fast.py patches), cache (a response cache in front of Alerta), pg19 (Alerta on PostgreSQL 18.7 and 19) or all (quick mode only)"
         type: choice
-        options: [compare, mixed, both, tuning, addon, cache, all]
+        options: [compare, mixed, both, tuning, addon, cache, pg19, all]
         default: compare
   pull_request:
     paths:
@@ -48,7 +49,7 @@ jobs:
       - name: Refuse full mode with suite all
         if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full' && inputs.suite == 'all'
         run: |
-          echo "::error::suite 'all' is for quick mode only. Start one full run for each of compare, mixed, both, tuning, addon or cache."
+          echo "::error::suite 'all' is for quick mode only. Start one full run for each of compare, mixed, both, tuning, addon, cache or pg19."
           exit 1
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
         with:
@@ -82,12 +83,13 @@ jobs:
       - name: Mixed suite gate tests (no server)
         timeout-minutes: 2
         run: python3 -I scripts/bench/test_mixed_checks.py
-      - name: PostgreSQL 18.7, pgbouncer, Varnish, HAProxy and the reference Alerta environment
+      - name: PostgreSQL 18.7 and 19, pgbouncer, Varnish, HAProxy and the reference Alerta environment
         timeout-minutes: 15
         run: scripts/bench/setup.sh
       - name: Benchmark
-        # The tuning suite has six arms: about 45 minutes in full mode.
-        timeout-minutes: 60
+        # The tuning suite has six arms: about 45 minutes in full mode. The
+        # pg19 suite has three arms on two versions: about 50 minutes.
+        timeout-minutes: 70
         env:
           BENCH_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'quick' }}
           # A pull request checks the plumbing of every suite.
@@ -106,6 +108,7 @@ jobs:
         run: |
           cp "$BENCH_WORK/alerta-pip-freeze.txt" "$BENCH_OUT/" 2>/dev/null || true
           cp "$BENCH_WORK/pg.log" "$BENCH_OUT/postgres.log" 2>/dev/null || true
+          cp "$BENCH_WORK/pg19.log" "$BENCH_OUT/postgres19.log" 2>/dev/null || true
           cp "$BENCH_WORK/pgb/pgbouncer.log" "$BENCH_OUT/" 2>/dev/null || true
           nproc > "$BENCH_OUT/nproc.txt"; free -m > "$BENCH_OUT/free.txt"
       - name: Upload results (7-day artifact)

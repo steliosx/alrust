@@ -126,6 +126,7 @@ from urllib.parse import urlsplit
 # `python3 -I` leaves the script's directory off the path.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cache_suite  # noqa: E402
+import pg_suite  # noqa: E402
 from mixed_checks import cell_valid, served_time_problems  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -141,8 +142,8 @@ if MODE not in ("quick", "full"):
     sys.exit(f"BENCH_MODE must be quick or full, not {MODE!r}")
 QUICK = MODE == "quick"
 SUITE = os.environ.get("BENCH_SUITE", "compare")
-if SUITE not in ("compare", "mixed", "both", "tuning", "addon", "cache", "all"):
-    sys.exit(f"BENCH_SUITE must be compare, mixed, both, tuning, addon, cache or all, not {SUITE!r}")
+if SUITE not in ("compare", "mixed", "both", "tuning", "addon", "cache", "pg19", "all"):
+    sys.exit(f"BENCH_SUITE must be compare, mixed, both, tuning, addon, cache, pg19 or all, not {SUITE!r}")
 
 KEY = "bench-key-0123456789abcdef0123456789abcdef"
 HEADERS = {
@@ -151,6 +152,9 @@ HEADERS = {
     "Accept-Encoding": "identity",
 }
 PG = {"host": "127.0.0.1", "port": "5432", "user": "postgres", "password": "postgres"}
+# The cluster's directory under WORK. The pg19 suite points PG["port"],
+# PG_DATA and PG_BIN at its second cluster for its own cells.
+PG_DATA = "data"
 PGB_PORT = 6432
 VCPUS = os.cpu_count() or 4
 COMPARE_ARMS = ["alrust", "alerta-1x4", "alerta-1x4-pgb", f"alerta-{VCPUS}x4-pgb"]
@@ -162,12 +166,14 @@ ADDON_ARMS = ["alrust", f"alerta-{VCPUS}x4-nofwd", f"alerta-{VCPUS}x4-pgbu-nofwd
 ADDON = SUITE in ("addon", "all")
 # The cache suite is scripts/bench/cache_suite.py.
 CACHE = SUITE in ("cache", "all")
+# The pg19 suite is scripts/bench/pg_suite.py.
+PG19 = SUITE in ("pg19", "all")
 if SUITE == "all" and MODE == "full":
     # Every arm's 18 cells and the 45 mixed cells, at 20 s each, are more
     # than an hour before any start, stop or check: more than the benchmark
     # step allows.
     sys.exit("BENCH_SUITE=all is for the quick check only. A full run takes one of "
-             "compare, mixed, both, tuning, addon or cache; start one run for each.")
+             "compare, mixed, both, tuning, addon, cache or pg19; start one run for each.")
 # The arms of the compare cases in this run, each once, in order.
 ARMS = list(dict.fromkeys((COMPARE_ARMS if SUITE in ("compare", "both", "all") else [])
                           + (TUNE_ARMS if SUITE in ("tuning", "all") else [])
@@ -285,7 +291,7 @@ def start(arm, db, logf, extra_env=None, port=8081):
             # pgbouncer's Unix socket; its hba file gives `trust` there.
             url = f"postgresql:///{db}?host={WORK / 'pgb'}&port={PGB_PORT}&user={PG['user']}"
         else:
-            url = db_url(db, PGB_PORT if "pgb" in options else 5432)
+            url = db_url(db, PGB_PORT if "pgb" in options else int(PG["port"]))
         env = {"PATH": f"{VENV}/bin:/usr/bin:/bin", "HOME": str(WORK),
                "DATABASE_URL": url, "AUTH_REQUIRED": "True",
                "SECRET_KEY": "bench-not-secret", "LOG_LEVEL": "WARNING"}
@@ -357,7 +363,7 @@ def tree_cpu(root_pid):
 
 
 def postmaster_pid():
-    return int((WORK / "data/postmaster.pid").read_text().split()[0])
+    return int((WORK / PG_DATA / "postmaster.pid").read_text().split()[0])
 
 
 def pg_db_stats(db):
@@ -998,7 +1004,8 @@ def run_mixed(record, dbs):
     return all_ok
 
 
-def start_pgbouncer():
+def start_pgbouncer(more_databases=""):
+    """`more_databases`: [databases] lines that go before the `*` line."""
     d = WORK / "pgb"
     d.mkdir(exist_ok=True)
     (d / "userlist.txt").write_text('"postgres" "postgres"\n')
@@ -1007,7 +1014,7 @@ def start_pgbouncer():
     (d / "hba.conf").write_text("local all all trust\n"
                                 "host all all 127.0.0.1/32 scram-sha-256\n")
     (d / "pgbouncer.ini").write_text(f"""[databases]
-* = host=127.0.0.1 port=5432
+{more_databases}* = host=127.0.0.1 port=5432
 [pgbouncer]
 listen_addr = 127.0.0.1
 listen_port = {PGB_PORT}
@@ -1092,7 +1099,9 @@ def main():
         probe_pool_setting(record)
     if ADDON:
         probe_addon(record)
-    pgb = start_pgbouncer()
+    if PG19:
+        pg_suite.prepare(sys.modules[__name__], record)
+    pgb = start_pgbouncer(pg_suite.pgbouncer_databases(sys.modules[__name__]) if PG19 else "")
     all_ok = True
     try:
         if mixed and not run_mixed(record, dbs):
@@ -1124,6 +1133,8 @@ def main():
                             stop(proc)
         if CACHE and not cache_suite.run(sys.modules[__name__], record, dbs):
             all_ok = False
+        if PG19 and not pg_suite.run(sys.modules[__name__], record, json_flag):
+            all_ok = False
     finally:
         stop(pgb)
         cells_ok = cell_gate(record)
@@ -1133,7 +1144,7 @@ def main():
         except Exception as e:  # a partial run still keeps results.json
             print(f"summary failed: {e!r}", file=sys.stderr)
     if not all_ok:
-        sys.exit("a correctness check or a cache suite cell failed; see results.json")
+        sys.exit("a correctness check, or a cell of the cache or pg19 suite, failed; see results.json")
     if not cells_ok:
         g = record["cell_gate"]
         sys.exit(f"compare cells [arm, case, c, repetition]: {len(g['missing'])} missing {g['missing']}, "
@@ -1225,6 +1236,8 @@ def write_summary(record):
         lines += mixed_summary(record)
     if "cache" in record:
         lines += cache_suite.summary(record)
+    if "pg19" in record:
+        lines += pg_suite.summary(record)
     (OUT / "summary.md").write_text("\n".join(lines) + "\n")
 
 
