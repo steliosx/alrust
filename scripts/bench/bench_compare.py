@@ -46,6 +46,21 @@ The write case sends an alert without tags, so the tag order that
 `forwarder`'s rewrite changes is not exercised; the cross-arm body gate
 covers the seeded alerts only.
 
+The "addon" suite adds scripts/bench/alerta_fast.py: Alerta as released,
+with a few functions replaced when the server starts (no fork). Its file
+header describes each patch. Every arm is N workers without `forwarder`:
+  alrust                      the reference;
+  alerta-Nx4-nofwd            the base;
+  alerta-Nx4-pgbu-nofwd       the best arm that changes no code;
+  alerta-Nx4-reuse-nofwd      one kept connection per worker thread;
+  alerta-Nx4-reuse-hot-nofwd  and the key-use and metrics writes collected
+                              and written about once a second;
+  alerta-Nx4-fast-nofwd       every patch.
+Before the suite's first cell, a check of the `hot` patch: after 50
+requests and a wait of three flush intervals, the key's use count and the
+timers' count must each have grown by exactly 50; after a clean stop they
+must still be 50. A failure stops the run before anything is scored.
+
 BENCH_MODE selects "quick" (plumbing: 1 repetition, c=1, 5 s; the default)
 or "full". The workflow passes "quick" on pull requests and the dispatch
 input otherwise (DECISIONS Y69).
@@ -111,8 +126,8 @@ if MODE not in ("quick", "full"):
     sys.exit(f"BENCH_MODE must be quick or full, not {MODE!r}")
 QUICK = MODE == "quick"
 SUITE = os.environ.get("BENCH_SUITE", "compare")
-if SUITE not in ("compare", "mixed", "both", "tuning", "all"):
-    sys.exit(f"BENCH_SUITE must be compare, mixed, both, tuning or all, not {SUITE!r}")
+if SUITE not in ("compare", "mixed", "both", "tuning", "addon", "all"):
+    sys.exit(f"BENCH_SUITE must be compare, mixed, both, tuning, addon or all, not {SUITE!r}")
 
 KEY = "bench-key-0123456789abcdef0123456789abcdef"
 HEADERS = {
@@ -126,9 +141,16 @@ VCPUS = os.cpu_count() or 4
 COMPARE_ARMS = ["alrust", "alerta-1x4", "alerta-1x4-pgb", f"alerta-{VCPUS}x4-pgb"]
 TUNE_ARMS = ["alrust", f"alerta-{VCPUS}x4", f"alerta-{VCPUS}x4-nofwd", f"alerta-{VCPUS}x4-pgb",
              f"alerta-{VCPUS}x4-pgb-nofwd", f"alerta-{VCPUS}x4-pgbu-nofwd"]
+ADDON_ARMS = ["alrust", f"alerta-{VCPUS}x4-nofwd", f"alerta-{VCPUS}x4-pgbu-nofwd",
+              f"alerta-{VCPUS}x4-reuse-nofwd", f"alerta-{VCPUS}x4-reuse-hot-nofwd",
+              f"alerta-{VCPUS}x4-fast-nofwd"]
+ADDON = SUITE in ("addon", "all")
 # The arms of the compare cases in this run, each once, in order.
 ARMS = list(dict.fromkeys((COMPARE_ARMS if SUITE in ("compare", "both", "all") else [])
-                          + (TUNE_ARMS if SUITE in ("tuning", "all") else [])))
+                          + (TUNE_ARMS if SUITE in ("tuning", "all") else [])
+                          + (ADDON_ARMS if ADDON else [])))
+# Arm options that load scripts/bench/alerta_fast.py, and its ALERTA_FAST value.
+ADDON_OPTIONS = {"reuse": "reuse", "hot": "hot", "fast": "all"}
 # Alerta's default PLUGINS (settings.py) without `forwarder`.
 PLUGINS_NOFWD = "remote_ip,reject,heartbeat,blackout"
 REPS = 1 if QUICK else 3
@@ -232,7 +254,7 @@ def start(arm, db, logf):
     else:
         workers = int(arm.split("-")[1].split("x")[0])
         options = arm.split("-")[2:]
-        unknown = set(options) - {"pgb", "pgbu", "nofwd"}
+        unknown = set(options) - {"pgb", "pgbu", "nofwd", *ADDON_OPTIONS}
         if unknown:
             raise ValueError(f"{arm}: unknown options {sorted(unknown)}")
         if "pgbu" in options:
@@ -245,6 +267,11 @@ def start(arm, db, logf):
                "SECRET_KEY": "bench-not-secret", "LOG_LEVEL": "WARNING"}
         if "nofwd" in options:
             env["PLUGINS"] = PLUGINS_NOFWD
+        patches = [ADDON_OPTIONS[o] for o in options if o in ADDON_OPTIONS]
+        target = ["alerta.app:create_app()"]
+        if patches:
+            env["ALERTA_FAST"] = ",".join(patches)
+            target = ["--pythonpath", str(Path(__file__).resolve().parent), "alerta_fast:app"]
         # Every Alerta worker runs sql/schema.sql at boot (create_engine), and
         # its threading.Lock is per call, so workers booting together can
         # deadlock on that DDL (run 43788943429, repetition 1). With several
@@ -252,7 +279,7 @@ def start(arm, db, logf):
         preload = ["--preload"] if workers > 1 else []
         proc = subprocess.Popen([str(VENV / "bin/gunicorn"), "--workers", str(workers),
                                  "--worker-class", "gthread", "--threads", "4", *preload,
-                                 "--bind", "127.0.0.1:8081", "alerta.app:create_app()"],
+                                 "--bind", "127.0.0.1:8081", *target],
                                 env=env, cwd=str(WORK), stdout=logf, stderr=subprocess.STDOUT)
         base = "http://127.0.0.1:8081"
     wait_ready(base, proc)
@@ -586,6 +613,35 @@ def probe_pool_setting(record):
     log("the binary knows ALRUST_DB_MAX_CONNECTIONS (it refuses 0)")
 
 
+def probe_addon(record):
+    """The `hot` patch must lose and add nothing: see the module text."""
+    db, n = "bench_addon_probe", 50
+    counts = lambda: (int(psql(db, "SELECT count FROM keys WHERE id = 'bench-key'")),
+                      int(psql(db, "SELECT COALESCE(SUM(count), 0) FROM metrics WHERE type = 'timer'")))
+    with open(OUT / "server-addon-probe.log", "w") as logf:
+        proc, base = start(f"alerta-{VCPUS}x4-fast-nofwd", db, logf)
+        try:
+            # Whatever the readiness requests counted is written before the
+            # starting values are read.
+            time.sleep(3.0)
+            before = counts()
+            statuses = [http("GET", base + "/alerts/count")[0] for _ in range(n)]
+            time.sleep(3.0)
+            running = counts()
+        finally:
+            stop(proc)
+    stopped = counts()
+    grew = lambda now: [now[0] - before[0], now[1] - before[1]]
+    ok = statuses == [200] * n and grew(running) == [n, n] and grew(stopped) == [n, n]
+    record["addon_probe"] = {"ok": ok, "requests": n, "non_200": sum(1 for x in statuses if x != 200),
+                             "key_and_timer_growth_running": grew(running),
+                             "key_and_timer_growth_stopped": grew(stopped)}
+    if not ok:
+        (OUT / "results.json").write_text(json.dumps(record, indent=1))
+        sys.exit(f"the add-on's collected writes are wrong: {record['addon_probe']}")
+    log(f"add-on check: {n} requests gave {n} key uses and {n} timer counts, running and stopped")
+
+
 def key_updates(db):
     """Row updates of the `keys` table so far (statistics; they lag by about
     a second). It shows the key-use mode: about one update per request when
@@ -893,6 +949,8 @@ def main():
     dbs = {}
     if mixed:
         dbs[("probe",)] = "bench_probe"
+    if ADDON:
+        dbs[("addon-probe",)] = "bench_addon_probe"
     for arm in ARMS if compare else []:
         safe = arm.replace("-", "_")
         dbs[(arm, "read")] = f"bench_read_{safe}"
@@ -917,6 +975,8 @@ def main():
     log(f"{len(dbs)} database copies created")
     if mixed:
         probe_pool_setting(record)
+    if ADDON:
+        probe_addon(record)
     pgb = start_pgbouncer()
     all_ok = True
     try:
@@ -998,6 +1058,11 @@ def write_summary(record):
                      f"{ch['basic_ok']}, fields {ch['fields_ok']}, groups {ch['groups_ok']}, same as "
                      f"{ch['reference_arm']} {ch['cross_arm_ok']}); list {ch['list_bytes']} bytes, "
                      f"Content-Encoding {ch['list_content_encoding']}")
+    if "addon_probe" in record:
+        a = record["addon_probe"]
+        lines += ["", f"Add-on check: {a['requests']} requests gave key-use and timer growth "
+                      f"{a['key_and_timer_growth_running']} while running and "
+                      f"{a['key_and_timer_growth_stopped']} after the stop."]
     writes = [c for c in record["cells"] if "persisted" in c]
     if writes:
         bad = [c for c in writes if not c["persisted"]["ok"]]

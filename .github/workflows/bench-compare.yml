@@ -19,9 +19,9 @@ on:
         options: [full, quick]
         default: full
       suite:
-        description: "compare (the four arms), mixed (writers and readers together; pool and key-use sweeps), both, tuning (Alerta deployment settings) or all"
+        description: "compare (the four arms), mixed (writers and readers together; pool and key-use sweeps), both, tuning (Alerta deployment settings), addon (alerta_fast.py patches) or all"
         type: choice
-        options: [compare, mixed, both, tuning, all]
+        options: [compare, mixed, both, tuning, addon, all]
         default: compare
   pull_request:
     paths:
