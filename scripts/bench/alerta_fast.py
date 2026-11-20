@@ -9,9 +9,19 @@ few of its functions when the server starts. Serve it in place of
 ALERTA_FAST selects the patches, comma-separated; the default is "all".
   reuse     One PostgreSQL connection per worker thread, kept between
             requests, in place of a new connection per request. A request
-            ends with ROLLBACK (Alerta commits its own writes), and a
-            connection that fails it, or is older than
-            ALERTA_FAST_CONN_MAX_AGE seconds (default 300), is replaced.
+            ends with ROLLBACK (Alerta commits its own writes). A kept
+            connection is replaced, never reused, when: the server has
+            closed it or sent anything while it was idle (checked on the
+            socket before each request, with no round trip); a statement
+            failed in the request that used it; the ROLLBACK fails; or it
+            is older than ALERTA_FAST_CONN_MAX_AGE seconds (default 300).
+            For a failover (Patroni or any other): connections that the
+            old primary or a proxy closes are replaced before the next
+            request; a connection to a demoted, read-only server is
+            replaced after the first write that fails on it. Where the
+            new connection goes is the deployment's choice (a proxy that
+            follows the leader, or several hosts in DATABASE_URL with
+            target_session_attrs=read-write), as for Alerta as released.
   hot       The two writes that every request makes to one shared row are
             collected in the process and written about once a second
             (ALERTA_FAST_FLUSH_SECONDS, default 1.0) by one thread per
@@ -37,6 +47,7 @@ already installs.
 import atexit
 import logging
 import os
+import select
 import threading
 import time
 
@@ -55,6 +66,7 @@ if "nosentry" in FEATURES and not os.environ.get("SENTRY_DSN"):
     sentry_sdk.init = lambda *args, **kwargs: None  # alerta.app calls it at import
 
 from flask import g, has_app_context  # noqa: E402
+from psycopg2 import extensions as _ext  # noqa: E402
 
 import alerta.app  # noqa: E402
 from alerta.database.backends.postgres import base as _pg  # noqa: E402
@@ -82,12 +94,21 @@ def _discard(conn):
         pass
 
 
+def _usable(conn):
+    """False when the server closed the connection or sent anything while it
+    was idle (a shutdown or termination message, or end of file)."""
+    try:
+        return not conn.closed and not select.select([conn.fileno()], [], [], 0)[0]
+    except Exception:
+        return False
+
+
 def _get_db(self):
     if "db" not in g:
         conn = getattr(_local, "conn", None)
         if conn is not None and _local.pid != os.getpid():
             conn = None  # made before a fork: the parent's, not ours to close
-        if conn is not None and (conn.closed or time.monotonic() - _local.born > MAX_AGE):
+        if conn is not None and (time.monotonic() - _local.born > MAX_AGE or not _usable(conn)):
             _discard(conn)
             conn = None
         if conn is None:
@@ -102,8 +123,14 @@ def _teardown_db(self, exc):
     if conn is None:
         return
     try:
+        # A failed statement (for example a write on a server that is now
+        # read-only) or a lost connection: do not keep it.
+        healthy = conn.info.transaction_status in (_ext.TRANSACTION_STATUS_IDLE,
+                                                   _ext.TRANSACTION_STATUS_INTRANS)
         conn.rollback()
     except Exception:
+        healthy = False
+    if not healthy:
         _discard(conn)
         if getattr(_local, "conn", None) is conn:
             _local.conn = None

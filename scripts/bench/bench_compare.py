@@ -56,10 +56,13 @@ header describes each patch. Every arm is N workers without `forwarder`:
   alerta-Nx4-reuse-hot-nofwd  and the key-use and metrics writes collected
                               and written about once a second;
   alerta-Nx4-fast-nofwd       every patch.
-Before the suite's first cell, a check of the `hot` patch: after 50
-requests and a wait of three flush intervals, the key's use count and the
-timers' count must each have grown by exactly 50; after a clean stop they
-must still be 50. A failure stops the run before anything is scored.
+Before the suite's first cell, a check of the add-on: after 50 requests
+and a wait of three flush intervals, the key's use count and the timers'
+count must each have grown by exactly 50. Then every session on the
+database is terminated, as a failover would do it: the next 50 requests
+must all be answered 200 on new connections, and both counts must reach
+exactly 100, while running and after a clean stop. A failure stops the
+run before anything is scored.
 
 BENCH_MODE selects "quick" (plumbing: 1 repetition, c=1, 5 s; the default)
 or "full". The workflow passes "quick" on pull requests and the dispatch
@@ -627,19 +630,30 @@ def probe_addon(record):
             before = counts()
             statuses = [http("GET", base + "/alerts/count")[0] for _ in range(n)]
             time.sleep(3.0)
+            first = counts()
+            # What a failover does to kept connections: every session ends.
+            killed = int(psql("postgres", "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity "
+                                          f"WHERE datname = '{db}' AND pid <> pg_backend_pid()"))
+            time.sleep(0.5)
+            statuses += [http("GET", base + "/alerts/count")[0] for _ in range(n)]
+            time.sleep(3.0)
             running = counts()
         finally:
             stop(proc)
     stopped = counts()
     grew = lambda now: [now[0] - before[0], now[1] - before[1]]
-    ok = statuses == [200] * n and grew(running) == [n, n] and grew(stopped) == [n, n]
-    record["addon_probe"] = {"ok": ok, "requests": n, "non_200": sum(1 for x in statuses if x != 200),
+    ok = (statuses == [200] * (2 * n) and killed > 0 and grew(first) == [n, n]
+          and grew(running) == [2 * n, 2 * n] and grew(stopped) == [2 * n, 2 * n])
+    record["addon_probe"] = {"ok": ok, "requests": 2 * n, "non_200": sum(1 for x in statuses if x != 200),
+                             "sessions_terminated": killed,
+                             "key_and_timer_growth_before_termination": grew(first),
                              "key_and_timer_growth_running": grew(running),
                              "key_and_timer_growth_stopped": grew(stopped)}
     if not ok:
         (OUT / "results.json").write_text(json.dumps(record, indent=1))
         sys.exit(f"the add-on's collected writes are wrong: {record['addon_probe']}")
-    log(f"add-on check: {n} requests gave {n} key uses and {n} timer counts, running and stopped")
+    log(f"add-on check: {2 * n} requests gave {2 * n} key uses and timer counts, with {killed} "
+        "sessions terminated half-way and no failed request")
 
 
 def key_updates(db):
@@ -1062,7 +1076,9 @@ def write_summary(record):
         a = record["addon_probe"]
         lines += ["", f"Add-on check: {a['requests']} requests gave key-use and timer growth "
                       f"{a['key_and_timer_growth_running']} while running and "
-                      f"{a['key_and_timer_growth_stopped']} after the stop."]
+                      f"{a['key_and_timer_growth_stopped']} after the stop; "
+                      f"{a['sessions_terminated']} sessions were terminated half-way and "
+                      f"{a['non_200']} requests failed."]
     writes = [c for c in record["cells"] if "persisted" in c]
     if writes:
         bad = [c for c in writes if not c["persisted"]["ok"]]
