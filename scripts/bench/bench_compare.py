@@ -28,6 +28,24 @@ and 43792492613, whose numbers they do not cover):
           same id and unchanged identity fields.
 A failed gate makes the check or the repetition invalid; it is never scored.
 
+The "tuning" suite runs the same cases and gates on other arms: what an
+operator can change in Alerta's deployment with no change to its code.
+N = vCPUs workers in each, so only the named setting differs from the base:
+  alrust                 the reference;
+  alerta-Nx4             the base: direct connections, the default plugins;
+  alerta-Nx4-nofwd       PLUGINS without `forwarder`. With no destination
+                         set, that plugin forwards nothing, but its
+                         post_receive returns the alert, so every receive
+                         also rewrites the alert's tags and attributes;
+  alerta-Nx4-pgb         behind pgbouncer over TCP with SCRAM;
+  alerta-Nx4-pgb-nofwd   both;
+  alerta-Nx4-pgbu-nofwd  both, with the pgbouncer hop on a Unix socket with
+                         `trust`, which removes the client's per-request
+                         SCRAM exchange with the pooler.
+The write case sends an alert without tags, so the tag order that
+`forwarder`'s rewrite changes is not exercised; the cross-arm body gate
+covers the seeded alerts only.
+
 BENCH_MODE selects "quick" (plumbing: 1 repetition, c=1, 5 s; the default)
 or "full". The workflow passes "quick" on pull requests and the dispatch
 input otherwise (DECISIONS Y69).
@@ -93,8 +111,8 @@ if MODE not in ("quick", "full"):
     sys.exit(f"BENCH_MODE must be quick or full, not {MODE!r}")
 QUICK = MODE == "quick"
 SUITE = os.environ.get("BENCH_SUITE", "compare")
-if SUITE not in ("compare", "mixed", "both"):
-    sys.exit(f"BENCH_SUITE must be compare, mixed or both, not {SUITE!r}")
+if SUITE not in ("compare", "mixed", "both", "tuning", "all"):
+    sys.exit(f"BENCH_SUITE must be compare, mixed, both, tuning or all, not {SUITE!r}")
 
 KEY = "bench-key-0123456789abcdef0123456789abcdef"
 HEADERS = {
@@ -105,7 +123,19 @@ HEADERS = {
 PG = {"host": "127.0.0.1", "port": "5432", "user": "postgres", "password": "postgres"}
 PGB_PORT = 6432
 VCPUS = os.cpu_count() or 4
-ARMS = ["alrust", "alerta-1x4", "alerta-1x4-pgb", f"alerta-{VCPUS}x4-pgb"]
+COMPARE_ARMS = ["alrust", "alerta-1x4", "alerta-1x4-pgb", f"alerta-{VCPUS}x4-pgb"]
+TUNE_ARMS = ["alrust", f"alerta-{VCPUS}x4", f"alerta-{VCPUS}x4-nofwd", f"alerta-{VCPUS}x4-pgb",
+             f"alerta-{VCPUS}x4-pgb-nofwd", f"alerta-{VCPUS}x4-pgbu-nofwd"]
+if SUITE == "all" and MODE == "full":
+    # 8 arms x 18 cells and 45 mixed cells of 20 s are 63 minutes before any
+    # start, stop or check: more than the benchmark step allows.
+    sys.exit("BENCH_SUITE=all is for the quick check only. A full run takes one of "
+             "compare, mixed, both or tuning; start one run for each.")
+# The arms of the compare cases in this run, each once, in order.
+ARMS = list(dict.fromkeys((COMPARE_ARMS if SUITE in ("compare", "both", "all") else [])
+                          + (TUNE_ARMS if SUITE in ("tuning", "all") else [])))
+# Alerta's default PLUGINS (settings.py) without `forwarder`.
+PLUGINS_NOFWD = "remote_ip,reject,heartbeat,blackout"
 REPS = 1 if QUICK else 3
 WARM_S = 2 if QUICK else 5
 TIMED_S = 5 if QUICK else 15
@@ -206,10 +236,20 @@ def start(arm, db, logf):
         base = "http://127.0.0.1:8080"
     else:
         workers = int(arm.split("-")[1].split("x")[0])
-        port = PGB_PORT if arm.endswith("-pgb") else 5432
+        options = arm.split("-")[2:]
+        unknown = set(options) - {"pgb", "pgbu", "nofwd"}
+        if unknown:
+            raise ValueError(f"{arm}: unknown options {sorted(unknown)}")
+        if "pgbu" in options:
+            # pgbouncer's Unix socket; its hba file gives `trust` there.
+            url = f"postgresql:///{db}?host={WORK / 'pgb'}&port={PGB_PORT}&user={PG['user']}"
+        else:
+            url = db_url(db, PGB_PORT if "pgb" in options else 5432)
         env = {"PATH": f"{VENV}/bin:/usr/bin:/bin", "HOME": str(WORK),
-               "DATABASE_URL": db_url(db, port), "AUTH_REQUIRED": "True",
+               "DATABASE_URL": url, "AUTH_REQUIRED": "True",
                "SECRET_KEY": "bench-not-secret", "LOG_LEVEL": "WARNING"}
+        if "nofwd" in options:
+            env["PLUGINS"] = PLUGINS_NOFWD
         # Every Alerta worker runs sql/schema.sql at boot (create_engine), and
         # its threading.Lock is per call, so workers booting together can
         # deadlock on that DDL (run 43788943429, repetition 1). With several
@@ -798,13 +838,18 @@ def start_pgbouncer():
     d = WORK / "pgb"
     d.mkdir(exist_ok=True)
     (d / "userlist.txt").write_text('"postgres" "postgres"\n')
+    # TCP clients authenticate with SCRAM, as before; the Unix socket (the
+    # -pgbu arms) is `trust`. The directory is the runner user's, mode 700.
+    (d / "hba.conf").write_text("local all all trust\n"
+                                "host all all 127.0.0.1/32 scram-sha-256\n")
     (d / "pgbouncer.ini").write_text(f"""[databases]
 * = host=127.0.0.1 port=5432
 [pgbouncer]
 listen_addr = 127.0.0.1
 listen_port = {PGB_PORT}
-unix_socket_dir =
-auth_type = scram-sha-256
+unix_socket_dir = {d}
+auth_type = hba
+auth_hba_file = {d}/hba.conf
 auth_file = {d}/userlist.txt
 pool_mode = transaction
 default_pool_size = 16
@@ -824,7 +869,7 @@ pidfile = {d}/pgbouncer.pid
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "raw").mkdir(exist_ok=True)
-    compare, mixed = SUITE in ("compare", "both"), SUITE in ("mixed", "both")
+    compare, mixed = bool(ARMS), SUITE in ("mixed", "both", "all")
     record = {"mode": MODE, "suite": SUITE, "arms": ARMS if compare else [],
               "reps": REPS, "warm_s": WARM_S, "timed_s": TIMED_S,
               "concurrency": CONCURRENCY, "vcpus": VCPUS, "checks": [], "cells": [],
@@ -909,6 +954,7 @@ def main():
                             stop(proc)
     finally:
         stop(pgb)
+        cells_ok = cell_gate(record)
         (OUT / "results.json").write_text(json.dumps(record, indent=1))
         try:
             write_summary(record)
@@ -916,6 +962,26 @@ def main():
             print(f"summary failed: {e!r}", file=sys.stderr)
     if not all_ok:
         sys.exit("a correctness check failed; see results.json")
+    if not cells_ok:
+        g = record["cell_gate"]
+        sys.exit(f"compare cells [arm, case, c, repetition]: {len(g['missing'])} missing {g['missing']}, "
+                 f"{len(g['invalid'])} invalid {g['invalid']}, of {g['expected']} planned")
+
+
+def cell_gate(record):
+    """Every compare cell this run planned must exist and be valid. A cell
+    is missing when its server did not survive an earlier cell or failed
+    its checks. Kept apart from scoring: an invalid cell is never scored,
+    and it also fails the run."""
+    got = {(c["arm"], c["case"], c["c"], c["rep"]): c["valid"] for c in record["cells"]}
+    expected = [(arm, case, conc, rep) for rep in range(REPS) for arm in record["arms"]
+                for case in CASES for conc in CONCURRENCY]
+    gate = {"expected": len(expected),
+            "missing": [list(k) for k in expected if k not in got],
+            "invalid": [list(k) for k in expected if got.get(k) is False]}
+    gate["ok"] = not gate["missing"] and not gate["invalid"]
+    record["cell_gate"] = gate
+    return gate["ok"]
 
 
 def write_summary(record):
@@ -958,6 +1024,11 @@ def write_summary(record):
                      f"{ch['basic_ok']}, fields {ch['fields_ok']}, groups {ch['groups_ok']}, same as "
                      f"{ch['reference_arm']} {ch['cross_arm_ok']}); list {ch['list_bytes']} bytes, "
                      f"Content-Encoding {ch['list_content_encoding']}")
+    g = record["cell_gate"]
+    if g["expected"]:
+        lines += ["", f"Planned compare cells: {g['expected']}; missing {len(g['missing'])}; "
+                      f"invalid {len(g['invalid'])}. Any missing or invalid cell fails the run."]
+        lines += [f"- MISSING {k}" for k in g["missing"]] + [f"- INVALID {k}" for k in g["invalid"]]
     writes = [c for c in record["cells"] if "persisted" in c]
     if writes:
         bad = [c for c in writes if not c["persisted"]["ok"]]
