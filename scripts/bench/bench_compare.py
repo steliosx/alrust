@@ -46,6 +46,35 @@ The write case sends an alert without tags, so the tag order that
 `forwarder`'s rewrite changes is not exercised; the cross-arm body gate
 covers the seeded alerts only.
 
+The "addon" suite adds scripts/bench/alerta_fast.py: Alerta as released,
+with a few functions replaced when the server starts (no fork). Its file
+header describes each patch. Every arm is N workers without `forwarder`:
+  alrust                      the reference;
+  alerta-Nx4-nofwd            the base;
+  alerta-Nx4-pgbu-nofwd       the best arm that changes no code;
+  alerta-Nx4-reuse-nofwd      one kept connection per worker thread;
+  alerta-Nx4-safe-nofwd       the add-on's default: every patch that leaves
+                              Alerta's own writes as they are;
+  alerta-Nx4-safe-hot-nofwd   and `hot`, the opt-in patch: the key-use and
+                              metrics writes collected and written about
+                              once a second (its counts are best effort).
+Before the suite's first cell, three checks of the add-on (probe_addon). A
+failure stops the run before anything is scored.
+  Counts: 50 requests, then three flush intervals: the key's use count and
+    the timers' count must each have grown by exactly 50.
+  Stop: with a flush interval of one hour, 50 requests must leave the
+    database unchanged (a known batch is waiting); a stop that needs no
+    kill must then write exactly that batch.
+  Connections, on one worker with one thread and without `hot`: requests
+    share one backend; after that backend is terminated (the call must
+    answer true, and the backend must be gone) the next request is
+    answered on a new one. Then new sessions are made read-only, as on a
+    standby, and the backend is terminated again: one alert write must
+    fail and save nothing. When sessions are writable again, the next
+    request must be answered at once on another new backend, the failed
+    write must still be absent (nothing replays it), and a new write of
+    it must be saved once.
+
 BENCH_MODE selects "quick" (plumbing: 1 repetition, c=1, 5 s; the default)
 or "full". The workflow passes "quick" on pull requests and the dispatch
 input otherwise (DECISIONS Y69).
@@ -111,8 +140,8 @@ if MODE not in ("quick", "full"):
     sys.exit(f"BENCH_MODE must be quick or full, not {MODE!r}")
 QUICK = MODE == "quick"
 SUITE = os.environ.get("BENCH_SUITE", "compare")
-if SUITE not in ("compare", "mixed", "both", "tuning", "all"):
-    sys.exit(f"BENCH_SUITE must be compare, mixed, both, tuning or all, not {SUITE!r}")
+if SUITE not in ("compare", "mixed", "both", "tuning", "addon", "all"):
+    sys.exit(f"BENCH_SUITE must be compare, mixed, both, tuning, addon or all, not {SUITE!r}")
 
 KEY = "bench-key-0123456789abcdef0123456789abcdef"
 HEADERS = {
@@ -126,14 +155,22 @@ VCPUS = os.cpu_count() or 4
 COMPARE_ARMS = ["alrust", "alerta-1x4", "alerta-1x4-pgb", f"alerta-{VCPUS}x4-pgb"]
 TUNE_ARMS = ["alrust", f"alerta-{VCPUS}x4", f"alerta-{VCPUS}x4-nofwd", f"alerta-{VCPUS}x4-pgb",
              f"alerta-{VCPUS}x4-pgb-nofwd", f"alerta-{VCPUS}x4-pgbu-nofwd"]
+ADDON_ARMS = ["alrust", f"alerta-{VCPUS}x4-nofwd", f"alerta-{VCPUS}x4-pgbu-nofwd",
+              f"alerta-{VCPUS}x4-reuse-nofwd", f"alerta-{VCPUS}x4-safe-nofwd",
+              f"alerta-{VCPUS}x4-safe-hot-nofwd"]
+ADDON = SUITE in ("addon", "all")
 if SUITE == "all" and MODE == "full":
-    # 8 arms x 18 cells and 45 mixed cells of 20 s are 63 minutes before any
-    # start, stop or check: more than the benchmark step allows.
+    # Every arm's 18 cells and the 45 mixed cells, at 20 s each, are more
+    # than an hour before any start, stop or check: more than the benchmark
+    # step allows.
     sys.exit("BENCH_SUITE=all is for the quick check only. A full run takes one of "
-             "compare, mixed, both or tuning; start one run for each.")
+             "compare, mixed, both, tuning or addon; start one run for each.")
 # The arms of the compare cases in this run, each once, in order.
 ARMS = list(dict.fromkeys((COMPARE_ARMS if SUITE in ("compare", "both", "all") else [])
-                          + (TUNE_ARMS if SUITE in ("tuning", "all") else [])))
+                          + (TUNE_ARMS if SUITE in ("tuning", "all") else [])
+                          + (ADDON_ARMS if ADDON else [])))
+# Arm options that load scripts/bench/alerta_fast.py, and its ALERTA_FAST value.
+ADDON_OPTIONS = {"reuse": "reuse", "safe": "safe", "hot": "hot"}
 # Alerta's default PLUGINS (settings.py) without `forwarder`.
 PLUGINS_NOFWD = "remote_ip,reject,heartbeat,blackout"
 REPS = 1 if QUICK else 3
@@ -227,7 +264,7 @@ def db_url(db, port=5432):
     return f"postgresql://postgres:postgres@127.0.0.1:{port}/{db}"
 
 
-def start(arm, db, logf):
+def start(arm, db, logf, extra_env=None):
     """Start one arm's server on database `db`; returns (process, base url)."""
     if arm.startswith("alrust"):
         env = dict(os.environ, DATABASE_URL=db_url(db), ALRUST_BIND="127.0.0.1:8080",
@@ -235,9 +272,9 @@ def start(arm, db, logf):
         proc = subprocess.Popen([ALRUST], env=env, stdout=logf, stderr=subprocess.STDOUT)
         base = "http://127.0.0.1:8080"
     else:
-        workers = int(arm.split("-")[1].split("x")[0])
+        workers, threads = (int(x) for x in arm.split("-")[1].split("x"))
         options = arm.split("-")[2:]
-        unknown = set(options) - {"pgb", "pgbu", "nofwd"}
+        unknown = set(options) - {"pgb", "pgbu", "nofwd", *ADDON_OPTIONS}
         if unknown:
             raise ValueError(f"{arm}: unknown options {sorted(unknown)}")
         if "pgbu" in options:
@@ -250,14 +287,20 @@ def start(arm, db, logf):
                "SECRET_KEY": "bench-not-secret", "LOG_LEVEL": "WARNING"}
         if "nofwd" in options:
             env["PLUGINS"] = PLUGINS_NOFWD
+        patches = [ADDON_OPTIONS[o] for o in options if o in ADDON_OPTIONS]
+        target = ["alerta.app:create_app()"]
+        if patches:
+            env["ALERTA_FAST"] = ",".join(patches)
+            target = ["--pythonpath", str(Path(__file__).resolve().parent), "alerta_fast:app"]
+        env.update(extra_env or {})
         # Every Alerta worker runs sql/schema.sql at boot (create_engine), and
         # its threading.Lock is per call, so workers booting together can
         # deadlock on that DDL (run 43788943429, repetition 1). With several
         # workers, --preload runs it once in the master before the fork.
         preload = ["--preload"] if workers > 1 else []
         proc = subprocess.Popen([str(VENV / "bin/gunicorn"), "--workers", str(workers),
-                                 "--worker-class", "gthread", "--threads", "4", *preload,
-                                 "--bind", "127.0.0.1:8081", "alerta.app:create_app()"],
+                                 "--worker-class", "gthread", "--threads", str(threads), *preload,
+                                 "--bind", "127.0.0.1:8081", *target],
                                 env=env, cwd=str(WORK), stdout=logf, stderr=subprocess.STDOUT)
         base = "http://127.0.0.1:8081"
     wait_ready(base, proc)
@@ -265,6 +308,7 @@ def start(arm, db, logf):
 
 
 def stop(proc):
+    """Ask the server to stop; kill it after 20 s. True when no kill was needed."""
     if proc.poll() is None:
         proc.terminate()
         try:
@@ -272,6 +316,8 @@ def stop(proc):
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
+            return False
+    return True
 
 
 # ------------------------------------------------------------ CPU and stats
@@ -591,6 +637,120 @@ def probe_pool_setting(record):
     log("the binary knows ALRUST_DB_MAX_CONNECTIONS (it refuses 0)")
 
 
+def probe_addon(record):
+    """The add-on's checks before any cell: see the module text."""
+    db, n = "bench_addon_probe", 50
+    hot_arm, one_arm = f"alerta-{VCPUS}x4-safe-hot-nofwd", "alerta-1x1-safe-nofwd"
+    probe = record["addon_probe"] = {"ok": False, "requests": n}
+
+    def fail(what):
+        probe["failed"] = what
+        (OUT / "results.json").write_text(json.dumps(record, indent=1))
+        sys.exit(f"add-on check failed: {what}: {probe}")
+
+    counts = lambda: (int(psql(db, "SELECT count FROM keys WHERE id = 'bench-key'")),
+                      int(psql(db, "SELECT COALESCE(SUM(count), 0) FROM metrics WHERE type = 'timer'")))
+    grew = lambda a, b: [b[0] - a[0], b[1] - a[1]]
+    get = lambda base: http("GET", base + "/alerts/count")[0]
+
+    # Counts. `ready` is what one start's readiness requests add.
+    down = counts()
+    with open(OUT / "server-addon-probe-counts.log", "w") as logf:
+        proc, base = start(hot_arm, db, logf)
+        try:
+            time.sleep(3.0)
+            before = counts()
+            ready = grew(down, before)
+            statuses = [get(base) for _ in range(n)]
+            time.sleep(3.0)
+            probe["counts"] = {"non_200": sum(1 for x in statuses if x != 200),
+                               "key_and_timer_growth": grew(before, counts()),
+                               "growth_of_one_start": ready}
+        finally:
+            stop(proc)
+    if probe["counts"]["non_200"] or probe["counts"]["key_and_timer_growth"] != [n, n]:
+        fail("counts")
+
+    # Stop. Nothing is written for an hour, so the batch is known to wait.
+    before = counts()
+    with open(OUT / "server-addon-probe-stop.log", "w") as logf:
+        proc, base = start(hot_arm, db, logf, {"ALERTA_FAST_FLUSH_SECONDS": "3600"})
+        try:
+            statuses = [get(base) for _ in range(n)]
+            time.sleep(1.0)
+            waiting = grew(before, counts())
+        finally:
+            graceful = stop(proc)
+    wanted = [n + ready[0], n + ready[1]]
+    probe["stop"] = {"non_200": sum(1 for x in statuses if x != 200), "growth_before_stop": waiting,
+                     "stopped_without_kill": graceful, "growth_after_stop": grew(before, counts()),
+                     "growth_wanted": wanted}
+    if (probe["stop"]["non_200"] or waiting != [0, 0] or not graceful
+            or probe["stop"]["growth_after_stop"] != wanted):
+        fail("stop")
+
+    # Connections.
+    backends = lambda: sorted(int(x) for x in psql(
+        "postgres", f"SELECT pid FROM pg_stat_activity WHERE datname = '{db}'").split())
+
+    def terminate(pid):
+        """True when the call answered true and the backend then went away."""
+        if psql("postgres", f"SELECT pg_terminate_backend({pid})") != "t":
+            return False
+        for _ in range(50):
+            if pid not in backends():
+                return True
+            time.sleep(0.1)
+        return False
+
+    saved = lambda: int(psql(db, "SELECT count(*) FROM alerts WHERE resource = 'addon-probe'"))
+    body = json.dumps(dict(DUP_ALERT, resource="addon-probe"))
+    c = probe["connections"] = {}
+    with open(OUT / "server-addon-probe-connections.log", "w") as logf:
+        proc, base = start(one_arm, db, logf)
+        try:
+            c["warm_statuses"] = [get(base) for _ in range(3)]
+            first = backends()
+            c["backends_warm"] = first
+            if c["warm_statuses"] != [200] * 3 or len(first) != 1:
+                fail("connections: three requests must share one backend")
+            c["terminated"] = terminate(first[0])
+            c["status_after_termination"] = get(base)
+            second = backends()
+            c["backends_after_termination"] = second
+            if (not c["terminated"] or c["status_after_termination"] != 200 or len(second) != 1
+                    or second == first):
+                fail("connections: no new backend after the termination")
+            # A session made now is read-only, as on a standby.
+            psql("postgres", f"ALTER DATABASE {db} SET default_transaction_read_only = on")
+            try:
+                c["terminated_again"] = terminate(second[0])
+                c["read_only_write_status"] = http("POST", base + "/alert", body)[0]
+                c["backends_read_only"] = backends()
+            finally:
+                psql("postgres", f"ALTER DATABASE {db} RESET default_transaction_read_only")
+            c["saved_after_failed_write"] = saved()
+            if (not c["terminated_again"] or 200 <= c["read_only_write_status"] < 300
+                    or c["saved_after_failed_write"] != 0):
+                fail("connections: the write on a read-only session must fail and save nothing")
+            c["status_after_recovery"] = get(base)
+            third = backends()
+            c["backends_after_recovery"] = third
+            c["saved_before_new_write"] = saved()
+            if (c["status_after_recovery"] != 200 or len(third) != 1
+                    or third[0] in first + second + c["backends_read_only"]
+                    or c["saved_before_new_write"] != 0):
+                fail("connections: the first request after recovery needs a new backend, and no replay")
+            c["new_write_status"] = http("POST", base + "/alert", body)[0]
+            c["saved_after_new_write"] = saved()
+            if c["new_write_status"] != 201 or c["saved_after_new_write"] != 1:
+                fail("connections: the new write was not saved once")
+        finally:
+            stop(proc)
+    probe["ok"] = True
+    log(f"add-on checks passed: counts {probe['counts']}; stop {probe['stop']}; connections {c}")
+
+
 def key_updates(db):
     """Row updates of the `keys` table so far (statistics; they lag by about
     a second). It shows the key-use mode: about one update per request when
@@ -898,6 +1058,8 @@ def main():
     dbs = {}
     if mixed:
         dbs[("probe",)] = "bench_probe"
+    if ADDON:
+        dbs[("addon-probe",)] = "bench_addon_probe"
     for arm in ARMS if compare else []:
         safe = arm.replace("-", "_")
         dbs[(arm, "read")] = f"bench_read_{safe}"
@@ -922,6 +1084,8 @@ def main():
     log(f"{len(dbs)} database copies created")
     if mixed:
         probe_pool_setting(record)
+    if ADDON:
+        probe_addon(record)
     pgb = start_pgbouncer()
     all_ok = True
     try:
@@ -1029,6 +1193,19 @@ def write_summary(record):
         lines += ["", f"Planned compare cells: {g['expected']}; missing {len(g['missing'])}; "
                       f"invalid {len(g['invalid'])}. Any missing or invalid cell fails the run."]
         lines += [f"- MISSING {k}" for k in g["missing"]] + [f"- INVALID {k}" for k in g["invalid"]]
+    if record.get("addon_probe", {}).get("ok"):
+        a = record["addon_probe"]
+        lines += ["", "Add-on checks, all passed:",
+                  f"- counts: {a['requests']} requests gave key-use and timer growth "
+                  f"{a['counts']['key_and_timer_growth']};",
+                  f"- stop: growth {a['stop']['growth_before_stop']} while a batch waited, "
+                  f"{a['stop']['growth_after_stop']} after a stop without kill "
+                  f"(wanted {a['stop']['growth_wanted']});",
+                  f"- connections: backend {a['connections']['backends_warm']} terminated, then "
+                  f"{a['connections']['backends_after_termination']}; the write on a read-only session "
+                  f"answered {a['connections']['read_only_write_status']} and saved nothing; after "
+                  f"recovery {a['connections']['backends_after_recovery']}, and the failed write was "
+                  "not replayed."]
     writes = [c for c in record["cells"] if "persisted" in c]
     if writes:
         bad = [c for c in writes if not c["persisted"]["ok"]]
