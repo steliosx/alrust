@@ -6,31 +6,49 @@ few of its functions when the server starts. Serve it in place of
 
     gunicorn --pythonpath <this directory> ... alerta_fast:app
 
-ALERTA_FAST selects the patches, comma-separated; the default is "all".
+ALERTA_FAST selects the patches, comma-separated. The default is "safe":
+reuse, nolog, onecount and nosentry, which leave every write of Alerta as
+it is. `hot` changes when and how surely two counters are written, so it is
+never on unless it is named: ALERTA_FAST=safe,hot.
   reuse     One PostgreSQL connection per worker thread, kept between
             requests, in place of a new connection per request. A request
-            ends with ROLLBACK (Alerta commits its own writes). A kept
-            connection is replaced, never reused, when: the server has
+            ends with ROLLBACK (Alerta commits its own writes), so no open
+            transaction passes to the next request. A kept connection is
+            replaced before a request, never reused, when: the server has
             closed it or sent anything while it was idle (checked on the
-            socket before each request, with no round trip); a statement
-            failed in the request that used it; the ROLLBACK fails; or it
+            socket, with no round trip); the server has reported that the
+            session is read-only or on a standby (`in_hot_standby`,
+            `default_transaction_read_only`; no round trip); a statement
+            failed in the request that used it; the ROLLBACK failed; or it
             is older than ALERTA_FAST_CONN_MAX_AGE seconds (default 300).
-            For a failover (Patroni or any other): connections that the
-            old primary or a proxy closes are replaced before the next
-            request; a connection to a demoted, read-only server is
-            replaced after the first write that fails on it. Where the
-            new connection goes is the deployment's choice (a proxy that
-            follows the leader, or several hosts in DATABASE_URL with
+            A failed request is never sent again by this file.
+            For a failover (Patroni or any other): where a new connection
+            goes is the deployment's choice (a proxy that follows the
+            leader, or several hosts in DATABASE_URL with
             target_session_attrs=read-write), as for Alerta as released.
-  hot       The two writes that every request makes to one shared row are
-            collected in the process and written about once a second
-            (ALERTA_FAST_FLUSH_SECONDS, default 1.0) by one thread per
-            worker on its own connection: the API key's use count and
-            last-used time, and the `metrics` timers and counters. Key
-            verification itself is not cached. `GET /keys` and
-            `/management/metrics` are late by up to that interval, the
-            last-used time is the time of the write, and a worker that is
-            killed loses what it had not written. A clean stop writes it.
+            While new connections reach a standby, each request makes its
+            own, as Alerta as released does.
+            Not covered: session state that a plugin leaves behind (SET,
+            temporary tables, advisory locks) stays on the connection, and
+            ROLLBACK does not undo what a plugin committed. Check custom
+            plugins before using `reuse` with them.
+  hot       OPT-IN, best effort. The two writes that every request makes to
+            one shared row are collected in the process and written about
+            once a second (ALERTA_FAST_FLUSH_SECONDS, default 1.0) by one
+            thread per worker on its own connection: the API key's use
+            count and last-used time, and the `metrics` timers and
+            counters. Key verification itself is not cached. What changes:
+              late:      `GET /keys` and `/management/metrics` are behind
+                         by up to the interval, and by longer while the
+                         database cannot be written; the last-used time
+                         is the time of the write, not of the request;
+              lost:      a worker that is killed, or that stops while the
+                         database cannot be written, loses what it had
+                         not written. A stop that needs no kill writes it;
+              too high:  a batch whose commit succeeded on the server but
+                         was reported to the worker as failed is written
+                         again.
+            Do not use `hot` where key-use counts or metrics must be exact.
   nolog     Alerta formats every SQL statement for a debug message before
             the logger checks its level. Skip that unless DEBUG is on.
   onecount  The list and the count read severity and status totals with
@@ -51,11 +69,16 @@ import select
 import threading
 import time
 
-ALL = ("reuse", "hot", "nolog", "onecount", "nosentry")
-_asked = [f for f in os.environ.get("ALERTA_FAST", "all").split(",") if f]
-FEATURES = set(ALL) if "all" in _asked else set(_asked)
-if FEATURES - set(ALL):
-    raise SystemExit(f"ALERTA_FAST: unknown patches {sorted(FEATURES - set(ALL))}; known: {ALL}")
+SAFE = ("reuse", "nolog", "onecount", "nosentry")
+ALL = SAFE + ("hot",)
+FEATURES = set()
+for _name in os.environ.get("ALERTA_FAST", "safe").split(","):
+    if _name == "safe":
+        FEATURES.update(SAFE)
+    elif _name in ALL:
+        FEATURES.add(_name)
+    elif _name:
+        raise SystemExit(f"ALERTA_FAST: unknown patch {_name!r}; known: safe, {', '.join(ALL)}")
 MAX_AGE = float(os.environ.get("ALERTA_FAST_CONN_MAX_AGE", "300"))
 FLUSH_SECONDS = float(os.environ.get("ALERTA_FAST_FLUSH_SECONDS", "1.0"))
 log = logging.getLogger("alerta.fast")
@@ -96,9 +119,14 @@ def _discard(conn):
 
 def _usable(conn):
     """False when the server closed the connection or sent anything while it
-    was idle (a shutdown or termination message, or end of file)."""
+    was idle (a shutdown or termination message, or end of file), or when
+    the session is read-only by the server's own report. Both are read
+    from what the client already has: no round trip."""
     try:
-        return not conn.closed and not select.select([conn.fileno()], [], [], 0)[0]
+        if conn.closed or select.select([conn.fileno()], [], [], 0)[0]:
+            return False
+        status = conn.info.parameter_status
+        return status("in_hot_standby") != "on" and status("default_transaction_read_only") != "on"
     except Exception:
         return False
 
@@ -124,7 +152,7 @@ def _teardown_db(self, exc):
         return
     try:
         # A failed statement (for example a write on a server that is now
-        # read-only) or a lost connection: do not keep it.
+        # read-only) or a lost connection: do not keep it. Nothing is retried.
         healthy = conn.info.transaction_status in (_ext.TRANSACTION_STATUS_IDLE,
                                                    _ext.TRANSACTION_STATUS_INTRANS)
         conn.rollback()
