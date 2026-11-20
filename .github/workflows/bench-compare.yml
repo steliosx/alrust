@@ -19,7 +19,7 @@ on:
         options: [full, quick]
         default: full
       suite:
-        description: "compare (the four arms), mixed (writers and readers together; pool and key-use sweeps), both, tuning (Alerta deployment settings) or all"
+        description: "compare (the four arms), mixed (writers and readers together; pool and key-use sweeps), both, tuning (Alerta deployment settings) or all (quick mode only)"
         type: choice
         options: [compare, mixed, both, tuning, all]
         default: compare
@@ -41,6 +41,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
+      # A full run of every suite needs more than the benchmark step's time:
+      # refused here, before anything is built.
+      - name: Refuse full mode with suite all
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full' && inputs.suite == 'all'
+        run: |
+          echo "::error::suite 'all' is for quick mode only. Start one full run for each of compare, mixed, both or tuning."
+          exit 1
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
         with:
           # The reference Alerta is installed from the pinned submodule.

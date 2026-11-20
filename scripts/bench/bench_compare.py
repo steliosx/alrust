@@ -126,6 +126,11 @@ VCPUS = os.cpu_count() or 4
 COMPARE_ARMS = ["alrust", "alerta-1x4", "alerta-1x4-pgb", f"alerta-{VCPUS}x4-pgb"]
 TUNE_ARMS = ["alrust", f"alerta-{VCPUS}x4", f"alerta-{VCPUS}x4-nofwd", f"alerta-{VCPUS}x4-pgb",
              f"alerta-{VCPUS}x4-pgb-nofwd", f"alerta-{VCPUS}x4-pgbu-nofwd"]
+if SUITE == "all" and MODE == "full":
+    # 8 arms x 18 cells and 45 mixed cells of 20 s are 63 minutes before any
+    # start, stop or check: more than the benchmark step allows.
+    sys.exit("BENCH_SUITE=all is for the quick check only. A full run takes one of "
+             "compare, mixed, both or tuning; start one run for each.")
 # The arms of the compare cases in this run, each once, in order.
 ARMS = list(dict.fromkeys((COMPARE_ARMS if SUITE in ("compare", "both", "all") else [])
                           + (TUNE_ARMS if SUITE in ("tuning", "all") else [])))
@@ -949,6 +954,7 @@ def main():
                             stop(proc)
     finally:
         stop(pgb)
+        cells_ok = cell_gate(record)
         (OUT / "results.json").write_text(json.dumps(record, indent=1))
         try:
             write_summary(record)
@@ -956,6 +962,26 @@ def main():
             print(f"summary failed: {e!r}", file=sys.stderr)
     if not all_ok:
         sys.exit("a correctness check failed; see results.json")
+    if not cells_ok:
+        g = record["cell_gate"]
+        sys.exit(f"compare cells [arm, case, c, repetition]: {len(g['missing'])} missing {g['missing']}, "
+                 f"{len(g['invalid'])} invalid {g['invalid']}, of {g['expected']} planned")
+
+
+def cell_gate(record):
+    """Every compare cell this run planned must exist and be valid. A cell
+    is missing when its server did not survive an earlier cell or failed
+    its checks. Kept apart from scoring: an invalid cell is never scored,
+    and it also fails the run."""
+    got = {(c["arm"], c["case"], c["c"], c["rep"]): c["valid"] for c in record["cells"]}
+    expected = [(arm, case, conc, rep) for rep in range(REPS) for arm in record["arms"]
+                for case in CASES for conc in CONCURRENCY]
+    gate = {"expected": len(expected),
+            "missing": [list(k) for k in expected if k not in got],
+            "invalid": [list(k) for k in expected if got.get(k) is False]}
+    gate["ok"] = not gate["missing"] and not gate["invalid"]
+    record["cell_gate"] = gate
+    return gate["ok"]
 
 
 def write_summary(record):
@@ -998,6 +1024,11 @@ def write_summary(record):
                      f"{ch['basic_ok']}, fields {ch['fields_ok']}, groups {ch['groups_ok']}, same as "
                      f"{ch['reference_arm']} {ch['cross_arm_ok']}); list {ch['list_bytes']} bytes, "
                      f"Content-Encoding {ch['list_content_encoding']}")
+    g = record["cell_gate"]
+    if g["expected"]:
+        lines += ["", f"Planned compare cells: {g['expected']}; missing {len(g['missing'])}; "
+                      f"invalid {len(g['invalid'])}. Any missing or invalid cell fails the run."]
+        lines += [f"- MISSING {k}" for k in g["missing"]] + [f"- INVALID {k}" for k in g["invalid"]]
     writes = [c for c in record["cells"] if "persisted" in c]
     if writes:
         bad = [c for c in writes if not c["persisted"]["ok"]]
