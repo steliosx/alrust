@@ -83,8 +83,12 @@ jobs:
       - name: Mixed suite gate tests (no server)
         timeout-minutes: 2
         run: python3 -I scripts/bench/test_mixed_checks.py
-      - name: PostgreSQL 18.7 and 19, pgbouncer, Varnish, HAProxy and the reference Alerta environment
+      - name: PostgreSQL 18.7 (and 19 for the pg19 suite), pgbouncer, Varnish, HAProxy and the reference Alerta environment
         timeout-minutes: 15
+        env:
+          # The same selection as the Benchmark step: PostgreSQL 19 is
+          # installed and started for pg19 and all only.
+          BENCH_SUITE: ${{ github.event_name == 'workflow_dispatch' && inputs.suite || 'all' }}
         run: scripts/bench/setup.sh
       - name: Benchmark
         # The tuning suite has six arms: about 45 minutes in full mode. The

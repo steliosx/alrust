@@ -155,6 +155,9 @@ PG = {"host": "127.0.0.1", "port": "5432", "user": "postgres", "password": "post
 # The cluster's directory under WORK. The pg19 suite points PG["port"],
 # PG_DATA and PG_BIN at its second cluster for its own cells.
 PG_DATA = "data"
+# A suite that runs an arm of another suite again sets this, so that each raw
+# sample has its own file name (pg_suite.py).
+RAW_TAG = ""
 PGB_PORT = 6432
 VCPUS = os.cpu_count() or 4
 COMPARE_ARMS = ["alrust", "alerta-1x4", "alerta-1x4-pgb", f"alerta-{VCPUS}x4-pgb"]
@@ -394,6 +397,8 @@ def oha(base, case, conc, seconds, out_file, json_flag):
     if body is not None:
         cmd += ["-H", "Content-Type: application/json", "-d", body]
     cmd.append(base + path)
+    if out_file.exists():
+        raise RuntimeError(f"{out_file.name} exists: two cells would share one raw sample")
     r = subprocess.run(cmd, capture_output=True, text=True)
     out_file.write_text(r.stdout)
     if r.returncode != 0:
@@ -561,8 +566,8 @@ def cell(arm, proc, base, case, conc, rep, db, json_flag, record):
     if write:
         prime_id, problems = prime_dup(base, db)
         persisted = {"prime_id": prime_id, "problems": problems}
-    warm = summarize_oha(oha(base, case, conc, WARM_S,
-                             raw_dir / f"warm-{arm}-{case}-c{conc}-r{rep}.json", json_flag))
+    names = {phase: f"{phase}-{RAW_TAG}{arm}-{case}-c{conc}-r{rep}.json" for phase in ("warm", "timed")}
+    warm = summarize_oha(oha(base, case, conc, WARM_S, raw_dir / names["warm"], json_flag))
     time.sleep(1.5)
     if write:
         rows = dup_rows(db)
@@ -572,7 +577,7 @@ def cell(arm, proc, base, case, conc, rep, db, json_flag, record):
                                          f"{persisted['dup_before']!r}, {warm['ok']} counted")
     pg0, srv0, pm0 = pg_db_stats(db), tree_cpu(proc.pid), tree_cpu(postmaster_pid())
     t0 = time.monotonic()
-    j = oha(base, case, conc, TIMED_S, raw_dir / f"timed-{arm}-{case}-c{conc}-r{rep}.json", json_flag)
+    j = oha(base, case, conc, TIMED_S, raw_dir / names["timed"], json_flag)
     wall = time.monotonic() - t0
     srv1, pm1 = tree_cpu(proc.pid), tree_cpu(postmaster_pid())
     alive = proc.poll() is None
@@ -580,6 +585,7 @@ def cell(arm, proc, base, case, conc, rep, db, json_flag, record):
     pg1 = pg_db_stats(db)
     s = summarize_oha(j)
     s["warm"] = warm
+    s["raw"] = names
     if write:
         rows = dup_rows(db)
         after = rows[0]["duplicate_count"] if len(rows) == 1 else None
