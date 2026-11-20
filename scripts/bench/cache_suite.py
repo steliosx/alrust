@@ -50,8 +50,9 @@ parameter), the worst case: no hit, only the cost of the extra hop.
 `write-dup` is the duplicate write of the compare suite; a cache passes it.
 Real traffic is between the two read cases. A cell is valid with no error,
 only 2xx answers, every process alive, the expected hit rate (0.9 or more
-for a repeated URL, 0.01 or less for new URLs) and, for writes, every
-counted write saved.
+for a repeated URL, 0.01 or less for new URLs and for writes) and, for
+writes, every counted write saved. The hit rate is 1 minus the caches'
+backend requests for each request.
 
 CPU is the process tree's, per completed request, for Alerta (or alrust),
 the caches, HAProxy and PostgreSQL.
@@ -313,18 +314,21 @@ def probe(bc, ttl, db, rec):
                   (200, CUSTOMER_ALERTS), (401, None), (401, None)]
         if direct != wanted:
             p["problems"].append(f"Alerta answers directly {direct}, {wanted} expected")
+        rounds = [[total_of(get(st.base + path, h)) for _, path, h in asks]]
         before = st.stats()
-        rounds = [[total_of(get(st.base + path, h)) for _, path, h in asks] for _ in range(2)]
-        hits = st.stats()["cache_hit"] - before["cache_hit"]
+        rounds.append([total_of(get(st.base + path, h)) for _, path, h in asks])
+        hits = len(asks) - (st.stats()["backend_req"] - before["backend_req"])
         for n, answers in enumerate(rounds):
             for (name, _, _), got, want in zip(asks, answers, direct):
                 if got != want:
                     p["problems"].append(f"separation, round {n + 1}, {name}: {got} through the "
                                          f"cache, {want} directly")
-        # Only the Authorization forms are sure to meet the same cache twice:
-        # HAProxy sends a request without that header to the caches in turn.
+        # Only the two Authorization forms with a good key are sure to meet
+        # the same cache twice: HAProxy sends a request without that header
+        # to the caches in turn.
         if hits < 2:
-            p["problems"].append(f"separation: {hits} cache hits in the second round, 2 or more expected")
+            p["problems"].append(f"separation: {hits} answers of the second round came from "
+                                 "the cache, 2 or more expected")
         p["separation"] = {"asks": [name for name, _, _ in asks], "direct": direct,
                            "through_cache": rounds, "cache_hits": hits}
 
@@ -461,15 +465,14 @@ def cell(bc, st, arm, case, conc, rep, db, json_flag, rec):
     for part in cpu0:
         s[f"{part}_cpu_ms_per_request"] = 1000 * (cpu1[part] - cpu0[part]) / hz / req
     if ttl_of(arm):
-        d = s["cache"]
-        looked = d["cache_hit"] + d["cache_miss"]
-        s["hit_ratio"] = d["cache_hit"] / looked if looked else None
-        if case in ("count", "list") and (s["hit_ratio"] or 0) < 0.9:
+        # From backend_req, which Varnish counts at once; its hit, miss and
+        # pass counters come later, from each worker thread (run 44805872744).
+        s["hit_ratio"] = max(0.0, 1 - s["cache"]["backend_req"] / req)
+        if case in ("count", "list") and s["hit_ratio"] < 0.9:
             problems.append(f"hit ratio {s['hit_ratio']!r} for a repeated URL, 0.9 or more expected")
-        if case == "list-unique" and (s["hit_ratio"] is None or s["hit_ratio"] > 0.01):
-            problems.append(f"hit ratio {s['hit_ratio']!r} for new URLs, 0.01 or less expected")
-        if write and d["s_pass"] < s["requests"]:
-            problems.append(f"{d['s_pass']} writes passed the cache, {s['requests']} sent")
+        if case in ("list-unique", "write-dup") and s["hit_ratio"] > 0.01:
+            problems.append(f"hit ratio {s['hit_ratio']!r}, 0.01 or less expected: "
+                            "every such request must reach a server")
     s["problems"] = problems
     s["valid"] = (alive and s["errors"] == 0 and s["non_2xx"] == 0 and s["ok"] > 0
                   and warm["errors"] == 0 and warm["non_2xx"] == 0 and not problems)
@@ -554,7 +557,7 @@ def summary(record):
             continue
         s, b, sep = p["staleness"], p["burst"], p["separation"]
         lines.append(f"- expiry {p['ttl_s']} s: {len(sep['asks'])} credential forms answered as "
-                     f"Alerta answers directly, twice ({sep['cache_hits']} cache hits); after a "
+                     f"Alerta answers directly, twice ({sep['cache_hits']} from the cache); after a "
                      f"write the new count came after {s['fresh_after_s']:.2f} s (limit "
                      f"{s['limit_s']} s; an old answer was {'seen' if s['old_answer_seen'] else 'not seen'}); "
                      f"{b['requests']} requests at once gave {b['backend_requests']} backend request.")
@@ -581,7 +584,7 @@ def summary(record):
                     continue
                 med = lambda k: statistics.median(x[k] for x in cs)
                 cached = "hit_ratio" in cs[0]
-                ratio = f"{med('hit_ratio'):.4f}" if cached and cs[0]["hit_ratio"] is not None else ""
+                ratio = f"{med('hit_ratio'):.4f}" if cached else ""
                 fetched = (f"{statistics.median(x['cache']['backend_req'] for x in cs):.0f}"
                            if cached else "")
                 lines.append(
