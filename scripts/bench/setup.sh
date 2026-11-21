@@ -3,6 +3,12 @@
 # PostgreSQL 18.7 and pgbouncer from PGDG, a throwaway cluster on
 # 127.0.0.1:5432, and the reference Alerta environment with gunicorn.
 # Varnish and HAProxy, for the cache suite, are Ubuntu's own packages.
+# PostgreSQL 19 is installed and started only when BENCH_SUITE is pg19 or all
+# (the pg19 suite): a second cluster on port 5433 with the same options. Every
+# other suite runs without it and does not look for it: a PostgreSQL 19 that
+# the host already has, or a listener on its port, is not this setup's
+# concern. Without BENCH_SUITE the suite is compare, the driver's default.
+# alrust's pin stays 18.7.
 # PostgreSQL 18.7 is alrust's pin since #226 (Y67); the owner first chose it
 # for this benchmark (2026-11-15: "use postgres 18.7 which is the current
 # stable one"). Writes BENCH_* lines to $GITHUB_ENV.
@@ -10,14 +16,23 @@ set -euo pipefail
 : "${RUNNER_TEMP:?RUNNER_TEMP is required}"
 root=$(git rev-parse --show-toplevel)
 version=18.7-1.pgdg24.04+2
+version19=19.0-2.pgdg24.04+1
 port=5432
+port19=5433
 work="$RUNNER_TEMP/bench-env"
 mkdir -m 700 -- "$work"
+BENCH_SUITE=${BENCH_SUITE:-compare}
+case "$BENCH_SUITE" in
+  pg19|all) pg19=1; ports="$port $port19" ;;
+  *) pg19=0; ports="$port" ;;
+esac
 
-if ss -ltnH "sport = :$port" | grep -q .; then
-  echo "port $port is already in use" >&2
-  exit 1
-fi
+for p in $ports; do
+  if ss -ltnH "sport = :$p" | grep -q .; then
+    echo "port $p is already in use" >&2
+    exit 1
+  fi
+done
 
 # The PGDG signing key (fingerprint B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8).
 # --retry-all-errors also retries a dropped transfer (curl exit 56).
@@ -34,8 +49,11 @@ printf '%s\n' \
 sudo install -d /etc/postgresql-common/createcluster.d
 echo 'create_main_cluster = false' | sudo tee /etc/postgresql-common/createcluster.d/bench.conf >/dev/null
 sudo apt-get update -q
-sudo apt-get install -y -q --no-install-recommends \
-  "postgresql-18=$version" "postgresql-client-18=$version" pgbouncer libpq-dev varnish haproxy
+packages=("postgresql-18=$version" "postgresql-client-18=$version" pgbouncer libpq-dev varnish haproxy)
+if [ "$pg19" = 1 ]; then
+  packages+=("postgresql-19=$version19" "postgresql-client-19=$version19")
+fi
+sudo apt-get install -y -q --no-install-recommends "${packages[@]}"
 # The packages start their own services; the benchmark runs its own processes.
 sudo systemctl disable --now pgbouncer varnish haproxy >/dev/null 2>&1 || true
 
@@ -44,10 +62,22 @@ bin=/usr/lib/postgresql/18/bin
 pwfile="$work/pwfile"
 ( umask 077; printf '%s' postgres > "$pwfile" )
 "$bin/initdb" -D "$work/data" -U postgres --pwfile="$pwfile" -A scram-sha-256 >/dev/null
+if [ "$pg19" = 1 ]; then
+  bin19=/usr/lib/postgresql/19/bin
+  "$bin19/postgres" -V
+  "$bin19/initdb" -D "$work/data19" -U postgres --pwfile="$pwfile" -A scram-sha-256 >/dev/null
+fi
 rm -f -- "$pwfile"
 "$bin/pg_ctl" -D "$work/data" -l "$work/pg.log" -w \
   -o "-p $port -c listen_addresses=127.0.0.1 -c unix_socket_directories='' -c max_connections=200" start >/dev/null
 PGPASSWORD=postgres "$bin/psql" -h 127.0.0.1 -p "$port" -U postgres -d postgres -tAc 'SELECT version()'
+if [ "$pg19" = 1 ]; then
+  "$bin19/pg_ctl" -D "$work/data19" -l "$work/pg19.log" -w \
+    -o "-p $port19 -c listen_addresses=127.0.0.1 -c unix_socket_directories='' -c max_connections=200" start >/dev/null
+  PGPASSWORD=postgres "$bin19/psql" -h 127.0.0.1 -p "$port19" -U postgres -d postgres -tAc 'SELECT version()'
+else
+  echo "suite $BENCH_SUITE: PostgreSQL 19 not requested; this setup did not install or start it"
+fi
 
 # The reference Alerta environment, built as conformance/scripts/run-reference.sh
 # builds it (both hash locks, then the pinned source), plus gunicorn.
@@ -69,6 +99,7 @@ rm -rf -- "$src"
 {
   echo "BENCH_WORK=$work"
   echo "BENCH_PG_BIN=$bin"
+  if [ "$pg19" = 1 ]; then echo "BENCH_PG19_BIN=$bin19"; fi
   echo "BENCH_ALERTA_VENV=$venv"
   echo "BENCH_PGBOUNCER=$(command -v pgbouncer)"
   echo "BENCH_VARNISHD=/usr/sbin/varnishd"
