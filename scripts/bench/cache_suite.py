@@ -783,6 +783,21 @@ def oha(bc, st, case, conc, seconds, out_file, json_flag):
     return json.loads(r.stdout)
 
 
+def steady(read, wait, limit=30):
+    """Read the counters until two reads in a row are equal. Varnish adds a
+    worker thread's numbers to the totals when the thread ends its task, so a
+    read at the moment the load tool stops can miss the last requests (run
+    44903568987: 1932 of 1933). Returns (counters, number of reads, steady)."""
+    last = read()
+    for n in range(2, limit + 1):
+        wait()
+        now = read()
+        if now == last:
+            return now, n, True
+        last = now
+    return last, limit, False
+
+
 def counter_problems(case, requests, before, after):
     """The raw counters of each cache for one timed run, checked as numbers
     before any ratio. Returns (per-cache deltas, backend requests, problems)."""
@@ -825,7 +840,9 @@ def cell(bc, st, arm, case, conc, rep, db, json_flag, rec):
     j = oha(bc, st, case, conc, bc.TIMED_S, raw / f"cache-timed-{arm}-{case}-c{conc}-r{rep}.json",
             json_flag)
     wall = time.monotonic() - t0
-    cpu1, v1 = st.cpu(bc), st.stats()
+    cpu1 = st.cpu(bc)
+    # No request is under way now: the load tool waited for its last answers.
+    v1, reads, is_steady = steady(st.stats, lambda: time.sleep(0.1))
     alive = st.alive()
     time.sleep(1.5)
     s = bc.summarize_oha(j)
@@ -847,11 +864,13 @@ def cell(bc, st, arm, case, conc, rep, db, json_flag, rec):
     for part in cpu0:
         s[f"{part}_cpu_ms_per_request"] = 1000 * (cpu1[part] - cpu0[part]) / hz / req
     if ttl_of(arm):
-        # backend_req is counted at once; the hit, miss and pass counters come
-        # later, from each worker thread (run 44805872744), so no gate reads them.
+        # Only backend_req is in a gate. The "before" read is 1.5 s after the
+        # warm-up; the "after" read is the first of two equal reads.
         delta, fetched, found = counter_problems(case, s["requests"], v0, v1)
         problems += found
-        s["cache_nodes"] = {"before": v0, "after": v1, "delta": delta}
+        if not is_steady:
+            problems.append(f"the caches' counters still changed after {reads} reads")
+        s["cache_nodes"] = {"before": v0, "after": v1, "delta": delta, "after_reads": reads}
         s["backend_requests"] = fetched
         s["hit_ratio"] = 1 - fetched / req
     s["problems"] = problems
@@ -1033,6 +1052,17 @@ def gate_self_test(planned):
             ("counters: a counter that went down", "count", 100, -1, False)):
         cases.append({"case": name, "gate_must_pass": good,
                       "gate_passed": not counter_problems(case, requests, zero, after(fetched))[2]})
+    # The wait for steady counters, on made-up reads.
+    def reads_of(values):
+        left = list(values)
+        return lambda: after(left.pop(0) if len(left) > 1 else left[0])
+    for name, values, limit, want in (
+            ("steady: a late backend request is waited for", (99, 100, 100), 30, (100, 3, True)),
+            ("steady: counters that are equal at once", (100, 100), 30, (100, 2, True)),
+            ("steady: counters that never rest are reported", (1, 2, 3, 4, 5), 4, (4, 4, False))):
+        got, n, ok = steady(reads_of(values), lambda: None, limit)
+        cases.append({"case": name, "gate_must_pass": True,
+                      "gate_passed": (got[0]["backend_req"], n, ok) == want})
     wrong = [c["case"] for c in cases if c["gate_passed"] != c["gate_must_pass"]]
     if wrong:
         raise RuntimeError(f"the cache suite's gate is wrong for: {wrong}")
