@@ -8,8 +8,9 @@ few of its functions when the server starts. Serve it in place of
 
 ALERTA_FAST selects the patches, comma-separated. The default is "safe":
 reuse, nolog, onecount and nosentry, which leave every write of Alerta as
-it is. `hot` changes when and how surely two counters are written, so it is
-never on unless it is named: ALERTA_FAST=safe,hot.
+it is. `hot` changes when and how surely two counters are written, and
+`noecho` leaves out a write that changes nothing, so each is never on
+unless it is named: ALERTA_FAST=safe,hot,noecho.
   reuse     One PostgreSQL connection per worker thread, kept between
             requests, in place of a new connection per request. A request
             ends with ROLLBACK (Alerta commits its own writes), so no open
@@ -49,6 +50,44 @@ never on unless it is named: ALERTA_FAST=safe,hot.
                          was reported to the worker as failed is written
                          again.
             Do not use `hot` where key-use counts or metrics must be exact.
+  noecho    OPT-IN. After a plugin's post-receive or action hook returns the
+            alert (the default `forwarder` plugin always does, with or
+            without a destination), Alerta writes the alert's tags and
+            attributes again: two more UPDATEs, each with its own commit,
+            and each with `WHERE id=... OR id LIKE ...`, which reads the
+            whole table. With `noecho` the row is first read by its id
+            (primary key). When the stored tags are the same set, with no
+            tag twice and no NULL, the tags are not written. When
+            PostgreSQL renders the stored attributes and the document that
+            would be written as the same jsonb text, the attributes are
+            not written. The comparison is made in PostgreSQL, with
+            Alerta's own adaptation of the document, so 1, 1.0,
+            1.0000000000000001 and true all differ. In every other case
+            Alerta's own statement runs unchanged. The same holds for
+            `PUT /alert/<id>/attributes` and the status and action paths,
+            which use the same two functions.
+            Kept: Alerta's function commits the request's connection, so
+            a left-out write commits it too. What a plugin wrote earlier
+            in the request without a commit is committed at the same
+            point as in Alerta as released.
+            What changes when a write is left out:
+              order:     Alerta's write stores the tags in the order of a
+                         Python set, which differs from worker to worker.
+                         Without the write the stored order stays;
+              race:      a change that another request commits between
+                         this read and Alerta's write is overwritten by
+                         Alerta as released. Without the write it stays;
+              other ids: Alerta's statement has `id LIKE '<id>%'`, so it
+                         also overwrites every other alert whose id
+                         begins with this id, and `_` and `%` in this id
+                         are wildcards there (possible only with ids
+                         that a client chose). Without the write those
+                         rows stay as they are;
+              triggers:  an installation that added its own UPDATE
+                         trigger or rule to `alerts` does not see the
+                         two UPDATEs that changed nothing. Alerta itself
+                         has no trigger. The row's xmin does not change
+                         and no WAL is written for it.
   nolog     Alerta formats every SQL statement for a debug message before
             the logger checks its level. Skip that unless DEBUG is on.
   onecount  The list and the count read severity and status totals with
@@ -70,7 +109,7 @@ import threading
 import time
 
 SAFE = ("reuse", "nolog", "onecount", "nosentry")
-ALL = SAFE + ("hot",)
+ALL = SAFE + ("hot", "noecho")
 FEATURES = set()
 for _name in os.environ.get("ALERTA_FAST", "safe").split(","):
     if _name == "safe":
@@ -282,6 +321,47 @@ if "hot" in FEATURES:
     Backend.update_key_last_used = _update_key_last_used
     _metrics.Timer.stop_timer = _stop_timer
     _metrics.Counter.inc = _inc
+
+# ----------------------------------------------------------------- noecho
+
+if "noecho" in FEATURES:
+    _require(Backend, "update_tags", "update_attributes", "_fetchone")
+    _orig_update_tags = Backend.update_tags
+    _orig_update_attributes = Backend.update_attributes
+
+    def _same_tags(stored, sent):
+        """The same set of strings, and neither list has a tag twice."""
+        if not isinstance(stored, list) or not isinstance(sent, list):
+            return False
+        if not all(isinstance(t, str) for t in stored + sent):
+            return False
+        return len(set(sent)) == len(sent) and sorted(stored) == sorted(sent)
+
+    def _noecho_update_tags(self, id, tags):
+        row = self._fetchone("SELECT * FROM alerts WHERE id=%(id)s", {"id": id})
+        if row is not None and _same_tags(row.tags, tags):
+            self.get_db().commit()  # Alerta's _updateone commits here
+            return row
+        return _orig_update_tags(self, id, tags)
+
+    def _noecho_update_attributes(self, id, old_attrs, new_attrs):
+        # Alerta's own first two lines; its function repeats them with the
+        # same result.
+        old_attrs.update(new_attrs)
+        attrs = {k: v for k, v in old_attrs.items() if v is not None}
+        # `attrs` is sent as in Alerta's UPDATE. A document that cannot be
+        # sent, or that PostgreSQL refuses, fails here as it would there.
+        row = self._fetchone("""
+            SELECT attributes, attributes::text = (%(attrs)s::jsonb)::text AS same
+              FROM alerts WHERE id=%(id)s
+        """, {"id": id, "attrs": attrs})
+        if row is not None and row.same:
+            self.get_db().commit()  # Alerta's _updateone commits here
+            return row.attributes
+        return _orig_update_attributes(self, id, old_attrs, new_attrs)
+
+    Backend.update_tags = _noecho_update_tags
+    Backend.update_attributes = _noecho_update_attributes
 
 # ------------------------------------------------------------------ nolog
 
