@@ -1,116 +1,47 @@
-# alrust and Alerta 9.1.0 side by side (scripts/bench/bench_compare.py):
-# a diagnostic benchmark on one GitHub-hosted runner, PostgreSQL 18.7
-# (alrust's pin since #226, Y67), synthetic data only. The numbers are relative to the runner,
-# not a capacity claim. Not a required check. When it runs (the owner's
-# choice, DECISIONS Y69): a full run only when a person starts it
-# (workflow_dispatch, mode "full" by default); a pull request that changes
-# the benchmark runs only the quick check (1 repetition, c=1, 5 s) of every
-# suite. The mixed suite is docs/performance/benchmark-methodology.md. The
-# tuning suite compares deployment settings of Alerta (no change to its
-# code): its arms are listed at the top of bench_compare.py.
 name: bench compare
-
+run-name: Two-site Alerta dashboard replay
 on:
   workflow_dispatch:
-    inputs:
-      mode:
-        description: "full (3 repetitions, c=1 and c=8) or quick (plumbing only)"
-        type: choice
-        options: [full, quick]
-        default: full
-      suite:
-        description: "compare (the four arms), mixed (writers and readers together; pool and key-use sweeps), both, tuning (Alerta deployment settings), addon (alerta_fast.py patches) or all (quick mode only)"
-        type: choice
-        options: [compare, mixed, both, tuning, addon, all]
-        default: compare
-  pull_request:
-    paths:
-      - scripts/bench/**
-      - .github/workflows/bench-compare.yml
 
 permissions:
   contents: read
 
-concurrency:
-  group: bench-compare-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  bench:
-    name: alrust vs Alerta (PostgreSQL 18.7, relative numbers only)
+  replay:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 230
     steps:
-      # A full run of every suite needs more than the benchmark step's time:
-      # refused here, before anything is built.
-      - name: Refuse full mode with suite all
-        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full' && inputs.suite == 'all'
-        run: |
-          echo "::error::suite 'all' is for quick mode only. Start one full run for each of compare, mixed, both, tuning or addon."
-          exit 1
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          # The reference Alerta is installed from the pinned submodule.
           submodules: true
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0 (Node24)
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
-          python-version: "3.12"
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master resolved 2026-11-06
-        with:
-          toolchain: "1.100.0"
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2 resolved 2026-11-06
-      - name: Build alrust (release)
+          python-version: '3.12'
+      - name: Verify workload, cache accounting and archived laptop measurements offline
+        run: |
+          python -B -m unittest discover -s scripts/bench/dual-site -p 'test_*.py'
+          python -B scripts/bench/dual-site/cache_replay_evidence.py verify docs/performance/2026-11-21-two-site-varnish-samples.json.gz
+      - name: Install the repository's reference server and PostgreSQL
         timeout-minutes: 20
-        run: |
-          cargo build --locked --release --bin alrust
-          echo "ALRUST_BIN=$GITHUB_WORKSPACE/target/release/alrust" >> "$GITHUB_ENV"
-      - name: Install oha 1.17.0 (crates.io, locked)
-        timeout-minutes: 15
-        run: |
-          set -euo pipefail
-          # Outside the checkout, so the repository's Cargo config does not apply.
-          cd "$RUNNER_TEMP"
-          cargo install oha --version 1.17.0 --locked --root "$RUNNER_TEMP/oha"
-          echo "OHA_BIN=$RUNNER_TEMP/oha/bin/oha" >> "$GITHUB_ENV"
-          "$RUNNER_TEMP/oha/bin/oha" --version
-          "$RUNNER_TEMP/oha/bin/oha" --help
-      # The mixed suite's gates, tested without a server. First of the
-      # benchmark steps, so a broken gate stops the job before anything runs.
-      - name: Mixed suite gate tests (no server)
-        timeout-minutes: 2
-        run: python3 -I scripts/bench/test_mixed_checks.py
-      - name: PostgreSQL 18.7, pgbouncer and the reference Alerta environment
-        timeout-minutes: 15
-        run: scripts/bench/setup.sh
-      - name: Benchmark
-        # The tuning suite has six arms: about 45 minutes in full mode.
-        timeout-minutes: 60
+        run: bash scripts/bench/setup.sh
+      - name: Install the pinned cache, proxy and quorum tools
         env:
-          BENCH_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'quick' }}
-          # A pull request checks the plumbing of every suite.
-          BENCH_SUITE: ${{ github.event_name == 'workflow_dispatch' && inputs.suite || 'all' }}
-        run: |
-          set -euo pipefail
-          echo "BENCH_OUT=$RUNNER_TEMP/bench-out" >> "$GITHUB_ENV"
-          status=0
-          python3 -I scripts/bench/bench_compare.py "$RUNNER_TEMP/bench-out" || status=$?
-          if [ -f "$RUNNER_TEMP/bench-out/summary.md" ]; then
-            cat "$RUNNER_TEMP/bench-out/summary.md" >> "$GITHUB_STEP_SUMMARY"
-          fi
-          exit "$status"
-      - name: Collect environment records
-        if: always() && env.BENCH_OUT != ''
-        run: |
-          cp "$BENCH_WORK/alerta-pip-freeze.txt" "$BENCH_OUT/" 2>/dev/null || true
-          cp "$BENCH_WORK/pg.log" "$BENCH_OUT/postgres.log" 2>/dev/null || true
-          cp "$BENCH_WORK/pgb/pgbouncer.log" "$BENCH_OUT/" 2>/dev/null || true
-          nproc > "$BENCH_OUT/nproc.txt"; free -m > "$BENCH_OUT/free.txt"
-      - name: Upload results (7-day artifact)
-        if: always() && env.BENCH_OUT != ''
-        timeout-minutes: 2
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        timeout-minutes: 25
+        run: bash scripts/bench/dual-site/hosted-setup.sh
+      - name: Run independent cache-off and one-second pairs in sequence
+        env:
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        timeout-minutes: 180
+        run: python -B scripts/bench/dual-site/hosted_matrix.py
+      - name: Upload verified synthetic receipts and completion status
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: bench-compare-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ env.BENCH_OUT }}
-          retention-days: 7
+          name: two-site-cache-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/cache-public/matrix.json
+            ${{ runner.temp }}/cache-public/samples.json.gz
+          if-no-files-found: warn
+          retention-days: 14

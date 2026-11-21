@@ -208,3 +208,5 @@ occupancy and no lock waits.
   that none was seen here.
 
 Each of these is stated with its run id and raw results, or not at all.
+
+For Python Alerta deployments spanning two sites, the dashboard study records Varnish hits, origin load, response latency and revocation timing alongside the reproducible workload. [Two-site operator dashboard benchmark](2026-11-21-two-site-varnish.md)
