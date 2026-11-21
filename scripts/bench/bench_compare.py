@@ -125,6 +125,7 @@ from urllib.parse import urlsplit
 
 # `python3 -I` leaves the script's directory off the path.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cache_suite  # noqa: E402
 from mixed_checks import cell_valid, served_time_problems  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -140,8 +141,8 @@ if MODE not in ("quick", "full"):
     sys.exit(f"BENCH_MODE must be quick or full, not {MODE!r}")
 QUICK = MODE == "quick"
 SUITE = os.environ.get("BENCH_SUITE", "compare")
-if SUITE not in ("compare", "mixed", "both", "tuning", "addon", "all"):
-    sys.exit(f"BENCH_SUITE must be compare, mixed, both, tuning, addon or all, not {SUITE!r}")
+if SUITE not in ("compare", "mixed", "both", "tuning", "addon", "cache", "all"):
+    sys.exit(f"BENCH_SUITE must be compare, mixed, both, tuning, addon, cache or all, not {SUITE!r}")
 
 KEY = "bench-key-0123456789abcdef0123456789abcdef"
 HEADERS = {
@@ -159,12 +160,14 @@ ADDON_ARMS = ["alrust", f"alerta-{VCPUS}x4-nofwd", f"alerta-{VCPUS}x4-pgbu-nofwd
               f"alerta-{VCPUS}x4-reuse-nofwd", f"alerta-{VCPUS}x4-safe-nofwd",
               f"alerta-{VCPUS}x4-safe-hot-nofwd"]
 ADDON = SUITE in ("addon", "all")
+# The cache suite is scripts/bench/cache_suite.py.
+CACHE = SUITE in ("cache", "all")
 if SUITE == "all" and MODE == "full":
     # Every arm's 18 cells and the 45 mixed cells, at 20 s each, are more
     # than an hour before any start, stop or check: more than the benchmark
     # step allows.
     sys.exit("BENCH_SUITE=all is for the quick check only. A full run takes one of "
-             "compare, mixed, both, tuning or addon; start one run for each.")
+             "compare, mixed, both, tuning, addon or cache; start one run for each.")
 # The arms of the compare cases in this run, each once, in order.
 ARMS = list(dict.fromkeys((COMPARE_ARMS if SUITE in ("compare", "both", "all") else [])
                           + (TUNE_ARMS if SUITE in ("tuning", "all") else [])
@@ -264,8 +267,9 @@ def db_url(db, port=5432):
     return f"postgresql://postgres:postgres@127.0.0.1:{port}/{db}"
 
 
-def start(arm, db, logf, extra_env=None):
-    """Start one arm's server on database `db`; returns (process, base url)."""
+def start(arm, db, logf, extra_env=None, port=8081):
+    """Start one arm's server on database `db`; returns (process, base url).
+    `port` is an Alerta arm's port; alrust is always on 8080."""
     if arm.startswith("alrust"):
         env = dict(os.environ, DATABASE_URL=db_url(db), ALRUST_BIND="127.0.0.1:8080",
                    ALRUST_AUTH_REQUIRED="true", RUST_LOG="warn", **ARM_ENV.get(arm, {}))
@@ -300,9 +304,9 @@ def start(arm, db, logf, extra_env=None):
         preload = ["--preload"] if workers > 1 else []
         proc = subprocess.Popen([str(VENV / "bin/gunicorn"), "--workers", str(workers),
                                  "--worker-class", "gthread", "--threads", str(threads), *preload,
-                                 "--bind", "127.0.0.1:8081", *target],
+                                 "--bind", f"127.0.0.1:{port}", *target],
                                 env=env, cwd=str(WORK), stdout=logf, stderr=subprocess.STDOUT)
-        base = "http://127.0.0.1:8081"
+        base = f"http://127.0.0.1:{port}"
     wait_ready(base, proc)
     return proc, base
 
@@ -1060,6 +1064,8 @@ def main():
         dbs[("probe",)] = "bench_probe"
     if ADDON:
         dbs[("addon-probe",)] = "bench_addon_probe"
+    if CACHE:
+        dbs.update(cache_suite.databases(sys.modules[__name__]))
     for arm in ARMS if compare else []:
         safe = arm.replace("-", "_")
         dbs[(arm, "read")] = f"bench_read_{safe}"
@@ -1116,6 +1122,8 @@ def main():
                             cell(arm, proc, base, "write-dup", conc, rep, db, json_flag, record)
                         finally:
                             stop(proc)
+        if CACHE and not cache_suite.run(sys.modules[__name__], record, dbs):
+            all_ok = False
     finally:
         stop(pgb)
         cells_ok = cell_gate(record)
@@ -1125,7 +1133,7 @@ def main():
         except Exception as e:  # a partial run still keeps results.json
             print(f"summary failed: {e!r}", file=sys.stderr)
     if not all_ok:
-        sys.exit("a correctness check failed; see results.json")
+        sys.exit("a correctness check or a cache suite cell failed; see results.json")
     if not cells_ok:
         g = record["cell_gate"]
         sys.exit(f"compare cells [arm, case, c, repetition]: {len(g['missing'])} missing {g['missing']}, "
@@ -1215,6 +1223,8 @@ def write_summary(record):
             lines.append(f"- FAILED {c['arm']} c={c['c']} r{c['rep']}: {c['persisted']['problems']}")
     if record["mixed_cells"]:
         lines += mixed_summary(record)
+    if "cache" in record:
+        lines += cache_suite.summary(record)
     (OUT / "summary.md").write_text("\n".join(lines) + "\n")
 
 

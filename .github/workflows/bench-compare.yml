@@ -7,7 +7,9 @@
 # the benchmark runs only the quick check (1 repetition, c=1, 5 s) of every
 # suite. The mixed suite is docs/performance/benchmark-methodology.md. The
 # tuning suite compares deployment settings of Alerta (no change to its
-# code): its arms are listed at the top of bench_compare.py.
+# code): its arms are listed at the top of bench_compare.py. The cache suite
+# puts a short-lived response cache in front of Alerta
+# (scripts/bench/cache_suite.py).
 name: bench compare
 
 on:
@@ -19,9 +21,9 @@ on:
         options: [full, quick]
         default: full
       suite:
-        description: "compare (the four arms), mixed (writers and readers together; pool and key-use sweeps), both, tuning (Alerta deployment settings), addon (alerta_fast.py patches) or all (quick mode only)"
+        description: "compare (the four arms), mixed (writers and readers together; pool and key-use sweeps), both, tuning (Alerta deployment settings), addon (alerta_fast.py patches), cache (a response cache in front of Alerta) or all (quick mode only)"
         type: choice
-        options: [compare, mixed, both, tuning, addon, all]
+        options: [compare, mixed, both, tuning, addon, cache, all]
         default: compare
   pull_request:
     paths:
@@ -46,7 +48,7 @@ jobs:
       - name: Refuse full mode with suite all
         if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full' && inputs.suite == 'all'
         run: |
-          echo "::error::suite 'all' is for quick mode only. Start one full run for each of compare, mixed, both, tuning or addon."
+          echo "::error::suite 'all' is for quick mode only. Start one full run for each of compare, mixed, both, tuning, addon or cache."
           exit 1
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
         with:
@@ -80,7 +82,7 @@ jobs:
       - name: Mixed suite gate tests (no server)
         timeout-minutes: 2
         run: python3 -I scripts/bench/test_mixed_checks.py
-      - name: PostgreSQL 18.7, pgbouncer and the reference Alerta environment
+      - name: PostgreSQL 18.7, pgbouncer, Varnish, HAProxy and the reference Alerta environment
         timeout-minutes: 15
         run: scripts/bench/setup.sh
       - name: Benchmark
