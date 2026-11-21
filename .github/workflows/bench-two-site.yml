@@ -1,0 +1,103 @@
+# Alerta at two data sites with one PostgreSQL primary
+# (scripts/bench/dual-site/placement.py): must Alerta run at the primary's
+# site, and what does the add-on's `noecho` patch give there? A diagnostic
+# on one GitHub-hosted runner with emulated links between the sites,
+# synthetic data only. The numbers are relative to the runner, not a
+# capacity claim. Not a required check. When it runs (DECISIONS Y69): a
+# full run only when a person starts it (workflow_dispatch); a pull request
+# that changes the lab runs only the quick check (one short block of each
+# stage), which tests the plumbing and gives no result.
+name: bench two-site
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "full (3 placement blocks and 2 fresh-ingest blocks of 50 s per arm) or quick (plumbing only)"
+        type: choice
+        options: [full, quick]
+        default: full
+  pull_request:
+    paths:
+      - scripts/bench/dual-site/**
+      - scripts/bench/dual_site_quorum.py
+      - scripts/bench/alerta_fast.py
+      - scripts/bench/fastpath_check.py
+      - scripts/bench/setup.sh
+      - .github/workflows/bench-two-site.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bench-two-site-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  two-site:
+    name: Alerta at two sites (relative numbers only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
+        with:
+          # The reference Alerta is installed from the pinned submodule.
+          submodules: true
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0 (Node24)
+        with:
+          python-version: "3.12"
+      # The plan, the read check and the summaries, without a server. First,
+      # so a broken check stops the job before anything is installed.
+      - name: Self-test (no server)
+        timeout-minutes: 2
+        run: python3 -I -B scripts/bench/dual-site/placement.py --self-test
+      - name: PostgreSQL 18.7, pgbouncer and the reference Alerta environment
+        timeout-minutes: 15
+        run: scripts/bench/setup.sh
+      - name: Patroni, etcd 3.6.15 and HAProxy 3.4.7 (checked downloads)
+        timeout-minutes: 15
+        run: scripts/bench/dual-site/hosted-setup.sh
+      # The lab runs as the runner's user in its own network and process
+      # namespaces (hosted-netem.sh sets the links' delay, jitter, loss and
+      # rate there), in a scope with 2 CPUs and 4 GiB and no swap.
+      - name: Benchmark
+        timeout-minutes: 55
+        env:
+          BENCH_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'quick' }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/two-site-out"
+          tmp="$RUNNER_TEMP/two-site-tmp"
+          mkdir "$tmp"
+          echo "BENCH_OUT=$out" >> "$GITHUB_ENV"
+          d="$GITHUB_WORKSPACE/scripts/bench/dual-site"
+          status=0
+          sudo -n systemd-run --scope --quiet --unit "bench-two-site-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
+            -p CPUQuota=200% -p MemoryMax=4G -p MemorySwapMax=0 -p RuntimeMaxSec=3000 \
+            env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin TMPDIR="$tmp" \
+              GITHUB_ACTIONS=true RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
+            /usr/bin/unshare --net --pid --fork --kill-child --mount-proc \
+            /bin/bash "$d/hosted-netem.sh" "$(readlink /proc/self/ns/net)" "$(id -u)" "$(id -g)" \
+            /usr/bin/timeout --signal=INT --kill-after=25s 2900 \
+            "$BENCH_ALERTA_VENV/bin/python" -I -B "$d/placement.py" --mode "$BENCH_MODE" --output "$out" \
+              --etcd "$BENCH_WORK/bin/etcd" --haproxy "$BENCH_WORK/bin/haproxy" --pgbouncer "$BENCH_PGBOUNCER" \
+              --pg-bin "$BENCH_PG_BIN" --venv "$BENCH_ALERTA_VENV" || status=$?
+          if [ -f "$out/summary.md" ]; then
+            cat "$out/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$status"
+      - name: Collect environment records
+        if: always() && env.BENCH_OUT != ''
+        run: |
+          mkdir -p "$BENCH_OUT"
+          cp "$BENCH_WORK/alerta-pip-freeze.txt" "$BENCH_OUT/" 2>/dev/null || true
+          nproc > "$BENCH_OUT/nproc.txt"; free -m > "$BENCH_OUT/free.txt"
+      - name: Upload results (7-day artifact)
+        if: always() && env.BENCH_OUT != ''
+        timeout-minutes: 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: bench-two-site-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.BENCH_OUT }}
+          retention-days: 7

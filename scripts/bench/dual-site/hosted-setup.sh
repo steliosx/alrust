@@ -32,4 +32,5 @@ SUMS
 "$bin/etcd" --version
 /usr/sbin/varnishd -V
 "$BENCH_ALERTA_VENV/bin/patroni" --version
-sha256sum -c <<< '9d92181b0109cfe9974dfee05109117d24abeaa7686ad3d0305a2342a2327062  scripts/bench/dual-site/fixture/alerta_fast.py'
+# The add-on is main's scripts/bench/alerta_fast.py (placement.py checks the same blob).
+[[ $(git hash-object scripts/bench/alerta_fast.py) == c858e28004376b33163c26d3040ce2c1afead7f7 ]]
