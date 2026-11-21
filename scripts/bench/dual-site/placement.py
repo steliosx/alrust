@@ -408,7 +408,9 @@ class PlacementLab(hosted_lab.VirtualLab):
     def __init__(self, args, root, logdir):
         super().__init__(args, root, logdir)
         # Every Alerta process: each key sees only its customer's alerts.
-        self.env = {**self.env, "CUSTOMER_VIEWS": "True"}
+        # Alerta does not start with customer views and no admin user; no
+        # request of the benchmark is that user's.
+        self.env = {**self.env, "CUSTOMER_VIEWS": "True", "ADMIN_USERS": "bench"}
         self.keys = {tenant: secrets.token_hex(20) for tenant in TENANTS}
         self.settings = defaultdict(list)
 
