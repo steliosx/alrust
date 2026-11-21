@@ -93,15 +93,24 @@ reading the whole table is small here; the commits are not.
 Before the suite's first cell, three checks (probe_fastpath). A failure
 stops the run before anything is scored.
   Differential: scripts/bench/fastpath_check.py, in the reference Alerta
-    environment: Alerta's two functions and the patched ones on equal rows.
+    environment: Alerta's two functions and the patched ones on equal rows,
+    the commit of an earlier statement of the request, and ids that
+    Alerta's LIKE also matches.
   Server: on one worker with one thread, one new alert and 20 duplicates of
     it, with the default plugins, without and with `noecho`. Every answer
     must be 201. With `noecho` the alerts table must count exactly 20 row
     updates (one for each duplicate); without it, two more for each of the
-    21 requests; and the two stored alerts must have equal tags and
-    attributes.
-  Plan: with FAST_INDEX, the plan of Alerta's statement must have no
-    sequential scan. The plan without the index is recorded, not gated.
+    21 requests. The count is of row updates (n_tup_upd), not of commits
+    or WAL. It is read when no backend is left on the database: a backend
+    writes its counts before it leaves pg_stat_activity.
+    Each arm must leave exactly one row for its resource, with duplicate
+    count 20, no tags and the attributes that `remote_ip` sets.
+  Plan: Alerta's statement, EXPLAIN (FORMAT JSON), without and with
+    FAST_INDEX on the same statistics (the seed is analyzed once, before
+    any copy). With the index the plan must have no sequential scan and
+    use that index only. The plan without the index is recorded, with the
+    indexes it uses, and not gated: under collation C the primary key's
+    index could already serve it.
 
 BENCH_MODE selects "quick" (plumbing: 1 repetition, c=1, 5 s; the default)
 or "full". The workflow passes "quick" on pull requests and the dispatch
@@ -482,6 +491,8 @@ def seed(record):
                     raise RuntimeError(f"seed alert {i}: {status} {raw[:200]!r}")
         finally:
             stop(proc)
+    # Every copy starts with the same planner statistics.
+    psql("bench_seed", "ANALYZE")
     record["seed"] = {"alerts": int(psql("bench_seed", "SELECT count(*) FROM alerts"))}
 
 
@@ -825,47 +836,72 @@ def probe_fastpath(record):
     probe["differential"] = {"exit": r.returncode, "cases": d.get("cases"), "failed": d.get("failed")}
     if r.returncode or not d.get("ok") or not d.get("cases"):
         fail("differential")
-    # Its backend reports its counts when it ends; the next part reads them.
-    time.sleep(2.0)
 
     # Server.
-    updates = lambda: int(psql(db, "SELECT n_tup_upd FROM pg_stat_user_tables WHERE relname = 'alerts'"))
-    stored = lambda resource: sql_json(db, "SELECT json_build_object('tags', tags, 'attributes', "
-                                           f"attributes) FROM alerts WHERE resource = '{resource}'")
-    s = probe["server"] = {}
-    for arm in ("alerta-1x1-safe", "alerta-1x1-safe-noecho"):
+    def updates():
+        """(row updates of `alerts`, tenths of a second waited, barrier
+        reached). The barrier: no backend is left on the database. A
+        backend writes its counts to the shared statistics before it
+        leaves pg_stat_activity, so a reading after that has them all."""
+        for waited in range(100):
+            if psql("postgres", f"SELECT count(*) FROM pg_stat_activity WHERE datname = '{db}'") == "0":
+                return int(psql(db, "SELECT n_tup_upd FROM pg_stat_user_tables "
+                                    "WHERE relname = 'alerts'")), waited, True
+            time.sleep(0.1)
+        return -1, 100, False
+
+    rows = lambda resource: sql_json(db, "SELECT COALESCE(json_agg(json_build_object('tags', tags, "
+                                         "'attributes', attributes, 'duplicate_count', duplicate_count)), "
+                                         f"'[]') FROM alerts WHERE resource = '{resource}'")
+    wanted_rows = [{"tags": [], "attributes": {"ip": "127.0.0.1"}, "duplicate_count": n}]
+    s = probe["server"] = {"rows_wanted": wanted_rows}
+    for arm, wanted in (("alerta-1x1-safe", n + 2 * (n + 1)), ("alerta-1x1-safe-noecho", n)):
         resource = f"fastpath-probe-{arm}"
         body = json.dumps(dict(DUP_ALERT, resource=resource))
-        before = updates()
+        before, before_waited, before_quiet = updates()
         with open(OUT / f"server-fastpath-probe-{arm}.log", "w") as logf:
             proc, base = start(arm, db, logf)
             try:
                 statuses = [http("POST", base + "/alert", body)[0] for _ in range(n + 1)]
             finally:
                 stop(proc)
-        # A backend reports its counts when it ends, at the latest.
-        time.sleep(2.0)
-        s[arm] = {"non_201": sum(1 for x in statuses if x != 201),
-                  "alert_row_updates": updates() - before, "stored": stored(resource)}
-    plain, patched = s["alerta-1x1-safe"], s["alerta-1x1-safe-noecho"]
-    if (plain["non_201"] or patched["non_201"] or patched["alert_row_updates"] != n
-            or plain["alert_row_updates"] != n + 2 * (n + 1) or plain["stored"] != patched["stored"]):
-        fail("server")
+        after, after_waited, after_quiet = updates()
+        s[arm] = {"statuses_not_201": sum(1 for x in statuses if x != 201),
+                  "n_tup_upd_before": before, "n_tup_upd_after": after,
+                  "no_backend_left": [before_quiet, after_quiet],
+                  "waited_tenths": [before_waited, after_waited],
+                  "alert_row_updates": after - before, "alert_row_updates_wanted": wanted,
+                  "rows": rows(resource)}
+        if (s[arm]["statuses_not_201"] or not before_quiet or not after_quiet
+                or after - before != wanted or s[arm]["rows"] != wanted_rows):
+            fail(f"server, {arm}")
 
-    # Plan.
-    statement = ("EXPLAIN UPDATE alerts SET tags = tags WHERE id = '{0}' OR id LIKE '{0}%'"
+    # Plan. Both plans are made on the statistics of the seed's ANALYZE.
+    statement = ("EXPLAIN (FORMAT JSON) UPDATE alerts SET tags = tags WHERE id = '{0}' OR id LIKE '{0}%'"
                  .format("00000000-0000-4000-8000-000000000000"))
+
+    def plan():
+        nodes, todo = [], [sql_json(db, statement)[0]["Plan"]]
+        while todo:
+            node = todo.pop()
+            nodes.append({"node": node["Node Type"], "index": node.get("Index Name"),
+                          "condition": node.get("Index Cond") or node.get("Filter")})
+            todo += node.get("Plans", [])
+        return {"nodes": nodes, "sequential_scan": any(x["node"] == "Seq Scan" for x in nodes),
+                "indexes": sorted({x["index"] for x in nodes if x["index"]})}
+
     probe["plan"] = {"collation": psql("postgres", "SELECT datcollate FROM pg_database "
                                                    f"WHERE datname = '{db}'"),
-                     "without_index": psql(db, statement)}
+                     "statistics_columns": int(psql(db, "SELECT count(*) FROM pg_stats "
+                                                        "WHERE tablename = 'alerts'")),
+                     "without_index": plan()}
     psql(db, FAST_INDEX)
-    psql(db, "ANALYZE alerts")
-    probe["plan"]["with_index"] = psql(db, statement)
-    if "Seq Scan" in probe["plan"]["with_index"]:
+    probe["plan"]["with_index"] = plan()
+    if (not probe["plan"]["statistics_columns"] or probe["plan"]["with_index"]["sequential_scan"]
+            or probe["plan"]["with_index"]["indexes"] != ["alerts_id_pattern"]):
         fail("plan")
     probe["ok"] = True
-    log(f"fastpath checks passed: {probe['differential']}; server {s}; "
-        f"sequential scan without the index: {'Seq Scan' in probe['plan']['without_index']}")
+    log(f"fastpath checks passed: {probe['differential']}; server {s}; plan {probe['plan']}")
 
 
 def key_updates(db):
@@ -1206,7 +1242,6 @@ def main():
     for key, name in dbs.items():
         if "idx" in str(key[0]).split("-")[2:]:
             psql(name, FAST_INDEX)
-            psql(name, "ANALYZE alerts")
     log(f"{len(dbs)} database copies created")
     if mixed:
         probe_pool_setting(record)
@@ -1343,14 +1378,18 @@ def write_summary(record):
     if record.get("fastpath_probe", {}).get("ok"):
         f = record["fastpath_probe"]
         plain, patched = f["server"]["alerta-1x1-safe"], f["server"]["alerta-1x1-safe-noecho"]
+        without, with_index = f["plan"]["without_index"], f["plan"]["with_index"]
         lines += ["", "Fastpath checks, all passed:",
                   f"- differential: {f['differential']['cases']} cases, Alerta's functions and the "
-                  "patched ones agree;",
+                  "patched ones agree; a left-out write commits as Alerta's write does;",
                   f"- server: one new alert and {f['duplicates']} duplicates gave "
                   f"{plain['alert_row_updates']} row updates of `alerts` with the default plugins and "
-                  f"{patched['alert_row_updates']} with `noecho`; the stored tags and attributes are equal;",
-                  f"- plan: with the index, no sequential scan; without it, a sequential scan: "
-                  f"{'Seq Scan' in f['plan']['without_index']} (collation {f['plan']['collation']})."]
+                  f"{patched['alert_row_updates']} with `noecho` (row updates, not commits or WAL); each "
+                  f"left one row with duplicate count {f['duplicates']} and the tags and attributes wanted;",
+                  f"- plan of Alerta's `id=... OR id LIKE ...` (collation {f['plan']['collation']}, same "
+                  f"statistics): without the index, sequential scan {without['sequential_scan']}, indexes "
+                  f"{without['indexes']}; with it, sequential scan {with_index['sequential_scan']}, "
+                  f"indexes {with_index['indexes']}."]
     writes = [c for c in record["cells"] if "persisted" in c]
     if writes:
         bad = [c for c in writes if not c["persisted"]["ok"]]
