@@ -9,7 +9,14 @@ The methodology of the mixed suite is [benchmark-methodology.md](benchmark-metho
 ## How this report was made
 
 - **Harness:** `scripts/bench/bench_compare.py` of this repository, the same program that the
-  hosted workflow `bench compare` runs. Here it ran on a laptop, in mode `full`, suite `mixed`.
+  hosted workflow `bench compare` runs.
+- **Harness revision:** the run did not record the revision of the harness files. The run script
+  started the harness from a checkout of this repository and recorded that checkout's `HEAD` as
+  the alrust commit, `38c671382e8aa0860d616e4931a0a82dfeafc9de`. A check after the runs found the
+  checkout at that commit with no local change, and `bench_compare.py` there is Git blob
+  `dbc6d1a553618ed181e8f986bee12e9c6107b8ba`, last written the day before the runs. That is an
+  inference from a later check, not a record of the run. The harness of later revisions also
+  writes a `cell_gate` field; this results file has none. Here it ran on a laptop, in mode `full`, suite `mixed`.
 - **Machine:** one laptop with 8 logical CPUs (a four-core laptop processor from 2014) and 16 GB
   of memory, on mains power. The host name, the kernel version and local paths are not in this
   report; they are not needed to read it.

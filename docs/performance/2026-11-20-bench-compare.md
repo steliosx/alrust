@@ -7,7 +7,14 @@ other machine. The mixed run from the same laptop is [2026-11-20-mixed-bench.md]
 ## How this report was made
 
 - **Harness:** `scripts/bench/bench_compare.py` of this repository, the same program that the
-  hosted workflow `bench compare` runs. Here it ran on a laptop, in mode `full`, suite `compare`.
+  hosted workflow `bench compare` runs.
+- **Harness revision:** the run did not record the revision of the harness files. The run script
+  started the harness from a checkout of this repository and recorded that checkout's `HEAD` as
+  the alrust commit, `38c671382e8aa0860d616e4931a0a82dfeafc9de`. A check after the runs found the
+  checkout at that commit with no local change, and `bench_compare.py` there is Git blob
+  `dbc6d1a553618ed181e8f986bee12e9c6107b8ba`, last written the day before the runs. That is an
+  inference from a later check, not a record of the run. The harness of later revisions also
+  writes a `cell_gate` field; this results file has none. Here it ran on a laptop, in mode `full`, suite `compare`.
 - **Machine:** one laptop with 8 logical CPUs (a four-core laptop processor from 2014) and 16 GB
   of memory, on mains power. The host name, the kernel version and local paths are not in this
   report; they are not needed to read it.
@@ -107,8 +114,8 @@ rounded milliseconds. Read these ratios on this laptop only.
 No capacity for this laptop or for any other host. The load average above
 is part of the record, and other work was active later in the afternoon on
 the mixed run. No comparison that carries the hosted 15 November rates onto
-this machine: the CPU count, the Alerta worker arm, the PostgreSQL build,
-and the network mode differ, and the harness summary's "hosted runner"
+this machine: the CPU count, the Alerta worker arm and the PostgreSQL build
+differ, and the harness summary's "hosted runner"
 sentence does not describe this run. No confidence interval beyond the
 repetitions in the results file. The duplicate-write case is the duplicate
 path only. Nothing here qualifies a release.
