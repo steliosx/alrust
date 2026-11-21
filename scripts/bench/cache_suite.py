@@ -783,19 +783,34 @@ def oha(bc, st, case, conc, seconds, out_file, json_flag):
     return json.loads(r.stdout)
 
 
-def steady(read, wait, limit=30):
-    """Read the counters until two reads in a row are equal. Varnish adds a
-    worker thread's numbers to the totals when the thread ends its task, so a
-    read at the moment the load tool stops can miss the last requests (run
-    44903568987: 1932 of 1933). Returns (counters, number of reads, steady)."""
+QUIET_READS, QUIET_LIMIT, QUIET_WAIT_S = 10, 50, 0.1
+
+
+def settled(read, wait, quiet=QUIET_READS, limit=QUIET_LIMIT):
+    """Reads the counters at one boundary of a timed run, with no load.
+    Varnish adds a worker thread's numbers to the totals when the thread
+    ends a task and the lock is free (its `thread_stats_rate` text), so a
+    read just after the load tool stops can miss the last requests (run
+    44903568987, attempt 1: 1932 of 1933), and two equal reads do not show
+    that no more is to come. So the counters must rest: `quiet` reads in a
+    row equal, within `limit` reads. Returns (the last read, history,
+    resolved). The history has the first read and every changed read, each
+    with the number of its read. A change later than the rest interval is
+    not seen; the exact rule then fails the cell, or passes it wrongly by
+    the size of that change, and the saved history is the evidence."""
     last = read()
+    history, same = [{"read": 1, "counters": last}], 1
     for n in range(2, limit + 1):
+        if same >= quiet:
+            break
         wait()
         now = read()
         if now == last:
-            return now, n, True
-        last = now
-    return last, limit, False
+            same += 1
+        else:
+            last, same = now, 1
+            history.append({"read": n, "counters": now})
+    return last, history, same >= quiet
 
 
 def counter_problems(case, requests, before, after):
@@ -835,14 +850,18 @@ def cell(bc, st, arm, case, conc, rep, db, json_flag, rec):
         before = rows[0]["duplicate_count"] if len(rows) == 1 else None
         if before != warm["ok"]:
             problems.append(f"after the warm-up duplicate_count is {before!r}, {warm['ok']} counted")
-    cpu0, v0 = st.cpu(bc), st.stats()
+    # Both boundaries of the timed run are read the same way. A late count
+    # of the warm-up must not fall into the timed run's difference.
+    pause = lambda: time.sleep(QUIET_WAIT_S)
+    v0, history0, resolved0 = settled(st.stats, pause)
+    cpu0 = st.cpu(bc)
     t0 = time.monotonic()
     j = oha(bc, st, case, conc, bc.TIMED_S, raw / f"cache-timed-{arm}-{case}-c{conc}-r{rep}.json",
             json_flag)
     wall = time.monotonic() - t0
     cpu1 = st.cpu(bc)
     # No request is under way now: the load tool waited for its last answers.
-    v1, reads, is_steady = steady(st.stats, lambda: time.sleep(0.1))
+    v1, history1, resolved1 = settled(st.stats, pause)
     alive = st.alive()
     time.sleep(1.5)
     s = bc.summarize_oha(j)
@@ -864,13 +883,18 @@ def cell(bc, st, arm, case, conc, rep, db, json_flag, rec):
     for part in cpu0:
         s[f"{part}_cpu_ms_per_request"] = 1000 * (cpu1[part] - cpu0[part]) / hz / req
     if ttl_of(arm):
-        # Only backend_req is in a gate. The "before" read is 1.5 s after the
-        # warm-up; the "after" read is the first of two equal reads.
+        # Only backend_req is in a gate.
         delta, fetched, found = counter_problems(case, s["requests"], v0, v1)
         problems += found
-        if not is_steady:
-            problems.append(f"the caches' counters still changed after {reads} reads")
-        s["cache_nodes"] = {"before": v0, "after": v1, "delta": delta, "after_reads": reads}
+        for name, resolved in (("before", resolved0), ("after", resolved1)):
+            if not resolved:
+                problems.append(f"unresolved: the caches' counters did not rest for {QUIET_READS} reads "
+                                f"within {QUIET_LIMIT} reads {name} the timed run")
+        s["cache_nodes"] = {"before": v0, "after": v1, "delta": delta,
+                            "before_first": history0[0]["counters"], "after_first": history1[0]["counters"],
+                            "before_history": history0, "after_history": history1,
+                            "resolved": [resolved0, resolved1],
+                            "rest": {"reads": QUIET_READS, "limit": QUIET_LIMIT, "wait_s": QUIET_WAIT_S}}
         s["backend_requests"] = fetched
         s["hit_ratio"] = 1 - fetched / req
     s["problems"] = problems
@@ -1052,17 +1076,33 @@ def gate_self_test(planned):
             ("counters: a counter that went down", "count", 100, -1, False)):
         cases.append({"case": name, "gate_must_pass": good,
                       "gate_passed": not counter_problems(case, requests, zero, after(fetched))[2]})
-    # The wait for steady counters, on made-up reads.
+    # The two boundaries of a cell with 1933 requests that no cache may
+    # answer, on made-up reads: `start` and `end` are the backend_req
+    # values of the reads in order (the last one repeats). The rule is the
+    # cell's: both boundaries resolved, and the exact counter rule.
     def reads_of(values):
         left = list(values)
         return lambda: after(left.pop(0) if len(left) > 1 else left[0])
-    for name, values, limit, want in (
-            ("steady: a late backend request is waited for", (99, 100, 100), 30, (100, 3, True)),
-            ("steady: counters that are equal at once", (100, 100), 30, (100, 2, True)),
-            ("steady: counters that never rest are reported", (1, 2, 3, 4, 5), 4, (4, 4, False))):
-        got, n, ok = steady(reads_of(values), lambda: None, limit)
-        cases.append({"case": name, "gate_must_pass": True,
-                      "gate_passed": (got[0]["backend_req"], n, ok) == want})
+    def boundary_rule(start, end):
+        v0, _, r0 = settled(reads_of(start), lambda: None)
+        v1, h1, r1 = settled(reads_of(end), lambda: None)
+        return r0 and r1 and not counter_problems("write-dup", 1933, v0, v1)[2], h1
+    for name, start, end, good in (
+            ("rest: flat at once", (0,), (1933,), True),
+            ("rest: flat, then the late count arrives", (0,), (1932, 1932, 1933), True),
+            ("rest: a shortage that stays", (0,), (1932,), False),
+            ("rest: flat at the right number, then an excess", (0,), (1933, 1933, 1934), False),
+            ("rest: an excess after nine equal reads", (0,), (1933,) * 9 + (1934,), False),
+            ("rest: a late count of the warm-up is not the timed run's", (99, 99, 100), (2033,), True),
+            ("rest: a late count of the warm-up, and a shortage", (99, 99, 100), (2032,), False),
+            ("rest: counters that never rest at the end", (0,), tuple(range(1900, 1960)), False),
+            ("rest: counters that never rest at the start", tuple(range(60)), (1993,), False)):
+        cases.append({"case": name, "gate_must_pass": good, "gate_passed": boundary_rule(start, end)[0]})
+    history = boundary_rule((0,), (1932, 1932, 1933))[1]
+    cases.append({"case": "rest: the history keeps the first read and each change",
+                  "gate_must_pass": True,
+                  "gate_passed": [(h["read"], h["counters"][0]["backend_req"]) for h in history]
+                  == [(1, 1932), (3, 1933)]})
     wrong = [c["case"] for c in cases if c["gate_passed"] != c["gate_must_pass"]]
     if wrong:
         raise RuntimeError(f"the cache suite's gate is wrong for: {wrong}")
