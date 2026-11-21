@@ -116,7 +116,9 @@ on reads because of `hot` (the key's use count and the timers are written about 
 
 ## Limits
 
-- One runner and three repetitions. The arms ran in a fixed order.
+- One runner and three repetitions. The order of the arms moves by one place in each repetition
+  (the first arm of a repetition is the second arm of the one before), so each arm had three
+  of the five positions, not all five.
 - The write case sends one fixed duplicate alert with no tags and one attribute. An alert whose
   tags or attributes change on each receive gets no gain from `noecho`, and pays for one more
   read; this run did not measure that case.
