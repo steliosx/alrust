@@ -837,6 +837,29 @@ def counter_problems(case, requests, before, after):
     return delta, fetched, problems
 
 
+def cached_problems(case, requests, before, after, resolved, key_uses):
+    """The whole counter rule of one cell of an arm with caches; the cell
+    is valid only with no problem here. `before` and `after` are the settled
+    reads of the two boundaries, `resolved` says for each whether it rested,
+    `key_uses` is the benchmark key's use count at each. Returns (per-cache
+    deltas, backend requests, problems). The timed load uses one key, and
+    Alerta as released adds one to its use count, and commits, before it
+    answers a request that reached it. So the caches' backend requests and
+    the growth of that count are two accounts of the same requests. When
+    they differ, the suite cannot say which is right: the cell is
+    unresolved and not scored, and both numbers stay in the record."""
+    delta, fetched, problems = counter_problems(case, requests, before, after)
+    for name, rested in zip(("before", "after"), resolved):
+        if not rested:
+            problems.append(f"unresolved: the caches' counters did not rest for {QUIET_READS} reads "
+                            f"within {QUIET_LIMIT} reads {name} the timed run")
+    used = key_uses[1] - key_uses[0]
+    if used != fetched:
+        problems.append(f"unresolved: the caches count {fetched} backend requests, the key's use "
+                        f"count grew by {used}")
+    return delta, fetched, problems
+
+
 def cell(bc, st, arm, case, conc, rep, db, json_flag, rec):
     raw = bc.OUT / "raw"
     write, problems = case == "write-dup", []
@@ -852,11 +875,11 @@ def cell(bc, st, arm, case, conc, rep, db, json_flag, rec):
             problems.append(f"after the warm-up duplicate_count is {before!r}, {warm['ok']} counted")
     # Both boundaries of the timed run are read the same way. A late count
     # of the warm-up must not fall into the timed run's difference.
-    pause = lambda: time.sleep(QUIET_WAIT_S)
-    v0, history0, resolved0 = settled(st.stats, pause)
-    # A second account of the same requests, not in any gate: Alerta as
-    # released adds one to the key's use count, and commits, before it
-    # answers a request that reached it. The row is read, not statistics.
+    # An arm with no cache has no counters to wait for: one read.
+    pause, quiet = (lambda: time.sleep(QUIET_WAIT_S)), (QUIET_READS if ttl_of(arm) else 1)
+    v0, history0, resolved0 = settled(st.stats, pause, quiet)
+    # A second account of the same requests (cached_problems): the key's
+    # use count. The row is read, not statistics.
     key_uses = lambda: int(bc.psql(db, "SELECT count FROM keys WHERE id = 'bench-key'"))
     k0 = key_uses()
     cpu0 = st.cpu(bc)
@@ -866,7 +889,7 @@ def cell(bc, st, arm, case, conc, rep, db, json_flag, rec):
     wall = time.monotonic() - t0
     cpu1 = st.cpu(bc)
     # No request is under way now: the load tool waited for its last answers.
-    v1, history1, resolved1 = settled(st.stats, pause)
+    v1, history1, resolved1 = settled(st.stats, pause, quiet)
     k1 = key_uses()
     alive = st.alive()
     time.sleep(1.5)
@@ -889,13 +912,10 @@ def cell(bc, st, arm, case, conc, rep, db, json_flag, rec):
     for part in cpu0:
         s[f"{part}_cpu_ms_per_request"] = 1000 * (cpu1[part] - cpu0[part]) / hz / req
     if ttl_of(arm):
-        # Only backend_req is in a gate.
-        delta, fetched, found = counter_problems(case, s["requests"], v0, v1)
+        # Of the caches' counters only backend_req is in a gate.
+        delta, fetched, found = cached_problems(case, s["requests"], v0, v1,
+                                                (resolved0, resolved1), (k0, k1))
         problems += found
-        for name, resolved in (("before", resolved0), ("after", resolved1)):
-            if not resolved:
-                problems.append(f"unresolved: the caches' counters did not rest for {QUIET_READS} reads "
-                                f"within {QUIET_LIMIT} reads {name} the timed run")
         s["cache_nodes"] = {"before": v0, "after": v1, "delta": delta,
                             "before_first": history0[0]["counters"], "after_first": history1[0]["counters"],
                             "before_history": history0, "after_history": history1,
@@ -1091,10 +1111,12 @@ def gate_self_test(planned):
     def reads_of(values):
         left = list(values)
         return lambda: after(left.pop(0) if len(left) > 1 else left[0])
-    def boundary_rule(start, end):
+    def boundary_rule(start, end, used=None):
         v0, _, r0 = settled(reads_of(start), lambda: None)
         v1, h1, r1 = settled(reads_of(end), lambda: None)
-        return r0 and r1 and not counter_problems("write-dup", 1933, v0, v1)[2], h1
+        if used is None:  # the key's use count agrees with the caches
+            used = v1[0]["backend_req"] - v0[0]["backend_req"]
+        return not cached_problems("write-dup", 1933, v0, v1, (r0, r1), (7, 7 + used))[2], h1
     for name, start, end, good in (
             ("rest: flat at once", (0,), (1933,), True),
             ("rest: flat, then the late count arrives", (0,), (1932, 1932, 1933), True),
@@ -1106,6 +1128,11 @@ def gate_self_test(planned):
             ("rest: counters that never rest at the end", (0,), tuple(range(1900, 1960)), False),
             ("rest: counters that never rest at the start", tuple(range(60)), (1993,), False)):
         cases.append({"case": name, "gate_must_pass": good, "gate_passed": boundary_rule(start, end)[0]})
+    # The caches' numbers are right for the rule, the key's use count differs.
+    for name, used in (("key uses: one more than the caches count", 1934),
+                       ("key uses: one fewer than the caches count", 1932)):
+        cases.append({"case": name, "gate_must_pass": False,
+                      "gate_passed": boundary_rule((0,), (1933,), used)[0]})
     history = boundary_rule((0,), (1932, 1932, 1933))[1]
     cases.append({"case": "rest: the history keeps the first read and each change",
                   "gate_must_pass": True,
