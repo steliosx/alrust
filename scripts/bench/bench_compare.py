@@ -75,6 +75,34 @@ failure stops the run before anything is scored.
     write must still be absent (nothing replays it), and a new write of
     it must be saved once.
 
+The "fastpath" suite measures what is left on the write path when Alerta
+keeps its default plugins, `forwarder` among them (the tuning suite's
+text, above: every receive then writes the tags and attributes again, with
+two more commits and a `WHERE id=... OR id LIKE ...` that reads the table).
+Every arm is N workers with the add-on's default patches:
+  alerta-Nx4-safe-nofwd       the reference: the operator removed
+                              `forwarder` (the addon suite's arm);
+  alerta-Nx4-safe             the default plugins;
+  alerta-Nx4-safe-idx         and, in PostgreSQL only, an index that the
+                              `id LIKE` half can use (FAST_INDEX);
+  alerta-Nx4-safe-noecho      and the add-on's opt-in `noecho` patch (its
+                              file header), without that index;
+  alerta-Nx4-safe-hot-noecho  and `hot`.
+The seeded table has 1000 alerts, as in every suite, so the cost of
+reading the whole table is small here; the commits are not.
+Before the suite's first cell, three checks (probe_fastpath). A failure
+stops the run before anything is scored.
+  Differential: scripts/bench/fastpath_check.py, in the reference Alerta
+    environment: Alerta's two functions and the patched ones on equal rows.
+  Server: on one worker with one thread, one new alert and 20 duplicates of
+    it, with the default plugins, without and with `noecho`. Every answer
+    must be 201. With `noecho` the alerts table must count exactly 20 row
+    updates (one for each duplicate); without it, two more for each of the
+    21 requests; and the two stored alerts must have equal tags and
+    attributes.
+  Plan: with FAST_INDEX, the plan of Alerta's statement must have no
+    sequential scan. The plan without the index is recorded, not gated.
+
 BENCH_MODE selects "quick" (plumbing: 1 repetition, c=1, 5 s; the default)
 or "full". The workflow passes "quick" on pull requests and the dispatch
 input otherwise (DECISIONS Y69).
@@ -142,8 +170,8 @@ if MODE not in ("quick", "full"):
     sys.exit(f"BENCH_MODE must be quick or full, not {MODE!r}")
 QUICK = MODE == "quick"
 SUITE = os.environ.get("BENCH_SUITE", "compare")
-if SUITE not in ("compare", "mixed", "both", "tuning", "addon", "cache", "pg19", "all"):
-    sys.exit(f"BENCH_SUITE must be compare, mixed, both, tuning, addon, cache, pg19 or all, not {SUITE!r}")
+if SUITE not in ("compare", "mixed", "both", "tuning", "addon", "fastpath", "cache", "pg19", "all"):
+    sys.exit(f"BENCH_SUITE must be compare, mixed, both, tuning, addon, fastpath, cache, pg19 or all, not {SUITE!r}")
 
 KEY = "bench-key-0123456789abcdef0123456789abcdef"
 HEADERS = {
@@ -167,6 +195,13 @@ ADDON_ARMS = ["alrust", f"alerta-{VCPUS}x4-nofwd", f"alerta-{VCPUS}x4-pgbu-nofwd
               f"alerta-{VCPUS}x4-reuse-nofwd", f"alerta-{VCPUS}x4-safe-nofwd",
               f"alerta-{VCPUS}x4-safe-hot-nofwd"]
 ADDON = SUITE in ("addon", "all")
+FAST_ARMS = [f"alerta-{VCPUS}x4-safe-nofwd", f"alerta-{VCPUS}x4-safe", f"alerta-{VCPUS}x4-safe-idx",
+             f"alerta-{VCPUS}x4-safe-noecho", f"alerta-{VCPUS}x4-safe-hot-noecho"]
+FAST = SUITE in ("fastpath", "all")
+# PostgreSQL only: an index for the `id LIKE '<id>%'` half of Alerta's
+# `WHERE id=... OR id LIKE ...`, which the primary key's index cannot serve
+# under a collation other than C. An arm with the option `idx` has it.
+FAST_INDEX = "CREATE INDEX IF NOT EXISTS alerts_id_pattern ON alerts (id text_pattern_ops)"
 # The cache suite is scripts/bench/cache_suite.py.
 CACHE = SUITE in ("cache", "all")
 # The pg19 suite is scripts/bench/pg_suite.py.
@@ -176,13 +211,14 @@ if SUITE == "all" and MODE == "full":
     # than an hour before any start, stop or check: more than the benchmark
     # step allows.
     sys.exit("BENCH_SUITE=all is for the quick check only. A full run takes one of "
-             "compare, mixed, both, tuning, addon, cache or pg19; start one run for each.")
+             "compare, mixed, both, tuning, addon, fastpath, cache or pg19; start one run for each.")
 # The arms of the compare cases in this run, each once, in order.
 ARMS = list(dict.fromkeys((COMPARE_ARMS if SUITE in ("compare", "both", "all") else [])
                           + (TUNE_ARMS if SUITE in ("tuning", "all") else [])
-                          + (ADDON_ARMS if ADDON else [])))
+                          + (ADDON_ARMS if ADDON else [])
+                          + (FAST_ARMS if FAST else [])))
 # Arm options that load scripts/bench/alerta_fast.py, and its ALERTA_FAST value.
-ADDON_OPTIONS = {"reuse": "reuse", "safe": "safe", "hot": "hot"}
+ADDON_OPTIONS = {"reuse": "reuse", "safe": "safe", "hot": "hot", "noecho": "noecho"}
 # Alerta's default PLUGINS (settings.py) without `forwarder`.
 PLUGINS_NOFWD = "remote_ip,reject,heartbeat,blackout"
 REPS = 1 if QUICK else 3
@@ -287,7 +323,7 @@ def start(arm, db, logf, extra_env=None, port=8081):
     else:
         workers, threads = (int(x) for x in arm.split("-")[1].split("x"))
         options = arm.split("-")[2:]
-        unknown = set(options) - {"pgb", "pgbu", "nofwd", *ADDON_OPTIONS}
+        unknown = set(options) - {"pgb", "pgbu", "nofwd", "idx", *ADDON_OPTIONS}
         if unknown:
             raise ValueError(f"{arm}: unknown options {sorted(unknown)}")
         if "pgbu" in options:
@@ -767,6 +803,71 @@ def probe_addon(record):
     log(f"add-on checks passed: counts {probe['counts']}; stop {probe['stop']}; connections {c}")
 
 
+def probe_fastpath(record):
+    """The fastpath suite's checks before any cell: see the module text."""
+    db, n = "bench_fastpath_probe", 20
+    probe = record["fastpath_probe"] = {"ok": False, "duplicates": n}
+
+    def fail(what):
+        probe["failed"] = what
+        (OUT / "results.json").write_text(json.dumps(record, indent=1))
+        sys.exit(f"fastpath check failed: {what}: {probe}")
+
+    # Differential.
+    out = OUT / "fastpath-check.json"
+    env = {"PATH": f"{VENV}/bin:/usr/bin:/bin", "HOME": str(WORK), "DATABASE_URL": db_url(db),
+           "AUTH_REQUIRED": "True", "SECRET_KEY": "bench-not-secret", "LOG_LEVEL": "WARNING"}
+    with open(OUT / "fastpath-check.log", "w") as logf:
+        r = subprocess.run([str(VENV / "bin/python"), "-I",
+                            str(Path(__file__).resolve().parent / "fastpath_check.py"), str(out)],
+                           env=env, cwd=str(WORK), stdout=logf, stderr=subprocess.STDOUT)
+    d = json.loads(out.read_text()) if out.exists() else {}
+    probe["differential"] = {"exit": r.returncode, "cases": d.get("cases"), "failed": d.get("failed")}
+    if r.returncode or not d.get("ok") or not d.get("cases"):
+        fail("differential")
+    # Its backend reports its counts when it ends; the next part reads them.
+    time.sleep(2.0)
+
+    # Server.
+    updates = lambda: int(psql(db, "SELECT n_tup_upd FROM pg_stat_user_tables WHERE relname = 'alerts'"))
+    stored = lambda resource: sql_json(db, "SELECT json_build_object('tags', tags, 'attributes', "
+                                           f"attributes) FROM alerts WHERE resource = '{resource}'")
+    s = probe["server"] = {}
+    for arm in ("alerta-1x1-safe", "alerta-1x1-safe-noecho"):
+        resource = f"fastpath-probe-{arm}"
+        body = json.dumps(dict(DUP_ALERT, resource=resource))
+        before = updates()
+        with open(OUT / f"server-fastpath-probe-{arm}.log", "w") as logf:
+            proc, base = start(arm, db, logf)
+            try:
+                statuses = [http("POST", base + "/alert", body)[0] for _ in range(n + 1)]
+            finally:
+                stop(proc)
+        # A backend reports its counts when it ends, at the latest.
+        time.sleep(2.0)
+        s[arm] = {"non_201": sum(1 for x in statuses if x != 201),
+                  "alert_row_updates": updates() - before, "stored": stored(resource)}
+    plain, patched = s["alerta-1x1-safe"], s["alerta-1x1-safe-noecho"]
+    if (plain["non_201"] or patched["non_201"] or patched["alert_row_updates"] != n
+            or plain["alert_row_updates"] != n + 2 * (n + 1) or plain["stored"] != patched["stored"]):
+        fail("server")
+
+    # Plan.
+    statement = ("EXPLAIN UPDATE alerts SET tags = tags WHERE id = '{0}' OR id LIKE '{0}%'"
+                 .format("00000000-0000-4000-8000-000000000000"))
+    probe["plan"] = {"collation": psql("postgres", "SELECT datcollate FROM pg_database "
+                                                   f"WHERE datname = '{db}'"),
+                     "without_index": psql(db, statement)}
+    psql(db, FAST_INDEX)
+    psql(db, "ANALYZE alerts")
+    probe["plan"]["with_index"] = psql(db, statement)
+    if "Seq Scan" in probe["plan"]["with_index"]:
+        fail("plan")
+    probe["ok"] = True
+    log(f"fastpath checks passed: {probe['differential']}; server {s}; "
+        f"sequential scan without the index: {'Seq Scan' in probe['plan']['without_index']}")
+
+
 def key_updates(db):
     """Row updates of the `keys` table so far (statistics; they lag by about
     a second). It shows the key-use mode: about one update per request when
@@ -1077,6 +1178,8 @@ def main():
         dbs[("probe",)] = "bench_probe"
     if ADDON:
         dbs[("addon-probe",)] = "bench_addon_probe"
+    if FAST:
+        dbs[("fastpath-probe",)] = "bench_fastpath_probe"
     if CACHE:
         dbs.update(cache_suite.databases(sys.modules[__name__]))
     for arm in ARMS if compare else []:
@@ -1100,11 +1203,17 @@ def main():
                 if attempt == 9:
                     raise
                 time.sleep(1)
+    for key, name in dbs.items():
+        if "idx" in str(key[0]).split("-")[2:]:
+            psql(name, FAST_INDEX)
+            psql(name, "ANALYZE alerts")
     log(f"{len(dbs)} database copies created")
     if mixed:
         probe_pool_setting(record)
     if ADDON:
         probe_addon(record)
+    if FAST:
+        probe_fastpath(record)
     if PG19:
         pg_suite.prepare(sys.modules[__name__], record)
     pgb = start_pgbouncer(pg_suite.pgbouncer_databases(sys.modules[__name__]) if PG19 else "")
@@ -1231,6 +1340,17 @@ def write_summary(record):
                   f"answered {a['connections']['read_only_write_status']} and saved nothing; after "
                   f"recovery {a['connections']['backends_after_recovery']}, and the failed write was "
                   "not replayed."]
+    if record.get("fastpath_probe", {}).get("ok"):
+        f = record["fastpath_probe"]
+        plain, patched = f["server"]["alerta-1x1-safe"], f["server"]["alerta-1x1-safe-noecho"]
+        lines += ["", "Fastpath checks, all passed:",
+                  f"- differential: {f['differential']['cases']} cases, Alerta's functions and the "
+                  "patched ones agree;",
+                  f"- server: one new alert and {f['duplicates']} duplicates gave "
+                  f"{plain['alert_row_updates']} row updates of `alerts` with the default plugins and "
+                  f"{patched['alert_row_updates']} with `noecho`; the stored tags and attributes are equal;",
+                  f"- plan: with the index, no sequential scan; without it, a sequential scan: "
+                  f"{'Seq Scan' in f['plan']['without_index']} (collation {f['plan']['collation']})."]
     writes = [c for c in record["cells"] if "persisted" in c]
     if writes:
         bad = [c for c in writes if not c["persisted"]["ok"]]

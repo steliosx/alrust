@@ -8,8 +8,9 @@ few of its functions when the server starts. Serve it in place of
 
 ALERTA_FAST selects the patches, comma-separated. The default is "safe":
 reuse, nolog, onecount and nosentry, which leave every write of Alerta as
-it is. `hot` changes when and how surely two counters are written, so it is
-never on unless it is named: ALERTA_FAST=safe,hot.
+it is. `hot` changes when and how surely two counters are written, and
+`noecho` leaves out a write that changes nothing, so each is never on
+unless it is named: ALERTA_FAST=safe,hot,noecho.
   reuse     One PostgreSQL connection per worker thread, kept between
             requests, in place of a new connection per request. A request
             ends with ROLLBACK (Alerta commits its own writes), so no open
@@ -49,6 +50,31 @@ never on unless it is named: ALERTA_FAST=safe,hot.
                          was reported to the worker as failed is written
                          again.
             Do not use `hot` where key-use counts or metrics must be exact.
+  noecho    OPT-IN. After a plugin's post-receive or action hook returns the
+            alert (the default `forwarder` plugin always does, with or
+            without a destination), Alerta writes the alert's tags and
+            attributes again: two more UPDATEs, each with its own commit,
+            and each with `WHERE id=... OR id LIKE ...`, which reads the
+            whole table. With `noecho` the row is first read by its id
+            (primary key). When the stored tags are the same set, with no
+            tag twice and no NULL, the tags are not written. When the
+            stored attributes are the same JSON document as the one that
+            would be written, the attributes are not written. In every
+            other case Alerta's own statement runs unchanged. The same
+            holds for `PUT /alert/<id>/attributes` and the status and
+            action paths, which use the same two functions.
+            What changes:
+              order:     Alerta's write stores the tags in the order of a
+                         Python set, which differs from worker to worker.
+                         Without the write the stored order stays;
+              race:      a change that another request commits between
+                         this read and Alerta's write is overwritten by
+                         Alerta as released. Without the write it stays;
+              prefix:    Alerta's statement also overwrites every other
+                         alert whose id begins with this id (possible
+                         only with ids that a client chose). Without the
+                         write those rows stay as they are.
+            Numbers are compared as JSON text, so 1, 1.0 and true differ.
   nolog     Alerta formats every SQL statement for a debug message before
             the logger checks its level. Skip that unless DEBUG is on.
   onecount  The list and the count read severity and status totals with
@@ -63,6 +89,7 @@ already installs.
 """
 
 import atexit
+import json
 import logging
 import os
 import select
@@ -70,7 +97,7 @@ import threading
 import time
 
 SAFE = ("reuse", "nolog", "onecount", "nosentry")
-ALL = SAFE + ("hot",)
+ALL = SAFE + ("hot", "noecho")
 FEATURES = set()
 for _name in os.environ.get("ALERTA_FAST", "safe").split(","):
     if _name == "safe":
@@ -282,6 +309,46 @@ if "hot" in FEATURES:
     Backend.update_key_last_used = _update_key_last_used
     _metrics.Timer.stop_timer = _stop_timer
     _metrics.Counter.inc = _inc
+
+# ----------------------------------------------------------------- noecho
+
+if "noecho" in FEATURES:
+    _require(Backend, "update_tags", "update_attributes", "_fetchone")
+    _orig_update_tags = Backend.update_tags
+    _orig_update_attributes = Backend.update_attributes
+
+    def _same_tags(stored, sent):
+        """The same set of strings, and neither list has a tag twice."""
+        if not isinstance(stored, list) or not isinstance(sent, list):
+            return False
+        if not all(isinstance(t, str) for t in stored + sent):
+            return False
+        return len(set(sent)) == len(sent) and sorted(stored) == sorted(sent)
+
+    def _same_json(stored, sent):
+        try:
+            return json.dumps(stored, sort_keys=True) == json.dumps(sent, sort_keys=True)
+        except (TypeError, ValueError):
+            return False
+
+    def _noecho_update_tags(self, id, tags):
+        row = self._fetchone("SELECT * FROM alerts WHERE id=%(id)s", {"id": id})
+        if row is not None and _same_tags(row.tags, tags):
+            return row
+        return _orig_update_tags(self, id, tags)
+
+    def _noecho_update_attributes(self, id, old_attrs, new_attrs):
+        # Alerta's own first two lines; its function repeats them with the
+        # same result.
+        old_attrs.update(new_attrs)
+        attrs = {k: v for k, v in old_attrs.items() if v is not None}
+        row = self._fetchone("SELECT attributes FROM alerts WHERE id=%(id)s", {"id": id})
+        if row is not None and isinstance(row.attributes, dict) and _same_json(row.attributes, attrs):
+            return row.attributes
+        return _orig_update_attributes(self, id, old_attrs, new_attrs)
+
+    Backend.update_tags = _noecho_update_tags
+    Backend.update_attributes = _noecho_update_attributes
 
 # ------------------------------------------------------------------ nolog
 
