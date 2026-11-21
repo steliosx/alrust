@@ -88,24 +88,56 @@ Cells: `count` and `list` repeat one URL with one key, the best case for a
 cache. `list-unique` gives every request a new URL (the ignored `_`
 parameter), the worst case: no hit, only the cost of the extra hop.
 `write-dup` is the duplicate write of the compare suite; a cache passes it.
-Real traffic is between the two read cases. A cell is valid with no error,
-only 2xx answers, every process alive and, for writes, every counted write
-saved. On a cache arm the counters of each cache are kept as read, before
+Real traffic is between the two read cases.
+
+Each cell has two outcomes, from one scorer (score()). They are separate
+since scoring version 2; results of version 1 (one `valid` flag for both)
+are not converted.
+  - Workload: the requests did what the cell says. No client error, only
+    2xx answers, every process alive, for writes every counted write saved
+    (the duplicate count before and after, the row's id, the table's
+    total), and the expected growth of the benchmark key's use count.
+    Alerta as released adds one to that count, and commits, before it
+    answers a request that reached it. So the growth must equal the
+    requests where no cache may answer (writes, new URLs, arms with no
+    cache). For a repeated URL behind a cache it is the number of requests
+    that reached Alerta with the key ("origin visits"), from 0 to the
+    requests; it does not show one hit, a hit ratio or the fetches that
+    Varnish tried (requests can share a fetch, a fetch can be retried).
+    The alrust arm's count is recorded and not required. Throughput and
+    latency are scored from workload-valid cells.
+  - Cache accounting (cache arms): the caches' counters agree with the
+    rules below and with the key's use count. `reconciled`, `unresolved`
+    (the counters did not rest, or the two accounts differ: the suite
+    cannot say which is right) or `failed` (the two accounts agree and
+    break a rule). Backend requests and hit ratio are given only for
+    reconciled cells; for the others they are unavailable, and the raw
+    reads stay in the record.
+On a cache arm the counters of each cache are kept as read, before
 and after; a missing counter stops the run and a counter that goes down
-makes the cell invalid. The backend requests are checked as a number
+fails the accounting. The backend requests are checked as a number
 first. For writes they must equal the client's requests exactly: the load
 tool waits for its last answers, so nothing is in flight when the counters
 are read. For new URLs they must also be equal: the suite does not see the
 URLs that the load tool made, so it cannot explain a difference by a
-repeated URL, and a cell with any difference is not scored. For a repeated
+repeated URL, and the accounting of a cell with any difference does not pass. For a repeated
 URL they must be one tenth of the requests or fewer. The hit ratio is 1
 minus backend requests for each request, not clamped.
 
 The gate (gate()) wants every check part of every expiry, every isolation
 step on each cache with its expected result, a passed data check for every
-arm and repetition, and every planned cell once, valid, with its per-cache
-counters. gate_self_test() runs first: it removes each
-required item from a complete record in turn and the gate must refuse each.
+arm and repetition, and every planned cell once, with its per-cache
+counters. It gives two gates. The workload gate: all of that, and every
+cell workload-valid. The cache-accounting gate: every cell of a cache arm
+reconciled. The suite passes (`ok`) with the workload gate passed and no
+accounting `failed`; an `unresolved` accounting does not fail the suite,
+but the accounting gate is then not passed and `full_evidence` is false:
+no claim about hits, hit ratio or backend requests may use such a run
+as complete evidence. Varnish keeps its default statistics settings and
+the suite sends no extra traffic to move a counter.
+gate_self_test() runs first: it removes each required item from a
+complete record in turn and the gate must refuse each; and it scores
+made-up cells with score() and checks both gates for each.
 
 CPU is the process tree's, per completed request, for Alerta (or alrust),
 the caches, HAProxy and PostgreSQL.
@@ -783,6 +815,36 @@ def oha(bc, st, case, conc, seconds, out_file, json_flag):
     return json.loads(r.stdout)
 
 
+QUIET_READS, QUIET_LIMIT, QUIET_WAIT_S = 10, 50, 0.1
+
+
+def settled(read, wait, quiet=QUIET_READS, limit=QUIET_LIMIT):
+    """Reads the counters at one boundary of a timed run, with no load.
+    Varnish adds a worker thread's numbers to the totals when the thread
+    ends a task and the lock is free (its `thread_stats_rate` text), so a
+    read just after the load tool stops can miss the last requests (run
+    44903568987, attempt 1: 1932 of 1933), and two equal reads do not show
+    that no more is to come. So the counters must rest: `quiet` reads in a
+    row equal, within `limit` reads. Returns (the last read, history,
+    resolved). The history has the first read and every changed read, each
+    with the number of its read. A change later than the rest interval is
+    not seen; the exact rule then fails the cell, or passes it wrongly by
+    the size of that change, and the saved history is the evidence."""
+    last = read()
+    history, same = [{"read": 1, "counters": last}], 1
+    for n in range(2, limit + 1):
+        if same >= quiet:
+            break
+        wait()
+        now = read()
+        if now == last:
+            same += 1
+        else:
+            last, same = now, 1
+            history.append({"read": n, "counters": now})
+    return last, history, same >= quiet
+
+
 def counter_problems(case, requests, before, after):
     """The raw counters of each cache for one timed run, checked as numbers
     before any ratio. Returns (per-cache deltas, backend requests, problems)."""
@@ -807,6 +869,70 @@ def counter_problems(case, requests, before, after):
     return delta, fetched, problems
 
 
+def cached_problems(case, requests, before, after, resolved, key_uses):
+    """The whole counter rule of one cell of an arm with caches; the cell
+    is valid only with no problem here. `before` and `after` are the settled
+    reads of the two boundaries, `resolved` says for each whether it rested,
+    `key_uses` is the benchmark key's use count at each. Returns (per-cache
+    deltas, backend requests, problems). The timed load uses one key, and
+    Alerta as released adds one to its use count, and commits, before it
+    answers a request that reached it. So the caches' backend requests and
+    the growth of that count are two accounts of the same requests. When
+    they differ, the suite cannot say which is right: the cell is
+    unresolved and not scored, and both numbers stay in the record."""
+    delta, fetched, problems = counter_problems(case, requests, before, after)
+    for name, rested in zip(("before", "after"), resolved):
+        if not rested:
+            problems.append(f"unresolved: the caches' counters did not rest for {QUIET_READS} reads "
+                            f"within {QUIET_LIMIT} reads {name} the timed run")
+    used = key_uses[1] - key_uses[0]
+    if used != fetched:
+        problems.append(f"unresolved: the caches count {fetched} backend requests, the key's use "
+                        f"count grew by {used}")
+    return delta, fetched, problems
+
+
+SCORING = 2
+
+
+def score(arm, case, client, durable, key_uses, counters=None):
+    """The one scorer of a cell; the run and the self-test use it. `client`
+    has the load tool's numbers (requests, ok, errors, non_2xx, warm_errors,
+    warm_non_2xx) and `alive`; `durable` the problems of the saved writes;
+    `key_uses` the key's use count at the two boundaries; `counters`, on a
+    cache arm, (before, after, resolved) of cached_problems(). Returns the
+    two outcomes of the module's text: workload and accounting."""
+    requests, used = client["requests"], key_uses[1] - key_uses[0]
+    problems = [what for what, bad in (
+        ("a process stopped", not client["alive"]),
+        (f"{client['errors']} client errors", client["errors"] != 0),
+        (f"{client['non_2xx']} answers not 2xx", client["non_2xx"] != 0),
+        ("no 2xx answer", client["ok"] <= 0),
+        (f"warm-up: {client['warm_errors']} errors, {client['warm_non_2xx']} answers not 2xx",
+         client["warm_errors"] != 0 or client["warm_non_2xx"] != 0)) if bad] + list(durable)
+    repeated = counters is not None and case in ("count", "list")
+    expected = None if arm == "alrust" or repeated else requests
+    if expected is not None and used != expected:
+        problems.append(f"the key's use count grew by {used}, {expected} expected")
+    elif repeated and not 0 <= used <= requests:
+        problems.append(f"the key's use count grew by {used} for {requests} requests")
+    accounting = {"state": "none", "problems": []}
+    if counters is not None:
+        before, after, resolved = counters
+        delta, fetched, found = cached_problems(case, requests, before, after, resolved, key_uses)
+        state = ("reconciled" if not found else
+                 "unresolved" if any(p.startswith("unresolved:") for p in found) else "failed")
+        good = state == "reconciled"
+        accounting = {"state": state, "problems": found, "delta": delta,
+                      "backend_requests_as_counted": fetched,
+                      "backend_requests": fetched if good else None,
+                      "hit_ratio": 1 - fetched / (requests or 1) if good else None}
+    return {"workload": {"valid": not problems, "problems": problems, "requests": requests,
+                         "key_uses": used, "key_uses_expected": expected,
+                         "origin_visits": None if arm == "alrust" else used},
+            "accounting": accounting}
+
+
 def cell(bc, st, arm, case, conc, rep, db, json_flag, rec):
     raw = bc.OUT / "raw"
     write, problems = case == "write-dup", []
@@ -820,12 +946,24 @@ def cell(bc, st, arm, case, conc, rep, db, json_flag, rec):
         before = rows[0]["duplicate_count"] if len(rows) == 1 else None
         if before != warm["ok"]:
             problems.append(f"after the warm-up duplicate_count is {before!r}, {warm['ok']} counted")
-    cpu0, v0 = st.cpu(bc), st.stats()
+    # Both boundaries of the timed run are read the same way. A late count
+    # of the warm-up must not fall into the timed run's difference.
+    # An arm with no cache has no counters to wait for: one read.
+    pause, quiet = (lambda: time.sleep(QUIET_WAIT_S)), (QUIET_READS if ttl_of(arm) else 1)
+    v0, history0, resolved0 = settled(st.stats, pause, quiet)
+    # A second account of the same requests (cached_problems): the key's
+    # use count. The row is read, not statistics.
+    key_uses = lambda: int(bc.psql(db, "SELECT count FROM keys WHERE id = 'bench-key'"))
+    k0 = key_uses()
+    cpu0 = st.cpu(bc)
     t0 = time.monotonic()
     j = oha(bc, st, case, conc, bc.TIMED_S, raw / f"cache-timed-{arm}-{case}-c{conc}-r{rep}.json",
             json_flag)
     wall = time.monotonic() - t0
-    cpu1, v1 = st.cpu(bc), st.stats()
+    cpu1 = st.cpu(bc)
+    # No request is under way now: the load tool waited for its last answers.
+    v1, history1, resolved1 = settled(st.stats, pause, quiet)
+    k1 = key_uses()
     alive = st.alive()
     time.sleep(1.5)
     s = bc.summarize_oha(j)
@@ -846,24 +984,33 @@ def cell(bc, st, arm, case, conc, rep, db, json_flag, rec):
               "alive": alive})
     for part in cpu0:
         s[f"{part}_cpu_ms_per_request"] = 1000 * (cpu1[part] - cpu0[part]) / hz / req
+    scored = score(arm, case, {**{k: s[k] for k in ("requests", "ok", "errors", "non_2xx")},
+                               "warm_errors": warm["errors"], "warm_non_2xx": warm["non_2xx"],
+                               "alive": alive}, problems, (k0, k1),
+                   (v0, v1, (resolved0, resolved1)) if ttl_of(arm) else None)
+    s.update(scored)
+    s["key_uses"] = {"before": k0, "after": k1, "delta": k1 - k0}
     if ttl_of(arm):
-        # backend_req is counted at once; the hit, miss and pass counters come
-        # later, from each worker thread (run 44805872744), so no gate reads them.
-        delta, fetched, found = counter_problems(case, s["requests"], v0, v1)
-        problems += found
-        s["cache_nodes"] = {"before": v0, "after": v1, "delta": delta}
-        s["backend_requests"] = fetched
-        s["hit_ratio"] = 1 - fetched / req
-    s["problems"] = problems
-    s["valid"] = (alive and s["errors"] == 0 and s["non_2xx"] == 0 and s["ok"] > 0
-                  and warm["errors"] == 0 and warm["non_2xx"] == 0 and not problems)
+        # Of the caches' counters only backend_req is in a gate.
+        accounting = scored["accounting"]
+        fetched = accounting["backend_requests_as_counted"]
+        s["cache_nodes"] = {"before": v0, "after": v1, "delta": accounting["delta"],
+                            "before_first": history0[0]["counters"], "after_first": history1[0]["counters"],
+                            "before_history": history0, "after_history": history1,
+                            "resolved": [resolved0, resolved1],
+                            "key_uses": {"before": k0, "after": k1, "delta": k1 - k0,
+                                         "equals_backend_requests": k1 - k0 == fetched},
+                            "rest": {"reads": QUIET_READS, "limit": QUIET_LIMIT, "wait_s": QUIET_WAIT_S}}
+    work, acc = s["workload"], s["accounting"]
     rec["cells"].append(s)
-    ratio = "" if s.get("hit_ratio") is None else (f", hit ratio {s['hit_ratio']:.4f}, backend "
-                                                   f"requests {s['backend_requests']}")
-    bc.log(f"cache {arm:16} {case:11} c={conc} r{rep}: {'' if s['valid'] else 'INVALID '}"
+    ratio = {"none": "", "reconciled": f", hit ratio {acc.get('hit_ratio') or 0:.4f}, backend requests "
+                                       f"{acc.get('backend_requests')}"}.get(
+        acc["state"], f", cache accounting {acc['state'].upper()} (hit ratio and backend requests "
+                      f"unavailable): {acc['problems']}")
+    bc.log(f"cache {arm:16} {case:11} c={conc} r{rep}: {'' if work['valid'] else 'WORKLOAD INVALID '}"
            f"{s['rps']:.1f} rps, p50 {s['p50_ms']:.2f} ms, p99 {s['p99_ms']:.2f} ms, errors "
-           f"{s['errors']}, non-2xx {s['non_2xx']}{ratio}"
-           + (f", problems {problems}" if problems else ""))
+           f"{s['errors']}, non-2xx {s['non_2xx']}, key uses {k1 - k0}{ratio}"
+           + (f", problems {work['problems']}" if work["problems"] else ""))
     return alive
 
 
@@ -871,8 +1018,8 @@ def cell(bc, st, arm, case, conc, rep, db, json_flag, rec):
 
 def gate(rec, planned):
     """What a complete, passed suite has. Anything absent is named."""
-    g = {"expected": len(planned), "missing": [], "invalid": [], "duplicate": [],
-         "missing_checks": []}
+    g = {"scoring": SCORING, "expected": len(planned), "missing": [], "invalid": [],
+         "duplicate": [], "missing_checks": [], "unresolved": [], "accounting_failed": []}
     for ttl in TTLS:
         probes = [p for p in rec.get("probes", []) if p.get("ttl_s") == ttl]
         if len(probes) != 1:
@@ -923,14 +1070,31 @@ def gate(rec, planned):
         c = cells.get(key)
         if c is None:
             g["missing"].append(list(key))
-        elif c.get("valid") is not True:
+            continue
+        if (c.get("workload") or {}).get("valid") is not True:
             g["invalid"].append(list(key))
-        elif ttl_of(key[0]):
-            nodes = c.get("cache_nodes") or {}
+        if ttl_of(key[0]):
+            nodes, state = c.get("cache_nodes") or {}, (c.get("accounting") or {}).get("state")
             if any(len(nodes.get(k) or []) != len(STACKS) for k in ("before", "after", "delta")) \
-                    or "backend_requests" not in c:
+                    or state not in ("reconciled", "unresolved", "failed"):
                 g["missing_checks"].append(f"cell {list(key)}: no counters of each cache")
-    g["ok"] = not (g["missing"] or g["invalid"] or g["duplicate"] or g["missing_checks"])
+            elif state != "reconciled":
+                g["unresolved" if state == "unresolved" else "accounting_failed"].append(list(key))
+    cached = [k for k in planned if ttl_of(k[0])]
+    absent = sum(1 for k in cached if k not in cells)
+    structure = not (g["missing"] or g["duplicate"] or g["missing_checks"])
+    g["gates"] = {
+        "workload": {"cells": len(planned), "missing": len(g["missing"]), "invalid": len(g["invalid"]),
+                     "valid": len(planned) - len(g["missing"]) - len(g["invalid"]),
+                     "ok": structure and not g["invalid"]},
+        "accounting": {"cells": len(cached), "missing": absent, "unresolved": len(g["unresolved"]),
+                       "failed": len(g["accounting_failed"]),
+                       "ok": structure and not (g["unresolved"] or g["accounting_failed"])}}
+    count = g["gates"]["accounting"]
+    count["reconciled"] = (len(cached) - absent - count["unresolved"] - count["failed"]
+                           - sum(1 for m in g["missing_checks"] if m.startswith("cell ")))
+    g["ok"] = g["gates"]["workload"]["ok"] and not g["accounting_failed"]
+    g["full_evidence"] = g["gates"]["workload"]["ok"] and count["ok"]
     return g
 
 
@@ -954,8 +1118,8 @@ def gate_self_test(planned):
                                        "observed": copy.deepcopy(seen)}} for ttl in TTLS],
             "checks": [{"arm": a, "rep": r, "ok": True, "known_hits": len(SANE_PATHS)}
                        for a, r in sorted({(a, r) for a, _, _, r in planned})],
-            "cells": [{"arm": a, "case": case, "c": c, "rep": r, "valid": True,
-                       "backend_requests": 0,
+            "cells": [{"arm": a, "case": case, "c": c, "rep": r, "workload": {"valid": True},
+                       "accounting": {"state": "reconciled" if ttl_of(a) else "none"},
                        "cache_nodes": {"before": counters, "after": counters, "delta": counters}}
                       for a, case, c, r in planned]}
     cached = next(i for i, c in enumerate(full["cells"]) if ttl_of(c["arm"]))
@@ -1007,12 +1171,15 @@ def gate_self_test(planned):
                  ("a data check not passed", put(["checks", 0, "ok"], False)),
                  ("a data check without a known hit", put(["checks", cached_check, "known_hits"], 0)),
                  ("a cell removed", without(["cells", 0])),
-                 ("a cell not valid", put(["cells", 0, "valid"], False)),
+                 ("a cell not valid", put(["cells", 0, "workload", "valid"], False)),
+                 ("a cell without its workload outcome", without(["cells", 0, "workload"])),
+                 ("a cell's cache accounting failed",
+                  put(["cells", cached, "accounting", "state"], "failed")),
                  ("a cell twice", lambda rec: rec["cells"].append(dict(rec["cells"][0]))),
                  ("a cell without counters", without(["cells", cached, "cache_nodes"])),
                  ("a cell with one cache's counters",
                   put(["cells", cached, "cache_nodes", "delta"], counters[:1])),
-                 ("a cell without its backend requests", without(["cells", cached, "backend_requests"]))]
+                 ("a cell without its cache accounting", without(["cells", cached, "accounting"]))]
     cases = [{"case": "complete record", "gate_must_pass": True, "gate_passed": gate(full, planned)["ok"]}]
     for name, change in mutations:
         rec = copy.deepcopy(full)
@@ -1033,7 +1200,88 @@ def gate_self_test(planned):
             ("counters: a counter that went down", "count", 100, -1, False)):
         cases.append({"case": name, "gate_must_pass": good,
                       "gate_passed": not counter_problems(case, requests, zero, after(fetched))[2]})
-    wrong = [c["case"] for c in cases if c["gate_passed"] != c["gate_must_pass"]]
+    # The two boundaries of a cell with 1933 requests that no cache may
+    # answer, on made-up reads: `start` and `end` are the backend_req
+    # values of the reads in order (the last one repeats). The rule is the
+    # cell's: both boundaries resolved, and the exact counter rule.
+    def reads_of(values):
+        left = list(values)
+        return lambda: after(left.pop(0) if len(left) > 1 else left[0])
+    def boundary_rule(start, end, used=None):
+        v0, _, r0 = settled(reads_of(start), lambda: None)
+        v1, h1, r1 = settled(reads_of(end), lambda: None)
+        if used is None:  # the key's use count agrees with the caches
+            used = v1[0]["backend_req"] - v0[0]["backend_req"]
+        return not cached_problems("write-dup", 1933, v0, v1, (r0, r1), (7, 7 + used))[2], h1
+    for name, start, end, good in (
+            ("rest: flat at once", (0,), (1933,), True),
+            ("rest: flat, then the late count arrives", (0,), (1932, 1932, 1933), True),
+            ("rest: a shortage that stays", (0,), (1932,), False),
+            ("rest: flat at the right number, then an excess", (0,), (1933, 1933, 1934), False),
+            ("rest: an excess after nine equal reads", (0,), (1933,) * 9 + (1934,), False),
+            ("rest: a late count of the warm-up is not the timed run's", (99, 99, 100), (2033,), True),
+            ("rest: a late count of the warm-up, and a shortage", (99, 99, 100), (2032,), False),
+            ("rest: counters that never rest at the end", (0,), tuple(range(1900, 1960)), False),
+            ("rest: counters that never rest at the start", tuple(range(60)), (1993,), False)):
+        cases.append({"case": name, "gate_must_pass": good, "gate_passed": boundary_rule(start, end)[0]})
+    # The caches' numbers are right for the rule, the key's use count differs.
+    for name, used in (("key uses: one more than the caches count", 1934),
+                       ("key uses: one fewer than the caches count", 1932)):
+        cases.append({"case": name, "gate_must_pass": False,
+                      "gate_passed": boundary_rule((0,), (1933,), used)[0]})
+    history = boundary_rule((0,), (1932, 1932, 1933))[1]
+    cases.append({"case": "rest: the history keeps the first read and each change",
+                  "gate_must_pass": True,
+                  "gate_passed": [(h["read"], h["counters"][0]["backend_req"]) for h in history]
+                  == [(1, 1932), (3, 1933)]})
+    # The two outcomes of a cell, from the scorer of the run, through the
+    # gate: (suite passes, workload gate, accounting gate, accounting
+    # state, backend requests given). 1864 and 1863 are the numbers of run
+    # 44935050021: every write answered and saved, one backend request
+    # fewer in the caches' counters.
+    def outcome(arm, case, requests, used, counted=None, errors=0, durable=()):
+        rec = copy.deepcopy(full)
+        at = next(c for c in rec["cells"] if (c["arm"], c["case"]) == (arm, case))
+        client = {"requests": requests, "ok": requests - errors, "errors": errors, "non_2xx": 0,
+                  "warm_errors": 0, "warm_non_2xx": 0, "alive": True}
+        at.update(score(arm, case, client, list(durable), (7, 7 + used),
+                        None if counted is None else (zero, after(counted), (True, True))))
+        g = gate(rec, planned)
+        return (g["ok"], g["gates"]["workload"]["ok"], g["gates"]["accounting"]["ok"],
+                at["accounting"]["state"], at["accounting"].get("backend_requests") is not None)
+    some = "alerta-cache-2s"
+    for name, got, wanted in (
+            ("outcome: fully reconciled write", outcome(some, "write-dup", 1864, 1864, 1864),
+             (True, True, True, "reconciled", True)),
+            ("outcome: workload valid, the caches count one fewer",
+             outcome(some, "write-dup", 1864, 1864, 1863), (True, True, False, "unresolved", False)),
+            ("outcome: workload valid, the caches count one more",
+             outcome(some, "list-unique", 1864, 1864, 1865), (True, True, False, "unresolved", False)),
+            ("outcome: workload invalid, a client error",
+             outcome(some, "write-dup", 1864, 1863, 1863, errors=1), (False, False, False, "failed", False)),
+            ("outcome: workload invalid, a write not saved",
+             outcome(some, "write-dup", 1864, 1864, 1864, durable=["timed: not saved"]),
+             (False, False, True, "reconciled", True)),
+            ("outcome: workload invalid, the key's count one fewer, the caches count all",
+             outcome(some, "write-dup", 1864, 1863, 1864), (False, False, False, "unresolved", False)),
+            ("outcome: workload invalid, key and caches agree on one fewer",
+             outcome(some, "write-dup", 1864, 1863, 1863), (False, False, False, "failed", False)),
+            ("outcome: repeated URL reconciled", outcome(some, "count", 2000, 3, 3),
+             (True, True, True, "reconciled", True)),
+            ("outcome: repeated URL, key and caches differ", outcome(some, "count", 2000, 3, 4),
+             (True, True, False, "unresolved", False)),
+            ("outcome: repeated URL fetched too often, both accounts agree",
+             outcome(some, "list", 2000, 300, 300), (False, True, False, "failed", False)),
+            ("outcome: no cache, every request used the key", outcome("alerta", "write-dup", 1864, 1864),
+             (True, True, True, "none", False)),
+            ("outcome: no cache, the key's count one fewer", outcome("alerta", "write-dup", 1864, 1863),
+             (False, False, True, "none", False)),
+            ("outcome: alrust, the key's count is not required", outcome("alrust", "write-dup", 1864, 0),
+             (True, True, True, "none", False))):
+        cases.append({"case": name, "gate_must_pass": wanted[0], "gate_passed": got[0],
+                      "outcome_wanted": list(wanted), "outcome": list(got)})
+    wrong = [c["case"] for c in cases if c["gate_passed"] != c["gate_must_pass"]
+             or c.get("outcome") != c.get("outcome_wanted")]
     if wrong:
         raise RuntimeError(f"the cache suite's gate is wrong for: {wrong}")
     return cases
@@ -1107,9 +1355,22 @@ def summary(record):
              "and the first 401 that the check saw, from a time taken before the deletion; the "
              "stale answers ended between the two.", ""]
     if g:
-        lines += [f"Cells: {g['expected']} planned, {len(g['missing'])} missing, "
-                  f"{len(g['invalid'])} invalid, {len(g['duplicate'])} twice; "
-                  f"{len(g['missing_checks'])} required checks absent or failed. Gate self-test: "
+        w, a = g["gates"]["workload"], g["gates"]["accounting"]
+        word = lambda ok: "PASSED" if ok else "NOT PASSED"
+        lines += [f"**Workload gate: {word(w['ok'])}.** {w['cells']} cells planned: {w['valid']} valid, "
+                  f"{w['invalid']} invalid, {w['missing']} missing, {len(g['duplicate'])} twice; "
+                  f"{len(g['missing_checks'])} required checks absent or failed.", "",
+                  f"**Cache-accounting gate: {word(a['ok'])}.** {a['cells']} cells of cache arms: "
+                  f"{a['reconciled']} reconciled, {a['unresolved']} unresolved, {a['failed']} failed, "
+                  f"{a['missing']} missing."
+                  + ("" if a["ok"] else " This run is not complete evidence for hits, a hit ratio or "
+                                        "backend requests."), "",
+                  f"Scoring version {g['scoring']}: the two gates are separate. Throughput and latency "
+                  "are from workload-valid cells. `origin visits` is the growth of the benchmark "
+                  "key's use count (requests that reached Alerta with the key); it does not show "
+                  "one hit or a hit ratio. Hit ratio and backend requests are from the caches' "
+                  "counters and are given only for reconciled cells. Results of the earlier scoring "
+                  f"(one `valid` flag) are not converted. Gate self-test: "
                   f"{len(rec['gate_self_test'])} cases as expected.", ""]
         lines += [f"- GATE: {m}" for m in g["missing_checks"][:30]]
     for p in rec["probes"]:
@@ -1137,31 +1398,46 @@ def summary(record):
     for c in rec["cells"]:
         rows.setdefault((c["case"], c["c"], c["arm"]), []).append(c)
     if rows:
-        lines += ["", "| case | c | arm | valid reps | rps | p50 ms | p99 ms | hit ratio | backend requests | "
+        lines += ["", "| case | c | arm | workload-valid reps | rps | p50 ms | p99 ms | origin visits | "
+                      "reconciled reps | hit ratio | backend requests | "
                       "server CPU ms/req | cache CPU ms/req | HAProxy CPU ms/req | postgres CPU ms/req |",
-                  "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+                  "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for case in ("count", "list", "list-unique", "write-dup"):
         for conc in rec["concurrency"]:
             for arm in rec["arms"]:
                 allc = rows.get((case, conc, arm))
                 if not allc:
                     continue
-                cs = [x for x in allc if x["valid"]]
+                cs = [x for x in allc if x["workload"]["valid"]]
                 if not cs:
                     lines.append(f"| {case} | {conc} | {arm} | 0 of {len(allc)} | not scored "
-                                 "| | | | | | | | |")
+                                 "| | | | | | | | | | |")
                     continue
                 med = lambda k: statistics.median(x[k] for x in cs)
-                cached = "hit_ratio" in cs[0]
-                ratio = f"{med('hit_ratio'):.4f}" if cached else ""
-                fetched = f"{med('backend_requests'):.0f}" if cached else ""
+                visits = ("" if arm == "alrust" else
+                          f"{statistics.median(x['workload']['origin_visits'] for x in cs):.0f}")
+                good = [x["accounting"] for x in cs if x["accounting"]["state"] == "reconciled"]
+                counted, ratio, fetched = "", "", ""
+                if ttl_of(arm):
+                    counted = f"{len(good)} of {len(allc)}"
+                    ratio = fetched = "unavailable"
+                    if good:
+                        ratio = f"{statistics.median(x['hit_ratio'] for x in good):.4f}"
+                        fetched = f"{statistics.median(x['backend_requests'] for x in good):.0f}"
                 lines.append(
                     f"| {case} | {conc} | {arm} | {len(cs)} of {len(allc)} | {med('rps'):.0f} | "
-                    f"{med('p50_ms'):.2f} | {med('p99_ms'):.2f} | {ratio} | {fetched} | "
+                    f"{med('p50_ms'):.2f} | {med('p99_ms'):.2f} | {visits} | {counted} | {ratio} | {fetched} | "
                     f"{med('server_cpu_ms_per_request'):.3f} | {med('cache_cpu_ms_per_request'):.3f} | "
                     f"{med('front_cpu_ms_per_request'):.3f} | {med('postgres_cpu_ms_per_request'):.3f} |")
     for c in rec["cells"]:
-        if not c["valid"]:
-            lines.append(f"- INVALID {c['arm']} {c['case']} c={c['c']} r{c['rep']}: errors "
-                         f"{c['errors']}, non-2xx {c['non_2xx']}, alive {c['alive']}, {c['problems']}")
+        where = f"{c['arm']} {c['case']} c={c['c']} r{c['rep']}"
+        if not c["workload"]["valid"]:
+            lines.append(f"- WORKLOAD INVALID {where}: errors {c['errors']}, non-2xx {c['non_2xx']}, "
+                         f"alive {c['alive']}, {c['workload']['problems']}")
+        if c["accounting"]["state"] in ("unresolved", "failed"):
+            lines.append(f"- CACHE ACCOUNTING {c['accounting']['state'].upper()} {where}: the caches "
+                         f"count {c['accounting']['backend_requests_as_counted']} backend requests, "
+                         f"the key's use count grew by {c['workload']['key_uses']}, "
+                         f"{c['workload']['requests']} requests; hit ratio and backend requests "
+                         f"unavailable; {c['accounting']['problems']}")
     return lines
