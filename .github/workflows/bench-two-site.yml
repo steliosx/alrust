@@ -57,7 +57,8 @@ jobs:
         run: scripts/bench/setup.sh
       - name: Patroni, etcd 3.6.15 and HAProxy 3.4.7 (checked downloads)
         timeout-minutes: 15
-        run: scripts/bench/dual-site/hosted-setup.sh
+        # The imported script has no executable bit.
+        run: bash scripts/bench/dual-site/hosted-setup.sh
       # The lab runs as the runner's user in its own network and process
       # namespaces (hosted-netem.sh sets the links' delay, jitter, loss and
       # rate there), in a scope with 2 CPUs and 4 GiB and no swap.
