@@ -29,9 +29,10 @@ The cache rules (vcl(), below). Only what the suite measures is eligible:
 - GET only, no cookie;
 - the two measured routes only: /alerts/count without a query, and the
   measured list URL, alone or with the ignored `_` parameter;
-- exactly one credential header, and it must be one of the benchmark's
-  synthetic keys: `Authorization: Key bench-key...` or `X-API-Key:
-  bench-key...`. A request with both headers, with another credential or
+- exactly one credential header, and its value must be one of the two
+  synthetic keys of the benchmark, whole: `Authorization: Key <key>` or
+  `X-API-Key: <key>`. A request with both headers, with any other
+  credential (also another valid key that starts with the same letters) or
   with the `api-key` query parameter goes to Alerta;
 - the key is the host, the URL, the Authorization header and the X-API-Key
   header, so two credentials never share an answer;
@@ -49,27 +50,34 @@ to N seconds after an answer was stored, the same credential gets that
 answer without Alerta's checks of the key (expiry, deletion) and of the
 customer scope, and without Alerta's update of the key's use count and
 last-used time. The CPU numbers of the cache arms include those avoided
-checks and writes. The revocation check below measures the interval: after
-a key is deleted, how long each cache still answers 200 for it. The limit
-is N + 0.75 s. A site that cannot accept that interval needs invalidation
-or revalidation, which this suite does not have.
+checks and writes. The revocation check below observes the interval: it
+takes a time before it deletes a key, and from that time it records, for
+each cache and the front, the last 200 it saw and the first 401 it saw. The
+real end of the stale answers is between those two observations. No 200
+seen is recorded as not observed, not as zero. The first 401 must come
+within N + 0.75 s. A site that cannot accept that interval needs
+invalidation or revalidation, which this suite does not have.
 
 Checks before any cell, for each expiry (probe()); a failure stops the suite:
 - oracle: Alerta's direct answers equal the database's (totals, counts by
   severity and status, the 50 ids in order), for the admin key and for a
   customer's key;
 - isolation, on each cache alone, with the same Host: the two identities
-  in turn, in both header forms, on both routes; each answer must equal
-  Alerta's direct answer and each request must be the expected miss, hit or
-  pass, read from that cache's backend-request counter;
+  in turn, in both header forms, on both routes (eight miss and hit pairs);
+  each answer must equal Alerta's direct answer and each request must be
+  the expected miss, hit or pass, read from that cache's backend-request
+  counter. A third key that is valid in Alerta and differs from the two
+  only after `bench-key` must be a pass: 200 twice, one backend request
+  each time (a miss would make the second a hit);
 - separation, through HAProxy: the same identities and forms, twice;
 - staleness: both caches and the front hold the old count; after a write
   every observation must be the old or the new answer, each target must be
   new within N + 0.75 s, and must stay new;
 - burst: 32 requests for one new URL at the same moment must reach Alerta
   as one request;
-- revocation: as staleness, for a deleted key: 200 (old) or 401, 401 within
-  N + 0.75 s, then always 401.
+- revocation: as staleness, for a deleted key: 200 (old) or 401, the first
+  401 within N + 0.75 s of the time taken before the deletion, then always
+  401.
 
 Before the cells of an arm (sane()): the list, the list with `_` and the
 count, twice, must equal the database's answer and Alerta's direct answer;
@@ -85,14 +93,18 @@ only 2xx answers, every process alive and, for writes, every counted write
 saved. On a cache arm the counters of each cache are kept as read, before
 and after; a missing counter stops the run and a counter that goes down
 makes the cell invalid. The backend requests are checked as a number
-first: for new URLs and for writes they must equal the client's requests
-(within the concurrency); for a repeated URL they must be one tenth of the
-requests or fewer. The hit ratio is 1 minus backend requests for each
-request, not clamped.
+first. For writes they must equal the client's requests exactly: the load
+tool waits for its last answers, so nothing is in flight when the counters
+are read. For new URLs they must also be equal: the suite does not see the
+URLs that the load tool made, so it cannot explain a difference by a
+repeated URL, and a cell with any difference is not scored. For a repeated
+URL they must be one tenth of the requests or fewer. The hit ratio is 1
+minus backend requests for each request, not clamped.
 
-The gate (gate()) wants every check part of every expiry, a passed data
-check for every arm and repetition, and every planned cell once, valid,
-with its per-cache counters. gate_self_test() runs first: it removes each
+The gate (gate()) wants every check part of every expiry, every isolation
+step on each cache with its expected result, a passed data check for every
+arm and repetition, and every planned cell once, valid, with its per-cache
+counters. gate_self_test() runs first: it removes each
 required item from a complete record in turn and the gate must refuse each.
 
 CPU is the process tree's, per completed request, for Alerta (or alrust),
@@ -102,6 +114,7 @@ the caches, HAProxy and PostgreSQL.
 import copy
 import json
 import os
+import re
 import statistics
 import subprocess
 import threading
@@ -120,8 +133,9 @@ COUNT = "/alerts/count"
 LIST = "/alerts?page-size=50&sort-by=lastReceiveTime"
 # The eligible routes and credentials, as regular expressions of the VCL.
 ROUTES_RE = r"^/alerts/count$|^/alerts\?page-size=50&sort-by=lastReceiveTime(&_=[0-9a-z]{1,16})?$"
-KEY_RE = r"bench-key[0-9a-z-]{1,60}"
 KEY2 = "bench-key2-0123456789abcdef0123456789abcdef"
+# Valid in Alerta in the checks, never eligible: the pass-path control.
+KEY3 = "bench-key3-0123456789abcdef0123456789abcdef"
 CUSTOMER = "acme"
 CUSTOMER_ALERTS = 7
 BURST = 32
@@ -175,7 +189,7 @@ sub vcl_recv {
     if (req.http.Cookie) { return (pass); }
     if (req.url !~ "@ROUTES@") { return (pass); }
     if (req.http.Authorization && req.http.X-API-Key) { return (pass); }
-    if (req.http.Authorization ~ "^Key @KEY@$" || req.http.X-API-Key ~ "^@KEY@$") {
+    if (req.http.Authorization ~ "^Key (@KEY@)$" || req.http.X-API-Key ~ "^(@KEY@)$") {
         return (hash);
     }
     return (pass);
@@ -207,12 +221,20 @@ sub vcl_backend_response {
 """
 
 
-def vcl(ttl):
+def key_re(keys):
+    """The eligible keys, whole, as one alternation for the VCL."""
+    for key in keys:
+        if not re.fullmatch(r"[0-9a-z-]+", key):
+            raise RuntimeError("a benchmark key has a character that the VCL pattern would read as syntax")
+    return "|".join(keys)
+
+
+def vcl(ttl, keys):
     backends = "".join(f'backend alerta{i} {{ .host = "127.0.0.1"; .port = "{port}"; }}\n'
                        for i, (port, _) in enumerate(STACKS))
     adds = "".join(f"    both.add_backend(alerta{i});\n" for i in range(len(STACKS)))
     return (VCL.replace("@BACKENDS@", backends).replace("@ADDS@", adds)
-            .replace("@ROUTES@", ROUTES_RE).replace("@KEY@", KEY_RE).replace("@TTL@", str(ttl)))
+            .replace("@ROUTES@", ROUTES_RE).replace("@KEY@", key_re(keys)).replace("@TTL@", str(ttl)))
 
 
 def haproxy_cfg(ports, by_credential):
@@ -313,7 +335,7 @@ def start_stack(bc, arm, db, tag, extra_env=None):
             for i, (_, vport) in enumerate(STACKS):
                 d = bc.WORK / f"v{next(_dirs)}"
                 d.mkdir()
-                (d / "cache.vcl").write_text(vcl(ttl))
+                (d / "cache.vcl").write_text(vcl(ttl, (bc.KEY, KEY2)))
                 # -t: the freshness of an answer without one of its own.
                 # http_gzip_support=off: Accept-Encoding goes to Alerta as the
                 # client sent it, as in the arms without a cache.
@@ -419,11 +441,14 @@ def check_oracle(bc, st, db):
     return part
 
 
-def isolation_steps(bc):
-    """(name, path, headers, expected) in order. `miss` and `pass` are one
-    backend request; `hit` is none. The identities alternate, so a cache
-    that mixed them would give one the other's answer."""
-    a, c = bc.KEY, KEY2
+def isolation_steps(a):
+    """(name, path, headers, expected) in order, for the admin key `a`.
+    `miss` and `pass` are one backend request; `hit` is none. The
+    identities alternate, so a cache that mixed them would give one the
+    other's answer. A `pass` is asked twice: a miss would make the second
+    request a hit. That shows a pass only for a 200 answer, so the third
+    key, which Alerta accepts, is the control of the credential rule."""
+    c = KEY2
     steps = [("admin, Authorization, count", COUNT, auth(a), "miss"),
              ("customer, Authorization, count", COUNT, auth(c), "miss"),
              ("admin, Authorization, count", COUNT, auth(a), "hit"),
@@ -435,8 +460,15 @@ def isolation_steps(bc):
              ("customer, Authorization, list", LIST, auth(c), "miss"),
              ("admin, Authorization, list", LIST, auth(a), "miss"),
              ("customer, Authorization, list", LIST, auth(c), "hit"),
-             ("admin, Authorization, list", LIST, auth(a), "hit")]
+             ("admin, Authorization, list", LIST, auth(a), "hit"),
+             ("admin, X-API-Key, list", LIST, xkey(a), "miss"),
+             ("customer, X-API-Key, list", LIST, xkey(c), "miss"),
+             ("admin, X-API-Key, list", LIST, xkey(a), "hit"),
+             ("customer, X-API-Key, list", LIST, xkey(c), "hit")]
     for name, path, headers in (
+            (THIRD + ", Authorization, count", COUNT, auth(KEY3)),
+            (THIRD + ", X-API-Key, count", COUNT, xkey(KEY3)),
+            (THIRD + ", Authorization, list", LIST, auth(KEY3)),
             ("customer, api-key parameter", f"{COUNT}?api-key={c}", {}),
             ("admin Authorization with customer X-API-Key", COUNT, {**auth(a), **xkey(c)}),
             ("admin, Authorization, with a cookie", COUNT, {**auth(a), "Cookie": "a=b"}),
@@ -447,11 +479,19 @@ def isolation_steps(bc):
     return steps
 
 
+THIRD = "third valid key"
+
+
+def required_steps():
+    """What the gate wants of each cache: (ask, expected) in order."""
+    return [[name, expect] for name, _, _, expect in isolation_steps("-")]
+
+
 def check_isolation(bc, st, ttl):
     """Each cache alone: every answer equals Alerta's direct answer and
     every request is the expected miss, hit or pass."""
     part = {"problems": [], "nodes": []}
-    steps = isolation_steps(bc)
+    steps = isolation_steps(bc.KEY)
     direct = {}
     for name, path, headers, _ in steps:
         key = (path, json.dumps(headers, sort_keys=True))
@@ -479,6 +519,9 @@ def check_isolation(bc, st, ttl):
                 if fetched != (0 if expect == "hit" else 1):
                     problems.append(f"cache {i}, {name}: {fetched} backend request(s) for an "
                                     f"expected {expect}")
+                if name.startswith(THIRD) and got[0] != 200:
+                    problems.append(f"cache {i}, {name}: status {got[0]}; this control needs a "
+                                    "200 to tell a pass from a miss")
             if not late:
                 break
             # The runner was too slow for this expiry; start again with empty entries.
@@ -614,8 +657,9 @@ def check_burst(bc, st, ttl):
 
 
 def check_revocation(bc, st, ttl, db):
-    """How long a deleted key still gets its cached answer. This is the
-    stale-authorization interval of the rule set. Last: it removes the key."""
+    """A deleted key and its cached answer: for each target the last 200
+    and the first 401 that the check saw, from a time taken before the
+    deletion. Last: it removes the key."""
     part = {"problems": [], "limit_s": ttl + STALE_MARGIN_S}
     headers, targets = auth(KEY2), targets_of(st)
     old = sql_view(bc, db, COUNT, CUSTOMER)
@@ -630,9 +674,19 @@ def check_revocation(bc, st, ttl, db):
         part["problems"].append(f"after the deletion Alerta answers directly {direct}, [401] expected")
     part["targets"], problems = settle(targets, headers, COUNT, old, [401], ttl, t0)
     part["problems"] += problems
-    olds = [r["last_old_s"] for r in part["targets"].values() if r["last_old_s"] is not None]
-    part.update({"stale_authorization_s": max(olds) if olds else 0.0, "ok": not part["problems"]})
+    # Both are times after t0, which is before the deletion. The stale
+    # answers of a target ended between its two observations.
+    part["observed"] = {name: {"last_200_s": r["last_old_s"], "first_401_s": r["new_after_s"]}
+                        for name, r in part["targets"].items()}
+    part["ok"] = not part["problems"]
     return part
+
+
+def revocation_text(part):
+    """`cache 0: last 200 at 0.96 s, first 401 at 1.04 s; ...`"""
+    sec = lambda v: "not observed" if v is None else f"at {v:.3f} s"
+    return "; ".join(f"{name}: last 200 {sec(o['last_200_s'])}, first 401 {sec(o['first_401_s'])}"
+                     for name, o in part["observed"].items())
 
 
 def probe(bc, ttl, db, rec):
@@ -642,6 +696,8 @@ def probe(bc, ttl, db, rec):
     rec["probes"].append(p)
     bc.psql(db, "INSERT INTO keys (id, key, \"user\", scopes, text, expire_time, count, customer) "
                 f"VALUES ('bench-key2', '{KEY2}', 'bench2', ARRAY['read'], 'benchmark customer', "
+                f"timezone('UTC', now()) + interval '2 days', 0, '{CUSTOMER}'), "
+                f"('bench-key3', '{KEY3}', 'bench3', ARRAY['read'], 'benchmark third key', "
                 f"timezone('UTC', now()) + interval '2 days', 0, '{CUSTOMER}')")
     bc.psql(db, f"UPDATE alerts SET customer = '{CUSTOMER}' WHERE resource < 'host-{CUSTOMER_ALERTS:04d}'")
     st = start_stack(bc, arm, db, f"probe-{ttl}s",
@@ -662,9 +718,8 @@ def probe(bc, ttl, db, rec):
     p["ok"] = not p["problems"]
     news = [r["new_after_s"] for r in p["staleness"]["targets"].values()]
     bc.log(f"cache probe {ttl}s: {'ok' if p['ok'] else 'FAILED ' + str(p['problems'])}; "
-           f"new count after {news!r} s, deleted key served for "
-           f"{p['revocation']['stale_authorization_s']!r} s, burst "
-           f"{p['burst']['backend_requests']!r} backend request(s)")
+           f"new count after {news!r} s; deleted key, {revocation_text(p['revocation'])}; "
+           f"burst {p['burst']['backend_requests']!r} backend request(s)")
     return p["ok"]
 
 
@@ -728,7 +783,7 @@ def oha(bc, st, case, conc, seconds, out_file, json_flag):
     return json.loads(r.stdout)
 
 
-def counter_problems(case, conc, requests, before, after):
+def counter_problems(case, requests, before, after):
     """The raw counters of each cache for one timed run, checked as numbers
     before any ratio. Returns (per-cache deltas, backend requests, problems)."""
     problems = []
@@ -744,9 +799,11 @@ def counter_problems(case, conc, requests, before, after):
         if not 0 <= fetched <= 0.1 * requests:
             problems.append(f"{fetched} backend requests for {requests} requests of one URL; "
                             "one tenth or fewer expected")
-    elif abs(fetched - requests) > conc:
+    elif fetched != requests:
+        why = ("the suite does not see the URLs, so it cannot say that a repeated URL explains it"
+               if case == "list-unique" else "the load tool waits for its last answers")
         problems.append(f"{fetched} backend requests for {requests} requests that a cache must "
-                        f"not answer; equal numbers expected (within {conc})")
+                        f"not answer; equal numbers expected ({why})")
     return delta, fetched, problems
 
 
@@ -792,7 +849,7 @@ def cell(bc, st, arm, case, conc, rep, db, json_flag, rec):
     if ttl_of(arm):
         # backend_req is counted at once; the hit, miss and pass counters come
         # later, from each worker thread (run 44805872744), so no gate reads them.
-        delta, fetched, found = counter_problems(case, conc, s["requests"], v0, v1)
+        delta, fetched, found = counter_problems(case, s["requests"], v0, v1)
         problems += found
         s["cache_nodes"] = {"before": v0, "after": v1, "delta": delta}
         s["backend_requests"] = fetched
@@ -828,6 +885,22 @@ def gate(rec, planned):
         nodes = (p.get("isolation") or {}).get("nodes") or []
         if len(nodes) != len(STACKS) or not all(n.get("hits", 0) > 0 for n in nodes):
             g["missing_checks"].append(f"expiry {ttl} s: isolation not shown on each cache")
+        for n in nodes:
+            rows = n.get("steps") or []
+            if [[r.get("ask"), r.get("expected")] for r in rows] != required_steps():
+                g["missing_checks"].append(f"expiry {ttl} s, cache {n.get('cache')}: the isolation "
+                                           "steps are not the required ones")
+            elif not all(r.get("equals_direct") is True
+                         and r.get("backend_requests") == (0 if r["expected"] == "hit" else 1)
+                         and (r.get("status") == 200 or not r["ask"].startswith(THIRD))
+                         for r in rows):
+                g["missing_checks"].append(f"expiry {ttl} s, cache {n.get('cache')}: an isolation "
+                                           "step without its expected result")
+        seen = (p.get("revocation") or {}).get("observed") or {}
+        if len(seen) != len(STACKS) + 1 or not all(
+                isinstance(o.get("first_401_s"), float) and "last_200_s" in o for o in seen.values()):
+            g["missing_checks"].append(f"expiry {ttl} s: no first 401 recorded for each cache and "
+                                       "the front")
         for part in ("staleness", "revocation"):
             if len((p.get(part) or {}).get("targets") or {}) != len(STACKS) + 1:
                 g["missing_checks"].append(f"expiry {ttl} s: {part} not observed on each cache "
@@ -864,14 +937,21 @@ def gate(rec, planned):
 def gate_self_test(planned):
     """The gate must pass a complete record and refuse it when any required
     item is removed. Returns the cases; raises when the gate is wrong."""
-    node = {"hits": 1}
+    node = {"hits": 1, "cache": 0,
+            "steps": [{"ask": ask, "expected": expect, "equals_direct": True, "status": 200,
+                       "backend_requests": 0 if expect == "hit" else 1}
+                      for ask, expect in required_steps()]}
+    xlist = [i for i, (ask, _) in enumerate(required_steps()) if ask.endswith("X-API-Key, list")]
+    third = next(i for i, (ask, _) in enumerate(required_steps()) if ask.startswith(THIRD))
+    seen = {name: {"last_200_s": None, "first_401_s": 1.0} for name in ("cache 0", "cache 1", "front")}
     counters = [dict.fromkeys(VSTAT, 0) for _ in STACKS]
     targets = {name: {} for name in ("cache 0", "cache 1", "front")}
     full = {"probes": [{"ttl_s": ttl, "ok": True,
                         **{part: {"ok": True} for part in PROBE_PARTS},
-                        "isolation": {"ok": True, "nodes": [dict(node) for _ in STACKS]},
+                        "isolation": {"ok": True, "nodes": [copy.deepcopy(node) for _ in STACKS]},
                         "staleness": {"ok": True, "targets": dict(targets)},
-                        "revocation": {"ok": True, "targets": dict(targets)}} for ttl in TTLS],
+                        "revocation": {"ok": True, "targets": dict(targets),
+                                       "observed": copy.deepcopy(seen)}} for ttl in TTLS],
             "checks": [{"arm": a, "rep": r, "ok": True, "known_hits": len(SANE_PATHS)}
                        for a, r in sorted({(a, r) for a, _, _, r in planned})],
             "cells": [{"arm": a, "case": case, "c": c, "rep": r, "valid": True,
@@ -904,6 +984,23 @@ def gate_self_test(planned):
                    for part in PROBE_PARTS],
                  ("isolation on one cache only", without(["probes", 1, "isolation", "nodes", 1])),
                  ("isolation with no hit on a cache", put(["probes", 1, "isolation", "nodes", 0, "hits"], 0)),
+                 ("the X-API-Key list steps removed on one cache", lambda rec: [
+                     rec["probes"][0]["isolation"]["nodes"][1]["steps"].pop(i) for i in reversed(xlist)]),
+                 ("one X-API-Key list step removed", without(
+                     ["probes", 2, "isolation", "nodes", 0, "steps", xlist[0]])),
+                 ("the third key's step removed", without(
+                     ["probes", 1, "isolation", "nodes", 0, "steps", third])),
+                 ("the third key answered from the cache", put(
+                     ["probes", 1, "isolation", "nodes", 1, "steps", third + 1, "backend_requests"], 0)),
+                 ("the third key refused by Alerta", put(
+                     ["probes", 1, "isolation", "nodes", 1, "steps", third, "status"], 401)),
+                 ("a hit that reached Alerta", put(
+                     ["probes", 0, "isolation", "nodes", 0, "steps", 2, "backend_requests"], 1)),
+                 ("an answer that differs from Alerta's", put(
+                     ["probes", 0, "isolation", "nodes", 0, "steps", 0, "equals_direct"], False)),
+                 ("revocation without its observations", without(["probes", 0, "revocation", "observed"])),
+                 ("revocation with no first 401 on a target", put(
+                     ["probes", 2, "revocation", "observed", "cache 1", "first_401_s"], None)),
                  ("staleness without a target", without(["probes", 1, "staleness", "targets", "cache 1"])),
                  ("revocation without a target", without(["probes", 1, "revocation", "targets", "front"])),
                  ("a data check removed", without(["checks", 0])),
@@ -921,6 +1018,21 @@ def gate_self_test(planned):
         rec = copy.deepcopy(full)
         change(rec)
         cases.append({"case": name, "gate_must_pass": False, "gate_passed": gate(rec, planned)["ok"]})
+    # The counter rule of a cell, on numbers.
+    zero = [dict.fromkeys(VSTAT, 0) for _ in STACKS]
+    def after(n):
+        return [dict(zero[0], backend_req=n), *zero[1:]]
+    for name, case, requests, fetched, good in (
+            ("counters: writes all passed", "write-dup", 100, 100, True),
+            ("counters: one write not passed", "write-dup", 100, 99, False),
+            ("counters: one backend request more than writes", "write-dup", 100, 101, False),
+            ("counters: new URLs all fetched", "list-unique", 100, 100, True),
+            ("counters: one new URL not fetched", "list-unique", 100, 99, False),
+            ("counters: a repeated URL from the cache", "count", 100, 3, True),
+            ("counters: a repeated URL fetched too often", "count", 100, 11, False),
+            ("counters: a counter that went down", "count", 100, -1, False)):
+        cases.append({"case": name, "gate_must_pass": good,
+                      "gate_passed": not counter_problems(case, requests, zero, after(fetched))[2]})
     wrong = [c["case"] for c in cases if c["gate_passed"] != c["gate_must_pass"]]
     if wrong:
         raise RuntimeError(f"the cache suite's gate is wrong for: {wrong}")
@@ -939,7 +1051,7 @@ def run(bc, record, dbs):
         "arms": ARMS, "few_arms": FEW_ARMS, "ttls_s": TTLS, "concurrency": concurrency(bc),
         "alerta_per_stack": f"{max(1, bc.VCPUS // len(STACKS))}x4-pgbu-nofwd",
         "varnish": version("BENCH_VARNISHD", "-V"), "haproxy": version("BENCH_HAPROXY", "-v"),
-        "routes": ROUTES_RE, "credentials": KEY_RE, "stale_margin_s": STALE_MARGIN_S,
+        "routes": ROUTES_RE, "credentials": "the two synthetic keys, whole", "stale_margin_s": STALE_MARGIN_S,
         "gate_self_test": gate_self_test(planned), "probes": [], "checks": [], "cells": []}
     bc.log(f"cache suite: gate self-test, {len(rec['gate_self_test'])} cases, as expected")
     ok = True
@@ -987,11 +1099,13 @@ def summary(record):
              "case). Real traffic is between the two. All processes and the load generator share "
              "the runner's CPUs.", "",
              "The cache rules are a laboratory set: GET of the two measured routes, with one of "
-             "the benchmark's synthetic keys in one header. **A hit does not reach Alerta.** For "
+             "the benchmark's two synthetic keys, whole, in one header. **A hit does not reach Alerta.** For "
              "up to the expiry, a stored answer is given without Alerta's check of the key "
              "(expiry, deletion) and of the customer scope, and without the update of the key's "
              "use count and last-used time; the CPU numbers of the cache arms include that "
-             "avoided work. The line `deleted key` below is the measured interval.", ""]
+             "avoided work. `deleted key` below gives, for each cache and the front, the last 200 "
+             "and the first 401 that the check saw, from a time taken before the deletion; the "
+             "stale answers ended between the two.", ""]
     if g:
         lines += [f"Cells: {g['expected']} planned, {len(g['missing'])} missing, "
                   f"{len(g['invalid'])} invalid, {len(g['duplicate'])} twice; "
@@ -1007,7 +1121,6 @@ def summary(record):
         hits = sum(n["hits"] for n in iso["nodes"])
         new = max(t["new_after_s"] for t in s["targets"].values())
         old = sum(t["old_answers"] for t in s["targets"].values())
-        gone = max(t["new_after_s"] for t in v["targets"].values())
         lines.append(
             f"- expiry {p['ttl_s']} s: isolation, {steps} requests on the two caches one at a "
             f"time, each answer as Alerta's and each the expected miss, hit or pass ({hits} hits); "
@@ -1015,9 +1128,8 @@ def summary(record):
             f"({p['separation']['cache_hits']} from the cache); after a write every cache and the "
             f"front gave the new count within {new:.2f} s (limit {s['limit_s']} s; {old} old "
             f"answers before, none after); {b['requests']} requests at once gave "
-            f"{b['backend_requests']} backend request; deleted key: answered 200 for up to "
-            f"{v['stale_authorization_s']:.2f} s, 401 everywhere within {gone:.2f} s "
-            f"(limit {v['limit_s']} s).")
+            f"{b['backend_requests']} backend request; deleted key, {revocation_text(v)} "
+            f"(limit for the first 401: {v['limit_s']} s).")
     for c in rec["checks"]:
         if not c["ok"]:
             lines.append(f"- FAILED data check, {c['arm']} r{c['rep']}: {c['problems']}")
