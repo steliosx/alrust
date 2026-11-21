@@ -57,9 +57,15 @@ rejected; rejected blocks stay in the results, apart):
   - every answer has the wanted status and shape, and a read has only the
     tenant's alerts;
   - every read agrees with a possible state of the tenant's alerts: the
-    total, and for a list the ids of the page in order, of a state between
-    the writes that ended before the read began and the writes that began
-    before it ended;
+    two totals (by severity and by status), and for a list the ids of the
+    page in order, each of a state between the writes that ended before
+    the read began and the writes that began before it ended. Alerta makes
+    one statement for each of the three, and each has the condition
+    `last_receive_time <= <the time the read arrived>`. So an alert that
+    was received during the read can be absent from a statement that runs
+    after that write: the read then shows neither the old nor the new
+    alert. Such a read is accepted and counted (`reads_missing_an_alert`),
+    because Alerta as released does this; the count is a result;
   - after the last request the model's order is the database's order;
   - P and N: every answer came from site A's Alerta; L: from the user's site;
   - the four Alerta processes got the wanted PLUGINS and ALERTA_FAST
@@ -262,12 +268,13 @@ def sample(epoch, port, key, op, ids, phase, due):
         counts = [data.get("severityCounts"), data.get("statusCounts")]
         alerts = data.get("alerts") if kind == "list" else []
         if (type(data.get("total")) is not int or not all(isinstance(c, dict) for c in counts)
-                or any(sum(c.values()) != data["total"] for c in counts)):
+                or not all(type(n) is int for c in counts for n in c.values())
+                or sum(counts[0].values()) != data["total"]):
             row["error"] = "wrong_totals"
         elif not isinstance(alerts, list) or any(a.get("customer") != tenant for a in alerts):
             row["error"] = "other_customer"
         else:
-            row.update(ok=True, total=data["total"])
+            row.update(ok=True, total=data["total"], status_total=sum(counts[1].values()))
             if kind == "list":
                 row["page"] = [a["id"] for a in alerts]
     elif kind in POSTS:
@@ -283,16 +290,18 @@ def sample(epoch, port, key, op, ids, phase, due):
 
 
 def reconcile(rows, orders):
-    """Marks every read: `reconciled` True (it agrees with a possible state
-    of its tenant), False, or None (a write of the tenant has no known
-    result, so the states after it are not known). `orders` has each
+    """Marks every read: `reconciled` True (each of its statements agrees
+    with a possible state of its tenant), False, or None (a write of the
+    tenant has no known result, so the states after it are not known), and
+    `missed` (a statement agrees only with an alert absent that was
+    received during the read; see the file header). `orders` has each
     tenant's ids, newest first, before the first request. Returns each
     tenant's last known order, or None."""
     last = {}
     for tenant, first in orders.items():
         mine = [row for row in rows if row["tenant"] == tenant]
         writes = sorted((row for row in mine if row["kind"] not in READS), key=lambda row: row["start"])
-        states = [list(first)]
+        states, received = [list(first)], []
         for write in writes:
             if not write["ok"]:
                 break
@@ -302,6 +311,7 @@ def reconcile(rows, orders):
                     state.remove(write["alert_id"])
                 state.insert(0, write["alert_id"])
             states.append(state)
+            received.append(write["alert_id"] if write["kind"] in POSTS else None)
         known = len(states) - 1
         last[tenant] = states[-1] if known == len(writes) else None
         for read in (row for row in mine if row["kind"] in READS and row["ok"]):
@@ -310,9 +320,21 @@ def reconcile(rows, orders):
             if high > known:
                 read["reconciled"] = None
                 continue
-            read["reconciled"] = any(
-                read["total"] == len(states[k]) and (read["kind"] == "count" or read["page"] == states[k][:PAGE])
-                for k in range(low, high + 1))
+            # (number of absent alerts, ids): the state after k writes, without
+            # some of the alerts received by the writes low+1..k.
+            views = []
+            for k in range(low, high + 1):
+                during = sorted({alert for alert in received[low:k] if alert})
+                for n in range(len(during) + 1):
+                    for absent in itertools.combinations(during, n):
+                        views.append((n, [alert for alert in states[k] if alert not in absent]))
+            checks = [lambda view: len(view) == read["total"],
+                      lambda view: len(view) == read.get("status_total", read["total"])]
+            if read["kind"] == "list":
+                checks.append(lambda view: view[:PAGE] == read["page"])
+            fewest = [min((n for n, view in views if check(view)), default=None) for check in checks]
+            read["reconciled"] = None not in fewest
+            read["missed"] = read["reconciled"] and max(fewest) > 0
             read["states"] = [low, high]
     return last
 
@@ -658,13 +680,15 @@ class PlacementLab(hosted_lab.VirtualLab):
         for row in rows:  # the ledger's times: seconds from the block's start
             for field in ("arrival", "start", "end"):
                 row[field] = round(row[field] - block_start, 4)
-            row.pop("page", None)
+            if row.get("reconciled"):  # the page of any other read stays as evidence
+                row.pop("page", None)
         numeric = lambda stats: {k: int(v) for k, v in stats.items() if v.lstrip("-").isdigit()}
         return {
             "run": name, "arm": arm, "route": route, "alerta_fast": wanted_fast,
             "valid": not problems, "problems": problems, **clone,
             "requests": Counter(f"{row['phase']}/{CLASS[row['kind']]}" for row in rows),
             "groups": groups(rows),
+            "reads_missing_an_alert": Counter(row["site"] for row in rows if row.get("missed")),
             "drain_s": round(timed_end - start - (ops[-1]["offset"] + 1 / RATE), 3),
             "alert_row_updates": updates, "primary_wal_bytes": wal_bytes,
             "primary_flush_lsn": flush, "standby_replay_lsn": replay,
@@ -755,14 +779,17 @@ def summary(record):
             for pair, names in block["differences"].items():
                 for name, d in names.items():
                     lines.append(f"| {block['block']} | {pair} | {name} | {d.get('p50_ms')} | {d.get('p95_ms')} |")
-        lines += ["", "| block | arm | row updates of `alerts` | primary WAL bytes | app CPU ms A / B | PostgreSQL CPU ms |",
-                  "|---|---|---|---|---|---|"]
+        lines += ["", "`reads without an alert`: reads from site A / B that showed neither the old nor the new "
+                  "state of an alert received during the read (Alerta as released does this; file header).", "",
+                  "| block | arm | row updates of `alerts` | primary WAL bytes | app CPU ms A / B | PostgreSQL CPU ms "
+                  "| reads without an alert A / B |", "|---|---|---|---|---|---|---|"]
         for block in chosen:
             for run in block["runs"]:
                 cpu = run["cpu_ms"]
                 lines.append(f"| {block['block']} | {run['arm']} | {run['alert_row_updates']} | "
                              f"{run['primary_wal_bytes']} | {cpu.get('app_a')} / {cpu.get('app_b')} | "
-                             f"{cpu.get('postgres_a')} |")
+                             f"{cpu.get('postgres_a')} | {run['reads_missing_an_alert'].get('a', 0)} / "
+                             f"{run['reads_missing_an_alert'].get('b', 0)} |")
     lines += ["", f"Result: **{'ok' if record.get('ok') else 'NOT OK'}**"]
     return "\n".join(lines) + "\n"
 
@@ -863,10 +890,19 @@ def self_test():
             read("count", 3.6, 3.7, 30),                       # after the create, old total: wrong
             read("list", 6.0, 6.1, 31, added[:PAGE]),
             read("list", 6.0, 6.1, 31, moved[:PAGE]),          # right total, wrong page
-            read("count", 0.0, 9.0, 30, tenant="other")]
+            read("count", 0.0, 9.0, 30, tenant="other"),
+            # Received during the read: absent from every statement, or from one.
+            read("list", 0.9, 1.5, 29, [i for i in first if i != "id7"][:PAGE]),
+            read("list", 0.9, 1.5, 30, [i for i in first if i != "id7"][:PAGE]),
+            {**read("count", 0.9, 1.5, 30), "status_total": 29},
+            read("count", 2.9, 3.6, 29),                       # the create hides nothing stored
+            read("count", 1.5, 1.7, 29),                       # after the duplicate: wrong
+            read("list", 0.9, 1.5, 29, moved[1:PAGE + 1][::-1])]
     last = reconcile(rows, {"t": first, "other": first})
     assert [row["reconciled"] for row in rows[3:]] == [True, True, True, False, True, True, False,
-                                                       True, False, True], rows[3:]
+                                                       True, False, True,
+                                                       True, True, True, False, False, False], rows[3:]
+    assert [row.get("missed", False) for row in rows[3:]] == [False] * 10 + [True] * 3 + [False] * 3, rows[3:]
     assert last == {"t": added, "other": first}
     rows = [write("dup", 1.0, 1.4, "id7"), write("create", 3.0, 3.5, None, ok=False), write("dup", 4.0, 4.1, "id1"),
             read("count", 2.0, 2.1, 30), read("count", 2.9, 3.1, 30), read("count", 6.0, 6.1, 31)]
