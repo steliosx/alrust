@@ -26,6 +26,10 @@ on:
         type: choice
         options: [compare, mixed, both, tuning, addon, cache, pg19, all]
         default: compare
+      occupy_5433:
+        description: "regression check, quick compare only: another process holds port 5433 during the setup"
+        type: boolean
+        default: false
   pull_request:
     paths:
       - scripts/bench/**
@@ -83,19 +87,35 @@ jobs:
       - name: Mixed suite gate tests (no server)
         timeout-minutes: 2
         run: python3 -I scripts/bench/test_mixed_checks.py
-      # A suite without PostgreSQL 19 must not care about port 5433. This
-      # listener is there before the setup and stays for the whole job; the
-      # setup and the benchmark must pass with it.
-      - name: Fixture, a listener on port 5433 that a PostgreSQL 18 suite must ignore
-        if: github.event_name == 'workflow_dispatch' && inputs.suite != 'pg19' && inputs.suite != 'all'
+      # A suite without PostgreSQL 19 must not care about port 5433. Only
+      # the regression check asks for this (input occupy_5433, quick compare):
+      # no other run binds or looks at the port. The process holds the port
+      # during the setup; the step after the setup checks that same process
+      # and stops it.
+      - name: Fixture, hold port 5433 during the setup (regression check only)
+        if: github.event_name == 'workflow_dispatch' && inputs.occupy_5433
+        env:
+          FIXTURE_MODE: ${{ inputs.mode }}
+          FIXTURE_SUITE: ${{ inputs.suite }}
         run: |
           set -euo pipefail
-          nohup python3 -I -c 'import socket, time
+          if [[ $FIXTURE_MODE != quick || $FIXTURE_SUITE != compare ]]; then
+            echo "occupy_5433 is for mode quick, suite compare only" >&2; exit 1
+          fi
+          ready="$RUNNER_TEMP/fixture-5433.ready"
+          rm -f "$ready"
+          nohup python3 -I -c 'import socket, sys, time
           s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-          s.bind(("127.0.0.1", 5433)); s.listen(); time.sleep(7200)' >/dev/null 2>&1 &
-          sleep 1
-          ss -ltnH "sport = :5433" | grep -q . || { echo "the fixture does not listen" >&2; exit 1; }
-          echo "fixture: a listener on 127.0.0.1:5433"
+          s.bind(("127.0.0.1", 5433)); s.listen()
+          open(sys.argv[1], "w").close(); time.sleep(900)' "$ready" >/dev/null 2>&1 &
+          pid=$!
+          echo "$pid" > "$RUNNER_TEMP/fixture-5433.pid"
+          # The file is written by the process itself, after its listen().
+          for _ in $(seq 50); do [[ -e $ready ]] && break; sleep 0.2; done
+          if [[ ! -e $ready ]] || ! kill -0 "$pid"; then
+            echo "the fixture process did not get port 5433" >&2; exit 1
+          fi
+          echo "fixture: process $pid listens on 127.0.0.1:5433"
       - name: PostgreSQL 18.7 (and 19 for the pg19 suite), pgbouncer, Varnish, HAProxy and the reference Alerta environment
         timeout-minutes: 15
         env:
@@ -103,6 +123,17 @@ jobs:
           # installed and started for pg19 and all only.
           BENCH_SUITE: ${{ github.event_name == 'workflow_dispatch' && inputs.suite || 'all' }}
         run: scripts/bench/setup.sh
+      - name: Fixture, the same process held port 5433 through the setup; stop it
+        if: github.event_name == 'workflow_dispatch' && inputs.occupy_5433
+        run: |
+          set -euo pipefail
+          pid=$(cat "$RUNNER_TEMP/fixture-5433.pid")
+          kill -0 "$pid" || { echo "the fixture process $pid ended before the setup did" >&2; exit 1; }
+          echo "fixture: process $pid held 127.0.0.1:5433 through the setup"
+          kill "$pid"
+          for _ in $(seq 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
+          if kill -0 "$pid" 2>/dev/null; then echo "the fixture process $pid did not stop" >&2; exit 1; fi
+          echo "fixture: process $pid stopped"
       - name: Benchmark
         # The tuning suite has six arms: about 45 minutes in full mode. The
         # pg19 suite has three arms on two versions: about 50 minutes.
