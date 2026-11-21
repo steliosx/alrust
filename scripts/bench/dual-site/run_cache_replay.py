@@ -234,6 +234,73 @@ def counters(nodes):
     return result
 
 
+def fetch_error_categories(lines):
+    """Return only fixed labels from VSL FetchError records, never the raw line."""
+    counts = Counter()
+    for line in lines.splitlines():
+        _, tag, reason = line.partition("FetchError")
+        if not tag:
+            continue
+        reason = reason.lower()
+        category = next(
+            (
+                label
+                for token, label in (
+                    ("timeout", "timeout"),
+                    ("timed out", "timeout"),
+                    ("reset by peer", "peer_reset"),
+                    ("eof", "eof"),
+                    ("no backend", "no_backend"),
+                    ("refused", "connection_refused"),
+                    ("overflow", "overflow"),
+                    ("out of workspace", "workspace_exhausted"),
+                )
+                if token in reason
+            ),
+            "other",
+        )
+        counts[category] += 1
+    return dict(counts)
+
+
+def failed_fetch_diagnostics(nodes, before, after):
+    """Inspect this cache instance only after a timed failure; do not retain HTTP headers."""
+    if not nodes:
+        return {}
+    stage, lib = varnish_layout()
+    result = {}
+    for site, (directory, _) in nodes.items():
+        delta = after[site]["fetch_failed"] - before[site]["fetch_failed"]
+        if delta <= 0:
+            continue
+        observation = {"timed_fetch_failed_delta": delta}
+        try:
+            data = subprocess.check_output(
+                [
+                    stage / "bin/varnishlog",
+                    "-n",
+                    directory,
+                    "-d",
+                    "-g",
+                    "raw",
+                    "-i",
+                    "FetchError",
+                    "-k",
+                    "64",
+                ],
+                env={**os.environ, "LD_LIBRARY_PATH": str(lib)},
+                stderr=subprocess.DEVNULL,
+                text=True,
+                errors="replace",
+                timeout=4,
+            )
+            observation["retained_categories"] = fetch_error_categories(data)
+        except (OSError, subprocess.SubprocessError) as exc:
+            observation["diagnostic_unavailable"] = type(exc).__name__
+        result[site] = observation
+    return result
+
+
 def single_action(lab, arm, endpoints, event, views, t0):
     start = time.monotonic()
     row = {**event, "ok": False, "started_s": start - t0}
@@ -788,6 +855,10 @@ async def main(args):
                             )
                             # These contain only synthetic fixture IDs, counts and ordinals.
                             # Retain the primary records so a reader can audit the ledger offline.
+                            if any(not row["ok"] for row in cell["arrivals"]):
+                                cell["failed_fetch_diagnostics"] = await asyncio.to_thread(
+                                    failed_fetch_diagnostics, nodes, stat0, stat1
+                                )
                             cell["ledger_before"] = before
                             cell["ledger_after"] = after
                             save(path, report)

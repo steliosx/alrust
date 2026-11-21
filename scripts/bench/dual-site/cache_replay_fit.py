@@ -1,7 +1,7 @@
 """Estimate one-second cache reuse from a locally anonymized, chronological GET trace."""
 
 import argparse
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 import json
 import math
 from pathlib import Path
@@ -18,6 +18,7 @@ def estimate(records, ttl_ms=1000, fill_ms=0):
         raise ValueError("Use a positive TTL and a nonnegative fill time")
     totals = defaultdict(Counter)
     objects = {}
+    expiry_order = deque()
     previous = -1
     for n, row in enumerate(records, 1):
         if (
@@ -34,6 +35,11 @@ def estimate(records, ttl_ms=1000, fill_ms=0):
                 f"Invalid or unsorted row {n}; use only the documented five fields and numeric labels"
             )
         now = previous = row["time_ms"]
+        # All fills have the same lifetime and arrive in chronological order.
+        # Forget expired identities even when a long trace contains only unique URLs.
+        while expiry_order and expiry_order[0][0] <= now:
+            _, expired_key = expiry_order.popleft()
+            del objects[expired_key]
         site = row["site"]
         count = totals[site]
         count["reads"] += 1
@@ -48,7 +54,10 @@ def estimate(records, ttl_ms=1000, fill_ms=0):
             count["warm"] += 1
         else:
             count["fills"] += 1
-            objects[key] = (now + fill_ms, now + fill_ms + ttl_ms)
+            ready = now + fill_ms
+            expires = ready + ttl_ms
+            objects[key] = (ready, expires)
+            expiry_order.append((expires, key))
 
     def summary(counter):
         output = {k: counter[k] for k in ("reads", "bypass", "coalesced", "warm", "fills")}
