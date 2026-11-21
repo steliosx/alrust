@@ -854,6 +854,11 @@ def cell(bc, st, arm, case, conc, rep, db, json_flag, rec):
     # of the warm-up must not fall into the timed run's difference.
     pause = lambda: time.sleep(QUIET_WAIT_S)
     v0, history0, resolved0 = settled(st.stats, pause)
+    # A second account of the same requests, not in any gate: Alerta as
+    # released adds one to the key's use count, and commits, before it
+    # answers a request that reached it. The row is read, not statistics.
+    key_uses = lambda: int(bc.psql(db, "SELECT count FROM keys WHERE id = 'bench-key'"))
+    k0 = key_uses()
     cpu0 = st.cpu(bc)
     t0 = time.monotonic()
     j = oha(bc, st, case, conc, bc.TIMED_S, raw / f"cache-timed-{arm}-{case}-c{conc}-r{rep}.json",
@@ -862,6 +867,7 @@ def cell(bc, st, arm, case, conc, rep, db, json_flag, rec):
     cpu1 = st.cpu(bc)
     # No request is under way now: the load tool waited for its last answers.
     v1, history1, resolved1 = settled(st.stats, pause)
+    k1 = key_uses()
     alive = st.alive()
     time.sleep(1.5)
     s = bc.summarize_oha(j)
@@ -894,6 +900,8 @@ def cell(bc, st, arm, case, conc, rep, db, json_flag, rec):
                             "before_first": history0[0]["counters"], "after_first": history1[0]["counters"],
                             "before_history": history0, "after_history": history1,
                             "resolved": [resolved0, resolved1],
+                            "key_uses": {"before": k0, "after": k1, "delta": k1 - k0,
+                                         "equals_backend_requests": k1 - k0 == fetched},
                             "rest": {"reads": QUIET_READS, "limit": QUIET_LIMIT, "wait_s": QUIET_WAIT_S}}
         s["backend_requests"] = fetched
         s["hit_ratio"] = 1 - fetched / req
