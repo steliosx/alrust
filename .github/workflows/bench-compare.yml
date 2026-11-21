@@ -9,7 +9,8 @@
 # tuning suite compares deployment settings of Alerta (no change to its
 # code): its arms are listed at the top of bench_compare.py. The cache suite
 # puts a short-lived response cache in front of Alerta
-# (scripts/bench/cache_suite.py).
+# (scripts/bench/cache_suite.py). The pg19 suite runs Alerta on PostgreSQL
+# 18.7 and 19 side by side (scripts/bench/pg_suite.py).
 name: bench compare
 
 on:
@@ -21,10 +22,14 @@ on:
         options: [full, quick]
         default: full
       suite:
-        description: "compare (the four arms), mixed (writers and readers together; pool and key-use sweeps), both, tuning (Alerta deployment settings), addon (alerta_fast.py patches), cache (a response cache in front of Alerta) or all (quick mode only)"
+        description: "compare (the four arms), mixed (writers and readers together; pool and key-use sweeps), both, tuning (Alerta deployment settings), addon (alerta_fast.py patches), cache (a response cache in front of Alerta), pg19 (Alerta on PostgreSQL 18.7 and 19) or all (quick mode only)"
         type: choice
-        options: [compare, mixed, both, tuning, addon, cache, all]
+        options: [compare, mixed, both, tuning, addon, cache, pg19, all]
         default: compare
+      occupy_5433:
+        description: "regression check, quick compare only: another process holds port 5433 during the setup"
+        type: boolean
+        default: false
   pull_request:
     paths:
       - scripts/bench/**
@@ -48,7 +53,7 @@ jobs:
       - name: Refuse full mode with suite all
         if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full' && inputs.suite == 'all'
         run: |
-          echo "::error::suite 'all' is for quick mode only. Start one full run for each of compare, mixed, both, tuning, addon or cache."
+          echo "::error::suite 'all' is for quick mode only. Start one full run for each of compare, mixed, both, tuning, addon, cache or pg19."
           exit 1
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
         with:
@@ -82,12 +87,57 @@ jobs:
       - name: Mixed suite gate tests (no server)
         timeout-minutes: 2
         run: python3 -I scripts/bench/test_mixed_checks.py
-      - name: PostgreSQL 18.7, pgbouncer, Varnish, HAProxy and the reference Alerta environment
+      # A suite without PostgreSQL 19 must not care about port 5433. Only
+      # the regression check asks for this (input occupy_5433, quick compare):
+      # no other run binds or looks at the port. The process holds the port
+      # during the setup; the step after the setup checks that same process
+      # and stops it.
+      - name: Fixture, hold port 5433 during the setup (regression check only)
+        if: github.event_name == 'workflow_dispatch' && inputs.occupy_5433
+        env:
+          FIXTURE_MODE: ${{ inputs.mode }}
+          FIXTURE_SUITE: ${{ inputs.suite }}
+        run: |
+          set -euo pipefail
+          if [[ $FIXTURE_MODE != quick || $FIXTURE_SUITE != compare ]]; then
+            echo "occupy_5433 is for mode quick, suite compare only" >&2; exit 1
+          fi
+          ready="$RUNNER_TEMP/fixture-5433.ready"
+          rm -f "$ready"
+          nohup python3 -I -c 'import socket, sys, time
+          s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+          s.bind(("127.0.0.1", 5433)); s.listen()
+          open(sys.argv[1], "w").close(); time.sleep(900)' "$ready" >/dev/null 2>&1 &
+          pid=$!
+          echo "$pid" > "$RUNNER_TEMP/fixture-5433.pid"
+          # The file is written by the process itself, after its listen().
+          for _ in $(seq 50); do [[ -e $ready ]] && break; sleep 0.2; done
+          if [[ ! -e $ready ]] || ! kill -0 "$pid"; then
+            echo "the fixture process did not get port 5433" >&2; exit 1
+          fi
+          echo "fixture: process $pid listens on 127.0.0.1:5433"
+      - name: PostgreSQL 18.7 (and 19 for the pg19 suite), pgbouncer, Varnish, HAProxy and the reference Alerta environment
         timeout-minutes: 15
+        env:
+          # The same selection as the Benchmark step: PostgreSQL 19 is
+          # installed and started for pg19 and all only.
+          BENCH_SUITE: ${{ github.event_name == 'workflow_dispatch' && inputs.suite || 'all' }}
         run: scripts/bench/setup.sh
+      - name: Fixture, the same process held port 5433 through the setup; stop it
+        if: github.event_name == 'workflow_dispatch' && inputs.occupy_5433
+        run: |
+          set -euo pipefail
+          pid=$(cat "$RUNNER_TEMP/fixture-5433.pid")
+          kill -0 "$pid" || { echo "the fixture process $pid ended before the setup did" >&2; exit 1; }
+          echo "fixture: process $pid held 127.0.0.1:5433 through the setup"
+          kill "$pid"
+          for _ in $(seq 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
+          if kill -0 "$pid" 2>/dev/null; then echo "the fixture process $pid did not stop" >&2; exit 1; fi
+          echo "fixture: process $pid stopped"
       - name: Benchmark
-        # The tuning suite has six arms: about 45 minutes in full mode.
-        timeout-minutes: 60
+        # The tuning suite has six arms: about 45 minutes in full mode. The
+        # pg19 suite has three arms on two versions: about 50 minutes.
+        timeout-minutes: 70
         env:
           BENCH_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'quick' }}
           # A pull request checks the plumbing of every suite.
@@ -106,6 +156,7 @@ jobs:
         run: |
           cp "$BENCH_WORK/alerta-pip-freeze.txt" "$BENCH_OUT/" 2>/dev/null || true
           cp "$BENCH_WORK/pg.log" "$BENCH_OUT/postgres.log" 2>/dev/null || true
+          cp "$BENCH_WORK/pg19.log" "$BENCH_OUT/postgres19.log" 2>/dev/null || true
           cp "$BENCH_WORK/pgb/pgbouncer.log" "$BENCH_OUT/" 2>/dev/null || true
           nproc > "$BENCH_OUT/nproc.txt"; free -m > "$BENCH_OUT/free.txt"
       - name: Upload results (7-day artifact)
