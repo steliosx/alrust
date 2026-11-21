@@ -2,6 +2,7 @@
 # Benchmark setup on a GitHub-hosted ubuntu-24.04 runner (bench-compare.yml):
 # PostgreSQL 18.7 and pgbouncer from PGDG, a throwaway cluster on
 # 127.0.0.1:5432, and the reference Alerta environment with gunicorn.
+# Varnish and HAProxy, for the cache suite, are Ubuntu's own packages.
 # PostgreSQL 18.7 is alrust's pin since #226 (Y67); the owner first chose it
 # for this benchmark (2026-11-15: "use postgres 18.7 which is the current
 # stable one"). Writes BENCH_* lines to $GITHUB_ENV.
@@ -34,9 +35,9 @@ sudo install -d /etc/postgresql-common/createcluster.d
 echo 'create_main_cluster = false' | sudo tee /etc/postgresql-common/createcluster.d/bench.conf >/dev/null
 sudo apt-get update -q
 sudo apt-get install -y -q --no-install-recommends \
-  "postgresql-18=$version" "postgresql-client-18=$version" pgbouncer libpq-dev
-# The package starts its own pgbouncer service; the benchmark runs its own.
-sudo systemctl disable --now pgbouncer >/dev/null 2>&1 || true
+  "postgresql-18=$version" "postgresql-client-18=$version" pgbouncer libpq-dev varnish haproxy
+# The packages start their own services; the benchmark runs its own processes.
+sudo systemctl disable --now pgbouncer varnish haproxy >/dev/null 2>&1 || true
 
 bin=/usr/lib/postgresql/18/bin
 "$bin/postgres" -V
@@ -70,6 +71,12 @@ rm -rf -- "$src"
   echo "BENCH_PG_BIN=$bin"
   echo "BENCH_ALERTA_VENV=$venv"
   echo "BENCH_PGBOUNCER=$(command -v pgbouncer)"
+  echo "BENCH_VARNISHD=/usr/sbin/varnishd"
+  echo "BENCH_VARNISHSTAT=/usr/bin/varnishstat"
+  echo "BENCH_HAPROXY=/usr/sbin/haproxy"
 } >> "${GITHUB_ENV:-/dev/null}"
 pgbouncer --version
+/usr/sbin/varnishd -V 2>&1 | head -1
+/usr/bin/varnishstat -V 2>&1 | head -1
+/usr/sbin/haproxy -v | head -1
 echo "setup done: $work"
