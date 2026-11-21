@@ -83,6 +83,19 @@ jobs:
       - name: Mixed suite gate tests (no server)
         timeout-minutes: 2
         run: python3 -I scripts/bench/test_mixed_checks.py
+      # A suite without PostgreSQL 19 must not care about port 5433. This
+      # listener is there before the setup and stays for the whole job; the
+      # setup and the benchmark must pass with it.
+      - name: Fixture, a listener on port 5433 that a PostgreSQL 18 suite must ignore
+        if: github.event_name == 'workflow_dispatch' && inputs.suite != 'pg19' && inputs.suite != 'all'
+        run: |
+          set -euo pipefail
+          nohup python3 -I -c 'import socket, time
+          s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+          s.bind(("127.0.0.1", 5433)); s.listen(); time.sleep(7200)' >/dev/null 2>&1 &
+          sleep 1
+          ss -ltnH "sport = :5433" | grep -q . || { echo "the fixture does not listen" >&2; exit 1; }
+          echo "fixture: a listener on 127.0.0.1:5433"
       - name: PostgreSQL 18.7 (and 19 for the pg19 suite), pgbouncer, Varnish, HAProxy and the reference Alerta environment
         timeout-minutes: 15
         env:

@@ -5,7 +5,10 @@
 # Varnish and HAProxy, for the cache suite, are Ubuntu's own packages.
 # PostgreSQL 19 is installed and started only when BENCH_SUITE is pg19 or all
 # (the pg19 suite): a second cluster on port 5433 with the same options. Every
-# other suite runs without it. alrust's pin stays 18.7.
+# other suite runs without it and does not look for it: a PostgreSQL 19 that
+# the host already has, or a listener on its port, is not this setup's
+# concern. Without BENCH_SUITE the suite is compare, the driver's default.
+# alrust's pin stays 18.7.
 # PostgreSQL 18.7 is alrust's pin since #226 (Y67); the owner first chose it
 # for this benchmark (2026-11-15: "use postgres 18.7 which is the current
 # stable one"). Writes BENCH_* lines to $GITHUB_ENV.
@@ -18,7 +21,7 @@ port=5432
 port19=5433
 work="$RUNNER_TEMP/bench-env"
 mkdir -m 700 -- "$work"
-: "${BENCH_SUITE:?BENCH_SUITE is required}"
+BENCH_SUITE=${BENCH_SUITE:-compare}
 case "$BENCH_SUITE" in
   pg19|all) pg19=1; ports="$port $port19" ;;
   *) pg19=0; ports="$port" ;;
@@ -58,9 +61,9 @@ bin=/usr/lib/postgresql/18/bin
 "$bin/postgres" -V
 pwfile="$work/pwfile"
 ( umask 077; printf '%s' postgres > "$pwfile" )
-bin19=/usr/lib/postgresql/19/bin
 "$bin/initdb" -D "$work/data" -U postgres --pwfile="$pwfile" -A scram-sha-256 >/dev/null
 if [ "$pg19" = 1 ]; then
+  bin19=/usr/lib/postgresql/19/bin
   "$bin19/postgres" -V
   "$bin19/initdb" -D "$work/data19" -U postgres --pwfile="$pwfile" -A scram-sha-256 >/dev/null
 fi
@@ -73,12 +76,7 @@ if [ "$pg19" = 1 ]; then
     -o "-p $port19 -c listen_addresses=127.0.0.1 -c unix_socket_directories='' -c max_connections=200" start >/dev/null
   PGPASSWORD=postgres "$bin19/psql" -h 127.0.0.1 -p "$port19" -U postgres -d postgres -tAc 'SELECT version()'
 else
-  # The check of this choice: no PostgreSQL 19 on the runner for this suite.
-  if [ -e "$bin19/postgres" ] || ss -ltnH "sport = :$port19" | grep -q .; then
-    echo "PostgreSQL 19 is present for suite $BENCH_SUITE" >&2
-    exit 1
-  fi
-  echo "suite $BENCH_SUITE: PostgreSQL 19 not installed, not started"
+  echo "suite $BENCH_SUITE: PostgreSQL 19 not requested; this setup did not install or start it"
 fi
 
 # The reference Alerta environment, built as conformance/scripts/run-reference.sh
