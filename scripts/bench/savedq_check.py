@@ -24,7 +24,11 @@ Not kept, and still equal to Alerta: a text over the size limit (counted
 in bytes), a text or field that is not exactly `str`, a subclass of the
 parser, a replaced grammar object. The store never has more entries than
 its limit and drops the one that was used longest ago. Eight threads call
-at the same time and every answer is compared.
+the patched parser at the same time, from an empty store, and every answer
+must be the one Alerta's parser gives to a single thread. The same calls
+are also made on Alerta's parser alone: how many of its answers differ
+then is written to the result and is not a failure of the patch (the
+patch calls Alerta's parser under a lock).
 
 HTTP, in this process with Flask's test client and a real database. The
 same request is sent with Alerta's parser and with the patched parser put
@@ -269,27 +273,42 @@ def eviction_case():
 def thread_case(expressions, refused):
     texts = expressions[:20] + refused[:4]
     wanted = {q: stock(q) for q in texts}
+    calls = 300
+
+    def run(function):
+        wrong = []
+
+        def work(n):
+            for i in range(calls):
+                q = texts[(i * (n + 1) + n) % len(texts)]
+                got = function(q)
+                if got != wanted[q] or not exact(got):
+                    wrong.append((wanted[q][0], got[0]))
+
+        threads = [threading.Thread(target=work, args=(n,)) for n in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        return wrong
+
+    # Alerta's parser alone: an observation, not a case.
+    alone = run(stock)
+    kinds = {}
+    for pair in alone:
+        kinds[" -> ".join(pair)] = kinds.get(" -> ".join(pair), 0) + 1
     with af._savedq_lock:
         af._savedq.clear()
-    before, wrong, calls = stats(), [], 300
-
-    def work(n):
-        for i in range(calls):
-            q = texts[(i * (n + 1) + n) % len(texts)]
-            got = patched(q)
-            if got != wanted[q] or not exact(got):
-                wrong.append(q)
-
-    threads = [threading.Thread(target=work, args=(n,)) for n in range(8)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+    before = stats()
+    wrong = run(patched)
     got = moved(before)
+    after = [q for q in texts if patched(q) != wanted[q]]
     return one("eight threads", (
         (f"{len(wrong)} answers differ", bool(wrong)),
+        (f"{len(after)} kept answers differ", bool(after)),
         (f"numbers {got} do not add up to {8 * calls}", sum(got.values()) != 8 * calls),
-        ("an entry was dropped", "dropped" in got or "not_kept" in got)), calls=8 * calls, numbers=got)
+        ("an entry was dropped", "dropped" in got or "not_kept" in got)), calls=8 * calls, numbers=got,
+        alerta_alone={"calls": 8 * calls, "answers_that_differ": len(alone), "wanted -> got": kinds})
 
 
 # ------------------------------------------------------------------- HTTP

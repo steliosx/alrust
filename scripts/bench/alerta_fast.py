@@ -112,7 +112,12 @@ named: ALERTA_FAST=safe,hot,noecho,savedq.
             field (default 2048); a parser object that is not exactly
             Alerta's class, or a grammar object that was replaced after
             start-up; an answer that is not one string and a dict of
-            strings. The server does not start with `savedq` when the
+            strings. Alerta's parser is called by one thread of the
+            worker at a time (a lock): with several threads in it at the
+            same time, pyparsing can give a wrong answer or a wrong
+            refusal (seen in scripts/bench/savedq_check.py, 8 threads),
+            and such an answer must not be kept. Alerta as released has
+            no such lock. The server does not start with `savedq` when the
             installed postgres/queryparser.py is not the file of Alerta
             9.1.0 (git blob 346ff01a). Memory: at most the entries times
             (the text, the condition and the values). No search text and
@@ -417,6 +422,7 @@ if "savedq" in FEATURES:
     _grammar = _qp.query_expr
     _savedq = OrderedDict()  # (text, field) -> (condition, ((name, value), ...)); the last used at the end
     _savedq_lock = threading.Lock()
+    _parse_lock = threading.Lock()  # one thread at a time in Alerta's parser
     savedq_stats = {"hit": 0, "miss": 0, "refused": 0, "not_kept": 0, "dropped": 0}
 
     def _savedq_parse(self, query, default_field=None):
@@ -429,7 +435,8 @@ if "savedq" in FEATURES:
                 + len(field.encode("utf-8", "surrogatepass")) > SAVEDQ_BYTES):
             with _savedq_lock:
                 savedq_stats["not_kept"] += 1
-            return _orig_parse(self, query, default_field)
+            with _parse_lock:
+                return _orig_parse(self, query, default_field)
         key = (query, field)
         with _savedq_lock:
             kept = _savedq.get(key)
@@ -439,7 +446,8 @@ if "savedq" in FEATURES:
         if kept is not None:
             return kept[0], dict(kept[1])
         try:
-            sql, params = _orig_parse(self, query, default_field)
+            with _parse_lock:
+                sql, params = _orig_parse(self, query, default_field)
         except BaseException:
             with _savedq_lock:
                 savedq_stats["refused"] += 1
