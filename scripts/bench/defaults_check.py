@@ -34,6 +34,10 @@ so no SDK starts and nothing is sent anywhere.
     again.
 Not covered: a call of own code while alerta.app is being imported.
 
+With DEFAULTS_ADDON_DIR set, the alerta_fast.py of that directory is
+checked in place of the one beside this file (the workflow uses it for the
+add-on before these fixes, where three cases must fail).
+
 Exit status 1 on any failure.
 """
 
@@ -44,6 +48,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+ADDON = Path(os.environ.get("DEFAULTS_ADDON_DIR") or HERE)
 
 ONECOUNT = r"""
 import json
@@ -163,7 +168,7 @@ NOSENTRY_CASES = (
 def child(script, env, *args):
     child_env = {k: v for k, v in os.environ.items() if not k.startswith(("ALERTA_FAST", "SENTRY"))}
     child_env.update(env)
-    r = subprocess.run([sys.executable, "-I", "-c", script, str(HERE), *args], env=child_env,
+    r = subprocess.run([sys.executable, "-I", "-c", script, str(ADDON), *args], env=child_env,
                        capture_output=True, text=True, timeout=120)
     lines = [line[7:] for line in r.stdout.splitlines() if line.startswith("RESULT ")]
     result = json.loads(lines[-1]) if lines else None
@@ -190,7 +195,7 @@ def main(out):
                 ("a call of own code did not reach the recorder", not result["own_call_reached"])) if bad]
         results.append({"case": f"nosentry: {name}", "problems": problems, "result": result, "error": error})
     failed = sum(1 for r in results if r["problems"])
-    Path(out).write_text(json.dumps({"ok": not failed, "cases": len(results), "failed": failed,
+    Path(out).write_text(json.dumps({"ok": not failed, "cases": len(results), "failed": failed, "addon": str(ADDON),
                                      "results": results}, indent=1))
     for r in results:
         print(("FAILED " if r["problems"] else "ok     ") + r["case"] + (f": {r['problems']}" if r["problems"] else ""))
