@@ -1,9 +1,55 @@
 # Status
 
-_Last updated: 2026-11-17 11:54 EST by claude-alrust, the sole writer of this
+_Last updated: 2026-11-22 17:36 EST by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox. Times
 written from 2026-11-15 14:13 EST on are Nassau local time (DECISIONS Y63);
 earlier ones are UTC (`Z`)._
+
+## Alerta add-on work, 2026-11-17 to 2026-11-22 (newest first)
+
+**Owner direction, 2026-11-21:** for 30 days (to about 2026-12-21), Alerta
+only: the `alerta_fast.py` add-on for stock Alerta (no fork), PostgreSQL
+tuning and Patroni/etcd tuning at three sites; no alrust product work. Runs
+are approved when Codex agrees to the exact run.
+
+**Merge rule, 2026-11-22.** The advisor tool is available again in Claude's
+session since the morning of 2026-11-22, so Y73 lapsed and Y48 applies
+again as written. Record: Claude merged #280 at 10:39 EST under Y73's
+conditions after the advisor had returned. Codex's signed sequence
+`59e293a5` covered Y48 (1); Claude did not consult the advisor on that merge
+before it (Y48 (2)); afterwards the advisor said its gates were met.
+
+**cargo-deny red (not required).** RUSTSEC-2026-0592 (`url` 2.5.8, via sqlx)
+fails the check on every Rust-touching head. The advisor objected to merging
+while any check is red. The owner chose a lock-file fix, then "Skip the 7-day
+rule once" when the resolver refused `url` 2.5.9 under the 7-day publish age
+(DECISIONS Y78, on PR #285). #285 waits for the notice corpus to be
+regenerated with Codex's generator (Claude's request `f1a72d40`); the two
+crates' legal texts are byte-equal to the old ones.
+
+**Full hosted runs, 2026-11-22** (one attempt each, agreed by Codex, $0):
+- bench two-site, run 45037764779 at `0fc64977` (agreement `69cce14f`): 13
+  of 13 arm runs valid. Site B requests sent to the Alerta at the primary's
+  site were 354 to 360 ms faster for reads and 909 to 916 ms for duplicate
+  writes; `noecho` cut alert-row updates (116 to 36, 92 to 20) with no
+  latency gain. Report: PR #284.
+- addon savedq load, run 45054378079 at `1203a8af` (agreement `0394b9d8`): 64
+  of 64 cells valid. One repeated search: server CPU per request -73% to
+  -78%; a new text every time: +2% to +3%. Report: PR #286, with a finding
+  about Alerta's own parser (an ungrouped `a AND b AND c` loses `c`).
+
+**Merged since 2026-11-17:** #264, #267, #266, #236, #238, #268, #269, #240,
+#265, #272, #273, #274, #275, #276, #278, #279, #277 (2026-11-21 22:20 EST)
+and #280 (2026-11-22 10:39 EST, `21ec7f66`, tree = approved tree).
+
+**Open, in the agreed order** (each later head needs a new Codex review and
+the advisor): #285 (url); #281 savedq (approved at `fc6f976c`; needs a merge
+of main after #285); #282 savedq load (approved at `1203a8af`); #283
+onecount/nosentry fixes (approved at `9452ff7e`; needs its add-on pin
+rebound, and its check's text must say that the held-context case passes
+before the fix too, since each `/alerts` request has its own time cut-off);
+#284 and #286 (reports). Codex proposals not yet taken up: `alertlinks` and
+`fastdates` (`ec61babb`), the history projection (`8ec81447`).
 
 ## Current phase
 
