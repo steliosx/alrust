@@ -120,23 +120,31 @@ named: ALERTA_FAST=safe,hot,noecho,savedq.
             of strings.
             Your own parser code. `savedq` is for Alerta's parser as
             released, not changed while the worker runs:
+              - Your own grammar, or Alerta's grammar changed in place,
+                at any time (another `query_expr` object, a copy of it,
+                or a new parse action on one of its parts, for example):
+                leave `savedq` out of ALERTA_FAST, or call
+                `alerta_fast.savedq_disable()` before the first request
+                (for example in your WSGI file, after the import of
+                alerta_fast). The patch cannot see such a grammar: it
+                takes the grammar object that it finds at start-up as
+                Alerta's. With `savedq` on, a caller can then get the
+                answer that your grammar gave to another caller.
+                Importing your code before alerta_fast is not enough
+                for a grammar.
               - At start-up, when QueryParser.parse or one of the parser's
                 functions (the `to_sql` and `__init__` of its Search
                 classes, `_next_param`) is not the function of Alerta's
                 file, `savedq` stays off and says so in the log. Your
-                function is called as before. So code that changes the
-                parser must be imported before alerta_fast (for example
-                at the top of your WSGI file), or must call
-                `alerta_fast.savedq_disable()`.
-              - At each call the patch looks at the grammar object
-                (`query_expr`) and those functions. When one was replaced
-                after start-up, `savedq` goes off for the rest of the
-                worker's life and forgets what it kept.
-              - It cannot see a change made inside the grammar (a new
-                parse action on one of its parts, for example). Call
-                `alerta_fast.savedq_disable()` before such a change: it
-                turns `savedq` off for this worker and forgets what it
-                kept. There is no call to turn it on again.
+                function is called as before.
+              - At each call the patch compares the grammar object
+                (`query_expr`) and those functions with the ones of
+                start-up. When one was replaced after start-up, `savedq`
+                goes off for the rest of the worker's life and forgets
+                what it kept.
+              - savedq_disable() turns `savedq` off for this worker and
+                forgets what it kept. There is no call to turn it on
+                again.
               - A function put around QueryParser.parse after start-up
                 gets the kept answer as it would get the parser's.
             When off, each call goes to the parser, one thread at a time.
