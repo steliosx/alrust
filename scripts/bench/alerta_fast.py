@@ -92,8 +92,16 @@ unless it is named: ALERTA_FAST=safe,hot,noecho.
             the logger checks its level. Skip that unless DEBUG is on.
   onecount  The list and the count read severity and status totals with
             two scans of the same rows. Read both with one grouped query.
+            Its answer is kept for the one HTTP request only (on Flask's
+            request object). An application context can be held open over
+            several requests by your own code, so it is not used for this.
+            Outside a request (a tool with an application context only),
+            Alerta's two queries run as released.
   nosentry  Alerta starts the Sentry SDK even with no SENTRY_DSN, which
-            wraps every request. Do not start it when no DSN is set.
+            wraps every request. When no DSN is set, only Alerta's own
+            start-up call (in alerta.app, when it is imported) is left
+            out. Every other call of sentry_sdk.init, as from a plugin of
+            your own, goes to the SDK, during and after the start.
 
 Written against Alerta 9.1.0 (f4312727). The names it replaces are checked
 at start-up: a release that moves one of them stops the server with a
