@@ -14,9 +14,10 @@ failover, a real network or synchronous replication.
 
 ## Answer in short
 
-- **Send every request to an Alerta at the primary's site.** At site B, with a 50 ms link between
-  the sites, a dashboard read took about 355 ms less this way, and a write about 910 ms less.
-  This was so in all three blocks. Site A did not change.
+- **Send site B users to the Alerta at the primary's site.** With site A primary, both sites
+  healthy and a 50 ms link between them, this cut site B medians in all three placement blocks:
+  list reads by 356 to 360 ms, counts by 354 to 357 ms and duplicate writes by 909 to 916 ms.
+  Site A medians stayed close in all arms.
 - **`noecho` reduces write work, not response time.** Updates of alert rows fell from 116 to 36
   per run (placement stage) and from 92 to 20 (fresh stage). In the runs that can be compared,
   the primary wrote 6% to 14% fewer WAL bytes. The median time of a site B duplicate write was
@@ -65,7 +66,8 @@ report of 21 November ([2026-11-21-fastpath-bench.md](2026-11-21-fastpath-bench.
 - **Order:** placement blocks L/P/N, P/N/L and N/L/P; fresh blocks P/N and N/P.
 - **Times:** from the planned send time to the end of the answer.
 - **Results file:** [2026-11-22-two-site-placement-results.json](2026-11-22-two-site-placement-results.json),
-  the run's `results.json`, unchanged. The per-request samples are in the artifact only.
+  the run's `results.json`, unchanged. The per-request samples are in the artifact only, which
+  GitHub keeps for 7 days; the results file here stays.
 
 ## Checks
 
@@ -75,15 +77,16 @@ report of 21 November ([2026-11-21-fastpath-bench.md](2026-11-21-fastpath-bench.
   gave the same status and stored result in all three.
 - 5 blocks, none rejected; 13 of 13 arm runs valid; 3,016 requests; no transport error; no CPU
   throttling.
-- Every read agreed with a state of its tenant's committed alerts, apart from the eight reads in
-  the next item, which the lab accepts as Alerta's own behavior. Every written alert was stored
-  as planned, and no other alert was. In every block, all arms ended with the same alerts. In all
-  13 runs, the standby replayed to the primary's flush position and held the same alerts.
-- Eight site B list reads in L (3, 2 and 3 in the three blocks) each showed neither the old nor
-  the new state of one alert that was written while the read ran. Alerta's list has a time
-  cut-off (alerts received up to the query time). These alerts were received before the cut-off
-  but committed after the read had started. In L a site B write takes about a second, so this
-  window is wide. P and N had none.
+- Every read matched a result that the checker allows. Eight of the 120 timed site B list reads
+  in L (3, 2 and 3 in the three blocks) matched only when one duplicate written at the same time
+  was left out. Alerta's list keeps alerts with `last_receive_time <= query time`, one query
+  time for the count and the page. In each of these reads, the count and the page saw the
+  updated alert, and its new last receive time was **later** than that query time, so the alert
+  was not in the list. The samples record when each read and write was sent and answered; the
+  server's query time and commit time were not recorded. P and N had no such reads.
+- Every acknowledged write passed the stored-state checks, and no other alert was stored. In
+  every block, all arms ended with the same alerts. In all 13 runs, the standby replayed to the
+  primary's flush position and held the same alerts.
 - The output was searched for the lab's 11 generated credentials before it was published: 90
   files, none found.
 
@@ -105,13 +108,14 @@ p95 is close to the maximum.
 | 2 | N/L/P | N | 103.8 / 160.7 | 57.3 / 61.5 | 63.9 / 68.4 | 68.1 / 68.1 (1) |
 
 P against L in the same block, site B medians: list 356 to 360 ms less, count 354 to 357 ms
-less, duplicate 909 to 916 ms less, create 910 to 939 ms less. A site B count in L took about
-8 link round trips of 50 ms (410 to 414 ms), and a duplicate write about 19 (971 to 977 ms). In
-P the request crosses the link once (about 56 ms for a count). This is an inference from the
-medians; the lab does not count round trips.
+less, duplicate 909 to 916 ms less, create 910 to 939 ms less. In L, the median site B count
+(410 to 414 ms) and duplicate write (971 to 977 ms) took about 8 and 19 times the nominal 50 ms
+link round trip. In P, site B's HTTP request went to site A and its SQL ran there; the median
+count took about 56 ms. The lab did not count SQL statements or network round trips per request.
 
-The p95 of the site B list was 108 to 161 ms in P and N; with 40 reads, a p95 rests on the two
-slowest. The p95 of the 18 duplicates in N in block 0 (325 ms) is the slowest of them.
+The p95 of the site B list was 108 to 161 ms in P and N. The lab uses the nearest-rank p95: for
+40 reads it is the 38th value in order, with two slower values. For the 18 duplicates of N in
+block 0, the p95 is the maximum (325.1 ms).
 
 Site A, medians over the three blocks: list 6.2 to 6.7 ms, count 4.4 to 4.8 ms, duplicate 7.6
 to 8.0 ms, create 6.6 to 8.3 ms, in all three arms. The route of site B's requests does not
@@ -157,14 +161,18 @@ With 4 to 9 writes of each kind per arm, these are descriptions, not a measured 
 
 ## What this means for an operator
 
-- With Patroni at two sites, route Alerta's HTTP requests to the site of the current primary,
-  for reads and writes. In this lab, HAProxy at each site follows Patroni's `/primary` health
-  check (`scripts/bench/dual-site/haproxy-affinity.cfg`). A user then pays for one HTTP round trip
-  between the sites, instead of a round trip for each SQL statement of the request.
-- `noecho` is worth it where write load on the primary matters: fewer row updates, less WAL and
-  less for the standby to replay. It does not make requests faster at this load, and it adds
-  1 to 2 ms to a duplicate write. At one site and higher load, the fastpath report found more
-  requests per second with `noecho`.
+- For this healthy two-site layout, send the tested reads and writes to the Alerta at the site
+  of the PostgreSQL primary. The lab's HAProxy configuration
+  (`scripts/bench/dual-site/haproxy-affinity.cfg`) checks Patroni's primary role and the
+  readiness of each site's Alerta. With site A primary, P's and N's site B requests crossed the
+  HTTP link to site A and used the primary there. The configuration falls back to the other
+  site's Alerta if the preferred one is down, and answers 503 if both or neither role check
+  reports a primary. Promotion, fallback and recovery were not part of this run.
+- `noecho` lowers write work on the primary. Across the five blocks, alert-row updates fell; the
+  primary's WAL was 6% to 14% lower in the four pairs that can be compared; the median site B
+  duplicate write was 1.2 to 2.4 ms slower. The run checked that the standby caught up and that
+  the final alerts agreed; it did not measure the standby's cost of replay. At one site and
+  higher load, the fastpath report found more requests per second with `noecho`.
 
 ## Not in this run
 
