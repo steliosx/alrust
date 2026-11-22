@@ -99,9 +99,17 @@ request is checked by fastpath_check.py, not over HTTP.
 Credentials. All are made for one run and end with it. Patroni gets the
 PostgreSQL passwords in its environment, PgBouncer a file with the role's
 SCRAM verifier (for its owner only, in the lab's private directory), psql
-the tenant keys on standard input. After the run every file of the output
-is searched for them; a file with one is replaced by a notice and the run
-is not ok (`credential_scan`).
+the tenant keys on standard input.
+
+Output. The run writes into a private directory beside --output (mode
+0700, not uploaded, removed at the end). --output starts with a notice
+that the run did not finish. At the end every file is read once, searched
+for the credentials, and those same bytes are written to --output; a file
+with a credential is not copied (a notice takes its place) and the run is
+not ok (`credential_scan`). results.json and summary.md are searched as
+the bytes that are published: a credential in them is replaced by
+`[REDACTED]`, the errors and problems stay, and the run is not ok. A run
+that is stopped before this leaves only the notice.
 
     placement.py --self-test
     placement.py --mode quick|full --output DIR --etcd F --haproxy F
@@ -122,6 +130,7 @@ import os
 from pathlib import Path
 import random
 import secrets
+import shutil
 import subprocess
 import sys
 import threading
@@ -152,6 +161,7 @@ BACKGROUND = 22       # more stored alerts of each tenant
 TARGETS = 2           # stored alerts of each tenant for the changes
 RATE = 4              # requests per second
 PAGE = 25
+SCHEMA = 2  # 2: finish_offset_s; credential_scan of publish()
 LIST = f"/alerts?page-size={PAGE}&sort-by=lastReceiveTime"
 COUNT = "/alerts/count"
 READS = ("list", "count")
@@ -376,7 +386,10 @@ def reconcile(rows, orders, names):
             else:
                 found = [{"cutoff": c, "count_state": k1, "page_state": k2,
                           "absent": max(len(states[k]) - len(view(c, k)) for k in (k1, k2))}
-                         for c in span for k1 in span for k2 in range(k1, high + 1)
+                         # The lane sends a write after the answer to the one
+                         # before it: of the writes received before the read's
+                         # time, only the last can be not yet stored.
+                         for c in span for k1 in range(max(low, c - 1), high + 1) for k2 in range(k1, high + 1)
                          if histograms(view(c, k1), acked[k1], names) == got
                          and view(c, k2)[:PAGE] == read["page"]]
             read["reconciled"] = bool(found)
@@ -813,7 +826,10 @@ class PlacementLab(hosted_lab.VirtualLab):
             "requests": Counter(f"{row['phase']}/{CLASS[row['kind']]}" for row in rows),
             "groups": groups(rows),
             "reads_missing_an_alert": Counter(row["site"] for row in rows if row.get("missed")),
-            "drain_s": round(timed_end - start - (ops[-1]["offset"] + 1 / RATE), 3),
+            # The last answer against the planned end of the timed part: the
+            # signed offset (negative: it came before that end) and the wait.
+            "finish_offset_s": (offset := round(timed_end - start - (ops[-1]["offset"] + 1 / RATE), 3)),
+            "drain_s": max(0.0, offset),
             "alert_row_updates": updates, "primary_wal_bytes": wal_bytes,
             "primary_flush_lsn": flush, "standby_replay_lsn": replay,
             "standby_has_the_primary_alerts": standby_state == state,
@@ -881,23 +897,74 @@ def versions(tools):
     return result
 
 
-def credential_scan(out, values):
-    """Searches every file of the output (a .gz file also unpacked) for the
-    lab's credentials. A file with one is replaced by a notice."""
+NOT_FINISHED = "The run did not finish. Nothing of it was published."
+HAD_A_CREDENTIAL = b"Not published: this file had a credential that the lab made for this run.\n"
+REDACTED = b"[REDACTED]"
+
+
+def has_credential(data, values, unpack=False):
+    if unpack:
+        try:
+            data += gzip.decompress(data)
+        except (OSError, EOFError):
+            pass
+    return any(value in data for value in values)
+
+
+def begin_output(out):
+    """What --output has when the run is stopped before publish()."""
+    out.mkdir(parents=True)
+    (out / "results.json").write_text(json.dumps({"schema": SCHEMA, "ok": False, "error": NOT_FINISHED}) + "\n")
+    (out / "summary.md").write_text(f"**{NOT_FINISHED}**\n")
+
+
+def publish(stage, out, record, values):
+    """Writes the run to `out` from the private directory `stage`. Every
+    byte written to `out` was searched for `values` (the lab's
+    credentials) before; see the file header. Changes `record` (`ok`,
+    `credential_scan`) and returns the scan."""
     values = [value.encode() for value in values if value]
-    files, replaced = 0, []
-    for path in sorted(p for p in out.rglob("*") if p.is_file()):
-        files += 1
-        data = path.read_bytes()
-        if path.suffix == ".gz":
-            try:
-                data += gzip.decompress(data)
-            except (OSError, EOFError):
-                pass
-        if any(value in data for value in values):
-            path.write_bytes(b"Replaced: this file had a credential that the lab made for this run.\n")
-            replaced.append(str(path.relative_to(out)))
-    return {"files": files, "values": len(values), "replaced": replaced}
+    scan = {"files": 0, "values": len(values), "replaced": [], "redacted": []}
+    for path in sorted(p for p in stage.rglob("*") if p.is_file()):
+        scan["files"] += 1
+        data, name = path.read_bytes(), path.relative_to(stage)
+        if has_credential(data, values, path.suffix == ".gz") or has_credential(str(name).encode(), values):
+            name = Path(f"not-published-{len(scan['replaced'])}.txt")
+            scan["replaced"].append(str(name))
+            data = HAD_A_CREDENTIAL
+        (out / name).parent.mkdir(parents=True, exist_ok=True)
+        (out / name).write_bytes(data)
+    record["credential_scan"] = scan
+    if scan["replaced"]:
+        record["ok"] = False
+    for attempt in range(2):
+        files = {"results.json": (json.dumps(record, indent=1) + "\n").encode(),
+                 "summary.md": summary(record).encode()}
+        dirty = [name for name, data in files.items() if has_credential(data, values)]
+        if not dirty:
+            break
+        # The same record without the values; the problems and errors stay.
+        text = json.dumps(record).encode()
+        for value in values:
+            text = text.replace(value, REDACTED)
+        try:
+            clean = json.loads(text)
+            if not isinstance(clean, dict):
+                raise ValueError
+        except ValueError:
+            clean = {"schema": SCHEMA, "mode": record.get("mode")}
+        scan["redacted"] = dirty
+        clean.update(ok=False, credential_scan=scan)
+        record.clear()
+        record.update(clean)
+    else:
+        files = {"results.json": (json.dumps({"schema": SCHEMA, "ok": False, "error": HAD_A_CREDENTIAL.decode().strip(),
+                                              "credential_scan": {**scan, "redacted": dirty}}) + "\n").encode(),
+                 "summary.md": HAD_A_CREDENTIAL}
+        record["ok"] = False
+    for name, data in files.items():
+        (out / name).write_bytes(data)
+    return scan
 
 
 def target_problems(row):
@@ -965,16 +1032,21 @@ def summary(record):
     scan = record.get("credential_scan")
     if scan:
         lines += ["", f"Search of the output for the lab's credentials: {scan['files']} files, "
-                  f"{len(scan['replaced'])} replaced {scan['replaced'] or ''}".rstrip() + "."]
+                  f"{len(scan['replaced'])} not published {scan['replaced'] or ''}".rstrip() + "."]
+        if scan.get("redacted"):
+            lines += [f"A credential was replaced by `[REDACTED]` in {scan['redacted']}."]
     lines += ["", f"Result: **{'ok' if record.get('ok') else 'NOT OK'}**"]
     return "\n".join(lines) + "\n"
 
 
 async def run(tools):
     seconds, placement_blocks, fresh_blocks = MODES[tools.mode]
-    out = tools.output
-    out.mkdir(parents=True)
-    record = {"schema": 1, "mode": tools.mode, "ok": False, "block_seconds": seconds,
+    published = tools.output
+    begin_output(published)
+    # Private; publish() copies from here what it searched.
+    out = published.with_name(published.name + "-private")
+    out.mkdir(mode=0o700)
+    record = {"schema": SCHEMA, "mode": tools.mode, "ok": False, "block_seconds": seconds,
               "cgroup": require_hosted(), "sources": sources(), "addon_blob": blob_id(ADDON),
               "arms": {arm: {"route": route, "ALERTA_FAST": fast} for arm, (route, _, fast) in ARMS.items()},
               "plugins": PLUGINS, "tenants": len(TENANTS), "alerts_per_tenant": len(seed_resources()),
@@ -1025,13 +1097,10 @@ async def run(tools):
             for row in ledger:
                 file.write(json.dumps(row) + "\n")
         record["lab_directory_removed"] = tmp is not None and not tmp.exists()
-        for final in (False, True):  # the search reads the first writing of the two files
-            (out / "results.json").write_text(json.dumps(record, indent=1) + "\n")
-            (out / "summary.md").write_text(summary(record))
-            if not final:
-                record["credential_scan"] = credential_scan(out, private)
-                if record["credential_scan"]["replaced"] or not record["lab_directory_removed"]:
-                    record["ok"] = False
+        if not record["lab_directory_removed"]:
+            record["ok"] = False
+        publish(out, published, record, private)
+        shutil.rmtree(out, ignore_errors=True)
     return 0 if record["ok"] else 1
 
 
@@ -1132,6 +1201,22 @@ def self_test():
             write("dup", 4.0, 4.1, "seed-01", "id1"),
             read("count", 2.0, 2.1, moved), read("count", 2.9, 3.1, moved), read("count", 6.0, 6.1, added)]
     assert reconcile(rows, {"t": first}, names) == {"t": None}
+    # Two creates of one lane, one after the other, and a list read during
+    # both: the counts from before both with a page that has both cannot be
+    # (the read's time is after the second was received, so the first was
+    # stored before the count).
+    names.update(new2="fresh-x-0-2")
+    both = ["new2", *added]
+    two = [write("create", 3.0, 3.5, "fresh-x-0-1", "new"), write("create", 3.6, 4.1, "fresh-x-0-2", "new2")]
+    cases = [(read("list", 2.9, 4.2, moved, both), False, None),
+             (read("list", 2.9, 4.2, added, both), True, False),     # the second one in flight at the count
+             (read("list", 2.9, 4.2, moved, added), True, False),    # the first one in flight at the count
+             (read("list", 2.9, 4.2, both, both), True, False),
+             (read("list", 2.9, 4.2, moved, moved), True, False),
+             (read("list", 2.9, 4.2, added, added), True, False)]
+    reconcile([{**row, "tenant": "t"} for row in two] + [case[0] for case in cases], {"t": moved}, names)
+    for row, reconciled, missed in cases:
+        assert (row["reconciled"], row.get("missed")) == (reconciled, missed), row
     assert [row["reconciled"] for row in rows[3:]] == [True, None, None], rows[3:]
 
     def stored(resource, duplicates=0, status="open", severity=None):
@@ -1160,19 +1245,68 @@ def self_test():
     assert problems == [] and "t/fresh-x-0-1" not in table
 
     import tempfile
+
+    def published_bytes(out):
+        """Every byte under `out`, a .gz file also unpacked."""
+        data = b""
+        for path in sorted(p for p in out.rglob("*") if p.is_file()):
+            data += str(path.relative_to(out)).encode() + path.read_bytes()
+            if path.suffix == ".gz":
+                data += gzip.decompress(path.read_bytes())
+        return data
+
+    values = ["0123abcd", "feedf00d", "", "notthere"]
+
+    def staged(tmp, log="", rows="", in_name=False):
+        stage, out = tmp / "run-private", tmp / "run"
+        (stage / "lab").mkdir(parents=True)
+        (stage / "lab/a.log").write_text(f"line\nconnect {log} here\n")
+        (stage / "lab/b.log").write_text("nothing\n")
+        (stage / ("lab/key-feedf00d.log" if in_name else "lab/c.log")).write_text("named\n")
+        with gzip.open(stage / "samples.jsonl.gz", "wt") as file:
+            file.write("x" * 500 + rows + "y" * 500)
+        begin_output(out)
+        return stage, out
+
+    for secret in (b"0123abcd", b"feedf00d"):
+        assert has_credential(b"x" + secret, [secret]) and not has_credential(b"x", [secret])
     with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        (tmp / "lab").mkdir()
-        (tmp / "lab/a.log").write_text("line\nconnect with 0123abcd here\n")
-        (tmp / "lab/b.log").write_text("nothing\n")
-        with gzip.open(tmp / "rows.gz", "wt") as file:
-            file.write("x" * 500 + "feedf00d" + "y" * 500)
-        scan = credential_scan(tmp, ["0123abcd", "feedf00d", "", "notthere"])
-        assert scan == {"files": 3, "values": 3, "replaced": ["lab/a.log", "rows.gz"]}, scan
-        assert "0123abcd" not in (tmp / "lab/a.log").read_text() and (tmp / "lab/b.log").read_text() == "nothing\n"
-        assert credential_scan(tmp, ["0123abcd", "feedf00d"])["replaced"] == []
-    assert "replaced ['x.log']" in summary({"mode": "quick", "ok": False, "blocks": [],
-                                           "credential_scan": {"files": 2, "replaced": ["x.log"]}})
+        # Stopped before the search: only the notice, nothing of the private directory.
+        stage, out = staged(Path(tmp), log="0123abcd", rows="feedf00d")
+        assert sorted(p.name for p in out.rglob("*")) == ["results.json", "summary.md"]
+        assert json.loads((out / "results.json").read_text()) == {"schema": SCHEMA, "ok": False, "error": NOT_FINISHED}
+        assert NOT_FINISHED in (out / "summary.md").read_text()
+        assert not any(v.encode() in published_bytes(out) for v in values if v)
+    with tempfile.TemporaryDirectory() as tmp:
+        # Nothing to find: the files as they are, the record as it is.
+        stage, out = staged(Path(tmp))
+        record = {"schema": SCHEMA, "mode": "quick", "ok": True, "blocks": []}
+        scan = publish(stage, out, record, values)
+        assert scan == {"files": 4, "values": 3, "replaced": [], "redacted": []}, scan
+        assert json.loads((out / "results.json").read_text()) == record and record["ok"] is True
+        assert (out / "lab/a.log").read_bytes() == (stage / "lab/a.log").read_bytes()
+        assert (out / "samples.jsonl.gz").read_bytes() == (stage / "samples.jsonl.gz").read_bytes()
+        assert "Result: **ok**" in (out / "summary.md").read_text()
+    with tempfile.TemporaryDirectory() as tmp:
+        # A credential in a log, in the packed ledger, in a file name and in the record.
+        stage, out = staged(Path(tmp), log="0123abcd", rows="feedf00d", in_name=True)
+        record = {"schema": SCHEMA, "mode": "quick", "ok": True, "blocks": [],
+                  "error": "RuntimeError: psql said 0123abcd is wrong", "warnings": ["kept"]}
+        scan = publish(stage, out, record, values)
+        assert scan["files"] == 4 and len(scan["replaced"]) == 3, scan
+        assert scan["redacted"] == ["results.json", "summary.md"], scan
+        assert not any(v.encode() in published_bytes(out) for v in values if v), "a credential was published"
+        result = json.loads((out / "results.json").read_text())
+        assert result["ok"] is False and record["ok"] is False and result["warnings"] == ["kept"]
+        assert result["error"] == "RuntimeError: psql said [REDACTED] is wrong", result
+        assert result["credential_scan"] == scan
+        text = (out / "summary.md").read_text()
+        assert "NOT OK" in text and "psql said [REDACTED]" in text and "3 not published" in text
+        assert (out / "lab/b.log").read_text() == "nothing\n" and not (out / "lab/a.log").exists()
+        assert sorted(p.name for p in out.iterdir()) == [
+            "lab", "not-published-0.txt", "not-published-1.txt", "not-published-2.txt", "results.json", "summary.md"]
+    assert "not published ['x.log']" in summary({"mode": "quick", "ok": False, "blocks": [],
+                                                "credential_scan": {"files": 2, "replaced": ["x.log"]}})
 
     def timed(site, kind, ms, ok=True):
         return {"phase": "timed", "site": site, "kind": kind, "ok": ok, "arrival": 0, "start": 0.001, "end": ms / 1000}
