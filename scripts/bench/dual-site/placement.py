@@ -996,8 +996,11 @@ async def run(tools):
                 private[:] = lab.private_values()
                 record["private_file_modes"] = lab.private_files()
                 # Each site's PgBouncer: a SCRAM login with the generated password.
-                record["pgbouncer_logins"] = {site: lab.sql("postgres", "SELECT current_user", site, "pooler")
-                                              for site in SITES}
+                # In a thread: site B's path to the primary is a link that
+                # this process's event loop carries.
+                record["pgbouncer_logins"] = {
+                    site: await asyncio.to_thread(lab.sql, "postgres", "SELECT current_user", site, "pooler")
+                    for site in SITES}
                 if set(record["pgbouncer_logins"].values()) != {"postgres"}:
                     raise RuntimeError(f"PgBouncer logins: {record['pgbouncer_logins']}")
                 await lab.seed()
