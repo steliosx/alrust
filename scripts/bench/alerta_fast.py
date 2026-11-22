@@ -8,9 +8,10 @@ few of its functions when the server starts. Serve it in place of
 
 ALERTA_FAST selects the patches, comma-separated. The default is "safe":
 reuse, nolog, onecount and nosentry, which leave every write of Alerta as
-it is. `hot` changes when and how surely two counters are written, and
-`noecho` leaves out a write that changes nothing, so each is never on
-unless it is named: ALERTA_FAST=safe,hot,noecho.
+it is. `hot` changes when and how surely two counters are written,
+`noecho` leaves out a write that changes nothing, and `savedq` keeps the
+SQL of searches in the worker's memory, so each is never on unless it is
+named: ALERTA_FAST=safe,hot,noecho,savedq.
   reuse     One PostgreSQL connection per worker thread, kept between
             requests, in place of a new connection per request. A request
             ends with ROLLBACK (Alerta commits its own writes), so no open
@@ -88,6 +89,35 @@ unless it is named: ALERTA_FAST=safe,hot,noecho.
                          two UPDATEs that changed nothing. Alerta itself
                          has no trigger. The row's xmin does not change
                          and no WAL is written for it.
+  savedq    OPT-IN. For a search (`q=` of /alerts and the other lists)
+            Alerta parses the text with pyparsing and writes the SQL
+            condition and its values, again for every request, also when
+            a dashboard sends the same saved search every few seconds.
+            With `savedq` each worker keeps, for the last
+            ALERTA_FAST_SAVEDQ_ENTRIES (default 256) different pairs of
+            search text and default field (`q.df`, or Alerta's default),
+            what Alerta's own parser returned: the SQL condition and the
+            names and values of its parameters. The next request with the
+            same pair gets the same condition and a new dict of the same
+            values, and Alerta's parser does not run. That is all that is
+            saved: the parse and the writing of the condition.
+            Not kept and not changed: the result of a search, the alerts,
+            the customer scope, the key or token check, the dates, the
+            page, the sort order and every other parameter. Alerta adds
+            those to the condition after the parser, for each request,
+            and each request reads the database.
+            The parser is always called, and nothing is kept, for: a
+            search that the parser refuses (the same error each time); a
+            text of more than ALERTA_FAST_SAVEDQ_BYTES bytes with its
+            field (default 2048); a parser object that is not exactly
+            Alerta's class, or a grammar object that was replaced after
+            start-up; an answer that is not one string and a dict of
+            strings. The server does not start with `savedq` when the
+            installed postgres/queryparser.py is not the file of Alerta
+            9.1.0 (git blob 346ff01a). Memory: at most the entries times
+            (the text, the condition and the values). No search text and
+            no value is logged or counted by name; `savedq_stats` has
+            numbers only.
   nolog     Alerta formats every SQL statement for a debug message before
             the logger checks its level. Skip that unless DEBUG is on.
   onecount  The list and the count read severity and status totals with
@@ -109,7 +139,7 @@ import threading
 import time
 
 SAFE = ("reuse", "nolog", "onecount", "nosentry")
-ALL = SAFE + ("hot", "noecho")
+ALL = SAFE + ("hot", "noecho", "savedq")
 FEATURES = set()
 for _name in os.environ.get("ALERTA_FAST", "safe").split(","):
     if _name == "safe":
@@ -362,6 +392,72 @@ if "noecho" in FEATURES:
 
     Backend.update_tags = _noecho_update_tags
     Backend.update_attributes = _noecho_update_attributes
+
+# ----------------------------------------------------------------- savedq
+
+if "savedq" in FEATURES:
+    import hashlib
+    from collections import OrderedDict
+
+    from alerta.database.backends.postgres import queryparser as _qp
+
+    _QP_BLOB = "346ff01a80afd08d907f9ac276127a2963dc7726"  # Alerta 9.1.0 (f4312727)
+    SAVEDQ_ENTRIES = int(os.environ.get("ALERTA_FAST_SAVEDQ_ENTRIES", "256"))
+    SAVEDQ_BYTES = int(os.environ.get("ALERTA_FAST_SAVEDQ_BYTES", "2048"))
+    if SAVEDQ_ENTRIES < 1 or SAVEDQ_BYTES < 1:
+        raise SystemExit("alerta_fast: ALERTA_FAST_SAVEDQ_ENTRIES and ALERTA_FAST_SAVEDQ_BYTES must be 1 or more")
+    with open(_qp.__file__, "rb") as _file:
+        _data = _file.read()
+    if hashlib.sha1(b"blob %d\0" % len(_data) + _data).hexdigest() != _QP_BLOB:
+        raise SystemExit("alerta_fast: savedq is written for the query parser of Alerta 9.1.0; the installed "
+                         "alerta/database/backends/postgres/queryparser.py is another file")
+    del _data
+    _require(_qp.QueryParser, "parse")
+    _orig_parse = _qp.QueryParser.parse
+    _grammar = _qp.query_expr
+    _savedq = OrderedDict()  # (text, field) -> (condition, ((name, value), ...)); the last used at the end
+    _savedq_lock = threading.Lock()
+    savedq_stats = {"hit": 0, "miss": 0, "refused": 0, "not_kept": 0, "dropped": 0}
+
+    def _savedq_parse(self, query, default_field=None):
+        field = default_field or _qp.QueryParser.DEFAULT_FIELD
+        if (type(self) is not _qp.QueryParser or _qp.query_expr is not _grammar
+                or type(query) is not str or type(field) is not str
+                # A character is 1 to 4 bytes: no encoding of a text that is too long.
+                or len(query) + len(field) > SAVEDQ_BYTES
+                or len(query.encode("utf-8", "surrogatepass"))
+                + len(field.encode("utf-8", "surrogatepass")) > SAVEDQ_BYTES):
+            with _savedq_lock:
+                savedq_stats["not_kept"] += 1
+            return _orig_parse(self, query, default_field)
+        key = (query, field)
+        with _savedq_lock:
+            kept = _savedq.get(key)
+            if kept is not None:
+                _savedq.move_to_end(key)
+                savedq_stats["hit"] += 1
+        if kept is not None:
+            return kept[0], dict(kept[1])
+        try:
+            sql, params = _orig_parse(self, query, default_field)
+        except BaseException:
+            with _savedq_lock:
+                savedq_stats["refused"] += 1
+            raise
+        if (type(sql) is str and type(params) is dict
+                and all(type(name) is str and type(value) is str for name, value in params.items())):
+            with _savedq_lock:
+                savedq_stats["miss"] += 1
+                _savedq[key] = (sql, tuple(params.items()))
+                while len(_savedq) > SAVEDQ_ENTRIES:
+                    _savedq.popitem(last=False)
+                    savedq_stats["dropped"] += 1
+        else:
+            with _savedq_lock:
+                savedq_stats["not_kept"] += 1
+        return sql, params
+
+    _qp.QueryParser.parse = _savedq_parse
 
 # ------------------------------------------------------------------ nolog
 
