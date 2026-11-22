@@ -127,3 +127,8 @@ on reads because of `hot` (the key's use count and the timers are written about 
 - `hot` and `noecho` are opt-in. Read the add-on's file header before use: `noecho` changes what
   happens to rows whose id only begins with the alert's id, to row triggers on `UPDATE`, and to a
   concurrent change of the same alert.
+
+## See also
+
+- [Saved searches under gunicorn](2026-11-22-savedq-load.md), the 22 November run of the opt-in
+  `savedq` patch.
