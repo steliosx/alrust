@@ -22,7 +22,7 @@ the patched parser are called with equal arguments. Then:
     the patch's text says.
 Not kept, and still equal to Alerta: a text over the size limit (counted
 in bytes), a text or field that is not exactly `str`, a subclass of the
-parser, a replaced grammar object. The store never has more entries than
+parser. The store never has more entries than
 its limit and drops the one that was used longest ago. Eight threads call
 the patched parser at the same time, from an empty store, and every answer
 must be the one Alerta's parser gives to a single thread. The same calls
@@ -38,11 +38,23 @@ totals, counts and ordered ids on both sides. A new alert and a removed
 alert must show in the next answer of a saved search. `q.df` must change
 the answer. A refused search must give the same 400 each time. A request
 without `q` must not touch the store. A removed key and an expired key
-must get 401 for a saved search.
+must get 401 for a saved search. The blackout list (/blackouts) is the
+other place where Alerta calls the parser: a search there must give what
+Alerta gives, from the store the second time.
 
 Start-up, each in a new process: the patch is off unless named; with
 another queryparser.py the server does not start; with a limit of 0 it
 does not start.
+
+An installation's own parser code, each case in a new process. The own
+code adds the name of the caller (a thread-local value, as a request's
+context is) to the condition, so an answer kept for one caller and given
+to another shows. Own QueryParser.parse, or an own function of the
+parser, put in place before alerta_fast: `savedq` stays off and the own
+code gives each caller its answer. An own function, or another grammar
+object, put in place after a search was kept: `savedq` goes off, forgets
+what it kept, and each caller gets its answer. savedq_disable() and then a
+change inside the grammar: the same.
 
 Times. A few in-process times are written to the result (the parser alone,
 and whole requests through the test client). They are relative to this
@@ -224,25 +236,6 @@ def not_kept_cases():
             ("differs from Alerta", p1 != s or p2 != s),
             (f"kept is {is_kept}, wanted {want_kept}", want_kept is not None and is_kept != want_kept)),
             kind=s[0]))
-    # A grammar object replaced after start-up: Alerta's parser reads the
-    # module's name at each call, so the patched parser must call it.
-    patched("zzgrammar")
-    grammar = qp.query_expr
-    qp.query_expr = grammar.copy()
-    try:
-        before = stats()
-        s, p = stock("zzgrammar"), patched("zzgrammar")
-        s2, p2 = stock("zzgrammar2"), patched("zzgrammar2")
-        results.append(one("replaced grammar object", (
-            ("differs from Alerta", p != s or p2 != s2),
-            ("an answer came from the store", moved(before) != {"not_kept": 2}),
-            ("kept", kept("zzgrammar2")))))
-    finally:
-        qp.query_expr = grammar
-    before = stats()
-    results.append(one("the grammar object is back", (
-        ("differs from Alerta", patched("zzgrammar") != stock("zzgrammar")),
-        ("no hit", moved(before) != {"hit": 1}))))
     return results
 
 
@@ -362,7 +355,8 @@ class Http:
         return r.status_code, {"status": body.get("status"), "message": body.get("message"),
                                "total": body.get("total"), "severityCounts": body.get("severityCounts"),
                                "statusCounts": body.get("statusCounts"),
-                               "ids": [a.get("id") for a in body.get("alerts") or []]}
+                               "ids": [a.get("id") for a in body.get("alerts") or []],
+                               "blackouts": [b.get("id") for b in body.get("blackouts") or []]}
 
     def both(self, who, query, path="/alerts"):
         """Alerta's parser, then the patched parser twice."""
@@ -458,6 +452,27 @@ def http_cases(refused_text):
             ("patched", h.get("a", "/alerts", search)[0] != 401),
             ("Alerta", h.get("a", "/alerts", search, alerta=True)[0] != 401))))
         results.append(seen("customer B's key still works", h.both("b", search), h.ids["b"]))
+
+        # The blackout list: Alerta's other caller of the parser.
+        made = h.client.post("/blackout", json={"environment": "Production", "resource": f"sqres{h.run}n0"},
+                             headers={"Authorization": f"Key {h.keys['admin']}"})
+        blackout = (made.get_json(silent=True) or {}).get("id")
+        for name, query, wanted in (("its blackout", f"resource:sqres{h.run}n0", [blackout]),
+                                    ("no blackout", f"resource:sqres{h.run}none", [])):
+            before = stats()
+            a, p1, p2 = h.both("admin", {"q": query}, path="/blackouts")
+            results.append(one(f"/blackouts, a search with {name}", (
+                (f"the check could not make its blackout: HTTP {made.status_code}", not blackout),
+                ("the patched answers differ from Alerta's", p1 != a or p2 != a),
+                (f"HTTP {a[0]}", a[0] != 200),
+                (f"{len(a[1]['blackouts'])} blackouts, wanted {len(wanted)}", a[1]["blackouts"] != wanted),
+                (f"numbers moved {moved(before)}", moved(before) != {"miss": 1, "hit": 1}))))
+        before = stats()
+        a, p1, p2 = h.both("admin", {"q": refused_text}, path="/blackouts")
+        results.append(one("/blackouts, a refused search", (
+            ("the patched answers differ from Alerta's", p1 != a or p2 != a),
+            (f"HTTP {a[0]}, wanted 400", a[0] != 400),
+            (f"numbers moved {moved(before)}", moved(before) != {"refused": 2}))))
         timing = http_times(h)
     finally:
         h.close()
@@ -532,6 +547,118 @@ print("STARTED, Alerta's parser in place:", qp.QueryParser.parse is alerta_parse
 """
 
 
+OWN = r"""
+import sys
+import threading
+sys.path.insert(0, sys.argv[1])
+mode = sys.argv[2]
+from alerta.database.backends.postgres import queryparser as qp
+alerta_parse = qp.QueryParser.parse
+alerta_term = qp.SearchTerm.to_sql
+caller = threading.local()  # as a request's context is
+TEXT = "zzown AND status:open"
+
+
+def own_parse(self, query, default_field=None):
+    sql, params = alerta_parse(self, query, default_field)
+    return sql + " /* " + caller.name + " */", params
+
+
+def own_term(self, params):
+    return alerta_term(self, params) + " /* " + caller.name + " */"
+
+
+class OwnResult:
+    def __init__(self, inner):
+        self.inner = inner
+
+    def to_sql(self, params):
+        return self.inner.to_sql(params) + " /* " + caller.name + " */"
+
+
+def answers(parse):
+    out = []
+    for name in ("one", "two", "one"):
+        caller.name = name
+        out.append(parse(qp.QueryParser(), TEXT))
+    return out
+
+
+problems = []
+
+
+def check(what, bad):
+    if bad:
+        problems.append(what)
+
+
+if mode == "parse before":
+    qp.QueryParser.parse = own_parse
+if mode == "function before":
+    qp.SearchTerm.to_sql = own_term
+import alerta_fast as af
+caller.name = "one"
+if mode.endswith("before"):
+    check("savedq is on", af.savedq_state["on"] or not af.savedq_state["why_off"])
+    check("the parse function was replaced",
+          qp.QueryParser.parse is not (own_parse if mode == "parse before" else alerta_parse))
+    got = answers(qp.QueryParser.parse)
+    check("an answer has another caller's name or none",
+          [sql.count("/* " + name + " */") for (sql, _), name in zip(got, ("one", "two", "one"))] != [1, 1, 1]
+          and mode == "parse before")
+    check("the own function did not run", not all("/* " + name + " */" in sql
+                                                  for (sql, _), name in zip(got, ("one", "two", "one"))))
+    check("the numbers moved", any(af.savedq_stats.values()))
+else:
+    parse = qp.QueryParser.parse
+    check("savedq is off at start-up", not af.savedq_state["on"] or parse is not af._savedq_parse)
+    first, second = parse(qp.QueryParser(), TEXT), parse(qp.QueryParser(), TEXT)
+    check("not kept before the change", first != second or af.savedq_stats["hit"] != 1 or len(af._savedq) != 1)
+    if mode == "function after":
+        qp.SearchTerm.to_sql = own_term
+    elif mode == "grammar object after":
+        grammar = qp.query_expr
+        qp.query_expr = grammar.copy()
+    elif mode == "disable, then inside the grammar":
+        af.savedq_disable()
+        qp.query_expr.addParseAction(lambda tokens: OwnResult(tokens[0]))
+    got = answers(parse)
+    wanted = answers(alerta_parse)
+    check("differs from Alerta's parser with the own code", got != wanted)
+    if mode != "grammar object after":
+        check("the own code did not run for each caller",
+              not all("/* " + name + " */" in sql and "/* " + other + " */" not in sql
+                      for (sql, _), name, other in zip(got, ("one", "two", "one"), ("two", "one", "two"))))
+    else:
+        check("differs from the answer before", got != [first] * 3)
+        qp.query_expr = grammar
+        check("on again with the first grammar object", parse(qp.QueryParser(), TEXT) != first or af.savedq_state["on"])
+    check("savedq is on", af.savedq_state["on"] or not af.savedq_state["why_off"])
+    check("something is kept", len(af._savedq) != 0)
+    check("an answer came from the store", af.savedq_stats["hit"] != 1 or af.savedq_stats["off"] < 3)
+for problem in problems:
+    print("PROBLEM:", problem)
+print("OWN CODE DONE" if not problems else "OWN CODE FAILED")
+"""
+
+
+def own_code_cases():
+    results = []
+    for mode in ("parse before", "function before", "function after", "grammar object after",
+                 "disable, then inside the grammar"):
+        child_env = {k: v for k, v in os.environ.items() if not k.startswith("ALERTA_FAST")}
+        child_env["ALERTA_FAST"] = "savedq"
+        r = subprocess.run([sys.executable, "-I", "-c", OWN, str(HERE), mode], env=child_env,
+                           capture_output=True, text=True, timeout=120)
+        found = [line[9:] for line in r.stdout.splitlines() if line.startswith("PROBLEM: ")]
+        results.append(one(f"own parser code: {mode}", (
+            (f"exit {r.returncode}", r.returncode != 0),
+            (f"{found}", bool(found)),
+            ("the child did not finish", "OWN CODE DONE" not in r.stdout and not found)),
+            error=r.stderr.strip().splitlines()[-1][:300] if r.returncode else None))
+    return results
+
+
 def startup_cases():
     results = []
     with tempfile.TemporaryDirectory() as tmp:
@@ -572,7 +699,9 @@ def main(out, tests):
     http_results, http_timing = http_cases(parse_refused[0])
     timing = {"parser": parser_times(), "http": http_timing}
     startup = startup_cases()
-    groups = {"parser": parser_results, "not_kept_and_limits": others, "http": http_results, "startup": startup}
+    own = own_code_cases()
+    groups = {"parser": parser_results, "not_kept_and_limits": others, "http": http_results, "startup": startup,
+              "own_parser_code": own}
     failed = {name: sum(1 for r in rows if r["problems"]) for name, rows in groups.items()}
     result = {"ok": not any(failed.values()),
               "cases": {name: len(rows) for name, rows in groups.items()}, "failed": failed,
@@ -582,7 +711,8 @@ def main(out, tests):
               "queryparser_blob": af._QP_BLOB, "limits": {"entries": af.SAVEDQ_ENTRIES, "bytes": af.SAVEDQ_BYTES},
               "times": timing,
               "results": {"parser": [r for r in parser_results if r["problems"]],
-                          "not_kept_and_limits": others, "http": http_results, "startup": startup}}
+                          "not_kept_and_limits": others, "http": http_results, "startup": startup,
+                          "own_parser_code": own}}
     Path(out).write_text(json.dumps(result, indent=1, default=repr))
     for name, rows in groups.items():
         for r in rows:
