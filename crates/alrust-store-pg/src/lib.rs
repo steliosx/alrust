@@ -10,6 +10,7 @@ pub mod aggregates;
 pub mod catalog;
 pub mod hooks;
 pub mod key_usage;
+pub mod notes;
 pub mod startup;
 pub mod topn;
 
@@ -30,6 +31,7 @@ use sqlx::{Postgres, QueryBuilder, Row, Transaction};
 
 pub use hooks::{AckIntegration, CallerFacts, HookError};
 use hooks::{Gate, MULTIPLE_OWNERS, apply_writes, settle_commit};
+pub use notes::NoteBindings;
 pub use startup::{Outcome, Report as StartupReport, StartupError};
 
 /// The search path every alrust session uses. PostgreSQL searches

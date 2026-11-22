@@ -496,6 +496,89 @@ migration, the allowed list, the catalog check, the upgrade fixture and
 tests), reviewed on its exact head. Neither this document's approval nor
 the measurement plan authorizes creating an index.
 
+### 10. The note bindings: one alrust-owned table and triggers on `alerts` (DECISIONS Y77)
+
+The owner chose a table with triggers on `alerts` on 2026-11-17 for
+SF-NOTES (`spec/security-fixes.md`). The rest of this section is how it is
+built. It is the first table and the first triggers outside the reference
+layout.
+
+- **Objects** (migration `0003_note_bindings.sql`, all in `public`): the
+  table `alrust_note_bindings (note text PRIMARY KEY, alert text NOT NULL,
+  note_xmin xid NOT NULL)` with the index `alrust_note_bindings_alert_idx`;
+  the function `alrust_note_bindings_clear()`; and four `AFTER` triggers on
+  `alerts`, named `alrust_note_bindings_insert`, `_delete`, `_update` (for
+  each row, `WHEN (OLD.id IS DISTINCT FROM NEW.id)`) and `_truncate` (for
+  the statement). No reference table, column, constraint or index changes,
+  and nothing is attached to `notes`.
+- **The function.** It is `SECURITY DEFINER` with
+  `search_path = pg_catalog, pg_temp` and qualified names, so a program
+  that writes `alerts` under another role needs no privilege on the
+  bindings table. `EXECUTE` is revoked from `PUBLIC` and granted to no one:
+  only the owner (the role that ran the migration) or a superuser can
+  attach it to a table. It refuses to run unless it is an `AFTER` trigger
+  on `public.alerts` at the right level, and it only deletes rows of the
+  bindings table. If that table is gone it does nothing, so that one
+  partial state does not make writes to `alerts` fail. Other damaged
+  states (for example a table of another shape) can still make them fail.
+- **The note's side.** A binding holds the `xmin` of the note's row when
+  alrust wrote it. PostgreSQL gives every inserted or updated row version
+  the id of the writing transaction as `xmin`, so a note that another
+  program deleted and stored again, or updated, no longer matches, and the
+  binding does not count. alrust's own update binds the new version in
+  the same transaction. This needs no object on `notes`. A restore from a
+  dump gives every row a new `xmin`: all notes are then protected, which
+  is the safe direction. A transaction id is 32 bits and is used again
+  after about four thousand million transactions; a replaced row that
+  receives exactly the bound number would count as bound. That chance is
+  accepted and stated here.
+- **The start-up trigger list is unchanged.** `reference-catalog.json`
+  describes the ten tables and the type; other relations in `public` and
+  non-internal triggers were already outside it (decision 2). alrust's
+  triggers appear in the start-up trigger list like any other.
+  `Report::note_bindings` gives the state: in force, absent, or malformed
+  with one line for each difference, and start-up logs each line as a
+  warning.
+- **In force** means, read from the catalogs in the transaction of every
+  note write: the table is an ordinary permanent table with exactly those
+  three columns and a valid primary key on `note`; the function is
+  `SECURITY DEFINER`, returns `trigger`, has exactly that search path and
+  the body of `0003` (compared as text); each of the four triggers is on
+  `public.alerts`, enabled (`O` or `A`), calls that function, and has the
+  event, the timing, the level and (for `_update`) exactly the `WHEN` of
+  `0003`, with no column list, argument, transition table or constraint;
+  and no other trigger named `alrust_note_bindings_…` is on `alerts`.
+  Anything else is "malformed": a new note is stored without a binding and
+  no note is changed or deleted. A database in that state still starts.
+- **By database mode.** Managed databases (fresh, or upgraded) get `0003`
+  from the migrator. An adopted reference database gets nothing, as
+  decision 4 requires: there notes are added and listed and never changed
+  or deleted, and start-up logs a warning. Installing the objects on an
+  adopted database is not designed here, and whether this loss is
+  acceptable there is with the owner (Y77, consequence (a)).
+- **What the guarantee covers.** Programs that write rows, under any role:
+  for them a binding ends with its alert and with its note's row version.
+  It does not cover a role that changes the schema or bypasses triggers,
+  which alrust trusts: a trigger disabled and enabled again, writes under
+  `session_replication_role = replica`, logical replication applying
+  changes to `alerts` (origin triggers do not fire on the subscriber), or
+  objects changed and put back. A currently correct catalog says nothing
+  about such a period, and alrust cannot see it afterwards.
+- **After a known gap** an operator runs
+  `TRUNCATE public.alrust_note_bindings;` before alrust serves again (or
+  `DELETE … WHERE alert = …` for the alerts concerned). Every note is then
+  protected and none is bound afterwards; nothing is rebuilt from the
+  history, which is a display record and proves no ownership. To put a
+  malformed installation right on a managed database, drop the remaining
+  `alrust_note_bindings` objects and run the SQL of `0003` again as the
+  migration role; the table then starts empty.
+- **Not checked:** whether Zabalack, Voalack or Alerta refuse or mind an
+  unknown trigger or table (not checked against their sources for this
+  change).
+- **Cost:** one trigger call for each alert stored, deleted or given a new
+  id, a `WHEN` test on each other alert update, and one catalog query in
+  each note write. Not measured.
+
 ## Open questions
 
 1. The `value` rule (decision 8): decided, (b).

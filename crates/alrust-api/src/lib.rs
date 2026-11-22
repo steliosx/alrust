@@ -14,6 +14,7 @@ use alrust_domain::{
     scope_allows, truncate_ms,
 };
 use alrust_store_pg::aggregates::CubeCounts;
+use alrust_store_pg::notes::NoteUpdate;
 use alrust_store_pg::topn::{GroupColumn, TopnKind};
 use alrust_store_pg::{AlertEdit, AlertQuery, CallerFacts, NewAlert, Store, StoreError};
 use axum::extract::{Path, Query, State};
@@ -460,6 +461,12 @@ pub fn router(state: Shared) -> Router {
         .route("/key", post(create_key))
         .route("/keys", get(list_keys))
         .route("/key/{id}", axum::routing::delete(delete_key))
+        .route("/alert/{id}/note", put(add_note))
+        .route("/alert/{id}/notes", get(list_notes))
+        .route(
+            "/alert/{id}/note/{note_id}",
+            put(update_note).delete(delete_note),
+        )
         .route("/management/gtg", get(gtg))
         .route("/management/healthcheck", get(healthcheck))
         .route(
@@ -1705,6 +1712,190 @@ async fn delete_heartbeat(
     caller.require("write:heartbeats")?;
     st.store.delete_heartbeat(&id).await?;
     Ok(Json(json!({"status": "ok"})))
+}
+
+// ---------------------------------------------------------------- notes
+
+/// `PUT /alert/{id}/note` (`views/alerts.py:596-633`; SF-NOTES): the text
+/// is `text`, else `note`, with Python's `or`, checked before the alert
+/// lookup. A truthy non-string is refused, as `supplied` does for keys
+/// (DECISIONS Y75, for notes).
+/// The default plugins do not take notes, so `process_note` changes
+/// nothing.
+async fn add_note(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> ApiResult<Response> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("write:alerts")?;
+    let missing = || ApiError::bad("must supply 'note' text");
+    let Value::Object(fields) = &body else {
+        return Err(missing());
+    };
+    let text = match supplied(fields, "text")? {
+        Some(t) => t,
+        None => supplied(fields, "note")?.ok_or_else(missing)?,
+    };
+    let note_id = uuid::Uuid::new_v4().to_string();
+    let (alert_id, note) = st
+        .store
+        .add_note(
+            &id,
+            caller.customers().as_deref(),
+            &note_id,
+            &text,
+            caller.login(),
+        )
+        .await?;
+    let location = format!(
+        "{}/alert/{}/note/{}",
+        st.cfg.base_url,
+        alrust_domain::path_segment(&alert_id),
+        alrust_domain::path_segment(&note.id)
+    );
+    Ok((
+        StatusCode::CREATED,
+        [(axum::http::header::LOCATION, location)],
+        Json(json!({"status": "ok", "id": note.id, "note": note.body(&st.cfg.base_url)})),
+    )
+        .into_response())
+}
+
+/// `GET /alert/{id}/notes` (`views/alerts.py:637-661`): the notes selected
+/// by `alert ~* <the alert's id>` (customer-mapping C21), at most 100.
+async fn list_notes(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("read:alerts")?;
+    let notes: Vec<Value> = st
+        .store
+        .alert_notes(&id, caller.customers().as_deref())
+        .await?
+        .iter()
+        .map(|n| n.body(&st.cfg.base_url))
+        .collect();
+    let mut body = json!({"status": "ok", "total": notes.len()});
+    if notes.is_empty() {
+        body["message"] = json!("not found");
+    }
+    body["notes"] = Value::Array(notes);
+    Ok(Json(body))
+}
+
+/// `PUT /alert/{id}/note/{note_id}` (`views/alerts.py:665-697`; SF-NOTES:
+/// only the alert's own note, else 404 `not found` with no change).
+///
+/// The order is the reference's: a falsy body is 400 before any lookup;
+/// then the alert and the note are looked up (404); only then come the
+/// refusals of the body's content, and none of them writes anything:
+/// - a truthy body that is not an object is 500 (the reference fails at
+///   `update['user'] = ...`);
+/// - a body key `id` or `self`, with any value, is 500 (the reference's
+///   `note.update(**update)` cannot bind it and fails before its SQL);
+/// - a `text` that is not a string or an `attributes` that is not an
+///   object is 400 (alrust's own refusal, DECISIONS Y75; the reference's
+///   outcome is not established).
+///
+/// The 500 messages are alrust's; the reference's are Python's.
+async fn update_note(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+    Path((id, note_id)): Path<(String, String)>,
+    Json(body): Json<Value>,
+) -> ApiResult<Json<Value>> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("write:alerts")?;
+    if python_falsy(&body) {
+        return Err(ApiError::bad("nothing to change"));
+    }
+    let customers = caller.customers();
+    let update = match note_update(&body) {
+        Ok(update) => update,
+        Err(refusal) => {
+            st.store
+                .check_note(&id, customers.as_deref(), &note_id)
+                .await?;
+            return Err(refusal);
+        }
+    };
+    let note = st
+        .store
+        .update_note(&id, customers.as_deref(), &note_id, update, caller.login())
+        .await?;
+    Ok(Json(
+        json!({"status": "ok", "note": note.body(&st.cfg.base_url)}),
+    ))
+}
+
+/// Python's `not value` for a JSON value.
+fn python_falsy(value: &Value) -> bool {
+    match value {
+        Value::Null => true,
+        Value::Bool(b) => !b,
+        Value::Number(n) => n.as_f64() == Some(0.0),
+        Value::String(s) => s.is_empty(),
+        Value::Array(a) => a.is_empty(),
+        Value::Object(o) => o.is_empty(),
+    }
+}
+
+/// What a truthy note-update body changes, or the refusal that follows the
+/// lookups (see `update_note`). `update_note` writes `text` and merges
+/// `attributes` when they are not None; other ordinary keys are ignored.
+fn note_update(body: &Value) -> Result<NoteUpdate, ApiError> {
+    let server_error = |m: &str| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, m);
+    let Value::Object(fields) = body else {
+        return Err(server_error("the note update must be a JSON object"));
+    };
+    for reserved in ["id", "self"] {
+        if fields.contains_key(reserved) {
+            return Err(server_error(&format!(
+                "'{reserved}' cannot be a key of a note update"
+            )));
+        }
+    }
+    let text = match fields.get("text") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(t)) => Some(t.clone()),
+        Some(_) => return Err(ApiError::bad("text must be a string")),
+    };
+    let attributes = match fields.get("attributes") {
+        None | Some(Value::Null) => None,
+        Some(Value::Object(a)) => Some(a.clone()),
+        Some(_) => return Err(ApiError::bad("attributes must be an object")),
+    };
+    Ok(NoteUpdate { text, attributes })
+}
+
+/// `DELETE /alert/{id}/note/{note_id}` (`views/alerts.py:701-723`; SF-NOTES:
+/// only the alert's own note, else 404 `note not found` with nothing
+/// deleted). A missing alert is 404 `alert not found`.
+async fn delete_note(
+    State(st): State<Shared>,
+    headers: HeaderMap,
+    Query(params): Params,
+    Path((id, note_id)): Path<(String, String)>,
+) -> ApiResult<Json<Value>> {
+    let caller = authenticate(&st, &headers, &params).await?;
+    caller.require("write:alerts")?;
+    match st
+        .store
+        .delete_note(&id, caller.customers().as_deref(), &note_id, caller.login())
+        .await
+    {
+        Ok(true) => Ok(Json(json!({"status": "ok"}))),
+        Ok(false) => Err(ApiError::new(StatusCode::NOT_FOUND, "note not found")),
+        Err(StoreError::NotFound) => Err(ApiError::new(StatusCode::NOT_FOUND, "alert not found")),
+        Err(e) => Err(e.into()),
+    }
 }
 
 // ---------------------------------------------------------------- keys

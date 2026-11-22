@@ -186,6 +186,8 @@ pub mod change_type {
     pub const VALUE: &str = "value";
     pub const SEVERITY: &str = "severity";
     pub const ACTION: &str = "action";
+    pub const NOTE: &str = "note";
+    pub const DISMISS: &str = "dismiss";
     pub const ALL: &[&str] = &[
         "open", "assign", "ack", "unack", "shelve", "unshelve", "close", "new", "action", "status",
         "value", "severity", "note", "dismiss", "timeout", "expired",

@@ -268,6 +268,25 @@ code, body = call('GET', '/config', key=None)
 check('GET /config without a key is 200 with the 36 keys', code == 200 and isinstance(body, dict) and len(body) == 36
       and body.get('alarm_model', {}).get('name') == 'Alerta 9.1.0', (code, sorted(body) if isinstance(body, dict) else body))
 
+# --- alert notes [views/alerts.py:596-723; SF-NOTES]
+NA = f'notes-{RUN}'
+code, body = call('POST', '/alert', alert(resource=NA, event='NoteSmoke'))
+naid = body.get('id', '') if isinstance(body, dict) else ''
+code, body = call('PUT', f'/alert/{naid}/note', {'text': 'smoke note'})
+nid = body.get('id', '') if isinstance(body, dict) else ''
+check('PUT /alert/<id>/note is 201 with the note', code == 201 and body.get('note', {}).get('text') == 'smoke note', (code, body))
+code, body = call('GET', f'/alert/{naid}/notes')
+check('GET /alert/<id>/notes lists it', code == 200 and [n.get('id') for n in body.get('notes', [])] == [nid], (code, body))
+code, body = call('PUT', f'/alert/{naid}/note/{nid}', {'text': 'edited'})
+check('PUT /alert/<id>/note/<note_id> updates it', code == 200 and body.get('note', {}).get('text') == 'edited', (code, body))
+code, body = call('DELETE', f'/alert/{naid}/note/{nid}')
+check('DELETE /alert/<id>/note/<note_id> removes it', code == 200, (code, body))
+code, body = call('GET', f'/alert/{naid}')
+hist = body.get('alert', {}).get('history', []) if isinstance(body, dict) else []
+check('the dismissed note leaves a dismiss history entry',
+      any(h.get('type') == 'dismiss' and h.get('id') == nid for h in hist), hist)
+call('DELETE', f'/alert/{naid}')
+
 # --- heartbeats [HB]
 origin = f'smoke/{RUN}'
 code, body = call('POST', '/heartbeat', {'origin': origin, 'timeout': 60, 'tags': ['smoke']})
