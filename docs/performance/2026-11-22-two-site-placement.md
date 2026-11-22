@@ -80,9 +80,9 @@ report of 21 November ([2026-11-21-fastpath-bench.md](2026-11-21-fastpath-bench.
 - Every read matched a result that the checker allows. Eight of the 120 timed site B list reads
   in L (3, 2 and 3 in the three blocks) matched only when one duplicate written at the same time
   was left out. Alerta's list keeps alerts with `last_receive_time <= query time`, one query
-  time for the count and the page. In each of these reads, the count and the page saw the
-  updated alert, and its new last receive time was **later** than that query time, so the alert
-  was not in the list. The samples record when each read and write was sent and answered; the
+  time for the count and the page. In the checker's matching explanation for each read, the
+  count and the page saw the updated alert, and its new last receive time was **later** than
+  that query time, so the alert was not in the list. The samples record when each read and write was sent and answered; the
   server's query time and commit time were not recorded. P and N had no such reads.
 - Every acknowledged write passed the stored-state checks, and no other alert was stored. In
   every block, all arms ended with the same alerts. In all 13 runs, the standby replayed to the
