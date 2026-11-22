@@ -387,6 +387,8 @@ class Lab:
         self.key = secrets.token_hex(20)
         self.client_keys = [secrets.token_hex(20) for _ in range(args.key_count)]
         self.password = secrets.token_hex(20)
+        # etcd's bootstrap identifier is not a credential of another program.
+        self.cluster_token = secrets.token_hex(8)
         self.epoch = None
         self.site_processes = defaultdict(list)
         self.app_processes = defaultdict(list)
@@ -472,7 +474,7 @@ class Lab:
                  "--listen-peer-urls", f"http://{addr(self.p(site, 'peer'))}",
                  "--initial-advertise-peer-urls", peers[site],
                  "--listen-client-urls", endpoint, "--advertise-client-urls", endpoint,
-                 "--initial-cluster", membership, "--initial-cluster-token", self.key,
+                 "--initial-cluster", membership, "--initial-cluster-token", self.cluster_token,
                  "--log-level", "warn"], self.env, f"etcd-{site}.log")
         await wait_until(lambda: all(http(self.p(s, "dcs"), "/health")[0] == 200 for s in MEMBERS),
                          "the three etcd members")
@@ -516,11 +518,7 @@ class Lab:
                 "postgresql": {"listen": addr(self.p(site, "pg")),
                                "connect_address": addr(*replication[site]),
                                "bin_dir": str(self.pg), "data_dir": str(self.root / f"pg-{site}"),
-                               "parameters": {"unix_socket_directories": str(self.root)},
-                               "authentication": {"superuser": {"username": "postgres",
-                                                                "password": self.password},
-                                                  "replication": {"username": "replicator",
-                                                                  "password": self.password}}},
+                               "parameters": {"unix_socket_directories": str(self.root)}},
                 "watchdog": {"mode": "off"},
             }
             if self.args.file_copy_method == "clone":
@@ -528,7 +526,13 @@ class Lab:
             path = self.root / f"patroni-{site}.json"
             path.write_text(json.dumps(config))
             stack.push_async_callback(asyncio.to_thread, self.stop_pg, site)
-            await self.launch(stack, site, [self.venv / "patroni", path], self.pg_env, f"patroni-{site}.log")
+            # The generated credentials go to Patroni by its environment
+            # fields; the configuration file has none.
+            patroni_env = {**self.pg_env, "PATRONI_SUPERUSER_USERNAME": "postgres",
+                           "PATRONI_SUPERUSER_PASSWORD": self.password,
+                           "PATRONI_REPLICATION_USERNAME": "replicator",
+                           "PATRONI_REPLICATION_PASSWORD": self.password}
+            await self.launch(stack, site, [self.venv / "patroni", path], patroni_env, f"patroni-{site}.log")
             endpoint = "/primary" if site == "a" else "/replica"
             await wait_until(lambda: http(self.p(site, "patroni"), endpoint)[0] == 200,
                              f"Patroni site {site} {endpoint}", seconds=75)
@@ -631,8 +635,16 @@ class Lab:
         return transitions
 
     async def start_pools(self, stack):
+        # PgBouncer gets the role's stored SCRAM verifier, not the secret. A
+        # client's SCRAM login then gives PgBouncer the keys for its own login
+        # to PostgreSQL (the stored verifier is the same one). The file is new
+        # and for its owner only, in the lab's 0700 directory.
+        verifier = self.sql("postgres", "SELECT rolpassword FROM pg_authid WHERE rolname = 'postgres'")
+        if not verifier.startswith("SCRAM-SHA-256$") or '"' in verifier:
+            raise RuntimeError("The postgres role has no SCRAM-SHA-256 verifier")
         auth = self.root / "users.txt"
-        auth.write_text(f'"postgres" "{self.password}"\n')
+        with os.fdopen(os.open(auth, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as userlist:
+            userlist.write(f'"postgres" "{verifier}"\n')
         for site in SITES:
             cfg = self.root / f"pgbouncer-{site}.ini"
             cfg.write_text(f"""[databases]

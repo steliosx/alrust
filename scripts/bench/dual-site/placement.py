@@ -56,18 +56,33 @@ Checks on every arm run (a failed check makes the run, and its block,
 rejected; rejected blocks stay in the results, apart):
   - every answer has the wanted status and shape, and a read has only the
     tenant's alerts;
-  - every read agrees with a possible state of the tenant's alerts: the
-    two totals (by severity and by status), and for a list the ids of the
-    page in order, each of a state between the writes that ended before
-    the read began and the writes that began before it ended. Alerta makes
-    one statement for each of the three, and each has the condition
-    `last_receive_time <= <the time the read arrived>`. So an alert that
-    was received during the read can be absent from a statement that runs
-    after that write: the read then shows neither the old nor the new
-    alert. Such a read is accepted and counted (`reads_missing_an_alert`),
-    because Alerta as released does this; the count is a result;
+  - every read agrees with the tenant's committed alerts. The states that
+    a read can see are those between the writes that ended before the
+    read began and the writes that began before it ended. With `safe`
+    (`onecount`) one statement gives the counts by severity and by
+    status, so the two must be the counts of ONE state (the severities
+    are those sent; the status is `open`, or `ack` after that change).
+    GET /alerts/count has no other condition: its counts must be a
+    state's counts, with every alert. GET /alerts has the condition
+    `last_receive_time <= <the time the read arrived>` in its count
+    statement and in its page statement, which runs later. So the check
+    looks for one position of that time in the tenant's writes, one state
+    for the count statement and the same or a later state for the page;
+    only the alerts that a write received after that time are absent
+    from a statement that sees that write. Such a read shows neither the
+    old nor the new alert. It is accepted and counted
+    (`reads_missing_an_alert`), because Alerta as released does this; the
+    count is a result, and the ledger keeps its page and counts;
   - after the last request the model's order is the database's order;
-  - P and N: every answer came from site A's Alerta; L: from the user's site;
+  - every write with an answer is stored: each alert has the wanted
+    number of duplicates, severity and status, and there is no other
+    alert (`persisted`);
+  - before the run's database is removed, site B has replayed the
+    primary's last flushed WAL position and has the same alerts;
+  - P and N: every answer came from an Alerta of site A, by the proxy of
+    the user's site; L: from an Alerta of the user's site (`app_site` is
+    the site of the HAProxy in front of the Alerta that answered,
+    `proxy_site` the site that the user's HAProxy sent the request to);
   - the four Alerta processes got the wanted PLUGINS and ALERTA_FAST
     (read from /proc/<pid>/environ);
   - the use counts of the keys and Alerta's timers `received`, `queries`
@@ -78,9 +93,15 @@ rejected; rejected blocks stay in the results, apart):
     text, history types).
 
 Not measured here: failover and recovery, a response cache, a larger
-table. Limits of the checks: a read's status and severity counts are only
-checked to add up to the total; the commit of an earlier statement of the
-same request is checked by fastpath_check.py, not over HTTP.
+table. Limit of the checks: the commit of an earlier statement of the same
+request is checked by fastpath_check.py, not over HTTP.
+
+Credentials. All are made for one run and end with it. Patroni gets the
+PostgreSQL passwords in its environment, PgBouncer a file with the role's
+SCRAM verifier (for its owner only, in the lab's private directory), psql
+the tenant keys on standard input. After the run every file of the output
+is searched for them; a file with one is replaced by a notice and the run
+is not ok (`credential_scan`).
 
     placement.py --self-test
     placement.py --mode quick|full --output DIR --etcd F --haproxy F
@@ -218,7 +239,7 @@ def request(epoch, port, method, path, key, body=None):
         connection = None
     if connection is None:
         connection = HTTPConnection(HOST, port, timeout=TIMEOUT)
-    answer = {"status": None, "raw": b"", "app_site": None, "worker": None,
+    answer = {"status": None, "raw": b"", "app_site": None, "proxy_site": None, "worker": None,
               "reused": connection.sock is not None, "error": None}
     headers = {"Accept": "application/json", "Authorization": f"Key {key}"}
     data = None
@@ -229,7 +250,8 @@ def request(epoch, port, method, path, key, body=None):
         connection.request(method, path, body=data, headers=headers)
         response = connection.getresponse()
         answer.update(raw=response.read(), status=response.status,
-                      app_site=response.getheader("X-Alrust-Bench-Site"),
+                      app_site=response.getheader("X-Alrust-Bench-App-Site"),
+                      proxy_site=response.getheader("X-Alrust-Bench-Site"),
                       worker=response.getheader("X-Alrust-Bench-Worker"))
         LOCAL.connections[port] = (connection, time.monotonic())
     except (OSError, HTTPException) as exc:
@@ -253,7 +275,8 @@ def sample(epoch, port, key, op, ids, phase, due):
     ended = time.monotonic()
     row = {"op": op["op"], "phase": phase, "site": op["site"], "tenant": tenant, "kind": kind,
            "resource": resource, "status": answer["status"], "error": answer["error"], "ok": False,
-           "app_site": answer["app_site"], "worker": answer["worker"], "reused": answer["reused"],
+           "app_site": answer["app_site"], "proxy_site": answer["proxy_site"], "worker": answer["worker"],
+           "reused": answer["reused"],
            "arrival": due, "start": started, "end": ended}
     if answer["status"] != (201 if kind in POSTS else 200):
         return row
@@ -274,7 +297,7 @@ def sample(epoch, port, key, op, ids, phase, due):
         elif not isinstance(alerts, list) or any(a.get("customer") != tenant for a in alerts):
             row["error"] = "other_customer"
         else:
-            row.update(ok=True, total=data["total"], status_total=sum(counts[1].values()))
+            row.update(ok=True, total=data["total"], severity_counts=counts[0], status_counts=counts[1])
             if kind == "list":
                 row["page"] = [a["id"] for a in alerts]
     elif kind in POSTS:
@@ -289,54 +312,114 @@ def sample(epoch, port, key, op, ids, phase, due):
     return row
 
 
-def reconcile(rows, orders):
-    """Marks every read: `reconciled` True (each of its statements agrees
-    with a possible state of its tenant), False, or None (a write of the
-    tenant has no known result, so the states after it are not known), and
-    `missed` (a statement agrees only with an alert absent that was
-    received during the read; see the file header). `orders` has each
-    tenant's ids, newest first, before the first request. Returns each
+def histograms(view, acked, names):
+    """The counts by severity and by status of these alerts."""
+    return (dict(Counter(alert_body(names[alert])["severity"] for alert in view)),
+            dict(Counter("ack" if alert in acked else "open" for alert in view)))
+
+
+def reconcile(rows, orders, names):
+    """Marks every read: `reconciled` True (it agrees with the tenant's
+    committed alerts; see the file header), False, or None (a write of the
+    tenant has no known result, so the states after it are not known),
+    `witness` (the states that it agrees with) and `missed` (it agrees
+    only with an alert absent that was received during the read).
+    `orders` has each tenant's ids, newest first, before the first
+    request; `names` the resource of each of those ids. Returns each
     tenant's last known order, or None."""
     last = {}
     for tenant, first in orders.items():
         mine = [row for row in rows if row["tenant"] == tenant]
+        # One after the other (the tenant's lane), so this is their order.
         writes = sorted((row for row in mine if row["kind"] not in READS), key=lambda row: row["start"])
-        states, received = [list(first)], []
+        names = dict(names)
+        # After k writes: the ids, newest first; the acknowledged ids; and
+        # the id that write k received (a POST), or None.
+        states, acked, received = [list(first)], [frozenset()], [None]
         for write in writes:
             if not write["ok"]:
                 break
-            state = list(states[-1])
+            state, done, alert = list(states[-1]), acked[-1], None
             if write["kind"] in POSTS:
-                if write["alert_id"] in state:
-                    state.remove(write["alert_id"])
-                state.insert(0, write["alert_id"])
+                alert = write["alert_id"]
+                names[alert] = write["resource"]
+                if alert in state:
+                    state.remove(alert)
+                state.insert(0, alert)
+            elif write["kind"] == "ack":
+                done = done | {a for a in state if names[a] == write["resource"]}
             states.append(state)
-            received.append(write["alert_id"] if write["kind"] in POSTS else None)
+            acked.append(done)
+            received.append(alert)
         known = len(states) - 1
         last[tenant] = states[-1] if known == len(writes) else None
+
+        def view(cutoff, k):
+            """State k for a statement with the time condition, when the
+            read arrived after write `cutoff` was received."""
+            late = {received[j] for j in range(cutoff + 1, k + 1)}
+            return [alert for alert in states[k] if alert not in late]
+
         for read in (row for row in mine if row["kind"] in READS and row["ok"]):
             low = sum(1 for write in writes if write["end"] <= read["start"])
             high = sum(1 for write in writes if write["start"] < read["end"])
+            read["states"] = [low, high]
             if high > known:
                 read["reconciled"] = None
                 continue
-            # (number of absent alerts, ids): the state after k writes, without
-            # some of the alerts received by the writes low+1..k.
-            views = []
-            for k in range(low, high + 1):
-                during = sorted({alert for alert in received[low:k] if alert})
-                for n in range(len(during) + 1):
-                    for absent in itertools.combinations(during, n):
-                        views.append((n, [alert for alert in states[k] if alert not in absent]))
-            checks = [lambda view: len(view) == read["total"],
-                      lambda view: len(view) == read.get("status_total", read["total"])]
-            if read["kind"] == "list":
-                checks.append(lambda view: view[:PAGE] == read["page"])
-            fewest = [min((n for n, view in views if check(view)), default=None) for check in checks]
-            read["reconciled"] = None not in fewest
-            read["missed"] = read["reconciled"] and max(fewest) > 0
-            read["states"] = [low, high]
+            got = tuple({name: n for name, n in read[field].items() if n}
+                        for field in ("severity_counts", "status_counts"))
+            span = range(low, high + 1)
+            if read["kind"] == "count":
+                found = [{"state": k, "absent": 0} for k in span
+                         if histograms(states[k], acked[k], names) == got]
+            else:
+                found = [{"cutoff": c, "count_state": k1, "page_state": k2,
+                          "absent": max(len(states[k]) - len(view(c, k)) for k in (k1, k2))}
+                         for c in span for k1 in span for k2 in range(k1, high + 1)
+                         if histograms(view(c, k1), acked[k1], names) == got
+                         and view(c, k2)[:PAGE] == read["page"]]
+            read["reconciled"] = bool(found)
+            if found:
+                read["witness"] = min(found, key=lambda witness: witness["absent"])
+                read["missed"] = read["witness"]["absent"] > 0
     return last
+
+
+def persisted_problems(state, seeded, rows):
+    """Every write with an answer against the stored alerts. `state` is
+    final_state()'s, `seeded` the (tenant, resource) of the fixture.
+    Returns the wanted and the stored values of every alert that a write
+    named, and the problems. An alert of a write without a known result
+    is not judged (that write makes the run rejected)."""
+    posts, acks, unknown = Counter(), set(), set()
+    for row in rows:
+        key = (row["tenant"], row["resource"])
+        if row["kind"] in READS:
+            continue
+        if not row["ok"]:
+            unknown.add(key)
+        elif row["kind"] in POSTS:
+            posts[key] += 1
+        elif row["kind"] == "ack":
+            acks.add(key)
+    stored = {(row["customer"], row["resource"]): row for row in state}
+    fields = ("duplicate_count", "severity", "status")
+    table, problems = {}, []
+    for key in sorted(set(seeded) | set(posts) | set(stored)):
+        if key in unknown:
+            continue
+        got = stored.get(key)
+        wanted = None
+        if key in seeded or key in posts:
+            wanted = {"duplicate_count": posts[key] - (key not in seeded),
+                      "severity": alert_body(key[1])["severity"], "status": "ack" if key in acks else "open"}
+        have = got and {field: got[field] for field in fields}
+        if key in posts or key in acks or have != wanted:
+            table["/".join(key)] = {"wanted": wanted, "stored": have}
+        if have != wanted:
+            problems.append(f"{key[0]} {key[1]}: stored {have}, wanted {wanted}")
+    return table, problems
 
 
 def groups(rows):
@@ -423,7 +506,9 @@ def lab_args(tools, output):
         page_size=PAGE, read_filter="all", forwarder=True, health_interval=500, health_timeout=2000,
         writer_idle=30, flush=1.0, max_age=300.0, fault=None, fault_target="site-a", rejoin=False,
         wal_outage=0, health_trace=False, bulk_alerts=0, search_index="stock", clone_strategy="wal-log",
-        file_copy_method="copy", dashboard_encoding=None, cool_start_c=75)
+        file_copy_method="copy", dashboard_encoding=None, cool_start_c=75,
+        # Each site's HAProxy names its site in the answers of its Alerta.
+        operator_route_trace=True)
 
 
 class PlacementLab(hosted_lab.VirtualLab):
@@ -452,14 +537,38 @@ class PlacementLab(hosted_lab.VirtualLab):
     def json_sql(self, db, sql, site="a"):
         return json.loads(self.sql(db, sql, site))
 
+    def private_sql(self, db, sql, what):
+        """SQL that has a credential: psql reads it from standard input, and
+        nothing that psql writes is kept or shown."""
+        done = subprocess.run(
+            [self.args.psql, "-X", "-w", "-q", "-v", "ON_ERROR_STOP=1", "-h", HOST, "-p", str(self.p("a", "pg")),
+             "-U", "postgres", "-d", db, "-f", "-"], input=sql, text=True, timeout=10,
+            env={**self.pg_env, "PGPASSWORD": self.password, "PGCONNECT_TIMEOUT": "3"},
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if done.returncode:
+            raise RuntimeError(f"{what} failed (psql status {done.returncode}; its output is not kept)")
+
+    def private_values(self):
+        """The credentials of this lab, for the search of the output."""
+        verifier = (self.root / "users.txt").read_text().split('"')[3]
+        return [self.password, self.key, verifier, *self.client_keys, *self.keys.values()]
+
+    def private_files(self):
+        modes = {"directory": self.root.stat().st_mode & 0o777,
+                 "userlist": (self.root / "users.txt").stat().st_mode & 0o777}
+        if modes != {"directory": 0o700, "userlist": 0o600}:
+            raise RuntimeError(f"The lab's directory or PgBouncer's user file is not private: {modes}")
+        return {name: oct(mode) for name, mode in modes.items()}
+
     async def seed(self):
         self.sql("postgres", "CREATE DATABASE bench_seed")
         async with AsyncExitStack() as app:
             await self.start_app(app, "a", "vm1", "bench_seed", "stock", "seed")
-            for index, (tenant, key) in enumerate(self.keys.items()):
-                self.sql("bench_seed", 'INSERT INTO keys (id,key,"user",scopes,text,expire_time,count,customer) '
-                         f"VALUES ('bench-key-{index}','{key}','user-{index}',ARRAY['read','write'],"
-                         f"'benchmark',timezone('UTC',now())+interval '1 day',0,'{tenant}')")
+            self.private_sql("bench_seed", "".join(
+                'INSERT INTO keys (id,key,"user",scopes,text,expire_time,count,customer) '
+                f"VALUES ('bench-key-{index}','{key}','user-{index}',ARRAY['read','write'],"
+                f"'benchmark',timezone('UTC',now())+interval '1 day',0,'{tenant}');\n"
+                for index, (tenant, key) in enumerate(self.keys.items())), "The insert of the tenant keys")
             # host-0000 is the alert that fastpath_check.py copies.
             for resource, tenant in [*itertools.product(seed_resources(), TENANTS), ("host-0000", TENANTS[0])]:
                 answer = await asyncio.to_thread(request, "seed", self.p("a", "vm1"), "POST", "/alert",
@@ -503,7 +612,7 @@ class PlacementLab(hosted_lab.VirtualLab):
     def key_uses(self, db):
         return self.json_sql(db, "SELECT json_object_agg(customer, count) FROM keys WHERE id LIKE 'bench-key-%'")
 
-    def final_state(self, db):
+    def final_state(self, db, site="a"):
         return self.json_sql(db, """
             SELECT coalesce(json_agg(json_build_object(
                      'customer', customer, 'resource', resource, 'severity', severity, 'status', status,
@@ -514,7 +623,7 @@ class PlacementLab(hosted_lab.VirtualLab):
                                                           ORDER BY h.ordinality), '[]')
                                    FROM unnest(history) WITH ORDINALITY AS h))
                    ORDER BY customer, resource), '[]')
-              FROM alerts""")
+              FROM alerts""", site)
 
     def settings_problems(self, db, wanted_fast, processes=4):
         got = self.settings[db]
@@ -643,21 +752,29 @@ class PlacementLab(hosted_lab.VirtualLab):
             for op in tenant_reads[len(tenant_reads) // 2:]:
                 rows.append(await send(op, "final", None))
         updates = await asyncio.to_thread(self.row_updates, name)
-        flush = self.sql("postgres", "SELECT pg_current_wal_flush_lsn()")
-        replay = self.sql("postgres", "SELECT pg_last_wal_replay_lsn()", "b")
         _, orders_after = self.fixture(name)
         state = self.final_state(name)
         keys_after, timers_after = self.key_uses(name), self.alert_timers(name)
+        # No Alerta runs now. Site B must replay this position (wait_until's
+        # 45 s at most) and then have the same alerts.
+        flush = self.sql("postgres", "SELECT pg_current_wal_flush_lsn()")
+        try:
+            await self.wait_for_replay(flush, "the standby to replay the run")
+            standby_state = self.final_state(name, "b")
+        except RuntimeError:
+            standby_state = None
+        replay = self.sql("postgres", "SELECT pg_last_wal_replay_lsn()", "b")
         self.sql("postgres", f"DROP DATABASE {name} WITH (FORCE)")
 
         problems = self.settings_problems(name, wanted_fast)
-        last = reconcile(rows, orders)
+        last = reconcile(rows, orders, {alert: resource for (_, resource), alert in ids.items()})
+        persisted, not_persisted = persisted_problems(state, set(ids), rows)
         failed = [row["op"] for row in rows if not row["ok"]]
         unreconciled = [row["op"] for row in rows if row["kind"] in READS and row["ok"]
                         and row.get("reconciled") is not True]
-        wrong_site = [row["op"] for row in rows if row["status"] is not None and
-                      (row["app_site"] != "a" if route == "primary" else
-                       row["app_site"] is not None or row["worker"] not in ("vm1", "vm2"))]
+        wrong_site = [row["op"] for row in rows if row["status"] is not None and (
+            row["worker"] not in ("vm1", "vm2")
+            or (row["app_site"], row["proxy_site"]) != (("a", "a") if route == "primary" else (row["site"], None)))]
         answered = Counter(row["tenant"] for row in rows if row["status"] is not None)
         keys_wanted = {tenant: keys_before[tenant] + answered[tenant] for tenant in TENANTS}
         good = Counter(row["kind"] for row in rows if row["ok"])
@@ -670,6 +787,11 @@ class PlacementLab(hosted_lab.VirtualLab):
                 (f"{len(unreconciled)} reads agree with no possible state: {unreconciled[:8]}", unreconciled),
                 (f"{len(wrong_site)} answers from another site or route than planned: {wrong_site[:8]}", wrong_site),
                 ("the model's last order is not the database's order", last != orders_after),
+                (f"{len(not_persisted)} alerts are not stored as the answered writes say: {not_persisted[:8]}",
+                 not_persisted),
+                ("site B did not replay the primary's last flushed position in time", standby_state is None),
+                ("site B's alerts are not the primary's alerts",
+                 standby_state is not None and standby_state != state),
                 (f"key uses are {keys_after}, wanted {keys_wanted}", keys_after != keys_wanted),
                 (f"timers are {timers_after}, wanted {timers_wanted}", timers_after != timers_wanted),
                 ("the row updates of `alerts` could not be read", updates is None)):
@@ -680,8 +802,10 @@ class PlacementLab(hosted_lab.VirtualLab):
         for row in rows:  # the ledger's times: seconds from the block's start
             for field in ("arrival", "start", "end"):
                 row[field] = round(row[field] - block_start, 4)
-            if row.get("reconciled"):  # the page of any other read stays as evidence
-                row.pop("page", None)
+            if row.get("reconciled") and not row.get("missed"):
+                # The page and the counts of any other read stay as evidence.
+                for field in ("page", "severity_counts", "status_counts"):
+                    row.pop(field, None)
         numeric = lambda stats: {k: int(v) for k, v in stats.items() if v.lstrip("-").isdigit()}
         return {
             "run": name, "arm": arm, "route": route, "alerta_fast": wanted_fast,
@@ -692,6 +816,10 @@ class PlacementLab(hosted_lab.VirtualLab):
             "drain_s": round(timed_end - start - (ops[-1]["offset"] + 1 / RATE), 3),
             "alert_row_updates": updates, "primary_wal_bytes": wal_bytes,
             "primary_flush_lsn": flush, "standby_replay_lsn": replay,
+            "standby_has_the_primary_alerts": standby_state == state,
+            "persisted": persisted,
+            "answers_by_site": Counter(f"user {row['site']}: Alerta {row['app_site']}, proxy to {row['proxy_site']}"
+                                       for row in rows if row["status"] is not None),
             "key_uses": keys_after, "key_uses_wanted": keys_wanted,
             "timers": timers_after, "timers_wanted": timers_wanted,
             "pgbouncer_delta": {site: {k: v - numeric(pool_before[site]).get(k, 0)
@@ -726,6 +854,50 @@ class PlacementLab(hosted_lab.VirtualLab):
         pairs = (("L", "P"), ("P", "N"), ("L", "N")) if stage == "placement" else (("P", "N"),)
         record["differences"] = differences(record["runs"], pairs) if record["valid"] else {}
         return record, ledger
+
+
+def versions(tools):
+    """The programs and the Python packages as they are now (Patroni's
+    install can change the packages that setup.sh recorded)."""
+    def first_line(*command):
+        try:
+            done = subprocess.run([str(part) for part in command], stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return type(exc).__name__
+        return (done.stdout.strip().splitlines() or [""])[0][:200]
+    result = {"patroni": first_line(tools.venv / "bin/patroni", "--version"),
+              "postgres": first_line(tools.pg_bin / "postgres", "--version"),
+              "pgbouncer": first_line(tools.pgbouncer, "--version"),
+              "etcd": first_line(tools.etcd, "--version"), "haproxy": first_line(tools.haproxy, "-v")}
+    try:
+        result["python_packages"] = json.loads(subprocess.run(
+            [str(tools.venv / "bin/python"), "-I", "-c",
+             "import importlib.metadata as m, json; print(json.dumps(sorted("
+             "f'{d.metadata[\"Name\"]}=={d.version}' for d in m.distributions())))"],
+            stdout=subprocess.PIPE, text=True, timeout=30).stdout)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        result["python_packages"] = type(exc).__name__
+    return result
+
+
+def credential_scan(out, values):
+    """Searches every file of the output (a .gz file also unpacked) for the
+    lab's credentials. A file with one is replaced by a notice."""
+    values = [value.encode() for value in values if value]
+    files, replaced = 0, []
+    for path in sorted(p for p in out.rglob("*") if p.is_file()):
+        files += 1
+        data = path.read_bytes()
+        if path.suffix == ".gz":
+            try:
+                data += gzip.decompress(data)
+            except (OSError, EOFError):
+                pass
+        if any(value in data for value in values):
+            path.write_bytes(b"Replaced: this file had a credential that the lab made for this run.\n")
+            replaced.append(str(path.relative_to(out)))
+    return {"files": files, "values": len(values), "replaced": replaced}
 
 
 def target_problems(row):
@@ -790,6 +962,10 @@ def summary(record):
                              f"{run['primary_wal_bytes']} | {cpu.get('app_a')} / {cpu.get('app_b')} | "
                              f"{cpu.get('postgres_a')} | {run['reads_missing_an_alert'].get('a', 0)} / "
                              f"{run['reads_missing_an_alert'].get('b', 0)} |")
+    scan = record.get("credential_scan")
+    if scan:
+        lines += ["", f"Search of the output for the lab's credentials: {scan['files']} files, "
+                  f"{len(scan['replaced'])} replaced {scan['replaced'] or ''}".rstrip() + "."]
     lines += ["", f"Result: **{'ok' if record.get('ok') else 'NOT OK'}**"]
     return "\n".join(lines) + "\n"
 
@@ -804,8 +980,9 @@ async def run(tools):
               "plugins": PLUGINS, "tenants": len(TENANTS), "alerts_per_tenant": len(seed_resources()),
               "netem": {k: v for k, v in os.environ.items() if k.startswith("ALRUST_NETEM_")},
               "blocks": []}
-    ledger = []
+    ledger, private, tmp = [], [], None
     try:
+        record["versions"] = versions(tools)
         if record["addon_blob"] != ADDON_BLOB:
             raise RuntimeError(f"scripts/bench/alerta_fast.py is blob {record['addon_blob']}, not {ADDON_BLOB}")
         asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=8))
@@ -814,7 +991,15 @@ async def run(tools):
         with run_lab.lab_directory(args.output) as tmp:
             lab = PlacementLab(args, tmp, args.output)
             async with AsyncExitStack() as stack:
+                private += [lab.password, lab.key, *lab.client_keys, *lab.keys.values()]
                 await lab.start(stack)
+                private[:] = lab.private_values()
+                record["private_file_modes"] = lab.private_files()
+                # Each site's PgBouncer: a SCRAM login with the generated password.
+                record["pgbouncer_logins"] = {site: lab.sql("postgres", "SELECT current_user", site, "pooler")
+                                              for site in SITES}
+                if set(record["pgbouncer_logins"].values()) != {"postgres"}:
+                    raise RuntimeError(f"PgBouncer logins: {record['pgbouncer_logins']}")
                 await lab.seed()
                 record["lab"] = json.loads((args.output / "topology.json").read_text())
                 record["preflight"] = await lab.preflight(out, tools)
@@ -836,8 +1021,14 @@ async def run(tools):
         with gzip.open(out / "samples.jsonl.gz", "wt") as file:
             for row in ledger:
                 file.write(json.dumps(row) + "\n")
-        (out / "results.json").write_text(json.dumps(record, indent=1) + "\n")
-        (out / "summary.md").write_text(summary(record))
+        record["lab_directory_removed"] = tmp is not None and not tmp.exists()
+        for final in (False, True):  # the search reads the first writing of the two files
+            (out / "results.json").write_text(json.dumps(record, indent=1) + "\n")
+            (out / "summary.md").write_text(summary(record))
+            if not final:
+                record["credential_scan"] = credential_scan(out, private)
+                if record["credential_scan"]["replaced"] or not record["lab_directory_removed"]:
+                    record["ok"] = False
     return 0 if record["ok"] else 1
 
 
@@ -871,43 +1062,114 @@ def self_test():
     assert full[1] == {"list": 80, "count": 80, "create": 20, "dup": 12,
                        "changed": 2, "same": 2, "null": 2, "ack": 2}, full[1]
 
-    def read(kind, start, end, total, page=None, tenant="t"):
-        return {"tenant": tenant, "kind": kind, "ok": True, "start": start, "end": end, "total": total,
-                **({"page": page} if page is not None else {})}
-
-    def write(kind, start, end, alert_id=None, ok=True):
-        return {"tenant": "t", "kind": kind, "ok": ok, "start": start, "end": end, "alert_id": alert_id}
-
+    # id7 is a `major` alert, id3 the alert that gets the `ack`; the others
+    # and the new alert are `minor`.
     first = [f"id{i}" for i in range(30)]
+    names = {alert: f"seed-{i:02d}" for i, alert in enumerate(first)}
+    names.update(id7="repeat-0", id3="mutate-0", new="fresh-x-0-1")
     moved = ["id7", *(i for i in first if i != "id7")]
     added = ["new", *moved]
-    rows = [write("dup", 1.0, 1.4, "id7"), write("create", 3.0, 3.5, "new"), write("ack", 5.0, 5.2),
-            read("list", 0.1, 0.3, 30, first[:PAGE]),          # before every write
-            read("list", 0.9, 1.2, 30, first[:PAGE]),          # overlaps the duplicate: old state
-            read("list", 1.1, 1.5, 30, moved[:PAGE]),          # overlaps the duplicate: new state
-            read("list", 1.5, 1.7, 30, first[:PAGE]),          # after it, old order: wrong
-            read("count", 2.9, 3.6, 31), read("count", 2.9, 3.6, 30),
-            read("count", 3.6, 3.7, 30),                       # after the create, old total: wrong
-            read("list", 6.0, 6.1, 31, added[:PAGE]),
-            read("list", 6.0, 6.1, 31, moved[:PAGE]),          # right total, wrong page
-            read("count", 0.0, 9.0, 30, tenant="other"),
-            # Received during the read: absent from every statement, or from one.
-            read("list", 0.9, 1.5, 29, [i for i in first if i != "id7"][:PAGE]),
-            read("list", 0.9, 1.5, 30, [i for i in first if i != "id7"][:PAGE]),
-            {**read("count", 0.9, 1.5, 30), "status_total": 29},
-            read("count", 2.9, 3.6, 29),                       # the create hides nothing stored
-            read("count", 1.5, 1.7, 29),                       # after the duplicate: wrong
-            read("list", 0.9, 1.5, 29, moved[1:PAGE + 1][::-1])]
-    last = reconcile(rows, {"t": first, "other": first})
-    assert [row["reconciled"] for row in rows[3:]] == [True, True, True, False, True, True, False,
-                                                       True, False, True,
-                                                       True, True, True, False, False, False], rows[3:]
-    assert [row.get("missed", False) for row in rows[3:]] == [False] * 10 + [True] * 3 + [False] * 3, rows[3:]
+    no7 = [i for i in first if i != "id7"]
+
+    def read(kind, start, end, counted, page=None, acked=(), tenant="t", **other):
+        severity, status = histograms(counted, acked, names)
+        return {"tenant": tenant, "kind": kind, "ok": True, "start": start, "end": end, "resource": None,
+                "severity_counts": severity, "status_counts": status,
+                **({"page": page[:PAGE]} if page is not None else {}), **other}
+
+    def write(kind, start, end, resource, alert_id=None, ok=True):
+        return {"tenant": "t", "kind": kind, "ok": ok, "start": start, "end": end, "resource": resource,
+                "alert_id": alert_id}
+
+    assert histograms(moved, {"id3"}, names) == ({"major": 1, "minor": 29}, {"open": 29, "ack": 1})
+    cases = [  # the read, reconciled, missed
+        (read("list", 0.1, 0.3, first, first), True, False),         # before every write
+        (read("list", 0.9, 1.2, first, first), True, False),         # during the duplicate: the old state
+        (read("list", 1.1, 1.5, moved, moved), True, False),         # during the duplicate: the new state
+        (read("list", 0.9, 1.5, first, moved), True, False),         # the count before it, the page after it
+        (read("list", 0.9, 1.5, no7, first), False, None),           # the page from an earlier state than the count
+        (read("list", 1.5, 1.7, first, first), False, None),         # after it, the old order
+        (read("count", 2.9, 3.6, added), True, False),
+        (read("count", 2.9, 3.6, moved), True, False),
+        (read("count", 3.6, 3.7, moved), False, None),               # after the create, the old counts
+        (read("list", 6.0, 6.1, added, added, acked={"id3"}), True, False),
+        (read("list", 6.0, 6.1, added, moved, acked={"id3"}), False, None),   # right counts, wrong page
+        (read("list", 6.0, 6.1, added, added), False, None),         # the acknowledged alert counted as open
+        (read("count", 0.0, 9.0, first, tenant="other"), True, False),
+        # Received during a list read: absent from both statements, or from the page.
+        (read("list", 0.9, 1.5, no7, no7), True, True),
+        (read("list", 0.9, 1.5, first, no7), True, True),
+        # /alerts/count has no time condition: every alert, and one state for both counts.
+        (read("count", 0.9, 1.5, no7), False, None),
+        ({**read("count", 0.9, 1.5, first), "status_counts": {"open": 29}}, False, None),
+        ({**read("list", 0.9, 1.5, first, first), "status_counts": {"open": 29}}, False, None),
+        (read("count", 2.9, 3.6, no7), False, None),                 # the create hides nothing stored
+        (read("count", 1.5, 1.7, no7), False, None),                 # after the duplicate
+        (read("list", 0.9, 1.5, no7, moved[1:PAGE + 1][::-1]), False, None),
+        # One position of the read's time for both statements. The new alert
+        # counted and then not on the page:
+        (read("list", 2.9, 3.6, added, moved), False, None),
+        # The reverse can be: received before the read's time, stored between the statements.
+        (read("list", 2.9, 3.6, moved, added), True, False),
+        (read("list", 2.9, 3.6, moved, moved), True, False),         # the read arrived before the create
+        # During the duplicate and the create. The duplicate is after the
+        # read's time, so the create is also: `new` cannot be there without id7.
+        (read("list", 0.9, 3.6, ["new", *no7], ["new", *no7]), False, None),
+        (read("list", 0.9, 3.6, no7, no7), True, True)]
+    rows = [write("dup", 1.0, 1.4, "repeat-0", "id7"), write("create", 3.0, 3.5, "fresh-x-0-1", "new"),
+            write("ack", 5.0, 5.2, "mutate-0"), *(case[0] for case in cases)]
+    last = reconcile(rows, {"t": first, "other": first}, names)
+    for row, reconciled, missed in cases:
+        assert (row["reconciled"], row.get("missed")) == (reconciled, missed), row
+    assert rows[3]["witness"] == {"cutoff": 0, "count_state": 0, "page_state": 0, "absent": 0}, rows[3]
+    assert cases[13][0]["witness"] == {"cutoff": 0, "count_state": 1, "page_state": 1, "absent": 1}, cases[13]
+    assert cases[7][0]["witness"] == {"state": 1, "absent": 0}, cases[7]
     assert last == {"t": added, "other": first}
-    rows = [write("dup", 1.0, 1.4, "id7"), write("create", 3.0, 3.5, None, ok=False), write("dup", 4.0, 4.1, "id1"),
-            read("count", 2.0, 2.1, 30), read("count", 2.9, 3.1, 30), read("count", 6.0, 6.1, 31)]
-    assert reconcile(rows, {"t": first}) == {"t": None}
+    rows = [write("dup", 1.0, 1.4, "repeat-0", "id7"), write("create", 3.0, 3.5, "fresh-x-0-1", None, ok=False),
+            write("dup", 4.0, 4.1, "seed-01", "id1"),
+            read("count", 2.0, 2.1, moved), read("count", 2.9, 3.1, moved), read("count", 6.0, 6.1, added)]
+    assert reconcile(rows, {"t": first}, names) == {"t": None}
     assert [row["reconciled"] for row in rows[3:]] == [True, None, None], rows[3:]
+
+    def stored(resource, duplicates=0, status="open", severity=None):
+        return {"customer": "t", "resource": resource, "duplicate_count": duplicates, "status": status,
+                "severity": severity or alert_body(resource)["severity"]}
+
+    seeded = {("t", "repeat-0"), ("t", "mutate-0"), ("t", "seed-01")}
+    rows = [write("dup", 1.0, 1.4, "repeat-0", "id7"), write("dup", 2.0, 2.4, "repeat-0", "id7"),
+            write("create", 3.0, 3.5, "fresh-x-0-1", "new"), write("ack", 5.0, 5.2, "mutate-0"),
+            read("count", 0.0, 0.1, first)]
+    good = [stored("repeat-0", 2), stored("mutate-0", status="ack"), stored("seed-01"), stored("fresh-x-0-1")]
+    table, problems = persisted_problems(good, seeded, rows)
+    assert problems == [] and sorted(table) == ["t/fresh-x-0-1", "t/mutate-0", "t/repeat-0"], (table, problems)
+    assert table["t/repeat-0"]["wanted"] == table["t/repeat-0"]["stored"] == {
+        "duplicate_count": 2, "severity": "major", "status": "open"}
+    for bad, key in (([stored("repeat-0", 1), *good[1:]], "t/repeat-0"),            # a duplicate was lost
+                     ([good[0], stored("mutate-0"), *good[2:]], "t/mutate-0"),       # the ack was lost
+                     (good[:3], "t/fresh-x-0-1"),                                    # the new alert is not stored
+                     ([*good[:2], stored("seed-01", 1), good[3]], "t/seed-01"),      # a duplicate that nobody sent
+                     ([*good, stored("extra-1")], "t/extra-1"),                      # an alert that nobody sent
+                     ([stored("repeat-0", 2, severity="minor"), *good[1:]], "t/repeat-0")):
+        table, problems = persisted_problems(bad, seeded, rows)
+        assert len(problems) == 1 and table[key]["wanted"] != table[key]["stored"], (key, problems)
+    # A write without a known result: its alert is not judged.
+    table, problems = persisted_problems(good[:3], seeded, [*rows[:2], {**rows[2], "ok": False}, *rows[3:]])
+    assert problems == [] and "t/fresh-x-0-1" not in table
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        (tmp / "lab").mkdir()
+        (tmp / "lab/a.log").write_text("line\nconnect with 0123abcd here\n")
+        (tmp / "lab/b.log").write_text("nothing\n")
+        with gzip.open(tmp / "rows.gz", "wt") as file:
+            file.write("x" * 500 + "feedf00d" + "y" * 500)
+        scan = credential_scan(tmp, ["0123abcd", "feedf00d", "", "notthere"])
+        assert scan == {"files": 3, "values": 3, "replaced": ["lab/a.log", "rows.gz"]}, scan
+        assert "0123abcd" not in (tmp / "lab/a.log").read_text() and (tmp / "lab/b.log").read_text() == "nothing\n"
+        assert credential_scan(tmp, ["0123abcd", "feedf00d"])["replaced"] == []
+    assert "replaced ['x.log']" in summary({"mode": "quick", "ok": False, "blocks": [],
+                                           "credential_scan": {"files": 2, "replaced": ["x.log"]}})
 
     def timed(site, kind, ms, ok=True):
         return {"phase": "timed", "site": site, "kind": kind, "ok": ok, "arrival": 0, "start": 0.001, "end": ms / 1000}
