@@ -55,6 +55,13 @@ code gives each caller its answer. An own function, or another grammar
 object, put in place after a search was kept: `savedq` goes off, forgets
 what it kept, and each caller gets its answer. savedq_disable() and then a
 change inside the grammar: the same.
+An own grammar (a copy of Alerta's with a parse action that adds the
+caller's name) put in place before alerta_fast, as a WSGI file would: with
+`savedq` not named, and with savedq_disable() called before the first
+search, each of two callers gets its own answer and nothing is kept. With
+`savedq` on and nothing else, the second caller gets the first caller's
+answer: the limit that the add-on's header states, shown, so that the
+check is known to see it.
 
 Times. A few in-process times are written to the result (the parser alone,
 and whole requests through the test client). They are relative to this
@@ -596,9 +603,33 @@ if mode == "parse before":
     qp.QueryParser.parse = own_parse
 if mode == "function before":
     qp.SearchTerm.to_sql = own_term
+if mode.startswith("grammar object before"):
+    # A WSGI file that puts its own grammar in place first: a copy of
+    # Alerta's with a parse action that adds the caller's name.
+    qp.query_expr = qp.query_expr.copy().addParseAction(lambda tokens: OwnResult(tokens[0]))
 import alerta_fast as af
+if mode == "grammar object before, then savedq_disable()":
+    af.savedq_disable()
 caller.name = "one"
-if mode.endswith("before"):
+if mode.startswith("grammar object before"):
+    got = answers(qp.QueryParser.parse)
+    names = [[n for n in ("one", "two") if "/* " + n + " */" in sql] for sql, _ in got]
+    if mode == "grammar object before, savedq on":
+        # The limit that the header states, shown: the kept answer of the
+        # first caller goes to the second. The other two cases would see it.
+        check("savedq is off", not af.savedq_state["on"])
+        check("the second caller did not get the first caller's answer", names != [["one"], ["one"], ["one"]])
+        check("no answer came from the store", af.savedq_stats["hit"] != 2)
+    elif mode.endswith("not named"):
+        check("savedq was set up", hasattr(af, "savedq_state") or qp.QueryParser.parse is not alerta_parse)
+        check("a caller did not get its own answer", names != [["one"], ["two"], ["one"]])
+    else:
+        check("savedq is on", af.savedq_state["on"] or not af.savedq_state["why_off"])
+        check("a caller did not get its own answer", names != [["one"], ["two"], ["one"]])
+        check("something is kept", len(af._savedq) != 0)
+        check("an answer came from the store or was kept",
+              af.savedq_stats["hit"] or af.savedq_stats["miss"] or af.savedq_stats["off"] != 3)
+elif mode.endswith("before"):
     check("savedq is on", af.savedq_state["on"] or not af.savedq_state["why_off"])
     check("the parse function was replaced",
           qp.QueryParser.parse is not (own_parse if mode == "parse before" else alerta_parse))
@@ -645,9 +676,10 @@ print("OWN CODE DONE" if not problems else "OWN CODE FAILED")
 def own_code_cases():
     results = []
     for mode in ("parse before", "function before", "function after", "grammar object after",
-                 "disable, then inside the grammar"):
+                 "disable, then inside the grammar", "grammar object before, savedq not named",
+                 "grammar object before, then savedq_disable()", "grammar object before, savedq on"):
         child_env = {k: v for k, v in os.environ.items() if not k.startswith("ALERTA_FAST")}
-        child_env["ALERTA_FAST"] = "savedq"
+        child_env["ALERTA_FAST"] = "safe" if mode.endswith("not named") else "savedq"
         r = subprocess.run([sys.executable, "-I", "-c", OWN, str(HERE), mode], env=child_env,
                            capture_output=True, text=True, timeout=120)
         found = [line[9:] for line in r.stdout.splitlines() if line.startswith("PROBLEM: ")]
