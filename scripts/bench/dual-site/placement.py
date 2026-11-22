@@ -106,10 +106,16 @@ Output. The run writes into a private directory beside --output (mode
 that the run did not finish. At the end every file is read once, searched
 for the credentials, and those same bytes are written to --output; a file
 with a credential is not copied (a notice takes its place) and the run is
-not ok (`credential_scan`). results.json and summary.md are searched as
-the bytes that are published: a credential in them is replaced by
-`[REDACTED]`, the errors and problems stay, and the run is not ok. A run
-that is stopped before this leaves only the notice.
+not ok (`credential_scan`). A packed file that cannot be unpacked to its
+end, a file that cannot be read and a link are not copied either.
+results.json and summary.md are searched as the bytes that are published:
+a credential in them is replaced by `[REDACTED]`, the errors and problems
+stay, and the run is not ok. A run that is stopped before this leaves only
+the notice. The searched values are the password, the keys, and the
+role's SCRAM verifier with its parts (known from the moment the lab reads
+it, before PgBouncer starts). The message of an exception is not
+published and not printed: only its type and the lines of this
+directory's code that it passed.
 
     placement.py --self-test
     placement.py --mode quick|full --output DIR --etcd F --haproxy F
@@ -135,6 +141,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -563,8 +570,9 @@ class PlacementLab(hosted_lab.VirtualLab):
 
     def private_values(self):
         """The credentials of this lab, for the search of the output."""
-        verifier = (self.root / "users.txt").read_text().split('"')[3]
-        return [self.password, self.key, verifier, *self.client_keys, *self.keys.values()]
+        # The verifier is SCRAM-SHA-256$<count>:<salt>$<stored key>:<server key>.
+        parts = [part for part in self.verifier.replace("$", ":").split(":")[2:] if len(part) >= 16]
+        return [self.password, self.key, self.verifier, *parts, *self.client_keys, *self.keys.values()]
 
     def private_files(self):
         modes = {"directory": self.root.stat().st_mode & 0o777,
@@ -898,24 +906,41 @@ def versions(tools):
 
 
 NOT_FINISHED = "The run did not finish. Nothing of it was published."
-HAD_A_CREDENTIAL = b"Not published: this file had a credential that the lab made for this run.\n"
+HAD_A_CREDENTIAL = (b"Not published: this file had a credential that the lab made for this run, "
+                    b"or it could not be read to its end.\n")
+NOT_VERIFIED = "The output could not be searched for the lab's credentials. Nothing more of it was published."
 REDACTED = b"[REDACTED]"
 
 
 def has_credential(data, values, unpack=False):
+    """True also for a packed file that cannot be unpacked to its end."""
     if unpack:
         try:
             data += gzip.decompress(data)
-        except (OSError, EOFError):
-            pass
+        except (OSError, EOFError, ValueError):
+            return True
     return any(value in data for value in values)
+
+
+def safe_error(exc):
+    """An exception without its message (the message can have a private
+    value): the type, and where this directory's code raised or passed it."""
+    here = str(Path(__file__).resolve().parent)
+    lines = [f"{Path(frame.filename).name}:{frame.lineno} {frame.name}"
+             for frame in traceback.extract_tb(exc.__traceback__) if frame.filename.startswith(here)]
+    return {"type": type(exc).__name__, "at": lines[-8:]}
+
+
+def notice_only(out, text):
+    for name, data in (("results.json", json.dumps({"schema": SCHEMA, "ok": False, "error": text}) + "\n"),
+                       ("summary.md", f"**{text}**\n")):
+        (out / name).write_text(data)
 
 
 def begin_output(out):
     """What --output has when the run is stopped before publish()."""
     out.mkdir(parents=True)
-    (out / "results.json").write_text(json.dumps({"schema": SCHEMA, "ok": False, "error": NOT_FINISHED}) + "\n")
-    (out / "summary.md").write_text(f"**{NOT_FINISHED}**\n")
+    notice_only(out, NOT_FINISHED)
 
 
 def publish(stage, out, record, values):
@@ -925,10 +950,15 @@ def publish(stage, out, record, values):
     `credential_scan`) and returns the scan."""
     values = [value.encode() for value in values if value]
     scan = {"files": 0, "values": len(values), "replaced": [], "redacted": []}
-    for path in sorted(p for p in stage.rglob("*") if p.is_file()):
+    for path in sorted(p for p in stage.rglob("*") if p.is_symlink() or p.is_file()):
         scan["files"] += 1
-        data, name = path.read_bytes(), path.relative_to(stage)
-        if has_credential(data, values, path.suffix == ".gz") or has_credential(str(name).encode(), values):
+        name = path.relative_to(stage)
+        try:
+            data = None if path.is_symlink() else path.read_bytes()
+        except OSError:
+            data = None
+        if (data is None or has_credential(data, values, path.suffix == ".gz")
+                or has_credential(str(name).encode(), values)):
             name = Path(f"not-published-{len(scan['replaced'])}.txt")
             scan["replaced"].append(str(name))
             data = HAD_A_CREDENTIAL
@@ -985,7 +1015,7 @@ def summary(record):
              f"Mode **{record['mode']}**. One hosted runner, synthetic data, emulated links; relative numbers "
              "only. L: local Alerta, `safe`. P: Alerta at the primary's site, `safe`. N: P with `noecho`.", ""]
     if record.get("error"):
-        lines += [f"**The run stopped: {record['error']}**", ""]
+        lines += [f"**The run stopped: {json.dumps(record['error'])}**", ""]
     pre = record.get("preflight")
     if pre:
         lines += [f"Preflight: **{'passed' if pre['ok'] else 'FAILED'}**. Differential: "
@@ -1052,7 +1082,7 @@ async def run(tools):
               "plugins": PLUGINS, "tenants": len(TENANTS), "alerts_per_tenant": len(seed_resources()),
               "netem": {k: v for k, v in os.environ.items() if k.startswith("ALRUST_NETEM_")},
               "blocks": []}
-    ledger, private, tmp = [], [], None
+    ledger, lab, tmp = [], None, None
     try:
         record["versions"] = versions(tools)
         if record["addon_blob"] != ADDON_BLOB:
@@ -1063,9 +1093,7 @@ async def run(tools):
         with run_lab.lab_directory(args.output) as tmp:
             lab = PlacementLab(args, tmp, args.output)
             async with AsyncExitStack() as stack:
-                private += [lab.password, lab.key, *lab.client_keys, *lab.keys.values()]
                 await lab.start(stack)
-                private[:] = lab.private_values()
                 record["private_file_modes"] = lab.private_files()
                 # Each site's PgBouncer: a SCRAM login with the generated password.
                 # In a thread: site B's path to the primary is a link that
@@ -1090,8 +1118,9 @@ async def run(tools):
                         ledger += rows
                     record["ok"] = all(block["valid"] for block in record["blocks"])
     except Exception as exc:  # the record and the ledger so far are kept
-        record["error"] = f"{type(exc).__name__}: {exc}"[:600]
-        raise
+        # Not raised again: Python would print the message to the job's log.
+        record["ok"], record["error"] = False, safe_error(exc)
+        print(f"the run stopped: {json.dumps(record['error'])}", file=sys.stderr, flush=True)
     finally:
         with gzip.open(out / "samples.jsonl.gz", "wt") as file:
             for row in ledger:
@@ -1099,7 +1128,12 @@ async def run(tools):
         record["lab_directory_removed"] = tmp is not None and not tmp.exists()
         if not record["lab_directory_removed"]:
             record["ok"] = False
-        publish(out, published, record, private)
+        try:
+            publish(out, published, record, lab.private_values() if lab else [])
+        except Exception as exc:
+            record["ok"] = False
+            notice_only(published, NOT_VERIFIED)
+            print(f"publish stopped: {json.dumps(safe_error(exc))}", file=sys.stderr, flush=True)
         shutil.rmtree(out, ignore_errors=True)
     return 0 if record["ok"] else 1
 
@@ -1277,6 +1311,10 @@ def self_test():
         assert json.loads((out / "results.json").read_text()) == {"schema": SCHEMA, "ok": False, "error": NOT_FINISHED}
         assert NOT_FINISHED in (out / "summary.md").read_text()
         assert not any(v.encode() in published_bytes(out) for v in values if v)
+        # The search itself stops: a harmless notice, nothing of the record.
+        notice_only(out, NOT_VERIFIED)
+        assert NOT_VERIFIED in (out / "summary.md").read_text()
+        assert not any(v.encode() in published_bytes(out) for v in values if v)
     with tempfile.TemporaryDirectory() as tmp:
         # Nothing to find: the files as they are, the record as it is.
         stage, out = staged(Path(tmp))
@@ -1291,20 +1329,40 @@ def self_test():
         # A credential in a log, in the packed ledger, in a file name and in the record.
         stage, out = staged(Path(tmp), log="0123abcd", rows="feedf00d", in_name=True)
         record = {"schema": SCHEMA, "mode": "quick", "ok": True, "blocks": [],
-                  "error": "RuntimeError: psql said 0123abcd is wrong", "warnings": ["kept"]}
+                  "error": {"type": "RuntimeError", "at": []}, "note": "psql said 0123abcd is wrong",
+                  "warnings": ["kept"]}
         scan = publish(stage, out, record, values)
         assert scan["files"] == 4 and len(scan["replaced"]) == 3, scan
-        assert scan["redacted"] == ["results.json", "summary.md"], scan
+        assert scan["redacted"] == ["results.json"], scan
         assert not any(v.encode() in published_bytes(out) for v in values if v), "a credential was published"
         result = json.loads((out / "results.json").read_text())
         assert result["ok"] is False and record["ok"] is False and result["warnings"] == ["kept"]
-        assert result["error"] == "RuntimeError: psql said [REDACTED] is wrong", result
+        assert result["note"] == "psql said [REDACTED] is wrong" and result["error"]["type"] == "RuntimeError", result
         assert result["credential_scan"] == scan
         text = (out / "summary.md").read_text()
-        assert "NOT OK" in text and "psql said [REDACTED]" in text and "3 not published" in text
+        assert "NOT OK" in text and "RuntimeError" in text and "3 not published" in text
         assert (out / "lab/b.log").read_text() == "nothing\n" and not (out / "lab/a.log").exists()
         assert sorted(p.name for p in out.iterdir()) == [
             "lab", "not-published-0.txt", "not-published-1.txt", "not-published-2.txt", "results.json", "summary.md"]
+    with tempfile.TemporaryDirectory() as tmp:
+        # A packed ledger that stops before its end, and a link: not copied.
+        stage, out = staged(Path(tmp))
+        packed = (stage / "samples.jsonl.gz").read_bytes()
+        (stage / "samples.jsonl.gz").write_bytes(packed[:len(packed) // 2])
+        (stage / "lab/link.log").symlink_to(stage / "lab/b.log")
+        record = {"schema": SCHEMA, "mode": "quick", "ok": True, "blocks": []}
+        scan = publish(stage, out, record, values)
+        assert scan["files"] == 5 and len(scan["replaced"]) == 2 and record["ok"] is False, scan
+        assert not (out / "samples.jsonl.gz").exists() and not (out / "lab/link.log").exists()
+        assert (out / "lab/b.log").read_text() == "nothing\n"
+    try:
+        raise RuntimeError("psql said 0123abcd is wrong")
+    except RuntimeError as exc:
+        error = safe_error(exc)
+    assert error["type"] == "RuntimeError" and len(error["at"]) == 1 and "self_test" in error["at"][0], error
+    assert "0123abcd" not in json.dumps(error)
+    text = summary({"mode": "quick", "ok": False, "blocks": [], "error": error})
+    assert "RuntimeError" in text and "0123abcd" not in text
     assert "not published ['x.log']" in summary({"mode": "quick", "ok": False, "blocks": [],
                                                 "credential_scan": {"files": 2, "replaced": ["x.log"]}})
 

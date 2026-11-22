@@ -389,6 +389,7 @@ class Lab:
         self.password = secrets.token_hex(20)
         # etcd's bootstrap identifier is not a credential of another program.
         self.cluster_token = secrets.token_hex(8)
+        self.verifier = ""  # the role's SCRAM verifier, from start_pools()
         self.epoch = None
         self.site_processes = defaultdict(list)
         self.app_processes = defaultdict(list)
@@ -639,7 +640,10 @@ class Lab:
         # client's SCRAM login then gives PgBouncer the keys for its own login
         # to PostgreSQL (the stored verifier is the same one). The file is new
         # and for its owner only, in the lab's 0700 directory.
-        verifier = self.sql("postgres", "SELECT rolpassword FROM pg_authid WHERE rolname = 'postgres'")
+        # Kept on the lab at once, before any use: a caller that searches
+        # its output for the lab's credentials then knows this one also.
+        self.verifier = verifier = self.sql(
+            "postgres", "SELECT rolpassword FROM pg_authid WHERE rolname = 'postgres'")
         if not verifier.startswith("SCRAM-SHA-256$") or '"' in verifier:
             raise RuntimeError("The postgres role has no SCRAM-SHA-256 verifier")
         auth = self.root / "users.txt"
