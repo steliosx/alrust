@@ -1,0 +1,9 @@
+# Additional Linux x86_64 Python 3.12 packages for the disposable two-site lab.
+# Install after the repository's reference build, reference runtime and Gunicorn locks.
+patroni==4.1.5 --hash=sha256:7aad8c1539e6c51c269a8005169dd54ddc7668437b7900fa6099d7894e224c84
+py-consul==1.8.0 --hash=sha256:242f45d66c97224ecd04ba1dd4eb71053ed5a38dc7bb9b9387d2a882f7352d59
+prettytable==3.19.0 --hash=sha256:66d0eaf75f21198e92ce09e59a12c140be76c78b8a89252e7e87ac8994f96383
+psutil==7.2.2 --hash=sha256:076a2d2f923fd4821644f5ba89f059523da90dc9014e85f8e45a5774ca5bc6f9
+ydiff==1.4.2 --hash=sha256:369be623dcde7954d98973fb9db1780d64f0353982bf3ac85818f3d62ff452b0
+python-etcd==0.4.5 --hash=sha256:f1b5ebb825a3e8190494f5ce1509fde9069f2754838ed90402a8c11e1f52b8cb
+wcwidth==0.9.4 --hash=sha256:b185c8b927b23af2721be1783499d1cfa5c028b098b0858951b4ae224477f1c2 --hash=sha256:901eace6d2dd25ebb917d0ce5db18e5c537e1504c905cf32f0d006c12098b05d
