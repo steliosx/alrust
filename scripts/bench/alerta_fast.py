@@ -122,15 +122,33 @@ MAX_AGE = float(os.environ.get("ALERTA_FAST_CONN_MAX_AGE", "300"))
 FLUSH_SECONDS = float(os.environ.get("ALERTA_FAST_FLUSH_SECONDS", "1.0"))
 log = logging.getLogger("alerta.fast")
 
-if "nosentry" in FEATURES and not os.environ.get("SENTRY_DSN"):
-    import sentry_sdk
-
-    sentry_sdk.init = lambda *args, **kwargs: None  # alerta.app calls it at import
-
-from flask import g, has_app_context  # noqa: E402
+from flask import g, has_request_context, request  # noqa: E402
 from psycopg2 import extensions as _ext  # noqa: E402
 
-import alerta.app  # noqa: E402
+if "nosentry" in FEATURES and not os.environ.get("SENTRY_DSN"):
+    import sys
+    import sentry_sdk
+
+    _sdk_init = sentry_sdk.init
+
+    def _init_except_stock_startup(*args, **kwargs):
+        # Stock Alerta 9.1.0 initializes an unconfigured SDK when its module loads.
+        caller = sys._getframe(1)
+        if (sentry_sdk.init is _init_except_stock_startup and not os.environ.get("SENTRY_DSN")
+                and caller.f_code.co_name == "<module>" and caller.f_globals.get("__name__") == "alerta.app"
+                and not args and kwargs.keys() == {"integrations", "release"}):
+            return None
+        return _sdk_init(*args, **kwargs)
+
+    sentry_sdk.init = _init_except_stock_startup
+    try:
+        import alerta.app  # noqa: E402
+    finally:
+        if sentry_sdk.init is _init_except_stock_startup:
+            sentry_sdk.init = _sdk_init
+else:
+    import alerta.app  # noqa: E402
+
 from alerta.database.backends.postgres import base as _pg  # noqa: E402
 from alerta.models import metrics as _metrics  # noqa: E402
 
@@ -382,9 +400,10 @@ if "onecount" in FEATURES:
     _orig_by = {"severity": Backend.get_counts_by_severity, "status": Backend.get_counts_by_status}
 
     def _counts(self, query, which):
-        if query is None or not has_app_context():
+        if query is None or not has_request_context():
             return _orig_by[which](self, query)
-        cache = g.setdefault("alerta_fast_counts", {})
+        # An application context can span multiple requests in a custom integration.
+        cache = request.__dict__.setdefault("_alerta_fast_counts", {})
         key = (query.where, repr(query.vars))
         if key not in cache:
             select = f"""
