@@ -28,8 +28,19 @@ examples use synthetic values.
 
 Citations: `reference/alerta/<path>:<line>` at v9.1.0 for the server,
 `reference/alerta-webui/<path>:<line>` for the web UI, PyJWT 2.12.1 (the
-reference's pinned version) as `jwt/<file>:<line>`, and alrust paths at
+original reviewed reference environment) as `jwt/<file>:<line>`, and alrust paths at
 `main` `41a465b4` (`crates/alrust-api/src/lib.rs`, blob `d154febd`).
+
+The reference behavior and PyJWT line citations below describe that original
+2.12.1 design baseline. The security-refresh environment candidate uses
+PyJWT 2.15.0 and changes some reference outcomes; see
+[the environment comparison](../conformance/reference-environment.md).
+The existing Alrust requirements and owner choices remain unchanged. Do not
+silently copy the candidate oracle's stricter encoding rejection into Alrust,
+or treat historical reference qualification as evidence for the new environment. DECISIONS Y54
+chooses the refreshed environment as the future reference baseline only after
+exact source review, a reviewed behaviour-difference list and qualification;
+until then the current environment remains the reference.
 
 ## 1. Where this sits
 
