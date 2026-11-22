@@ -62,8 +62,9 @@ Gates. A cell, warm-up and timed, is valid only when:
   - every answer is HTTP 200 and equal to what Alerta without the add-on
     gave for that key and search: the page, its size, the number of
     pages, `more`, the total, the status and severity counts and each
-    alert of the page in order with all its fields, `href` left out (its
-    port is the server's). There is no second try of a request.
+    alert of the page in order with all its fields, including `href`.
+    Each GET sends the same Host header to all three servers. There is
+    no second try of a request.
 The expected answers are also checked against the seed, not only against
 each other: for each customer key every alert of every expected page has
 that key's customer and is one of that customer's seeded alerts; with no
@@ -157,7 +158,9 @@ def page_of(status, body):
         return None
     try:
         data = json.loads(body)
-        alerts = [{k: v for k, v in alert.items() if k != "href"} for alert in data["alerts"]]
+        alerts = data["alerts"]
+        if not isinstance(alerts, list) or not all(isinstance(alert, dict) for alert in alerts):
+            return None
         # An empty page's lastTime is the server's clock, not data.
         top = {k: v for k, v in data.items() if k != "alerts" and not (k == "lastTime" and not alerts)}
     except (ValueError, KeyError, TypeError, AttributeError):
@@ -194,7 +197,7 @@ class Client:
             self.connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
         sent = time.monotonic()
         try:
-            self.connection.request("GET", path, headers={"Authorization": f"Key {key}",
+            self.connection.request("GET", path, headers={"Authorization": f"Key {key}", "Host": "127.0.0.1",
                                                             "Accept-Encoding": "identity"})
             response = self.connection.getresponse()
             body = response.read()
@@ -635,18 +638,31 @@ def self_test():
     assert all(order.count("safe") == 2 for order in firsts.values()), firsts
     assert firsts["one"] != firsts["sixteen"]
 
-    # The page: order, fields and paging count; href and an empty page's clock do not.
+    # The page includes each complete href. Only the empty page's clock varies.
     def body(ids, **top):
         data = {"status": "ok", "page": 1, "pageSize": 50, "pages": 1, "more": False, "total": len(ids),
                 "severityCounts": {"major": len(ids)}, "statusCounts": {"open": len(ids)},
                 "lastTime": "2026-11-22T00:00:00.000Z", "autoRefresh": True,
-                "alerts": [{"id": i, "resource": "r" + i, "customer": "c", "href": "http://127.0.0.1:1/alert/" + i}
+                "alerts": [{"id": i, "resource": "r" + i, "customer": "c", "href": "http://127.0.0.1/alert/" + i}
                            for i in ids]}
         data.update(top)
         return json.dumps(data).encode()
     base = digest(200, body(["a", "b"]))
-    assert base == digest(200, body(["a", "b"]).replace(b"127.0.0.1:1", b"127.0.0.1:2"))
-    for changed in (body(["b", "a"]), body(["a", "c"]), body(["a", "b"], page=2), body(["a", "b"], more=True),
+    assert base == digest(200, json.dumps(json.loads(body(["a", "b"])), sort_keys=True).encode())
+    from unittest.mock import Mock
+    for port in PORTS.values():
+        client = Client(port)
+        client.connection = Mock()
+        client.connection.getresponse.return_value.status = 200
+        client.connection.getresponse.return_value.read.return_value = body(["a", "b"])
+        status, answer = client.get(path_of(None), "fixture-key")[:2]
+        assert client.connection.request.call_args.kwargs["headers"]["Host"] == "127.0.0.1"
+        assert digest(status, answer) == base
+    no_href = json.loads(body(["a", "b"]))
+    del no_href["alerts"][0]["href"]
+    for changed in (body(["a", "b"]).replace(b"/alert/a", b"/alert/b"),
+                    body(["a", "b"]).replace(b"127.0.0.1/", b"127.0.0.1:2/"), json.dumps(no_href).encode(),
+                    body(["b", "a"]), body(["a", "c"]), body(["a", "b"], page=2), body(["a", "b"], more=True),
                     body(["a", "b"], pages=2), body(["a", "b"], total=3), body(["a", "b"], pageSize=20),
                     body(["a", "b"]).replace(b'"customer": "c"', b'"customer": "d"', 1),
                     body(["a", "b"]).replace(b'"resource": "ra"', b'"resource": "rx"')):
