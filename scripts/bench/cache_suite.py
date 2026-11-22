@@ -92,11 +92,19 @@ Real traffic is between the two read cases.
 
 Each cell has two outcomes, from one scorer (score()). They are separate
 since scoring version 2; results of version 1 (one `valid` flag for both)
-are not converted.
-  - Workload: the requests did what the cell says. No client error, only
-    2xx answers, every process alive, for writes every counted write saved
+are not converted. Version 3 adds the status rule, lets a definite
+accounting failure win over an unresolved one, keeps the numbers of the
+saved writes, and gives `hit_ratio` its right name.
+  - Workload: the requests did what the cell says. No client error, every
+    answer of the warm-up and of the timed run with the one expected HTTP
+    status (200 for a GET, 201 for a duplicate POST; another 2xx status
+    fails), every process alive, for writes every counted write saved
     (the duplicate count before and after, the row's id, the table's
-    total), and the expected growth of the benchmark key's use count.
+    total; durable_problems() keeps the expected and the read numbers),
+    and the expected growth of the benchmark key's use count.
+    The timed run checks statuses and counts only: the body of each timed
+    answer is not read, and for new URLs the suite does not check that
+    each URL was new. The data check before each arm reads bodies.
     Alerta as released adds one to that count, and commits, before it
     answers a request that reached it. So the growth must equal the
     requests where no cache may answer (writes, new URLs, arms with no
@@ -107,12 +115,14 @@ are not converted.
     The alrust arm's count is recorded and not required. Throughput and
     latency are scored from workload-valid cells.
   - Cache accounting (cache arms): the caches' counters agree with the
-    rules below and with the key's use count. `reconciled`, `unresolved`
-    (the counters did not rest, or the two accounts differ: the suite
-    cannot say which is right) or `failed` (the two accounts agree and
-    break a rule). Backend requests and hit ratio are given only for
-    reconciled cells; for the others they are unavailable, and the raw
-    reads stay in the record.
+    rules below and with the key's use count. `failed` when a definite
+    fault is there (a cache's counters absent, a counter that went down),
+    with or without an unresolved condition; if not, `unresolved` (the
+    counters did not rest, or the two accounts differ: the suite cannot
+    say which is right); if not, `failed` when the two accounts agree and
+    break a rule; if not, `reconciled`. Backend requests and
+    backend-request avoidance are given only for reconciled cells; for
+    the others they are unavailable, and the raw reads stay in the record.
 On a cache arm the counters of each cache are kept as read, before
 and after; a missing counter stops the run and a counter that goes down
 fails the accounting. The backend requests are checked as a number
@@ -121,8 +131,10 @@ tool waits for its last answers, so nothing is in flight when the counters
 are read. For new URLs they must also be equal: the suite does not see the
 URLs that the load tool made, so it cannot explain a difference by a
 repeated URL, and the accounting of a cell with any difference does not pass. For a repeated
-URL they must be one tenth of the requests or fewer. The hit ratio is 1
-minus backend requests for each request, not clamped.
+URL they must be one tenth of the requests or fewer. The backend-request
+avoidance is 1 minus backend requests for each request, not clamped. It
+comes from the caches' counters; it is not a count of cache hits that a
+client saw.
 
 The gate (gate()) wants every check part of every expiry, every isolation
 step on each cache with its expected result, a passed data check for every
@@ -132,7 +144,7 @@ cell workload-valid. The cache-accounting gate: every cell of a cache arm
 reconciled. The suite passes (`ok`) with the workload gate passed and no
 accounting `failed`; an `unresolved` accounting does not fail the suite,
 but the accounting gate is then not passed and `full_evidence` is false:
-no claim about hits, hit ratio or backend requests may use such a run
+no claim about hits, backend-request avoidance or backend requests may use such a run
 as complete evidence. Varnish keeps its default statistics settings and
 the suite sends no extra traffic to move a counter.
 gate_self_test() runs first: it removes each required item from a
@@ -847,15 +859,17 @@ def settled(read, wait, quiet=QUIET_READS, limit=QUIET_LIMIT):
 
 def counter_problems(case, requests, before, after):
     """The raw counters of each cache for one timed run, checked as numbers
-    before any ratio. Returns (per-cache deltas, backend requests, problems)."""
+    before any ratio. Returns (per-cache deltas, backend requests, problems).
+    A problem that begins `definite:` is a fault whatever else is unknown."""
     problems = []
     delta = [{k: b[k] - a[k] for k in VSTAT} for a, b in zip(before, after)]
-    if len(delta) != len(STACKS):
-        problems.append(f"counters of {len(delta)} caches, {len(STACKS)} expected")
+    if not len(before) == len(after) == len(STACKS):
+        problems.append(f"definite: counters of {len(before)} caches before and {len(after)} after, "
+                        f"{len(STACKS)} expected")
     for i, d in enumerate(delta):
         down = {k: v for k, v in d.items() if v < 0}
         if down:
-            problems.append(f"cache {i}: counters went down: {down}")
+            problems.append(f"definite: cache {i}: counters went down: {down}")
     fetched = sum(d["backend_req"] for d in delta)
     if case in ("count", "list"):
         if not 0 <= fetched <= 0.1 * requests:
@@ -892,24 +906,64 @@ def cached_problems(case, requests, before, after, resolved, key_uses):
     return delta, fetched, problems
 
 
-SCORING = 2
+SCORING = 3
+
+
+def wanted_status(case):
+    return "201" if case == "write-dup" else "200"
+
+
+def durable_problems(identity, prime_id, warm_ok, timed_ok, rows_before, rows_after, total, seeded):
+    """The saved state of the duplicate writes of one cell, on what was
+    read. `rows_before` and `rows_after` are the rows of the duplicate
+    alert after the warm-up and after the timed run, `total` the number
+    of alerts after it, `identity(row, id)` the check of the row's id and
+    fields. Returns (record, problems); the record has each expected and
+    read number, so a passed cell can be checked again from the result."""
+    before = rows_before[0]["duplicate_count"] if len(rows_before) == 1 else None
+    after = rows_after[0]["duplicate_count"] if len(rows_after) == 1 else None
+    problems = []
+    if before != warm_ok:
+        problems.append(f"after the warm-up duplicate_count is {before!r}, {warm_ok} counted")
+    if before is None or after is None or after - before != timed_ok:
+        problems.append(f"timed: duplicate_count {before!r} -> {after!r}, {timed_ok} counted")
+    if len(rows_after) != 1 or not identity(rows_after[0], prime_id):
+        problems.append(f"after the timed run the database has {rows_after!r}")
+    if total != seeded + 1:
+        problems.append(f"{total} alerts, {seeded + 1} expected")
+    record = {"alert_id_expected": prime_id,
+              "alert_ids": [row.get("id") for row in rows_after],
+              "rows_before": len(rows_before), "rows_after": len(rows_after),
+              "duplicate_count_before_expected": warm_ok, "duplicate_count_before": before,
+              "duplicate_count_after_expected": None if before is None else before + timed_ok,
+              "duplicate_count_after": after,
+              "alerts_expected": seeded + 1, "alerts": total}
+    return record, problems
 
 
 def score(arm, case, client, durable, key_uses, counters=None):
     """The one scorer of a cell; the run and the self-test use it. `client`
     has the load tool's numbers (requests, ok, errors, non_2xx, warm_errors,
-    warm_non_2xx) and `alive`; `durable` the problems of the saved writes;
+    warm_non_2xx, and `statuses` and `warm_statuses`: answers for each HTTP
+    status) and `alive`; `durable` the problems of the saved writes;
     `key_uses` the key's use count at the two boundaries; `counters`, on a
     cache arm, (before, after, resolved) of cached_problems(). Returns the
     two outcomes of the module's text: workload and accounting."""
     requests, used = client["requests"], key_uses[1] - key_uses[0]
+    wanted = wanted_status(case)
+    other = {name: {k: v for k, v in client[name].items() if str(k) != wanted and v}
+             for name in ("warm_statuses", "statuses")}
     problems = [what for what, bad in (
         ("a process stopped", not client["alive"]),
         (f"{client['errors']} client errors", client["errors"] != 0),
         (f"{client['non_2xx']} answers not 2xx", client["non_2xx"] != 0),
         ("no 2xx answer", client["ok"] <= 0),
         (f"warm-up: {client['warm_errors']} errors, {client['warm_non_2xx']} answers not 2xx",
-         client["warm_errors"] != 0 or client["warm_non_2xx"] != 0)) if bad] + list(durable)
+         client["warm_errors"] != 0 or client["warm_non_2xx"] != 0),
+        (f"warm-up: answers with a status that is not {wanted}: {other['warm_statuses']}",
+         bool(other["warm_statuses"])),
+        (f"timed: answers with a status that is not {wanted}: {other['statuses']}",
+         bool(other["statuses"]))) if bad] + list(durable)
     repeated = counters is not None and case in ("count", "list")
     expected = None if arm == "alrust" or repeated else requests
     if expected is not None and used != expected:
@@ -921,13 +975,15 @@ def score(arm, case, client, durable, key_uses, counters=None):
         before, after, resolved = counters
         delta, fetched, found = cached_problems(case, requests, before, after, resolved, key_uses)
         state = ("reconciled" if not found else
+                 "failed" if any(p.startswith("definite:") for p in found) else
                  "unresolved" if any(p.startswith("unresolved:") for p in found) else "failed")
         good = state == "reconciled"
         accounting = {"state": state, "problems": found, "delta": delta,
                       "backend_requests_as_counted": fetched,
                       "backend_requests": fetched if good else None,
-                      "hit_ratio": 1 - fetched / (requests or 1) if good else None}
+                      "backend_request_avoidance": 1 - fetched / (requests or 1) if good else None}
     return {"workload": {"valid": not problems, "problems": problems, "requests": requests,
+                         "status_expected": wanted,
                          "key_uses": used, "key_uses_expected": expected,
                          "origin_visits": None if arm == "alrust" else used},
             "accounting": accounting}
@@ -938,14 +994,11 @@ def cell(bc, st, arm, case, conc, rep, db, json_flag, rec):
     write, problems = case == "write-dup", []
     if write:
         prime_id, problems = bc.prime_dup(st.base, db)
-    warm = bc.summarize_oha(oha(bc, st, case, conc, bc.WARM_S,
-                                raw / f"cache-warm-{arm}-{case}-c{conc}-r{rep}.json", json_flag))
+    warm_raw = oha(bc, st, case, conc, bc.WARM_S, raw / f"cache-warm-{arm}-{case}-c{conc}-r{rep}.json",
+                   json_flag)
+    warm = bc.summarize_oha(warm_raw)
     time.sleep(1.5)
-    if write:
-        rows = bc.dup_rows(db)
-        before = rows[0]["duplicate_count"] if len(rows) == 1 else None
-        if before != warm["ok"]:
-            problems.append(f"after the warm-up duplicate_count is {before!r}, {warm['ok']} counted")
+    rows_before = bc.dup_rows(db) if write else []
     # Both boundaries of the timed run are read the same way. A late count
     # of the warm-up must not fall into the timed run's difference.
     # An arm with no cache has no counters to wait for: one read.
@@ -968,16 +1021,14 @@ def cell(bc, st, arm, case, conc, rep, db, json_flag, rec):
     time.sleep(1.5)
     s = bc.summarize_oha(j)
     s["warm"] = warm
+    statuses = {name: {str(k): int(v) for k, v in (answer.get("statusCodeDistribution") or {}).items()}
+                for name, answer in (("warm_statuses", warm_raw), ("statuses", j))}
+    s.update(statuses)
     if write:
-        rows = bc.dup_rows(db)
-        after = rows[0]["duplicate_count"] if len(rows) == 1 else None
-        if before is None or after is None or after - before != s["ok"]:
-            problems.append(f"timed: duplicate_count {before!r} -> {after!r}, {s['ok']} counted")
-        if len(rows) != 1 or not bc.dup_identity_ok(rows[0], prime_id):
-            problems.append(f"after the timed run the database has {rows!r}")
-        total = int(bc.psql(db, "SELECT count(*) FROM alerts"))
-        if total != bc.SEED_ALERTS + 1:
-            problems.append(f"{total} alerts, {bc.SEED_ALERTS + 1} expected")
+        s["durable"], found = durable_problems(
+            bc.dup_identity_ok, prime_id, warm["ok"], s["ok"], rows_before, bc.dup_rows(db),
+            int(bc.psql(db, "SELECT count(*) FROM alerts")), bc.SEED_ALERTS)
+        problems = problems + found
     req = s["requests"] or 1
     hz = os.sysconf("SC_CLK_TCK")
     s.update({"arm": arm, "case": case, "c": conc, "rep": rep, "db": db, "wall_s": wall,
@@ -986,7 +1037,7 @@ def cell(bc, st, arm, case, conc, rep, db, json_flag, rec):
         s[f"{part}_cpu_ms_per_request"] = 1000 * (cpu1[part] - cpu0[part]) / hz / req
     scored = score(arm, case, {**{k: s[k] for k in ("requests", "ok", "errors", "non_2xx")},
                                "warm_errors": warm["errors"], "warm_non_2xx": warm["non_2xx"],
-                               "alive": alive}, problems, (k0, k1),
+                               "alive": alive, **statuses}, problems, (k0, k1),
                    (v0, v1, (resolved0, resolved1)) if ttl_of(arm) else None)
     s.update(scored)
     s["key_uses"] = {"before": k0, "after": k1, "delta": k1 - k0}
@@ -1003,10 +1054,11 @@ def cell(bc, st, arm, case, conc, rep, db, json_flag, rec):
                             "rest": {"reads": QUIET_READS, "limit": QUIET_LIMIT, "wait_s": QUIET_WAIT_S}}
     work, acc = s["workload"], s["accounting"]
     rec["cells"].append(s)
-    ratio = {"none": "", "reconciled": f", hit ratio {acc.get('hit_ratio') or 0:.4f}, backend requests "
+    ratio = {"none": "", "reconciled": f", backend-request avoidance "
+                                       f"{acc.get('backend_request_avoidance') or 0:.4f}, backend requests "
                                        f"{acc.get('backend_requests')}"}.get(
-        acc["state"], f", cache accounting {acc['state'].upper()} (hit ratio and backend requests "
-                      f"unavailable): {acc['problems']}")
+        acc["state"], f", cache accounting {acc['state'].upper()} (backend-request avoidance and "
+                      f"backend requests unavailable): {acc['problems']}")
     bc.log(f"cache {arm:16} {case:11} c={conc} r{rep}: {'' if work['valid'] else 'WORKLOAD INVALID '}"
            f"{s['rps']:.1f} rps, p50 {s['p50_ms']:.2f} ms, p99 {s['p99_ms']:.2f} ms, errors "
            f"{s['errors']}, non-2xx {s['non_2xx']}, key uses {k1 - k0}{ratio}"
@@ -1098,7 +1150,7 @@ def gate(rec, planned):
     return g
 
 
-def gate_self_test(planned):
+def gate_self_test(planned, bc):
     """The gate must pass a complete record and refuse it when any required
     item is removed. Returns the cases; raises when the gate is wrong."""
     node = {"hits": 1, "cache": 0,
@@ -1239,13 +1291,18 @@ def gate_self_test(planned):
     # state, backend requests given). 1864 and 1863 are the numbers of run
     # 44935050021: every write answered and saved, one backend request
     # fewer in the caches' counters.
-    def outcome(arm, case, requests, used, counted=None, errors=0, durable=()):
+    def outcome(arm, case, requests, used, counted=None, errors=0, durable=(), statuses=None,
+                warm_statuses=None, counters=None):
         rec = copy.deepcopy(full)
         at = next(c for c in rec["cells"] if (c["arm"], c["case"]) == (arm, case))
+        answers = {wanted_status(case): requests - errors}
         client = {"requests": requests, "ok": requests - errors, "errors": errors, "non_2xx": 0,
-                  "warm_errors": 0, "warm_non_2xx": 0, "alive": True}
-        at.update(score(arm, case, client, list(durable), (7, 7 + used),
-                        None if counted is None else (zero, after(counted), (True, True))))
+                  "warm_errors": 0, "warm_non_2xx": 0, "alive": True,
+                  "statuses": answers if statuses is None else statuses,
+                  "warm_statuses": {wanted_status(case): 50} if warm_statuses is None else warm_statuses}
+        if counters is None and counted is not None:
+            counters = (zero, after(counted), (True, True))
+        at.update(score(arm, case, client, list(durable), (7, 7 + used), counters))
         g = gate(rec, planned)
         return (g["ok"], g["gates"]["workload"]["ok"], g["gates"]["accounting"]["ok"],
                 at["accounting"]["state"], at["accounting"].get("backend_requests") is not None)
@@ -1277,8 +1334,54 @@ def gate_self_test(planned):
             ("outcome: no cache, the key's count one fewer", outcome("alerta", "write-dup", 1864, 1863),
              (False, False, True, "none", False)),
             ("outcome: alrust, the key's count is not required", outcome("alrust", "write-dup", 1864, 0),
-             (True, True, True, "none", False))):
+             (True, True, True, "none", False)),
+            # An answer with another 2xx status is not the cell's work.
+            ("status: every duplicate write answered 200, not 201",
+             outcome(some, "write-dup", 1864, 1864, 1864, statuses={"200": 1864}),
+             (False, False, True, "reconciled", True)),
+            ("status: one read answered 204",
+             outcome(some, "count", 2000, 3, 3, statuses={"200": 1999, "204": 1}),
+             (False, False, True, "reconciled", True)),
+            ("status: one warm-up write answered 200",
+             outcome("alerta", "write-dup", 1864, 1864, warm_statuses={"201": 49, "200": 1}),
+             (False, False, True, "none", False)),
+            ("status: a status with no answer is not a fault",
+             outcome("alerta", "list", 1864, 1864, statuses={"200": 1864, "204": 0}),
+             (True, True, True, "none", False)),
+            # A definite fault wins over an unresolved condition.
+            ("accounting: a counter went down and the counters did not rest",
+             outcome(some, "write-dup", 1864, 1864, counters=(
+                 [zero[0], dict(zero[1], backend_req=5)], [dict(zero[0], backend_req=1869), zero[1]],
+                 (True, False))), (False, True, False, "failed", False)),
+            ("accounting: a counter went down and the two accounts differ",
+             outcome(some, "list-unique", 1864, 1864, counters=(
+                 [zero[0], dict(zero[1], backend_req=5)], [dict(zero[0], backend_req=1868), zero[1]],
+                 (True, True))), (False, True, False, "failed", False)),
+            ("accounting: one cache's counters absent and the counters did not rest",
+             outcome(some, "write-dup", 1864, 1864, counters=(zero, after(1864)[:1], (False, True))),
+             (False, True, False, "failed", False)),
+            ("accounting: the counters did not rest, nothing definite",
+             outcome(some, "write-dup", 1864, 1864, counters=(zero, after(1864), (True, False))),
+             (True, True, False, "unresolved", False))):
         cases.append({"case": name, "gate_must_pass": wanted[0], "gate_passed": got[0],
+                      "outcome_wanted": list(wanted), "outcome": list(got)})
+    # The saved state of the writes, from the function of the run, on
+    # made-up rows, then through the scorer and the gate.
+    row = lambda count, id="id-1": {**bc.DUP_ALERT, "id": id, "duplicate_count": count, "status": "open"}
+    for name, rows0, rows1, total, good in (
+            ("saved: every write in the row", [row(50)], [row(1914)], 101, True),
+            ("saved: one write fewer in the row", [row(50)], [row(1913)], 101, False),
+            ("saved: one write more in the row", [row(50)], [row(1915)], 101, False),
+            ("saved: the warm-up count differs", [row(49)], [row(1913)], 101, False),
+            ("saved: another alert's id", [row(50)], [row(1914, "id-2")], 101, False),
+            ("saved: two rows", [row(50)], [row(1914), row(0, "id-2")], 102, False),
+            ("saved: no row before the timed run", [], [row(1864)], 101, False),
+            ("saved: one alert more in the table", [row(50)], [row(1914)], 102, False),
+            ("saved: the row is not open", [row(50)], [dict(row(1914), status="closed")], 101, False)):
+        record, found = durable_problems(bc.dup_identity_ok, "id-1", 50, 1864, rows0, rows1, total, 100)
+        got = outcome(some, "write-dup", 1864, 1864, 1864, durable=found)
+        wanted = (good, good, True, "reconciled", True)
+        cases.append({"case": name, "gate_must_pass": good, "gate_passed": got[0], "durable": record,
                       "outcome_wanted": list(wanted), "outcome": list(got)})
     wrong = [c["case"] for c in cases if c["gate_passed"] != c["gate_must_pass"]
              or c.get("outcome") != c.get("outcome_wanted")]
@@ -1300,7 +1403,7 @@ def run(bc, record, dbs):
         "alerta_per_stack": f"{max(1, bc.VCPUS // len(STACKS))}x4-pgbu-nofwd",
         "varnish": version("BENCH_VARNISHD", "-V"), "haproxy": version("BENCH_HAPROXY", "-v"),
         "routes": ROUTES_RE, "credentials": "the two synthetic keys, whole", "stale_margin_s": STALE_MARGIN_S,
-        "gate_self_test": gate_self_test(planned), "probes": [], "checks": [], "cells": []}
+        "gate_self_test": gate_self_test(planned, bc), "probes": [], "checks": [], "cells": []}
     bc.log(f"cache suite: gate self-test, {len(rec['gate_self_test'])} cases, as expected")
     ok = True
     for ttl in TTLS:
@@ -1363,14 +1466,19 @@ def summary(record):
                   f"**Cache-accounting gate: {word(a['ok'])}.** {a['cells']} cells of cache arms: "
                   f"{a['reconciled']} reconciled, {a['unresolved']} unresolved, {a['failed']} failed, "
                   f"{a['missing']} missing."
-                  + ("" if a["ok"] else " This run is not complete evidence for hits, a hit ratio or "
-                                        "backend requests."), "",
+                  + ("" if a["ok"] else " This run is not complete evidence for hits, backend-request "
+                                        "avoidance or backend requests."), "",
                   f"Scoring version {g['scoring']}: the two gates are separate. Throughput and latency "
                   "are from workload-valid cells. `origin visits` is the growth of the benchmark "
                   "key's use count (requests that reached Alerta with the key); it does not show "
-                  "one hit or a hit ratio. Hit ratio and backend requests are from the caches' "
-                  "counters and are given only for reconciled cells. Results of the earlier scoring "
-                  f"(one `valid` flag) are not converted. Gate self-test: "
+                  "one hit or a hit ratio. Backend requests are from the caches' counters; "
+                  "`backend-request avoidance` is 1 minus backend requests for each request, not a "
+                  "count of cache hits that a client saw. Both are given only for reconciled cells. "
+                  "Every answer of a warm-up and of a timed run must have the one expected HTTP "
+                  "status (GET 200, duplicate POST 201). The timed runs check statuses and counts "
+                  "only: the body of each timed answer is not read, and the suite does not check "
+                  "that each URL of `list-unique` was new. Results of an earlier scoring version "
+                  f"are not converted. Gate self-test: "
                   f"{len(rec['gate_self_test'])} cases as expected.", ""]
         lines += [f"- GATE: {m}" for m in g["missing_checks"][:30]]
     for p in rec["probes"]:
@@ -1399,7 +1507,7 @@ def summary(record):
         rows.setdefault((c["case"], c["c"], c["arm"]), []).append(c)
     if rows:
         lines += ["", "| case | c | arm | workload-valid reps | rps | p50 ms | p99 ms | origin visits | "
-                      "reconciled reps | hit ratio | backend requests | "
+                      "reconciled reps | backend-request avoidance | backend requests | "
                       "server CPU ms/req | cache CPU ms/req | HAProxy CPU ms/req | postgres CPU ms/req |",
                   "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for case in ("count", "list", "list-unique", "write-dup"):
@@ -1422,7 +1530,7 @@ def summary(record):
                     counted = f"{len(good)} of {len(allc)}"
                     ratio = fetched = "unavailable"
                     if good:
-                        ratio = f"{statistics.median(x['hit_ratio'] for x in good):.4f}"
+                        ratio = f"{statistics.median(x['backend_request_avoidance'] for x in good):.4f}"
                         fetched = f"{statistics.median(x['backend_requests'] for x in good):.0f}"
                 lines.append(
                     f"| {case} | {conc} | {arm} | {len(cs)} of {len(allc)} | {med('rps'):.0f} | "
@@ -1438,6 +1546,6 @@ def summary(record):
             lines.append(f"- CACHE ACCOUNTING {c['accounting']['state'].upper()} {where}: the caches "
                          f"count {c['accounting']['backend_requests_as_counted']} backend requests, "
                          f"the key's use count grew by {c['workload']['key_uses']}, "
-                         f"{c['workload']['requests']} requests; hit ratio and backend requests "
+                         f"{c['workload']['requests']} requests; backend-request avoidance and backend requests "
                          f"unavailable; {c['accounting']['problems']}")
     return lines
