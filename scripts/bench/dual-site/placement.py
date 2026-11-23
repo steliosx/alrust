@@ -193,7 +193,7 @@ CACHE_ARMS = {"DS": ("direct", "shared", "staggered"), "DA": ("direct", "shared"
               "CP": ("cache", "personal", "aligned")}
 CACHE_ORDERS = (("DS", "DA", "FA", "CA", "CP"), ("CP", "CA", "FA", "DA", "DS"))
 CACHE_TTL = 1          # seconds an answer may be kept
-CACHE_SLACK = 1.0      # Varnish's Age is whole seconds, and a fill takes time
+CACHE_SLACK = 0.5      # the fill: the origin answered at most this long before Varnish kept it
 PROBE_LIMIT = 6.0      # seconds a visibility probe waits for its answer
 STAGES = ("placement", "fresh", "cache")
 # mode: (seconds of a block, placement blocks, fresh blocks, cache blocks)
@@ -279,7 +279,8 @@ def cache_plan(block, seconds, cadence):
     """The requests of one cache block for one cadence. Per 5 s: at each
     site, two tenants' list and count, each read by two readers (16 reads),
     and 4 writes. The second reader reads 50 ms after the first (aligned)
-    or 2.5 s after it, within the same 5 s (staggered). The writes and the
+    or 2.5 s away from it within the same 5 s, so before it for the last
+    three pairs of a cycle (staggered). The writes and the
     first readers are the same for both cadences."""
     rng = random.Random(f"cache/{block}")
     cycles = seconds // 5
@@ -1119,9 +1120,15 @@ class PlacementLab(hosted_lab.VirtualLab):
             "final_state_sha256": hashlib.sha256(json.dumps(state, sort_keys=True).encode()).hexdigest(),
             "settings": self.settings[name],
             **({"read_entry": entry, "credentials": credentials, "cadence": cadence,
-                "cache_answers": Counter(f"{row['phase']}/{row.get('cache')}" for row in rows
+                "cache_answers": Counter(f"{row['phase']}/{row.get('cache') or 'direct'}" for row in rows
                                          if row["kind"] in READS),
-                "varnish": cache_counts, "probes": probes} if arm in CACHE_ARMS else {}),
+                "varnish": cache_counts, "probes": probes,
+                # Not a gate: the reads that the client saw as origin or pass,
+                # beside Varnish's own backend requests (those also count the
+                # probes' and the health checks' requests).
+                "origin_or_pass_reads": sum(1 for row in rows if row["kind"] in READS
+                                            and row.get("cache") in ("origin", "pass"))}
+               if arm in CACHE_ARMS else {}),
         }, rows
 
     async def block(self, stage, index, order, seconds, t0):
@@ -1339,7 +1346,7 @@ def summary(record):
                   "2.5 s after the first, A 50 ms after, P aligned with its own key. Writes go straight in every arm. "
                   "Probes: seconds from a new alert's answer until each site's list showed it, and from a key's "
                   "delete to the last 200 and the first refusal.", "",
-                  "| block | arm | timed reads hit / origin / pass | Varnish backend requests A / B "
+                  "| block | arm | timed reads hit / origin / pass / direct | Varnish backend requests A / B "
                   "| new alert seen A / B | revoked key A: last 200, refused | revoked key B: last 200, refused |",
                   "|---|---|---|---|---|---|---|"]
         for block in cache_blocks:
@@ -1349,7 +1356,8 @@ def summary(record):
                                        ("new_alert_seen_s", "revoked_last_200_s", "revoked_first_refusal_s"))
                 lines.append(
                     f"| {block['block']} | {run['arm']} | {answers.get('timed/hit', 0)} / "
-                    f"{answers.get('timed/origin', 0)} / {answers.get('timed/pass', 0)} | "
+                    f"{answers.get('timed/origin', 0)} / {answers.get('timed/pass', 0)} / "
+                    f"{answers.get('timed/direct', 0)} | "
                     f"{varnish.get('a', {}).get('MAIN.backend_req', '-')} / "
                     f"{varnish.get('b', {}).get('MAIN.backend_req', '-')} | {seen.get('a')} / {seen.get('b')} | "
                     f"{last.get('a')}, {refused.get('a')} | {last.get('b')}, {refused.get('b')} |")
@@ -1555,6 +1563,7 @@ def self_test():
         (read("list", 1.5, 1.7, first, first, cache="hit"), True, False),
         (read("list", 3.7, 3.8, moved, moved, cache="hit"), True, False),   # ...or before the create
         (read("list", 5.0, 5.1, first, first, cache="hit"), False, None),   # not older than that
+        (read("list", 3.0, 3.1, first, first, cache="hit"), False, None),   # the duplicate ended 1.6 s before
         (read("list", 1.5, 1.7, first, first, cache="origin"), False, None)]
     rows = [write("dup", 1.0, 1.4, "repeat-0", "id7"), write("create", 3.0, 3.5, "fresh-x-0-1", "new"),
             write("ack", 5.0, 5.2, "mutate-0"), *(case[0] for case in cases)]
@@ -1730,8 +1739,9 @@ def main():
     parser.add_argument("--varnishd", type=Path, default=Path("/usr/sbin/varnishd"))
     parser.add_argument("--varnishstat", type=Path, default=Path("/usr/bin/varnishstat"))
     tools = parser.parse_args()
-    tools.stages = tuple(stage for stage in STAGES if stage in tools.stages.split(","))
-    if not tools.stages or set(parser.parse_args().stages.split(",")) - set(STAGES):
+    asked = tools.stages.split(",")
+    tools.stages = tuple(stage for stage in STAGES if stage in asked)
+    if not tools.stages or len(tools.stages) != len(set(asked)) or set(asked) - set(STAGES):
         parser.error(f"--stages: one or more of {','.join(STAGES)}")
     if tools.self_test:
         return self_test()
