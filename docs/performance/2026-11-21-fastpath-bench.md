@@ -130,5 +130,7 @@ on reads because of `hot` (the key's use count and the timers are written about 
 
 ## See also
 
+- [Alerta at two sites: where requests go, and `noecho`](2026-11-22-two-site-placement.md),
+  the 22 November run of the two-site lab.
 - [Saved searches under gunicorn](2026-11-22-savedq-load.md), the 22 November run of the opt-in
   `savedq` patch.
