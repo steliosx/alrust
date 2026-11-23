@@ -1,0 +1,72 @@
+# The `savedq` patch of scripts/bench/alerta_fast.py (an add-on for stock
+# Alerta 9.1.0; it keeps the SQL of repeated searches in the worker's
+# memory) checked against Alerta as released: scripts/bench/savedq_check.py,
+# on one GitHub-hosted runner with PostgreSQL 18.7 and the reference Alerta
+# environment of scripts/bench/setup.sh. Synthetic data only. The times in
+# the result are in-process and relative to the runner: not a capacity
+# claim, and not a benchmark run (DECISIONS Y69). Not a required check.
+name: addon savedq check
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/bench/alerta_fast.py
+      - scripts/bench/savedq_check.py
+      - scripts/bench/setup.sh
+      - .github/workflows/addon-savedq.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: addon-savedq-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: savedq against Alerta's parser (PostgreSQL 18.7)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
+        with:
+          # The reference Alerta is installed from the pinned submodule.
+          submodules: true
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0 (Node24)
+        with:
+          python-version: "3.12"
+      - name: PostgreSQL 18.7 and the reference Alerta environment
+        timeout-minutes: 10
+        run: scripts/bench/setup.sh
+      - name: savedq check
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/savedq-out"
+          mkdir -- "$out"
+          # The throwaway cluster of setup.sh: its password is public text.
+          PGPASSWORD=postgres "$BENCH_PG_BIN/psql" -h 127.0.0.1 -p 5432 -U postgres -d postgres \
+            -v ON_ERROR_STOP=1 -c 'CREATE DATABASE savedq_check'
+          cd "$BENCH_WORK"
+          env -i PATH="$BENCH_ALERTA_VENV/bin:/usr/bin:/bin" HOME="$BENCH_WORK" \
+            DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/savedq_check \
+            SECRET_KEY=bench-not-secret LOG_LEVEL=WARNING \
+            "$BENCH_ALERTA_VENV/bin/python" -I "$GITHUB_WORKSPACE/scripts/bench/savedq_check.py" \
+            "$out/savedq-check.json" 2>&1 | tee "$out/savedq-check.log"
+      - name: Result
+        if: always()
+        run: |
+          f="$RUNNER_TEMP/savedq-out/savedq-check.json"
+          [ -f "$f" ] || { echo "no result file"; exit 0; }
+          python3 -I -c 'import json, sys
+          d = json.load(open(sys.argv[1]))
+          print("ok:", d["ok"]); print("cases:", d["cases"]); print("failed:", d["failed"])
+          print("expressions:", d["expressions"]); print("times:", json.dumps(d["times"], indent=1))' "$f"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node24)
+        if: always()
+        with:
+          name: addon-savedq-check
+          path: ${{ runner.temp }}/savedq-out/
+          if-no-files-found: warn
