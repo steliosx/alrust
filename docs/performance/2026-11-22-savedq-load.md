@@ -91,13 +91,15 @@ different results.
   checked, and no client thread stopped. 171,275 timed and 51,072 warm-up answers.
 - Every offered cell sent 400 of its 400 due requests; none was sent more than 100 ms late (the
   most was 0.38 ms).
-- Every answer was HTTP 200 and equal to the answer of Alerta without the add-on for that key and
-  search: page, page size, number of pages, `more`, total, both counts and every alert in order with
-  all its fields, the link included.
+- Every answer was HTTP 200 and matched its expected page from Alerta without the add-on, for that
+  key and search: page, page size, number of pages, `more`, total, both counts and every alert in
+  order with all its fields, the link included. The comparison left out `lastTime` of an empty page,
+  which is the server's clock.
 - The expected answers were checked against the seed itself: each customer key saw only its own
   alerts, and with no search its first 50.
-- 24,549 `unique` texts were sent. 22 of them were asked again, for each key, of Alerta without the
-  add-on after the timed part: 0 differences.
+- For the `unique` texts, each key's expected answer was the stock answer of their common part (the
+  same SQL, see above). 24,549 such texts were sent. After the timed part, 22 of them were asked
+  again of Alerta without the add-on, for each of the three keys: 0 differences.
 
 ## Results
 
@@ -139,13 +141,16 @@ With a few hundred to a few thousand requests per cell, the p99 rests on few req
 ## What this means for an operator
 
 - `savedq` is a good fit where the same searches come back often, as dashboards and saved views
-  do. With the search text `one`, the server's CPU per request fell by about 7.5 ms: that is the
-  parse, which `savedq` does once per worker and text.
-- Where most searches are new (ad-hoc text), `savedq` gives nothing and costs a few percent of CPU.
+  do. With the search text `one` at the offered rate, the whole gunicorn CPU per request fell by
+  about 7.5 ms. Less parsing agrees with that; the run did not time the parser on its own.
+- Where every search text is new, `savedq` gives nothing and cost 2% to 3% more CPU in this run. The
+  run does not show at which share of new texts a mixed load stops gaining.
 - It is opt-in (`ALERTA_FAST=safe,savedq`), each worker keeps at most 256 searches by default
   (`ALERTA_FAST_SAVEDQ_ENTRIES`), and it does not start unless Alerta's parser file is the one of
-  Alerta 9.1.0. Codex measured about 0.5 to 1 KB of Python objects per kept search for the texts of
-  this run, so about 130 to 240 KB per worker when the store is full.
+  Alerta 9.1.0. A separate measurement by Codex (CPython 3.12.16, outside this run) found 8,344 and
+  15,288 bytes above an empty store for 16 synthetic single-term and multi-term searches. That
+  projects to about 130.5 and 239.0 KiB per worker for 256 similar searches. The hosted run measured
+  neither the store's memory nor the workers' RSS.
 - Group long searches with parentheses, with or without the add-on: Alerta drops the third term
   of an ungrouped `AND` chain (see above).
 
