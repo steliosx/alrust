@@ -60,12 +60,18 @@ Stages (the design is Codex's, mail 20261121T182255Z-codex-alrust-c3594b37):
               may show what the origin answered up to CACHE_TTL + CACHE_SLACK
               before it was sent (reconcile()); hits do not reach Alerta, so
               the key-use and timer checks count origin answers only. After
-              the timed part, in every arm: tenant-0's list is read at both
-              sites, a new alert is written, and each site reads until its
-              list shows it; then a read-only probe key is read twice at
-              each site, deleted, and read until refused. Each arm records
-              its answers (hit, origin, pass), Varnish's counters and the
-              probes' seconds.
+              the timed part, in every arm (cache_probes()): tenant-0's list
+              is read at both sites until a valid page (and, in C arms, a
+              cache hit) shows the entry is warm, a new alert is written,
+              and each site reads until its list shows it; then a read-only
+              probe key is primed the same way, deleted (exactly that key:
+              DELETE ... RETURNING), and read until refused. A failed
+              priming makes the arm invalid. Each probe answer is kept
+              (site, seconds, status, hit or origin); an answer counts only
+              when it completed by the PROBE_LIMIT deadline (each wait is
+              cut at the time left), and an origin 200 after the delete
+              makes the arm invalid. Each arm records its answers (hit,
+              origin, pass), Varnish's counters and the probes' seconds.
 
 A dashboard read is one request of a tenant's key: GET /alerts (newest
 first, one page) or GET /alerts/count, in turn. Every key belongs to one
@@ -362,9 +368,9 @@ def change_request(kind, alert_id, value="moved"):
     return f"/alert/{alert_id}/attributes", {"attributes": {"zone": None if kind == "null" else value}}
 
 
-def request(epoch, port, method, path, key, body=None):
+def request(epoch, port, method, path, key, body=None, timeout=TIMEOUT):
     """One HTTP request on this thread's kept connection to `port`. Never
-    sent a second time."""
+    sent a second time. `timeout` bounds each wait for the socket."""
     if getattr(LOCAL, "epoch", None) != epoch:
         for connection, _ in getattr(LOCAL, "connections", {}).values():
             connection.close()
@@ -374,7 +380,11 @@ def request(epoch, port, method, path, key, body=None):
         connection.close()
         connection = None
     if connection is None:
-        connection = HTTPConnection(HOST, port, timeout=TIMEOUT)
+        connection = HTTPConnection(HOST, port, timeout=timeout)
+    else:
+        connection.timeout = timeout
+        if connection.sock is not None:
+            connection.sock.settimeout(timeout)
     answer = {"status": None, "raw": b"", "app_site": None, "proxy_site": None, "worker": None,
               "reused": connection.sock is not None, "error": None, "cache": None}
     headers = {"Accept": "application/json", "Authorization": f"Key {key}"}
@@ -447,6 +457,116 @@ def sample(epoch, port, key, op, ids, phase, due):
     else:
         row["ok"] = True
     return row
+
+
+def probe_record(site, sent, done, answer, tenant):
+    """One probe read as evidence (no key, no page): its site, times,
+    status, cache outcome and error; `ids` is the page when it is a valid
+    200 page of the tenant's alerts. A 401 or 403 is a valid refusal only
+    with Alerta's error body; any other status is an error."""
+    record = {"site": site, "sent": sent, "done": done, "status": answer["status"],
+              "cache": answer["cache"], "error": answer["error"], "ids": None}
+    try:
+        data = json.loads(answer["raw"]) if answer["status"] is not None else None
+    except ValueError:
+        data = None
+    if answer["status"] == 200:
+        alerts = data.get("alerts") if isinstance(data, dict) and data.get("status") == "ok" else None
+        if not isinstance(alerts, list) or not all(isinstance(a, dict) and a.get("customer") == tenant
+                                                   and isinstance(a.get("id"), str) for a in alerts):
+            record["error"] = "wrong_page"
+        else:
+            record["ids"] = [a["id"] for a in alerts]
+    elif answer["status"] in (401, 403):
+        if not (isinstance(data, dict) and data.get("status") == "error"):
+            record["error"] = "wrong_refusal"
+    elif answer["status"] is not None:
+        record["error"] = f"status_{answer['status']}"
+    return record
+
+
+def prime_problems(what, records, cached):
+    """The reads before a probe's event: at each site the reads must all be
+    valid 200 pages, and in a cache arm the last one a cache hit."""
+    problems = []
+    for site in SITES:
+        mine = [r for r in records if r["site"] == site]
+        if not mine or any(r["ids"] is None for r in mine):
+            problems.append(f"{what}: the priming reads at site {site} were not all valid pages: "
+                            f"{[(r['status'], r['error']) for r in mine]}")
+        elif cached and mine[-1]["cache"] != "hit":
+            problems.append(f"{what}: the cache at site {site} was not shown warm (no hit): "
+                            f"{[r['cache'] for r in mine]}")
+    return problems
+
+
+def visibility(records, alert_id, start, deadline):
+    """Per site, seconds from `start` to the first answer that showed the
+    alert and completed by `deadline`; an answer that showed it later is
+    kept apart (late), never counted."""
+    seen, late = dict.fromkeys(SITES), dict.fromkeys(SITES)
+    for r in sorted(records, key=lambda r: r["done"]):
+        if r["ids"] is not None and alert_id in r["ids"]:
+            into = seen if r["done"] <= deadline else late
+            if seen[r["site"]] is None and into[r["site"]] is None:
+                into[r["site"]] = round(r["done"] - start, 3)
+    return seen, late
+
+
+def revocation(records, start, deadline):
+    """The reads after a key's delete, per site: the last cached 200, any
+    origin 200 (Alerta or a passed request accepted the deleted key), the
+    first valid refusal by the deadline, late answers and errors."""
+    out = {"last_cached_200_s": dict.fromkeys(SITES), "origin_200_s": {s: [] for s in SITES},
+           "first_refusal_s": dict.fromkeys(SITES), "late": {s: 0 for s in SITES}, "errors": []}
+    for r in sorted(records, key=lambda r: r["done"]):
+        seconds, site = round(r["done"] - start, 3), r["site"]
+        if r["done"] > deadline:
+            out["late"][site] += 1
+        elif r["status"] == 200 and r["ids"] is not None:
+            if r["cache"] == "hit":
+                out["last_cached_200_s"][site] = seconds
+            else:
+                out["origin_200_s"][site].append(seconds)
+        elif r["status"] in (401, 403) and not r["error"]:
+            if out["first_refusal_s"][site] is None:
+                out["first_refusal_s"][site] = seconds
+        else:
+            out["errors"].append({"site": site, "s": seconds, "status": r["status"], "error": r["error"]})
+    return out
+
+
+def probe_problems(written, seen, late, new_reads, removed, digest, left, revoked):
+    """The problems of one arm's probes (an arm with any is invalid):
+    `written` the new alert's write was acked; `seen`/`late` from
+    visibility(); `new_reads` the records of the reads after the write;
+    `removed` psql's lines from DELETE ... RETURNING and `left` the count
+    of keys with the probe key's md5 `digest` after the reads;
+    `revoked` from revocation()."""
+    problems = []
+    bad_reads = [(r["site"], r["status"], r["error"]) for r in new_reads if r["ids"] is None]
+    origin = {site: times for site, times in revoked["origin_200_s"].items() if times}
+    for what, bad in (("the probe's new alert was not written", not written),
+                      (f"the new alert was not seen within {PROBE_LIMIT} s: {seen}, late {late}",
+                       written and None in seen.values()),
+                      (f"unexpected answers while waiting for the new alert: {bad_reads[:4]}", bad_reads),
+                      ("the delete did not remove exactly the probe key",
+                       [line for line in removed.splitlines() if not line.startswith("DELETE ")]
+                       != [f"probe-key {digest}"] or left != "0"),
+                      (f"an origin answered 200 with the deleted key: {origin}", origin),
+                      (f"the deleted key was not refused within {PROBE_LIMIT} s: {revoked['first_refusal_s']}",
+                       None in revoked["first_refusal_s"].values()),
+                      (f"unexpected answers after the delete: {revoked['errors'][:4]}", revoked["errors"])):
+        if bad:
+            problems.append(what)
+    return problems
+
+
+def within(after, wanted, slack):
+    """True when `after` has the keys of `wanted`, each value at least the
+    wanted one and at most `slack` (per key, default 0) above it."""
+    return (after is not None and set(after) == set(wanted)
+            and all(wanted[k] <= after[k] <= wanted[k] + slack.get(k, 0) for k in wanted))
 
 
 def histograms(view, acked, names):
@@ -909,73 +1029,110 @@ class PlacementLab(hosted_lab.VirtualLab):
                             if len(parts) >= 2 and parts[0] in VARNISH_COUNTERS and parts[1].isdigit()}
         return result
 
-    async def cache_probes(self, name, read_ports, ids, rows, index):
+    async def cache_probes(self, name, read_ports, ids, rows, index, cached):
         """After the timed part, the same in every arm of a cache block.
-        (1) Tenant-0's list is read at both sites (a warm cache), a new alert
-        of tenant-0 is written straight to site A's primary-aware HAProxy,
-        and each site reads the list through the arm's read entry every
-        0.1 s until a page has it. (2) The probe key's list is read twice at
-        each site, the key is deleted, and each site reads until one read is
-        refused. Seconds are from the write's answer and from the delete.
+        (1) Tenant-0's list is primed at both sites: read until a valid page
+        and, in a cache arm (`cached`), a cache hit. A new alert of tenant-0
+        is written straight to site A's primary-aware HAProxy, and each site
+        reads the list through the arm's read entry every 0.1 s until a
+        page has it. (2) The probe key's list is primed the same way, the
+        key is deleted (DELETE ... RETURNING must name exactly the probe
+        key), and each site reads until one read is refused. Seconds are
+        from the write's answer and from the delete; an answer counts only
+        when it completed by PROBE_LIMIT, and each wait is cut at the time
+        left. Every read is kept (site, seconds, status, cache, error).
         The write is a row of the ledger (it is in the final state of every
-        arm). Origin answers are counted for the key-use and timer checks."""
+        arm). Origin answers are counted for the key-use and timer checks;
+        a read with no answer may or may not have reached Alerta, so those
+        checks get that many as slack."""
         tenant, problems = TENANTS[0], []
-        result = {"origin_list_reads": 0, "tenant_origin_reads": 0}
+        result = {"origin_list_reads": 0, "tenant_origin_reads": 0, "unanswered_reads": 0,
+                  "tenant_unanswered_reads": 0}
 
-        async def get(site, key):
-            answer = await asyncio.to_thread(request, name, read_ports[site], "GET", LIST, key)
-            if answer["status"] == 200 and answer["cache"] != "hit":
+        async def get(site, key, owner, deadline=None):
+            left = TIMEOUT if deadline is None else min(TIMEOUT, deadline - time.monotonic())
+            if left <= 0:
+                return None
+            sent = time.monotonic()
+            answer = await asyncio.to_thread(request, name, read_ports[site], "GET", LIST, key, None, left)
+            record = probe_record(site, sent, time.monotonic(), answer, owner)
+            if answer["status"] is None:
+                result["unanswered_reads"] += 1
+                result["tenant_unanswered_reads"] += key == self.keys[tenant]
+            elif answer["status"] == 200 and answer["cache"] != "hit":
                 result["origin_list_reads"] += 1
                 result["tenant_origin_reads"] += key == self.keys[tenant]
-            return answer
+            return record
 
-        for site in SITES:
-            await get(site, self.keys[tenant])
+        async def prime_site(site, key):
+            records = []
+            for _ in range(4 if cached else 1):
+                record = await get(site, key, tenant)
+                records.append(record)
+                if record["ids"] is None or not cached or record["cache"] == "hit":
+                    break
+            return records
+
+        async def prime(key, what):
+            # Side by side, so the shown hit is well inside CACHE_TTL at the event.
+            records = sum(await asyncio.gather(*(prime_site(site, key) for site in SITES)), [])
+            problems.extend(prime_problems(what, records, cached))
+            return records
+
+        async def until(site, key, deadline, done):
+            """Reads at one site every 0.1 s until done(its reads) or the deadline."""
+            records = []
+            while time.monotonic() < deadline:
+                record = await get(site, key, tenant, deadline)
+                if record is not None:
+                    records.append(record)
+                if done(records):
+                    break
+                await asyncio.sleep(0.1)
+            return records
+
+        def evidence(records, start):
+            return [{"site": r["site"], "sent_s": round(r["sent"] - start, 3), "done_s": round(r["done"] - start, 3),
+                     "status": r["status"], "cache": r["cache"], "error": r["error"]} for r in records]
+
+        primed = await prime(self.keys[tenant], "new alert probe")
         op = {"op": f"probe-{name}", "site": "a", "tenant": tenant, "kind": "new",
               "resource": f"probe-cache-{index}"}
         row = await asyncio.to_thread(sample, name, self.port("a", "primary"), self.keys[tenant], op, ids,
                                       "probe", time.monotonic())
         rows.append(row)
-        seen = {site: None for site in SITES}
+        reads, seen, late = [], dict.fromkeys(SITES), dict.fromkeys(SITES)
         if row["ok"]:
             acked = row["end"]
-            while None in seen.values() and time.monotonic() < acked + PROBE_LIMIT:
-                for site in SITES:
-                    if seen[site] is None:
-                        answer = await get(site, self.keys[tenant])
-                        try:
-                            page = ([a["id"] for a in json.loads(answer["raw"]).get("alerts", [])]
-                                    if answer["status"] == 200 else [])
-                        except (ValueError, AttributeError, TypeError):
-                            page = []
-                        if row["alert_id"] in page:
-                            seen[site] = round(time.monotonic() - acked, 3)
-                await asyncio.sleep(0.1)
-        result["new_alert_seen_s"] = seen
-        for site in SITES:
-            for _ in range(2):
-                await get(site, self.probe_key)
-        await asyncio.to_thread(self.private_sql, name, "DELETE FROM keys WHERE id = 'probe-key';\n",
-                                "The delete of the probe key")
+            deadline = acked + PROBE_LIMIT
+            # The sites are read side by side, so a slow site does not delay the other.
+            shown = lambda records: visibility(records, row["alert_id"], acked, deadline)[0][records[-1]["site"]]
+            reads = sum(await asyncio.gather(*(until(site, self.keys[tenant], deadline,
+                                                     lambda r: bool(r) and shown(r) is not None)
+                                               for site in SITES)), [])
+            seen, late = visibility(reads, row["alert_id"], acked, deadline)
+            result.update(new_alert_prime=evidence(primed, acked), new_alert_reads=evidence(reads, acked))
+        result.update(new_alert_seen_s=seen, new_alert_late_s=late)
+        new_reads = reads
+
+        primed = await prime(self.probe_key, "revoked key probe")
+        digest = hashlib.md5(self.probe_key.encode()).hexdigest()
+        removed = await asyncio.to_thread(
+            self.sql, name, "DELETE FROM keys WHERE id = 'probe-key' RETURNING id || ' ' || md5(key)")
         deleted = time.monotonic()
-        last_ok, refused = {site: None for site in SITES}, {site: None for site in SITES}
-        while None in refused.values() and time.monotonic() < deleted + PROBE_LIMIT:
-            for site in SITES:
-                if refused[site] is None:
-                    answer = await get(site, self.probe_key)
-                    seconds = round(time.monotonic() - deleted, 3)
-                    if answer["status"] == 200:
-                        last_ok[site] = seconds
-                    elif answer["status"] in (401, 403):
-                        refused[site] = seconds
-            await asyncio.sleep(0.1)
-        result.update(revoked_last_200_s=last_ok, revoked_first_refusal_s=refused)
-        for what, bad in (("the probe's new alert was not written", not row["ok"]),
-                          (f"the new alert was not seen within {PROBE_LIMIT} s: {seen}", None in seen.values()),
-                          (f"the deleted key was still answered after {PROBE_LIMIT} s: {refused}",
-                           None in refused.values())):
-            if bad:
-                problems.append(what)
+        deadline = deleted + PROBE_LIMIT
+        refusal = lambda records: revocation(records, deleted, deadline)["first_refusal_s"][records[-1]["site"]]
+        reads = sum(await asyncio.gather(*(until(site, self.probe_key, deadline,
+                                                 lambda r: bool(r) and refusal(r) is not None)
+                                           for site in SITES)), [])
+        revoked = revocation(reads, deleted, deadline)
+        left = await asyncio.to_thread(self.sql, name, f"SELECT count(*) FROM keys WHERE md5(key) = '{digest}'")
+        result.update(revoked_prime=evidence(primed, deleted), revoked_reads=evidence(reads, deleted),
+                      revoked_last_cached_200_s=revoked["last_cached_200_s"],
+                      revoked_origin_200_s=revoked["origin_200_s"],
+                      revoked_first_refusal_s=revoked["first_refusal_s"], revoked_late=revoked["late"],
+                      revoked_errors=revoked["errors"])
+        problems += probe_problems(row["ok"], seen, late, new_reads, removed, digest, left, revoked)
         result["problems"] = problems
         return result
 
@@ -1025,7 +1182,7 @@ class PlacementLab(hosted_lab.VirtualLab):
             scope_after = run_lab.cgroup_cpu_stats()
             pool_after, cpu_after = self.pool_stats(name), self.cpu_sample()
             if arm in CACHE_ARMS:
-                probes = await self.cache_probes(name, read_ports, ids, rows, index)
+                probes = await self.cache_probes(name, read_ports, ids, rows, index, entry == "cache")
             for op in tenant_reads[len(tenant_reads) // 2:]:
                 rows.append(await send(op, "final", None))
             if entry != "direct":
@@ -1056,8 +1213,11 @@ class PlacementLab(hosted_lab.VirtualLab):
             or (row["app_site"], row["proxy_site"]) != (("a", "a") if route == "primary" else (row["site"], None)))]
         # A cache hit does not reach Alerta: no key use, no timer.
         answered = Counter(row["tenant"] for row in rows if row["status"] is not None and row.get("cache") != "hit")
+        key_slack, timer_slack = {}, {}
         if probes:
             answered[TENANTS[0]] += probes["tenant_origin_reads"]
+            key_slack[TENANTS[0]] = probes["tenant_unanswered_reads"]
+            timer_slack["queries"] = probes["unanswered_reads"]
         keys_wanted = {tenant: keys_before[tenant] + answered[tenant] for tenant in TENANTS}
         good = Counter(row["kind"] for row in rows if row["ok"] and row.get("cache") != "hit")
         timers_wanted = {timer: timers_before.get(timer, 0) + sum(good[kind] for kind in kinds)
@@ -1077,8 +1237,10 @@ class PlacementLab(hosted_lab.VirtualLab):
                 ("site B did not replay the primary's last flushed position in time", standby_state is None),
                 ("site B's alerts are not the primary's alerts",
                  standby_state is not None and standby_state != state),
-                (f"key uses are {keys_after}, wanted {keys_wanted}", keys_after != keys_wanted),
-                (f"timers are {timers_after}, wanted {timers_wanted}", timers_after != timers_wanted),
+                (f"key uses are {keys_after}, wanted {keys_wanted} (+{key_slack})",
+                 not within(keys_after, keys_wanted, key_slack)),
+                (f"timers are {timers_after}, wanted {timers_wanted} (+{timer_slack})",
+                 not within(timers_after, timers_wanted, timer_slack)),
                 ("the row updates of `alerts` could not be read", updates is None)):
             if bad:
                 problems.append(what)
@@ -1345,15 +1507,17 @@ def summary(record):
                   f"request passed; C: through it with a {CACHE_TTL} s cache. Second letter: S the second reader "
                   "2.5 s after the first, A 50 ms after, P aligned with its own key. Writes go straight in every arm. "
                   "Probes: seconds from a new alert's answer until each site's list showed it, and from a key's "
-                  "delete to the last 200 and the first refusal.", "",
+                  "delete to the last cached 200 and the first refusal (an origin 200 after the delete makes the arm "
+                  "invalid).", "",
                   "| block | arm | timed reads hit / origin / pass / direct | Varnish backend requests A / B "
-                  "| new alert seen A / B | revoked key A: last 200, refused | revoked key B: last 200, refused |",
+                  "| new alert seen A / B | revoked key A: last cached 200, refused "
+                  "| revoked key B: last cached 200, refused |",
                   "|---|---|---|---|---|---|---|"]
         for block in cache_blocks:
             for run in block["runs"]:
                 answers, varnish, probes = run.get("cache_answers", {}), run.get("varnish") or {}, run.get("probes") or {}
                 seen, last, refused = (probes.get(k, {}) for k in
-                                       ("new_alert_seen_s", "revoked_last_200_s", "revoked_first_refusal_s"))
+                                       ("new_alert_seen_s", "revoked_last_cached_200_s", "revoked_first_refusal_s"))
                 lines.append(
                     f"| {block['block']} | {run['arm']} | {answers.get('timed/hit', 0)} / "
                     f"{answers.get('timed/origin', 0)} / {answers.get('timed/pass', 0)} / "
@@ -1725,6 +1889,68 @@ def self_test():
     text = summary({"mode": "quick", "ok": False, "blocks": [], "error": "x"})
     assert "NOT OK" in text and "stopped" in text
     assert blob_id(ADDON) == ADDON_BLOB, "scripts/bench/alerta_fast.py is not the pinned blob"
+    # Cache probes: priming, visibility deadline and revocation evidence.
+    page = lambda *ids_, customer=TENANTS[0]: json.dumps(
+        {"status": "ok", "alerts": [{"id": i, "customer": customer} for i in ids_]}).encode()
+    refusal = json.dumps({"status": "error", "message": "API key parameter is invalid"}).encode()
+
+    def answer(status, raw=b"", cache=None, error=None):
+        return {"status": status, "raw": raw, "cache": cache, "error": error}
+
+    def probe(site, done, status, raw=b"", cache=None, sent=None):
+        return probe_record(site, done if sent is None else sent, done, answer(status, raw, cache), TENANTS[0])
+
+    warm = [probe("a", 1, 200, page("x"), "origin"), probe("a", 1.1, 200, page("x"), "hit"),
+            probe("b", 1.2, 200, page("x"), "origin"), probe("b", 1.3, 200, page("x"), "hit")]
+    assert prime_problems("p", warm, True) == [] and prime_problems("p", warm[::2], False) == []
+    # A probe key that never worked: its priming reads are refused.
+    dead = [probe("a", 1, 401, refusal), probe("b", 1, 401, refusal)]
+    assert len(prime_problems("p", dead, True)) == 2 and len(prime_problems("p", dead, False)) == 2
+    # An unwarmed cache: valid pages, but no hit at site b.
+    cold = warm[:2] + [probe("b", 1.2, 200, page("x"), "origin")] * 4
+    assert prime_problems("p", cold, True) == ["p: the cache at site b was not shown warm (no hit): "
+                                               "['origin', 'origin', 'origin', 'origin']"]
+    assert prime_problems("p", [probe("a", 1, 200, page("x", customer="other")), warm[2]], False)[0].startswith(
+        "p: the priming reads at site a were not all valid pages")
+    assert probe("a", 1, 200, b"{")["error"] == "wrong_page" and probe("a", 1, 401, b"no")["error"] == "wrong_refusal"
+    assert probe("a", 1, 502)["error"] == "status_502" and probe("a", 1, None)["ids"] is None
+    # A late success: the page that shows the alert completed after the deadline.
+    reads = [probe("a", 10.4, 200, page("x"), "hit"), probe("a", 10.9, 200, page("new", "x"), "origin"),
+             probe("b", 10.5, 200, page("x")), probe("b", 16.2, 200, page("new", "x"), sent=15.9)]
+    assert visibility(reads, "new", 10.0, 16.0) == ({"a": 0.9, "b": None}, {"a": None, "b": 6.2})
+    # Revocation: a cached 200, an origin 200 after the delete, refusals, a late one and an error.
+    after = [probe("a", 20.2, 200, page("x"), "hit"), probe("a", 20.9, 200, page("x"), "hit"),
+             probe("a", 21.2, 401, refusal), probe("b", 20.3, 200, page("x"), "origin"),
+             probe("b", 20.4, 500), probe("b", 26.5, 401, refusal, sent=25.8)]
+    revoked = revocation(after, 20.0, 26.0)
+    assert revoked == {"last_cached_200_s": {"a": 0.9, "b": None}, "origin_200_s": {"a": [], "b": [0.3]},
+                       "first_refusal_s": {"a": 1.2, "b": None}, "late": {"a": 0, "b": 1},
+                       "errors": [{"site": "b", "s": 0.4, "status": 500, "error": "status_500"}]}, revoked
+    # probe_problems: a clean probe has none; each of the failures makes the arm invalid.
+    digest = "d" * 32
+    good_revoked = revocation([probe("a", 20.5, 401, refusal), probe("b", 20.6, 401, refusal)], 20.0, 26.0)
+    shown = [probe("a", 10.5, 200, page("new")), probe("b", 10.6, 200, page("x"), "hit"),
+             probe("b", 10.9, 200, page("new"))]
+    clean = (True, {"a": 0.5, "b": 0.9}, {"a": None, "b": None}, shown, f"probe-key {digest}", digest, "0",
+             good_revoked)
+    assert probe_problems(*clean) == []
+    assert probe_problems(*clean[:4], f"probe-key {digest}\nDELETE 1", *clean[5:]) == []
+    seen_late = visibility(reads, "new", 10.0, 16.0)
+    failures = {
+        "late success": (True, *seen_late, reads, *clean[4:]),
+        "origin 200 after the delete": (*clean[:7], revoked),
+        "wrong key deleted": (*clean[:4], "probe-key " + "e" * 32, *clean[5:]),
+        "probe key left": (*clean[:6], "1", clean[7]),
+        "error while waiting": (*clean[:3], shown + [probe("a", 10.2, 502)], *clean[4:]),
+        "never refused": (*clean[:7], revocation([probe("a", 20.5, 401, refusal)], 20.0, 26.0)),
+        "not written": (False, dict.fromkeys(SITES), dict.fromkeys(SITES), [], *clean[4:])}
+    for what, case in failures.items():
+        assert probe_problems(*case), what
+    assert any("origin answered 200" in p for p in probe_problems(*failures["origin 200 after the delete"]))
+    assert any("not seen within" in p for p in probe_problems(*failures["late success"]))
+    assert within({"t": 5}, {"t": 4}, {"t": 1}) and not within({"t": 6}, {"t": 4}, {"t": 1})
+    assert not within({"t": 3}, {"t": 4}, {"t": 1}) and not within(None, {"t": 4}, {})
+    assert within({"t": 4, "u": 2}, {"t": 4, "u": 2}, {}) and not within({"t": 4}, {"t": 4, "u": 2}, {})
     print("placement self-test: passed")
 
 
