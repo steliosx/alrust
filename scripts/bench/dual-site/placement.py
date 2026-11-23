@@ -62,15 +62,20 @@ Stages (the design is Codex's, mail 20261121T182255Z-codex-alrust-c3594b37):
               the key-use and timer checks count origin answers only. After
               the timed part, in every arm (cache_probes()): tenant-0's list
               is read at both sites until a valid page (and, in C arms, a
-              cache hit) shows the entry is warm, a new alert is written,
+              cache hit) shows the entry is warm (a valid page is not empty,
+              has only the tenant's alerts and at least one id known to be
+              the tenant's from the fixture or an acked write), a new alert is written,
               and each site reads until its list shows it; then a read-only
               probe key is primed the same way, deleted (exactly that key:
               DELETE ... RETURNING), and read until refused. A failed
               priming makes the arm invalid. Each probe answer is kept
-              (site, seconds, status, hit or origin); an answer counts only
+              (site, seconds, status, hit or origin); a success counts only
               when it completed by the PROBE_LIMIT deadline (each wait is
-              cut at the time left), and an origin 200 after the delete
-              makes the arm invalid. Each arm records its answers (hit,
+              cut at the time left). An origin 200 after the delete, a 200
+              after a refusal, and any wrong page, wrong refusal or other
+              HTTP status make the arm invalid, also when they complete
+              after the deadline; a read cut at the deadline with no HTTP
+              answer is only late. Each arm records its answers (hit,
               origin, pass), Varnish's counters and the probes' seconds.
 
 A dashboard read is one request of a tenant's key: GET /alerts (newest
@@ -459,11 +464,14 @@ def sample(epoch, port, key, op, ids, phase, due):
     return row
 
 
-def probe_record(site, sent, done, answer, tenant):
+def probe_record(site, sent, done, answer, tenant, known):
     """One probe read as evidence (no key, no page): its site, times,
     status, cache outcome and error; `ids` is the page when it is a valid
-    200 page of the tenant's alerts. A 401 or 403 is a valid refusal only
-    with Alerta's error body; any other status is an error."""
+    200 page of the tenant's alerts: not empty, every alert the tenant's,
+    and at least one id in `known` (ids known to be the tenant's, from the
+    fixture and the acked writes; no page order is assumed). A 401 or 403
+    is a valid refusal only with Alerta's error body; any other status is
+    an error."""
     record = {"site": site, "sent": sent, "done": done, "status": answer["status"],
               "cache": answer["cache"], "error": answer["error"], "ids": None}
     try:
@@ -475,6 +483,10 @@ def probe_record(site, sent, done, answer, tenant):
         if not isinstance(alerts, list) or not all(isinstance(a, dict) and a.get("customer") == tenant
                                                    and isinstance(a.get("id"), str) for a in alerts):
             record["error"] = "wrong_page"
+        elif not alerts:
+            record["error"] = "empty_page"
+        elif not known.intersection(a["id"] for a in alerts):
+            record["error"] = "unknown_ids"
         else:
             record["ids"] = [a["id"] for a in alerts]
     elif answer["status"] in (401, 403):
@@ -515,30 +527,37 @@ def visibility(records, alert_id, start, deadline):
 
 def revocation(records, start, deadline):
     """The reads after a key's delete (all sent after it), per site: the
-    last cached 200, every origin 200 whenever it completed (Alerta or a
-    passed request accepted the deleted key), any 200 after the site's
-    first refusal, the first valid refusal by the deadline, late answers
-    and errors."""
+    last cached 200 by the deadline; every origin 200, valid page or not,
+    whenever it completed (Alerta or a passed request accepted the deleted
+    key); every 200 after the site's first refusal, whenever it completed;
+    the first valid refusal by the deadline (only these count as
+    refusals); `late`, the valid answers that completed after the deadline
+    and the reads that timed out after it with no HTTP answer (the wait was
+    cut at the deadline); and `errors`, every other answer or failure, on
+    time or late."""
     out = {"last_cached_200_s": dict.fromkeys(SITES), "origin_200_s": {s: [] for s in SITES},
            "first_refusal_s": dict.fromkeys(SITES), "200_after_refusal_s": {s: [] for s in SITES},
            "late": {s: 0 for s in SITES}, "errors": []}
     for r in sorted(records, key=lambda r: r["done"]):
-        seconds, site = round(r["done"] - start, 3), r["site"]
-        valid_200 = r["status"] == 200 and r["ids"] is not None
-        if valid_200 and r["cache"] != "hit":
+        seconds, site, on_time = round(r["done"] - start, 3), r["site"], r["done"] <= deadline
+        if r["status"] == 200 and r["cache"] != "hit":
             out["origin_200_s"][site].append(seconds)
-        if valid_200 and out["first_refusal_s"][site] is not None:
+        if r["status"] == 200 and out["first_refusal_s"][site] is not None:
             out["200_after_refusal_s"][site].append(seconds)
-        if r["done"] > deadline:
+        valid_200 = r["status"] == 200 and r["ids"] is not None
+        refusal = r["status"] in (401, 403) and not r["error"]
+        cut = r["status"] is None and r["error"] == "TimeoutError"
+        if (valid_200 or refusal or cut) and not on_time:
             out["late"][site] += 1
         elif valid_200:
             if r["cache"] == "hit":
                 out["last_cached_200_s"][site] = seconds
-        elif r["status"] in (401, 403) and not r["error"]:
+        elif refusal:
             if out["first_refusal_s"][site] is None:
                 out["first_refusal_s"][site] = seconds
         else:
-            out["errors"].append({"site": site, "s": seconds, "status": r["status"], "error": r["error"]})
+            out["errors"].append({"site": site, "s": seconds, "status": r["status"], "error": r["error"],
+                                  "late": not on_time})
     return out
 
 
@@ -1045,15 +1064,19 @@ class PlacementLab(hosted_lab.VirtualLab):
         reads the list through the arm's read entry every 0.1 s until a
         page has it. (2) The probe key's list is primed the same way, the
         key is deleted (DELETE ... RETURNING must name exactly the probe
-        key), and each site reads until one read is refused. Seconds are
-        from the write's answer and from the delete; an answer counts only
-        when it completed by PROBE_LIMIT, and each wait is cut at the time
-        left. Every read is kept (site, seconds, status, cache, error).
+        key), and each site reads to the deadline. Seconds are from the
+        write's answer and from the delete; a success counts only when it
+        completed by PROBE_LIMIT, and each wait is cut at the time left.
+        Wrong answers and origin 200s after the delete count also when
+        late (revocation()). Every read is kept (site, seconds, status, cache, error).
         The write is a row of the ledger (it is in the final state of every
         arm). Origin answers are counted for the key-use and timer checks;
         a read with no answer may or may not have reached Alerta, so those
         checks get that many as slack."""
         tenant, problems = TENANTS[0], []
+        # Ids known to be tenant-0's: the fixture's and every acked write's.
+        known = {alert for (owner, _), alert in ids.items() if owner == tenant}
+        known.update(row["alert_id"] for row in rows if row.get("tenant") == tenant and row.get("alert_id"))
         result = {"origin_list_reads": 0, "tenant_origin_reads": 0, "unanswered_reads": 0,
                   "tenant_unanswered_reads": 0}
 
@@ -1063,7 +1086,7 @@ class PlacementLab(hosted_lab.VirtualLab):
                 return None
             sent = time.monotonic()
             answer = await asyncio.to_thread(request, name, read_ports[site], "GET", LIST, key, None, left)
-            record = probe_record(site, sent, time.monotonic(), answer, owner)
+            record = probe_record(site, sent, time.monotonic(), answer, owner, known)
             if answer["status"] is None:
                 result["unanswered_reads"] += 1
                 result["tenant_unanswered_reads"] += key == self.keys[tenant]
@@ -1914,8 +1937,9 @@ def self_test():
     def answer(status, raw=b"", cache=None, error=None):
         return {"status": status, "raw": raw, "cache": cache, "error": error}
 
-    def probe(site, done, status, raw=b"", cache=None, sent=None):
-        return probe_record(site, done if sent is None else sent, done, answer(status, raw, cache), TENANTS[0])
+    def probe(site, done, status, raw=b"", cache=None, sent=None, known=frozenset({"x", "new"}), error=None):
+        return probe_record(site, done if sent is None else sent, done, answer(status, raw, cache, error),
+                            TENANTS[0], known)
 
     warm = [probe("a", 1, 200, page("x"), "origin"), probe("a", 1.1, 200, page("x"), "hit"),
             probe("b", 1.2, 200, page("x"), "origin"), probe("b", 1.3, 200, page("x"), "hit")]
@@ -1931,6 +1955,14 @@ def self_test():
         "p: the priming reads at site a were not all valid pages")
     assert probe("a", 1, 200, b"{")["error"] == "wrong_page" and probe("a", 1, 401, b"no")["error"] == "wrong_refusal"
     assert probe("a", 1, 502)["error"] == "status_502" and probe("a", 1, None)["ids"] is None
+    # A page must not be empty and must hold an id known to be the tenant's (in any order).
+    assert probe("a", 1, 200, page())["error"] == "empty_page" and probe("a", 1, 200, page())["ids"] is None
+    assert probe("a", 1, 200, page("y", "z"))["error"] == "unknown_ids"
+    assert probe("a", 1, 200, page("y", "x"))["ids"] == ["y", "x"]
+    assert probe("a", 1, 200, page("new"), known=frozenset({"x"}))["error"] == "unknown_ids"
+    for bad in (page(), page("y", "z")):
+        assert prime_problems("p", [probe("a", 1, 200, bad, "hit"), warm[3]], True)[0].startswith(
+            "p: the priming reads at site a were not all valid pages"), bad
     # A late success: the page that shows the alert completed after the deadline.
     reads = [probe("a", 10.4, 200, page("x"), "hit"), probe("a", 10.9, 200, page("new", "x"), "origin"),
              probe("b", 10.5, 200, page("x")), probe("b", 16.2, 200, page("new", "x"), sent=15.9)]
@@ -1943,10 +1975,11 @@ def self_test():
     assert revoked == {"last_cached_200_s": {"a": 0.9, "b": None}, "origin_200_s": {"a": [], "b": [0.3]},
                        "first_refusal_s": {"a": 1.2, "b": None}, "200_after_refusal_s": {"a": [], "b": []},
                        "late": {"a": 0, "b": 1},
-                       "errors": [{"site": "b", "s": 0.4, "status": 500, "error": "status_500"}]}, revoked
+                       "errors": [{"site": "b", "s": 0.4, "status": 500, "error": "status_500", "late": False}]}, revoked
     # probe_problems: a clean probe has none; each of the failures makes the arm invalid.
     digest = "d" * 32
-    good_revoked = revocation([probe("a", 20.5, 401, refusal), probe("b", 20.6, 401, refusal)], 20.0, 26.0)
+    refused = [probe("a", 20.5, 401, refusal), probe("b", 20.6, 401, refusal)]
+    good_revoked = revocation(refused, 20.0, 26.0)
     shown = [probe("a", 10.5, 200, page("new")), probe("b", 10.6, 200, page("x"), "hit"),
              probe("b", 10.9, 200, page("new"))]
     clean = (True, {"a": 0.5, "b": 0.9}, {"a": None, "b": None}, shown, f"probe-key {digest}", digest, "0",
@@ -1968,11 +2001,31 @@ def self_test():
                                                         probe("a", 20.8, 200, page("x"), "hit"),
                                                         probe("b", 20.6, 401, refusal)], 20.0, 26.0)),
         "failed delete": (*clean[:4], "failed: CalledProcessError", *clean[5:]),
+        "late wrong-tenant 200 after a refusal": (*clean[:7], revocation(
+            [*refused, probe("b", 26.3, 200, page("x", customer="other"), "hit", sent=25.6)], 20.0, 26.0)),
+        "late HTTP 500 after a refusal": (*clean[:7], revocation(
+            [*refused, probe("a", 26.4, 500, sent=25.7)], 20.0, 26.0)),
+        "late empty origin 200": (*clean[:7], revocation(
+            [*refused, probe("a", 26.4, 200, page(), "origin", sent=25.7)], 20.0, 26.0)),
         "not written": (False, dict.fromkeys(SITES), dict.fromkeys(SITES), [], *clean[4:])}
     for what, case in failures.items():
         assert probe_problems(*case), what
     assert any("origin answered 200" in p for p in probe_problems(*failures["origin 200 after the delete"]))
     assert any("not seen within" in p for p in probe_problems(*failures["late success"]))
+    late_bad = revocation([*refused, probe("b", 26.3, 200, page("x", customer="other"), "origin", sent=25.6)],
+                          20.0, 26.0)
+    assert late_bad["origin_200_s"]["b"] == [6.3] and late_bad["200_after_refusal_s"]["b"] == [6.3]
+    assert late_bad["errors"] == [{"site": "b", "s": 6.3, "status": 200, "error": "wrong_page", "late": True}]
+    # A terminal timeout (no HTTP answer, cut at the deadline) and a late valid refusal are late, not errors.
+    timed_out = revocation([*refused, probe("a", 26.05, None, sent=25.9, error="TimeoutError"),
+                            probe("b", 26.1, 401, refusal, sent=25.9)], 20.0, 26.0)
+    assert timed_out["late"] == {"a": 1, "b": 1} and timed_out["errors"] == [], timed_out
+    assert probe_problems(*clean[:7], timed_out) == []
+    # No answer before the deadline is an error; so is a late reset (not a timeout).
+    assert revocation([*refused, probe("a", 21.0, None, error="TimeoutError")], 20.0, 26.0)["errors"][0]["late"] is False
+    reset = revocation([*refused, probe("a", 26.2, None, sent=25.9, error="ConnectionResetError")], 20.0, 26.0)
+    assert reset["errors"] == [{"site": "a", "s": 6.2, "status": None, "error": "ConnectionResetError", "late": True}]
+    assert probe_problems(*clean[:7], reset)
     assert within({"t": 5}, {"t": 4}, {"t": 1}) and not within({"t": 6}, {"t": 4}, {"t": 1})
     assert not within({"t": 3}, {"t": 4}, {"t": 1}) and not within(None, {"t": 4}, {})
     assert within({"t": 4, "u": 2}, {"t": 4, "u": 2}, {}) and not within({"t": 4}, {"t": 4, "u": 2}, {})
