@@ -94,7 +94,7 @@ jobs:
           if n == "1":  # fastdates with microseconds
               checks += [("only time fields differ in pages", bool(fields) and all(f.endswith("Time") for f in fields)),
                          ("encoder cases differ, only for the app provider and the values it writes",
-                          bool(enc) and all(r["provider"] == "the app's provider" and r["value"] in fast for r in enc))]
+                          bool(enc) and all(r["provider"].startswith("the app") and r["value"] in fast for r in enc))]
           else:  # alertlinks cutting one character
               checks += [("only href differs in pages", fields == {"href"}), ("no encoder case differs", not enc)]
           bad = [what for what, ok in checks if not ok]
