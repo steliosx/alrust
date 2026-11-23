@@ -80,8 +80,29 @@ jobs:
               "$out/pages-changed-$n.json" > "$out/pages-changed-$n.log" 2>&1) || status=$?
             tail -n 3 -- "$out/pages-changed-$n.log"
             [ "$status" = 1 ] || { echo "changed copy $n was not caught"; exit 1; }
+            # Caught for the change itself: a complete run with no setup or
+            # reader problem, and differences only where the change is.
+            python3 -I -c 'import json, sys
+          n, d = sys.argv[1], json.load(open(sys.argv[2]))
+          pages = [r for r in d["results"] if r["part"] == "pages" and r["problems"]]
+          enc = [r for r in d["results"] if r["part"] == "encoder" and r["problems"]]
+          fields = set(f for r in pages for f in r.get("differs_in", ["?"]))
+          fast = {"naive, 0 us", "naive, 999 us", "naive, 999999 us", "year 1000", "year 9999", "nested"}
+          checks = [("no setup or reader problem", d["problems"] == []),
+                    ("78 page pairs and 224 encoder cases", d["pages"] == 78 and d["encoder_cases"] == 224),
+                    ("some pages differ", bool(pages))]
+          if n == "1":  # fastdates with microseconds
+              checks += [("only time fields differ in pages", bool(fields) and all(f.endswith("Time") for f in fields)),
+                         ("encoder cases differ, only for the app provider and the values it writes",
+                          bool(enc) and all(r["provider"] == "the app's provider" and r["value"] in fast for r in enc))]
+          else:  # alertlinks cutting one character
+              checks += [("only href differs in pages", fields == {"href"}), ("no encoder case differs", not enc)]
+          bad = [what for what, ok in checks if not ok]
+          print(f"changed copy {n}: fields {sorted(fields)}, {len(pages)} pages, {len(enc)} encoder cases;",
+                "caught for its change" if not bad else f"NOT as expected: {bad}")
+          sys.exit(1 if bad else 0)' "$n" "$out/pages-changed-$n.json"
           done
-          echo "both changed copies were caught"
+          echo "both changed copies were caught for their changes"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node24)
         if: always()
         with:
