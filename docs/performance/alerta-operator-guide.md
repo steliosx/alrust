@@ -54,14 +54,14 @@ Reports: [2026-11-21-fastpath-bench.md](2026-11-21-fastpath-bench.md),
   first two terms of an ungrouped chain: `a AND b AND c` loses `c`, and no error is shown.
   `(a AND b) AND c` keeps all three. This is Alerta's own behaviour, with or without the add-on.
 - **Repeated searches (dashboards, saved views):** the opt-in `savedq` patch is for Alerta's
-  stock PostgreSQL search grammar. Each worker keeps, in a store of the last 256 searches it
-  used (least recently used is dropped first), the SQL condition and values that Alerta's parser
-  made for a search text. While a search stays in that store, its parse does not run again. Alert
+  stock PostgreSQL search grammar. Each worker keeps, in a store of the searches it used last
+  (256 by default, `ALERTA_FAST_SAVEDQ_ENTRIES`; the least recently used is dropped first), the
+  SQL condition and values that Alerta's parser made for a search text. While a search stays in that store, its parse does not run again. Alert
   results and the customer scope are never kept: each request still reads the database for its
   caller. With one recurring search, the server's CPU per request fell by 73% to 78%. In the
   tested load where every search text was new, it cost 2% to 3% more CPU. If your Python code
   changes Alerta's search grammar, leave `savedq` out, or call `alerta_fast.savedq_disable()` in
-  each worker before its first request. It is in pull request #281 and is not yet on `main`.
+  each worker before its first request. Turn it on with `ALERTA_FAST=safe,savedq`.
 
 Report: [2026-11-22-savedq-load.md](2026-11-22-savedq-load.md).
 
