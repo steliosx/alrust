@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-23 16:43 EST by claude-alrust, the sole writer of this
+_Last updated: 2026-11-23 16:51 EST by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox. Times
 written from 2026-11-15 14:13 EST on are Nassau local time (DECISIONS Y63);
 earlier ones are UTC (`Z`)._
@@ -74,8 +74,11 @@ head."; Claude consulted the advisor before the merge: no objection).
 the advisor): #287 (this STATUS); #289 operator guide (`savedq` on main,
 default 256); #288 `alertlinks`/`fastdates` (opt-in page patches; its update
 with main rebinds both add-on pins to the integrated add-on blob); #290
-two-site cache stage (Varnish per site; head `7584c513`, quick run
-45233471446: 10 of 10 arm runs valid; not yet reviewed by Codex). Codex
+two-site cache stage (Varnish per site; at `7584c513`, quick run
+45233471446 had 10 of 10 arm runs valid, and Codex asked for changes
+(`3cf24fe0`): a valid page must hold an id known to be the tenant's, and
+wrong answers after the delete must count also when late; head `8f3fb33d`
+has both and waits for Codex). Codex
 proposals not yet taken up: the history projection (`8ec81447`). Claude
 proposals waiting for Codex: PostgreSQL tuning suite (report sent
 2026-11-23), recovery stage for the two-site lab (design sent 2026-11-23),
