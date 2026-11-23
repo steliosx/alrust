@@ -514,20 +514,26 @@ def visibility(records, alert_id, start, deadline):
 
 
 def revocation(records, start, deadline):
-    """The reads after a key's delete, per site: the last cached 200, any
-    origin 200 (Alerta or a passed request accepted the deleted key), the
-    first valid refusal by the deadline, late answers and errors."""
+    """The reads after a key's delete (all sent after it), per site: the
+    last cached 200, every origin 200 whenever it completed (Alerta or a
+    passed request accepted the deleted key), any 200 after the site's
+    first refusal, the first valid refusal by the deadline, late answers
+    and errors."""
     out = {"last_cached_200_s": dict.fromkeys(SITES), "origin_200_s": {s: [] for s in SITES},
-           "first_refusal_s": dict.fromkeys(SITES), "late": {s: 0 for s in SITES}, "errors": []}
+           "first_refusal_s": dict.fromkeys(SITES), "200_after_refusal_s": {s: [] for s in SITES},
+           "late": {s: 0 for s in SITES}, "errors": []}
     for r in sorted(records, key=lambda r: r["done"]):
         seconds, site = round(r["done"] - start, 3), r["site"]
+        valid_200 = r["status"] == 200 and r["ids"] is not None
+        if valid_200 and r["cache"] != "hit":
+            out["origin_200_s"][site].append(seconds)
+        if valid_200 and out["first_refusal_s"][site] is not None:
+            out["200_after_refusal_s"][site].append(seconds)
         if r["done"] > deadline:
             out["late"][site] += 1
-        elif r["status"] == 200 and r["ids"] is not None:
+        elif valid_200:
             if r["cache"] == "hit":
                 out["last_cached_200_s"][site] = seconds
-            else:
-                out["origin_200_s"][site].append(seconds)
         elif r["status"] in (401, 403) and not r["error"]:
             if out["first_refusal_s"][site] is None:
                 out["first_refusal_s"][site] = seconds
@@ -546,6 +552,7 @@ def probe_problems(written, seen, late, new_reads, removed, digest, left, revoke
     problems = []
     bad_reads = [(r["site"], r["status"], r["error"]) for r in new_reads if r["ids"] is None]
     origin = {site: times for site, times in revoked["origin_200_s"].items() if times}
+    again = {site: times for site, times in revoked["200_after_refusal_s"].items() if times}
     for what, bad in (("the probe's new alert was not written", not written),
                       (f"the new alert was not seen within {PROBE_LIMIT} s: {seen}, late {late}",
                        written and None in seen.values()),
@@ -554,6 +561,7 @@ def probe_problems(written, seen, late, new_reads, removed, digest, left, revoke
                        [line for line in removed.splitlines() if not line.startswith("DELETE ")]
                        != [f"probe-key {digest}"] or left != "0"),
                       (f"an origin answered 200 with the deleted key: {origin}", origin),
+                      (f"the deleted key was answered again after a refusal: {again}", again),
                       (f"the deleted key was not refused within {PROBE_LIMIT} s: {revoked['first_refusal_s']}",
                        None in revoked["first_refusal_s"].values()),
                       (f"unexpected answers after the delete: {revoked['errors'][:4]}", revoked["errors"])):
@@ -1106,9 +1114,10 @@ class PlacementLab(hosted_lab.VirtualLab):
             acked = row["end"]
             deadline = acked + PROBE_LIMIT
             # The sites are read side by side, so a slow site does not delay the other.
-            shown = lambda records: visibility(records, row["alert_id"], acked, deadline)[0][records[-1]["site"]]
-            reads = sum(await asyncio.gather(*(until(site, self.keys[tenant], deadline,
-                                                     lambda r: bool(r) and shown(r) is not None)
+            def shown(records, alert=row["alert_id"], acked=acked, deadline=deadline):
+                return bool(records) and visibility(records, alert, acked, deadline)[0][records[-1]["site"]] is not None
+
+            reads = sum(await asyncio.gather(*(until(site, self.keys[tenant], deadline, shown)
                                                for site in SITES)), [])
             seen, late = visibility(reads, row["alert_id"], acked, deadline)
             result.update(new_alert_prime=evidence(primed, acked), new_alert_reads=evidence(reads, acked))
@@ -1117,19 +1126,27 @@ class PlacementLab(hosted_lab.VirtualLab):
 
         primed = await prime(self.probe_key, "revoked key probe")
         digest = hashlib.md5(self.probe_key.encode()).hexdigest()
-        removed = await asyncio.to_thread(
-            self.sql, name, "DELETE FROM keys WHERE id = 'probe-key' RETURNING id || ' ' || md5(key)")
+        try:
+            removed = await asyncio.to_thread(
+                self.sql, name, "DELETE FROM keys WHERE id = 'probe-key' RETURNING id || ' ' || md5(key)")
+        except (OSError, subprocess.SubprocessError) as exc:
+            removed = f"failed: {type(exc).__name__}"
         deleted = time.monotonic()
         deadline = deleted + PROBE_LIMIT
-        refusal = lambda records: revocation(records, deleted, deadline)["first_refusal_s"][records[-1]["site"]]
-        reads = sum(await asyncio.gather(*(until(site, self.probe_key, deadline,
-                                                 lambda r: bool(r) and refusal(r) is not None)
+        # Each site is read until the deadline, also after its first refusal:
+        # a later 200 (another worker, a flapping key) must be seen.
+        reads = sum(await asyncio.gather(*(until(site, self.probe_key, deadline, lambda records: False)
                                            for site in SITES)), [])
         revoked = revocation(reads, deleted, deadline)
-        left = await asyncio.to_thread(self.sql, name, f"SELECT count(*) FROM keys WHERE md5(key) = '{digest}'")
+        try:
+            left = await asyncio.to_thread(self.sql, name, f"SELECT count(*) FROM keys WHERE md5(key) = '{digest}'")
+        except (OSError, subprocess.SubprocessError) as exc:
+            left = f"failed: {type(exc).__name__}"
         result.update(revoked_prime=evidence(primed, deleted), revoked_reads=evidence(reads, deleted),
+                      revoked_delete=removed if removed.startswith("failed") else f"{len(removed.splitlines())} line(s)",
                       revoked_last_cached_200_s=revoked["last_cached_200_s"],
                       revoked_origin_200_s=revoked["origin_200_s"],
+                      revoked_200_after_refusal_s=revoked["200_after_refusal_s"],
                       revoked_first_refusal_s=revoked["first_refusal_s"], revoked_late=revoked["late"],
                       revoked_errors=revoked["errors"])
         problems += probe_problems(row["ok"], seen, late, new_reads, removed, digest, left, revoked)
@@ -1924,7 +1941,8 @@ def self_test():
              probe("b", 20.4, 500), probe("b", 26.5, 401, refusal, sent=25.8)]
     revoked = revocation(after, 20.0, 26.0)
     assert revoked == {"last_cached_200_s": {"a": 0.9, "b": None}, "origin_200_s": {"a": [], "b": [0.3]},
-                       "first_refusal_s": {"a": 1.2, "b": None}, "late": {"a": 0, "b": 1},
+                       "first_refusal_s": {"a": 1.2, "b": None}, "200_after_refusal_s": {"a": [], "b": []},
+                       "late": {"a": 0, "b": 1},
                        "errors": [{"site": "b", "s": 0.4, "status": 500, "error": "status_500"}]}, revoked
     # probe_problems: a clean probe has none; each of the failures makes the arm invalid.
     digest = "d" * 32
@@ -1943,6 +1961,13 @@ def self_test():
         "probe key left": (*clean[:6], "1", clean[7]),
         "error while waiting": (*clean[:3], shown + [probe("a", 10.2, 502)], *clean[4:]),
         "never refused": (*clean[:7], revocation([probe("a", 20.5, 401, refusal)], 20.0, 26.0)),
+        "late origin 200": (*clean[:7], revocation([probe("a", 20.5, 401, refusal), probe("b", 20.6, 401, refusal),
+                                                    probe("b", 26.2, 200, page("x"), "origin", sent=25.5)],
+                                                   20.0, 26.0)),
+        "200 after a refusal": (*clean[:7], revocation([probe("a", 20.5, 401, refusal),
+                                                        probe("a", 20.8, 200, page("x"), "hit"),
+                                                        probe("b", 20.6, 401, refusal)], 20.0, 26.0)),
+        "failed delete": (*clean[:4], "failed: CalledProcessError", *clean[5:]),
         "not written": (False, dict.fromkeys(SITES), dict.fromkeys(SITES), [], *clean[4:])}
     for what, case in failures.items():
         assert probe_problems(*case), what
