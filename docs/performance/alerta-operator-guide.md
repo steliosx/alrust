@@ -13,8 +13,8 @@ claim. Follow the links to each report for its method, checks and limits.
 
 With a 50 ms link between the sites, a site B user waited much less when site B's HTTP requests
 went to the Alerta at the primary's site (site A), instead of to site B's own Alerta. Site B's own
-Alerta reaches the primary across the link for every SQL statement. Medians of three blocks, with
-site A primary and both sites healthy:
+Alerta reaches the primary across the link for every SQL statement. The ranges are the medians
+of each of three placement blocks, with site A primary and both sites healthy:
 
 | Site B request | Site B's own Alerta | Alerta at the primary's site |
 |---|---:|---:|
@@ -22,7 +22,7 @@ site A primary and both sites healthy:
 | Alert count | 410 to 414 ms | 56 ms |
 | Duplicate alert (write) | 971 to 977 ms | 61 to 63 ms |
 
-Site A did not change. In the lab, HAProxy at each site checks Patroni's primary role and the
+Site A medians stayed close in all arms. In the lab, HAProxy at each site checks Patroni's primary role and the
 readiness of each site's Alerta (`scripts/bench/dual-site/haproxy-affinity.cfg`). Failover,
 fallback and recovery were not part of the run.
 Report: [2026-11-22-two-site-placement.md](2026-11-22-two-site-placement.md).
@@ -34,11 +34,14 @@ Report: [2026-11-22-two-site-placement.md](2026-11-22-two-site-placement.md).
   tags and attributes again on every receive. On one site, with 8 clients, removing it gave 39% to
   45% more duplicate writes per second, in each repetition.
 - **If you need `forwarder`, the add-on's opt-in `noecho` leaves out the writes that change
-  nothing.** On one site, with 8 clients: 21% to 31% more duplicate writes per second. At two
-  sites, alert-row updates fell from 116 to 36 per run and the primary wrote 6% to 14% less WAL,
-  but requests were not faster at that load: the median site B duplicate write was 1.2 to 2.4 ms
-  slower. If your own post-receive hooks or database triggers expect those writes, check them
-  first.
+  nothing.** On one site, with 8 clients sending one fixed duplicate: 21% to 31% more duplicate
+  writes per second. At two sites, alert-row updates fell from 116 to 36 per run in the placement
+  stage and from 92 to 20 in the fresh stage, and the primary wrote 6% to 14% less WAL in the
+  four pairs that can be compared (one pair is left out). Requests were not faster at that load:
+  the median site B duplicate write was 1.2 to 2.4 ms slower. Before you turn it on, read what
+  the add-on's file header says changes when a write is left out: the stored tag order, a change
+  that another request commits at the same time, other alerts whose id begins with this id (ids
+  that a client chose), and your own UPDATE triggers on `alerts`.
 - **The opt-in `hot` patch** writes the key-use count and the timers about once a second instead
   of on each request. Use it only where those counts may be approximate.
 
@@ -50,19 +53,27 @@ Reports: [2026-11-21-fastpath-bench.md](2026-11-21-fastpath-bench.md),
 - **Put parentheses around chained terms.** Alerta 9.1.0's PostgreSQL search parser keeps only the
   first two terms of an ungrouped chain: `a AND b AND c` loses `c`, and no error is shown.
   `(a AND b) AND c` keeps all three. This is Alerta's own behaviour, with or without the add-on.
-- **Repeated searches (dashboards, saved views):** the opt-in `savedq` patch keeps the SQL that
-  Alerta's parser made for a search text, so the parse runs once per worker and text. With one
-  recurring search, the server's CPU per request fell by 73% to 78%. When every search text is
-  new, it cost 2% to 3% more CPU. It is in pull request #281 and is not yet on `main`.
+- **Repeated searches (dashboards, saved views):** the opt-in `savedq` patch is for Alerta's
+  stock PostgreSQL search grammar. Each worker keeps, in a store of the last 256 searches it
+  used (least recently used is dropped first), the SQL condition and values that Alerta's parser
+  made for a search text. While a search stays in that store, its parse does not run again. Alert
+  results and the customer scope are never kept: each request still reads the database for its
+  caller. With one recurring search, the server's CPU per request fell by 73% to 78%. In the
+  tested load where every search text was new, it cost 2% to 3% more CPU. If your Python code
+  changes Alerta's search grammar, leave `savedq` out, or call `alerta_fast.savedq_disable()` in
+  each worker before its first request. It is in pull request #281 and is not yet on `main`.
 
 Report: [2026-11-22-savedq-load.md](2026-11-22-savedq-load.md).
 
-## 4. Not yet measured, or measured only in part
+## 4. Not covered by the reports above
 
-- A response cache in front of Alerta at two sites (Varnish and HAProxy): the next stage of the
-  two-site lab.
+- A response cache in front of Alerta at two sites (Varnish and HAProxy) on the 22 November
+  placement lab. An earlier two-site replay (20 and 21 November) measured Varnish with
+  authenticated reads; it is not one of the reports here.
 - Building alert pages with less CPU (the opt-in `alertlinks` and `fastdates` patches, pull
-  request #288): byte-identical answers and less CPU in-process so far; no whole-request
-  measurement yet.
-- Failover and recovery with Patroni and etcd at three sites, synchronous replication, real
-  networks, larger tables.
+  request #288): byte-identical answers so far, and less CPU for Flask test-client requests in
+  one process; gunicorn and network latency and throughput are not measured.
+- Failover and recovery with Patroni and etcd on the 22 November placement lab. Earlier
+  asynchronous promotion trials measured acknowledged loss at some lag thresholds; they are not
+  one of the reports here.
+- Synchronous replication, real networks, larger tables.
