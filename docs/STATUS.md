@@ -1,11 +1,11 @@
 # Status
 
-_Last updated: 2026-11-22 23:38 EST by claude-alrust, the sole writer of this
+_Last updated: 2026-11-23 16:43 EST by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox. Times
 written from 2026-11-15 14:13 EST on are Nassau local time (DECISIONS Y63);
 earlier ones are UTC (`Z`)._
 
-## Alerta add-on work, 2026-11-17 to 2026-11-22 (newest first)
+## Alerta add-on work, 2026-11-17 to 2026-11-23 (newest first)
 
 **Owner direction, 2026-11-21:** for 30 days (to about 2026-12-21), Alerta
 only: the `alerta_fast.py` add-on for stock Alerta (no fork), PostgreSQL
@@ -50,7 +50,7 @@ into it, with Cargo.lock, DECISIONS and `third_party/rust` unchanged.
   Report: PR #286, merged, with a finding about Alerta's own parser (an
   ungrouped `a AND b AND c` loses `c`).
 
-**Merged, 2026-11-16 to 2026-11-22 (Nassau dates):** #264 (2026-11-16
+**Merged, 2026-11-16 to 2026-11-23 (Nassau dates):** #264 (2026-11-16
 20:19:32 EST, `fc3554c9`, without an advisor; see 2026-11-16 below). From
 2026-11-17: #267, #266, #236, #238, #268, #269, #240, #265, #272, #273, #274,
 #275, #276, #278, #279, #277 (2026-11-21 22:20:51 EST), #280 (2026-11-22
@@ -63,16 +63,31 @@ two conditions) and #285 (2026-11-22 23:00:58 EST, `6f251b0d`, tree = approved
 tree `e290c6d6`; Codex `ed9e0738`, the same two conditions; cargo-deny green
 again on heads that merge it) and #281 (2026-11-22 23:38:14 EST, `5dcf74c4`,
 tree = approved tree `59a8431e`; Codex `224e0e12`, the same two
-conditions).
+conditions) and #282 (2026-11-23 12:40:19 EST, `b3ec4391`, tree = approved
+tree `cb106ba5`; Codex `b05dc239`: "The Codex review condition is satisfied
+for this head."; Claude consulted the advisor before the merge: no objection)
+and #283 (2026-11-23 16:42:44 EST, `19212625`, tree = approved tree
+`8bf6bcb6`; Codex `1b5ee5b6`: "This records Y48(1) for this exact #283
+head."; Claude consulted the advisor before the merge: no objection).
 
 **Open, in the agreed order** (each later head needs a new Codex review and
-the advisor): #282 savedq load (approved at `1203a8af`; head `465aa137`
-merges main with #281, its own files unchanged); #283
-onecount/nosentry fixes (approved at `9452ff7e`; needs its add-on pin
-rebound, and its check's text must say that the held-context case passes
-before the fix too, since each `/alerts` request has its own time cut-off);
-#287 (this STATUS). Codex proposals not yet taken up: `alertlinks` and
-`fastdates` (`ec61babb`), the history projection (`8ec81447`).
+the advisor): #287 (this STATUS); #289 operator guide (`savedq` on main,
+default 256); #288 `alertlinks`/`fastdates` (opt-in page patches; its update
+with main rebinds both add-on pins to the integrated add-on blob); #290
+two-site cache stage (Varnish per site; head `7584c513`, quick run
+45233471446: 10 of 10 arm runs valid; not yet reviewed by Codex). Codex
+proposals not yet taken up: the history projection (`8ec81447`). Claude
+proposals waiting for Codex: PostgreSQL tuning suite (report sent
+2026-11-23), recovery stage for the two-site lab (design sent 2026-11-23),
+routing of Patroni's etcd client traffic over the shaped links (finding
+sent 2026-11-23).
+
+**Lab finding, 2026-11-23.** In the two-site lab, Patroni at both sites lists
+etcd member a first and keeps the first member that works, so Patroni's etcd
+client traffic goes to local ports with no added delay; only etcd peer
+traffic uses the shaped links. Results so far measure Patroni with a
+near-zero DCS round trip. A local change that sends client traffic through
+the shaped relays and checks the connections in use waits for Codex.
 
 ## Current phase
 
