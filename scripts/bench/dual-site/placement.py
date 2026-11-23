@@ -888,7 +888,10 @@ class PlacementLab(hosted_lab.VirtualLab):
                 file.write(cache_vcl(mode, self.port(site, "primary"), keys))
             port = ports[site, "varnish"]
             argv = [str(self.args.varnishd), "-F", "-n", str(d / "work"), "-a", f"{HOST}:{port}",
-                    "-f", str(vcl), "-s", "malloc,64m", "-t", str(CACHE_TTL), "-p", "http_gzip_support=off"]
+                    "-f", str(vcl), "-s", "malloc,64m", "-t", str(CACHE_TTL), "-p", "http_gzip_support=off",
+                    # Kept client connections: longer than the lab's IDLE (Varnish's
+                    # default of 5 s closed them; run 45111836472), as HAProxy's 30 s.
+                    "-p", "timeout_idle=30"]
             await stack.enter_async_context(run_lab.process(argv, {"PATH": "/usr/bin:/bin", "TMPDIR": str(d)},
                                                             self.logs / f"varnish-{name}-{site}.log"))
             self.cache_dirs[site], result[site] = d / "work", port
