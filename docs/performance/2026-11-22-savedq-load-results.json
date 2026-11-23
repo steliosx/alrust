@@ -1,0 +1,2982 @@
+{
+ "schema": 2,
+ "mode": "full",
+ "ok": true,
+ "workers": 4,
+ "threads": 4,
+ "clients": 8,
+ "rate": 40,
+ "page_size": 50,
+ "sort_by": "resource",
+ "reps": 4,
+ "warm_s": 3,
+ "timed_s": 10,
+ "arms": {
+  "safe": "safe",
+  "safe+savedq": "safe,savedq"
+ },
+ "cells": [
+  {
+   "arm": "safe",
+   "shape": "one",
+   "load": "offered",
+   "rep": 0,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.31,
+   "wall_s": 9.984,
+   "rps": 40.1,
+   "p50_ms": 10.97,
+   "p95_ms": 28.93,
+   "p99_ms": 36.75,
+   "max_ms": 39.64,
+   "send_to_body": {
+    "p50_ms": 10.85,
+    "p95_ms": 28.81,
+    "p99_ms": 36.52,
+    "max_ms": 39.53
+   },
+   "due_to_body": {
+    "p50_ms": 10.97,
+    "p95_ms": 28.93,
+    "p99_ms": 36.75,
+    "max_ms": 39.64
+   },
+   "cpu_ms_per_request": 10.175
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "one",
+   "load": "offered",
+   "rep": 0,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.27,
+   "wall_s": 9.979,
+   "rps": 40.1,
+   "p50_ms": 4.14,
+   "p95_ms": 5.57,
+   "p99_ms": 6.11,
+   "max_ms": 30.15,
+   "send_to_body": {
+    "p50_ms": 3.99,
+    "p95_ms": 5.45,
+    "p99_ms": 5.99,
+    "max_ms": 30.04
+   },
+   "due_to_body": {
+    "p50_ms": 4.14,
+    "p95_ms": 5.57,
+    "p99_ms": 6.11,
+    "max_ms": 30.15
+   },
+   "cpu_ms_per_request": 2.675
+  },
+  {
+   "arm": "safe",
+   "shape": "one",
+   "load": "closed",
+   "rep": 0,
+   "requests": 2188,
+   "taken": 2188,
+   "slots": null,
+   "warm_requests": 656,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.038,
+   "rps": 218.0,
+   "p50_ms": 32.13,
+   "p95_ms": 66.98,
+   "p99_ms": 84.36,
+   "max_ms": 103.57,
+   "send_to_body": {
+    "p50_ms": 32.13,
+    "p95_ms": 66.98,
+    "p99_ms": 84.36,
+    "max_ms": 103.57
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 14.447
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "one",
+   "load": "closed",
+   "rep": 0,
+   "requests": 7163,
+   "taken": 7163,
+   "slots": null,
+   "warm_requests": 2127,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.01,
+   "rps": 715.6,
+   "p50_ms": 9.9,
+   "p95_ms": 16.79,
+   "p99_ms": 20.64,
+   "max_ms": 47.88,
+   "send_to_body": {
+    "p50_ms": 9.9,
+    "p95_ms": 16.79,
+    "p99_ms": 20.64,
+    "max_ms": 47.88
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 3.158
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "sixteen",
+   "load": "offered",
+   "rep": 0,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.22,
+   "wall_s": 9.978,
+   "rps": 40.1,
+   "p50_ms": 3.54,
+   "p95_ms": 4.54,
+   "p99_ms": 5.43,
+   "max_ms": 5.7,
+   "send_to_body": {
+    "p50_ms": 3.42,
+    "p95_ms": 4.44,
+    "p99_ms": 5.29,
+    "max_ms": 5.55
+   },
+   "due_to_body": {
+    "p50_ms": 3.54,
+    "p95_ms": 4.54,
+    "p99_ms": 5.43,
+    "max_ms": 5.7
+   },
+   "cpu_ms_per_request": 2.125
+  },
+  {
+   "arm": "safe",
+   "shape": "sixteen",
+   "load": "offered",
+   "rep": 0,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.3,
+   "wall_s": 9.98,
+   "rps": 40.1,
+   "p50_ms": 5.54,
+   "p95_ms": 7.03,
+   "p99_ms": 7.59,
+   "max_ms": 25.31,
+   "send_to_body": {
+    "p50_ms": 5.4,
+    "p95_ms": 6.88,
+    "p99_ms": 7.47,
+    "max_ms": 25.19
+   },
+   "due_to_body": {
+    "p50_ms": 5.54,
+    "p95_ms": 7.03,
+    "p99_ms": 7.59,
+    "max_ms": 25.31
+   },
+   "cpu_ms_per_request": 4.25
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "sixteen",
+   "load": "closed",
+   "rep": 0,
+   "requests": 9715,
+   "taken": 9715,
+   "slots": null,
+   "warm_requests": 2943,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.006,
+   "rps": 970.9,
+   "p50_ms": 7.69,
+   "p95_ms": 11.81,
+   "p99_ms": 13.56,
+   "max_ms": 17.48,
+   "send_to_body": {
+    "p50_ms": 7.69,
+    "p95_ms": 11.81,
+    "p99_ms": 13.56,
+    "max_ms": 17.48
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 2.201
+  },
+  {
+   "arm": "safe",
+   "shape": "sixteen",
+   "load": "closed",
+   "rep": 0,
+   "requests": 5463,
+   "taken": 5463,
+   "slots": null,
+   "warm_requests": 1550,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.01,
+   "rps": 545.8,
+   "p50_ms": 12.27,
+   "p95_ms": 27.4,
+   "p99_ms": 41.71,
+   "max_ms": 61.63,
+   "send_to_body": {
+    "p50_ms": 12.27,
+    "p95_ms": 27.4,
+    "p99_ms": 41.71,
+    "max_ms": 61.63
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 4.706
+  },
+  {
+   "arm": "safe",
+   "shape": "unique",
+   "load": "offered",
+   "rep": 0,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.3,
+   "wall_s": 10.009,
+   "rps": 40.0,
+   "p50_ms": 12.31,
+   "p95_ms": 33.32,
+   "p99_ms": 41.32,
+   "max_ms": 43.76,
+   "send_to_body": {
+    "p50_ms": 12.18,
+    "p95_ms": 33.22,
+    "p99_ms": 41.19,
+    "max_ms": 43.64
+   },
+   "due_to_body": {
+    "p50_ms": 12.31,
+    "p95_ms": 33.32,
+    "p99_ms": 41.32,
+    "max_ms": 43.76
+   },
+   "cpu_ms_per_request": 11.825
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "unique",
+   "load": "offered",
+   "rep": 0,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.32,
+   "wall_s": 9.987,
+   "rps": 40.1,
+   "p50_ms": 12.2,
+   "p95_ms": 33.74,
+   "p99_ms": 39.68,
+   "max_ms": 40.5,
+   "send_to_body": {
+    "p50_ms": 12.07,
+    "p95_ms": 33.58,
+    "p99_ms": 39.5,
+    "max_ms": 40.28
+   },
+   "due_to_body": {
+    "p50_ms": 12.2,
+    "p95_ms": 33.74,
+    "p99_ms": 39.68,
+    "max_ms": 40.5
+   },
+   "cpu_ms_per_request": 11.65
+  },
+  {
+   "arm": "safe",
+   "shape": "unique",
+   "load": "closed",
+   "rep": 0,
+   "requests": 1957,
+   "taken": 1957,
+   "slots": null,
+   "warm_requests": 577,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.018,
+   "rps": 195.4,
+   "p50_ms": 36.26,
+   "p95_ms": 72.22,
+   "p99_ms": 91.04,
+   "max_ms": 121.15,
+   "send_to_body": {
+    "p50_ms": 36.26,
+    "p95_ms": 72.22,
+    "p99_ms": 91.04,
+    "max_ms": 121.15
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 15.912
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "unique",
+   "load": "closed",
+   "rep": 0,
+   "requests": 1926,
+   "taken": 1926,
+   "slots": null,
+   "warm_requests": 571,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.022,
+   "rps": 192.2,
+   "p50_ms": 36.72,
+   "p95_ms": 74.11,
+   "p99_ms": 91.15,
+   "max_ms": 111.56,
+   "send_to_body": {
+    "p50_ms": 36.72,
+    "p95_ms": 74.11,
+    "p99_ms": 91.15,
+    "max_ms": 111.56
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 16.293
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "none",
+   "load": "offered",
+   "rep": 0,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.34,
+   "wall_s": 9.979,
+   "rps": 40.1,
+   "p50_ms": 4.72,
+   "p95_ms": 5.45,
+   "p99_ms": 6.0,
+   "max_ms": 6.21,
+   "send_to_body": {
+    "p50_ms": 4.61,
+    "p95_ms": 5.28,
+    "p99_ms": 5.83,
+    "max_ms": 6.1
+   },
+   "due_to_body": {
+    "p50_ms": 4.72,
+    "p95_ms": 5.45,
+    "p99_ms": 6.0,
+    "max_ms": 6.21
+   },
+   "cpu_ms_per_request": 3.25
+  },
+  {
+   "arm": "safe",
+   "shape": "none",
+   "load": "offered",
+   "rep": 0,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.36,
+   "wall_s": 9.98,
+   "rps": 40.1,
+   "p50_ms": 4.85,
+   "p95_ms": 5.8,
+   "p99_ms": 6.24,
+   "max_ms": 24.77,
+   "send_to_body": {
+    "p50_ms": 4.73,
+    "p95_ms": 5.69,
+    "p99_ms": 6.11,
+    "max_ms": 24.68
+   },
+   "due_to_body": {
+    "p50_ms": 4.85,
+    "p95_ms": 5.8,
+    "p99_ms": 6.24,
+    "max_ms": 24.77
+   },
+   "cpu_ms_per_request": 3.35
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "none",
+   "load": "closed",
+   "rep": 0,
+   "requests": 5774,
+   "taken": 5774,
+   "slots": null,
+   "warm_requests": 1546,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.008,
+   "rps": 577.0,
+   "p50_ms": 11.95,
+   "p95_ms": 20.76,
+   "p99_ms": 24.9,
+   "max_ms": 60.86,
+   "send_to_body": {
+    "p50_ms": 11.95,
+    "p95_ms": 20.76,
+    "p99_ms": 24.9,
+    "max_ms": 60.86
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 4.094
+  },
+  {
+   "arm": "safe",
+   "shape": "none",
+   "load": "closed",
+   "rep": 0,
+   "requests": 5687,
+   "taken": 5687,
+   "slots": null,
+   "warm_requests": 1716,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.009,
+   "rps": 568.2,
+   "p50_ms": 12.42,
+   "p95_ms": 21.48,
+   "p99_ms": 25.73,
+   "max_ms": 36.76,
+   "send_to_body": {
+    "p50_ms": 12.42,
+    "p95_ms": 21.48,
+    "p99_ms": 25.73,
+    "max_ms": 36.76
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 4.078
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "one",
+   "load": "offered",
+   "rep": 1,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.37,
+   "wall_s": 9.979,
+   "rps": 40.1,
+   "p50_ms": 4.25,
+   "p95_ms": 5.45,
+   "p99_ms": 5.79,
+   "max_ms": 6.21,
+   "send_to_body": {
+    "p50_ms": 4.13,
+    "p95_ms": 5.32,
+    "p99_ms": 5.66,
+    "max_ms": 6.08
+   },
+   "due_to_body": {
+    "p50_ms": 4.25,
+    "p95_ms": 5.45,
+    "p99_ms": 5.79,
+    "max_ms": 6.21
+   },
+   "cpu_ms_per_request": 2.875
+  },
+  {
+   "arm": "safe",
+   "shape": "one",
+   "load": "offered",
+   "rep": 1,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.33,
+   "wall_s": 9.985,
+   "rps": 40.1,
+   "p50_ms": 11.03,
+   "p95_ms": 28.61,
+   "p99_ms": 38.29,
+   "max_ms": 39.31,
+   "send_to_body": {
+    "p50_ms": 10.89,
+    "p95_ms": 28.48,
+    "p99_ms": 38.16,
+    "max_ms": 39.19
+   },
+   "due_to_body": {
+    "p50_ms": 11.03,
+    "p95_ms": 28.61,
+    "p99_ms": 38.29,
+    "max_ms": 39.31
+   },
+   "cpu_ms_per_request": 10.4
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "one",
+   "load": "closed",
+   "rep": 1,
+   "requests": 6951,
+   "taken": 6951,
+   "slots": null,
+   "warm_requests": 2175,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.007,
+   "rps": 694.6,
+   "p50_ms": 10.47,
+   "p95_ms": 16.63,
+   "p99_ms": 19.97,
+   "max_ms": 44.07,
+   "send_to_body": {
+    "p50_ms": 10.47,
+    "p95_ms": 16.63,
+    "p99_ms": 19.97,
+    "max_ms": 44.07
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 3.113
+  },
+  {
+   "arm": "safe",
+   "shape": "one",
+   "load": "closed",
+   "rep": 1,
+   "requests": 1969,
+   "taken": 1969,
+   "slots": null,
+   "warm_requests": 649,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.034,
+   "rps": 196.2,
+   "p50_ms": 38.78,
+   "p95_ms": 73.2,
+   "p99_ms": 85.94,
+   "max_ms": 104.62,
+   "send_to_body": {
+    "p50_ms": 38.78,
+    "p95_ms": 73.2,
+    "p99_ms": 85.94,
+    "max_ms": 104.62
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 12.925
+  },
+  {
+   "arm": "safe",
+   "shape": "sixteen",
+   "load": "offered",
+   "rep": 1,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.23,
+   "wall_s": 9.98,
+   "rps": 40.1,
+   "p50_ms": 5.14,
+   "p95_ms": 6.18,
+   "p99_ms": 6.86,
+   "max_ms": 23.32,
+   "send_to_body": {
+    "p50_ms": 5.01,
+    "p95_ms": 6.07,
+    "p99_ms": 6.74,
+    "max_ms": 23.18
+   },
+   "due_to_body": {
+    "p50_ms": 5.14,
+    "p95_ms": 6.18,
+    "p99_ms": 6.86,
+    "max_ms": 23.32
+   },
+   "cpu_ms_per_request": 3.825
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "sixteen",
+   "load": "offered",
+   "rep": 1,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.22,
+   "wall_s": 9.978,
+   "rps": 40.1,
+   "p50_ms": 3.46,
+   "p95_ms": 4.47,
+   "p99_ms": 6.16,
+   "max_ms": 22.68,
+   "send_to_body": {
+    "p50_ms": 3.35,
+    "p95_ms": 4.33,
+    "p99_ms": 6.06,
+    "max_ms": 22.56
+   },
+   "due_to_body": {
+    "p50_ms": 3.46,
+    "p95_ms": 4.47,
+    "p99_ms": 6.16,
+    "max_ms": 22.68
+   },
+   "cpu_ms_per_request": 2.075
+  },
+  {
+   "arm": "safe",
+   "shape": "sixteen",
+   "load": "closed",
+   "rep": 1,
+   "requests": 5668,
+   "taken": 5668,
+   "slots": null,
+   "warm_requests": 1590,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.007,
+   "rps": 566.4,
+   "p50_ms": 12.87,
+   "p95_ms": 23.33,
+   "p99_ms": 37.34,
+   "max_ms": 55.87,
+   "send_to_body": {
+    "p50_ms": 12.87,
+    "p95_ms": 23.33,
+    "p99_ms": 37.34,
+    "max_ms": 55.87
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 4.712
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "sixteen",
+   "load": "closed",
+   "rep": 1,
+   "requests": 9868,
+   "taken": 9868,
+   "slots": null,
+   "warm_requests": 2826,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.006,
+   "rps": 986.2,
+   "p50_ms": 7.59,
+   "p95_ms": 11.29,
+   "p99_ms": 13.26,
+   "max_ms": 30.78,
+   "send_to_body": {
+    "p50_ms": 7.59,
+    "p95_ms": 11.29,
+    "p99_ms": 13.26,
+    "max_ms": 30.78
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 2.187
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "unique",
+   "load": "offered",
+   "rep": 1,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.27,
+   "wall_s": 10.007,
+   "rps": 40.0,
+   "p50_ms": 11.79,
+   "p95_ms": 31.81,
+   "p99_ms": 39.3,
+   "max_ms": 40.91,
+   "send_to_body": {
+    "p50_ms": 11.68,
+    "p95_ms": 31.71,
+    "p99_ms": 39.18,
+    "max_ms": 40.71
+   },
+   "due_to_body": {
+    "p50_ms": 11.79,
+    "p95_ms": 31.81,
+    "p99_ms": 39.3,
+    "max_ms": 40.91
+   },
+   "cpu_ms_per_request": 11.375
+  },
+  {
+   "arm": "safe",
+   "shape": "unique",
+   "load": "offered",
+   "rep": 1,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.27,
+   "wall_s": 9.986,
+   "rps": 40.1,
+   "p50_ms": 11.68,
+   "p95_ms": 30.89,
+   "p99_ms": 35.25,
+   "max_ms": 39.58,
+   "send_to_body": {
+    "p50_ms": 11.53,
+    "p95_ms": 30.78,
+    "p99_ms": 35.12,
+    "max_ms": 39.44
+   },
+   "due_to_body": {
+    "p50_ms": 11.68,
+    "p95_ms": 30.89,
+    "p99_ms": 35.25,
+    "max_ms": 39.58
+   },
+   "cpu_ms_per_request": 11.125
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "unique",
+   "load": "closed",
+   "rep": 1,
+   "requests": 1950,
+   "taken": 1950,
+   "slots": null,
+   "warm_requests": 576,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.024,
+   "rps": 194.5,
+   "p50_ms": 36.57,
+   "p95_ms": 72.85,
+   "p99_ms": 90.66,
+   "max_ms": 120.85,
+   "send_to_body": {
+    "p50_ms": 36.57,
+    "p95_ms": 72.85,
+    "p99_ms": 90.66,
+    "max_ms": 120.85
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 16.036
+  },
+  {
+   "arm": "safe",
+   "shape": "unique",
+   "load": "closed",
+   "rep": 1,
+   "requests": 1989,
+   "taken": 1989,
+   "slots": null,
+   "warm_requests": 600,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.03,
+   "rps": 198.3,
+   "p50_ms": 36.03,
+   "p95_ms": 71.16,
+   "p99_ms": 87.33,
+   "max_ms": 106.86,
+   "send_to_body": {
+    "p50_ms": 36.03,
+    "p95_ms": 71.16,
+    "p99_ms": 87.33,
+    "max_ms": 106.86
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 15.782
+  },
+  {
+   "arm": "safe",
+   "shape": "none",
+   "load": "offered",
+   "rep": 1,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.24,
+   "wall_s": 9.981,
+   "rps": 40.1,
+   "p50_ms": 4.77,
+   "p95_ms": 5.55,
+   "p99_ms": 5.87,
+   "max_ms": 5.94,
+   "send_to_body": {
+    "p50_ms": 4.65,
+    "p95_ms": 5.45,
+    "p99_ms": 5.74,
+    "max_ms": 5.8
+   },
+   "due_to_body": {
+    "p50_ms": 4.77,
+    "p95_ms": 5.55,
+    "p99_ms": 5.87,
+    "max_ms": 5.94
+   },
+   "cpu_ms_per_request": 3.35
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "none",
+   "load": "offered",
+   "rep": 1,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.29,
+   "wall_s": 9.979,
+   "rps": 40.1,
+   "p50_ms": 4.59,
+   "p95_ms": 5.39,
+   "p99_ms": 5.86,
+   "max_ms": 24.33,
+   "send_to_body": {
+    "p50_ms": 4.47,
+    "p95_ms": 5.27,
+    "p99_ms": 5.75,
+    "max_ms": 24.22
+   },
+   "due_to_body": {
+    "p50_ms": 4.59,
+    "p95_ms": 5.39,
+    "p99_ms": 5.86,
+    "max_ms": 24.33
+   },
+   "cpu_ms_per_request": 3.225
+  },
+  {
+   "arm": "safe",
+   "shape": "none",
+   "load": "closed",
+   "rep": 1,
+   "requests": 5620,
+   "taken": 5620,
+   "slots": null,
+   "warm_requests": 1710,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.009,
+   "rps": 561.5,
+   "p50_ms": 11.66,
+   "p95_ms": 24.22,
+   "p99_ms": 29.57,
+   "max_ms": 42.02,
+   "send_to_body": {
+    "p50_ms": 11.66,
+    "p95_ms": 24.22,
+    "p99_ms": 29.57,
+    "max_ms": 42.02
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 4.034
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "none",
+   "load": "closed",
+   "rep": 1,
+   "requests": 5619,
+   "taken": 5619,
+   "slots": null,
+   "warm_requests": 1698,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.012,
+   "rps": 561.2,
+   "p50_ms": 11.76,
+   "p95_ms": 23.98,
+   "p99_ms": 29.91,
+   "max_ms": 56.33,
+   "send_to_body": {
+    "p50_ms": 11.76,
+    "p95_ms": 23.98,
+    "p99_ms": 29.91,
+    "max_ms": 56.33
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 4.035
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "one",
+   "load": "offered",
+   "rep": 2,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.38,
+   "wall_s": 9.979,
+   "rps": 40.1,
+   "p50_ms": 4.23,
+   "p95_ms": 5.57,
+   "p99_ms": 6.11,
+   "max_ms": 6.55,
+   "send_to_body": {
+    "p50_ms": 4.08,
+    "p95_ms": 5.42,
+    "p99_ms": 5.97,
+    "max_ms": 6.42
+   },
+   "due_to_body": {
+    "p50_ms": 4.23,
+    "p95_ms": 5.57,
+    "p99_ms": 6.11,
+    "max_ms": 6.55
+   },
+   "cpu_ms_per_request": 2.85
+  },
+  {
+   "arm": "safe",
+   "shape": "one",
+   "load": "offered",
+   "rep": 2,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.25,
+   "wall_s": 9.985,
+   "rps": 40.1,
+   "p50_ms": 10.99,
+   "p95_ms": 30.32,
+   "p99_ms": 32.89,
+   "max_ms": 34.79,
+   "send_to_body": {
+    "p50_ms": 10.86,
+    "p95_ms": 30.21,
+    "p99_ms": 32.76,
+    "max_ms": 34.67
+   },
+   "due_to_body": {
+    "p50_ms": 10.99,
+    "p95_ms": 30.32,
+    "p99_ms": 32.89,
+    "max_ms": 34.79
+   },
+   "cpu_ms_per_request": 10.45
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "one",
+   "load": "closed",
+   "rep": 2,
+   "requests": 6980,
+   "taken": 6980,
+   "slots": null,
+   "warm_requests": 2110,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.006,
+   "rps": 697.6,
+   "p50_ms": 10.45,
+   "p95_ms": 16.62,
+   "p99_ms": 19.41,
+   "max_ms": 32.53,
+   "send_to_body": {
+    "p50_ms": 10.45,
+    "p95_ms": 16.62,
+    "p99_ms": 19.41,
+    "max_ms": 32.53
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 3.1
+  },
+  {
+   "arm": "safe",
+   "shape": "one",
+   "load": "closed",
+   "rep": 2,
+   "requests": 2233,
+   "taken": 2233,
+   "slots": null,
+   "warm_requests": 674,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.051,
+   "rps": 222.2,
+   "p50_ms": 31.98,
+   "p95_ms": 64.32,
+   "p99_ms": 77.72,
+   "max_ms": 99.76,
+   "send_to_body": {
+    "p50_ms": 31.98,
+    "p95_ms": 64.32,
+    "p99_ms": 77.72,
+    "max_ms": 99.76
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 14.12
+  },
+  {
+   "arm": "safe",
+   "shape": "sixteen",
+   "load": "offered",
+   "rep": 2,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.33,
+   "wall_s": 9.98,
+   "rps": 40.1,
+   "p50_ms": 4.97,
+   "p95_ms": 6.37,
+   "p99_ms": 7.32,
+   "max_ms": 24.38,
+   "send_to_body": {
+    "p50_ms": 4.85,
+    "p95_ms": 6.26,
+    "p99_ms": 7.16,
+    "max_ms": 24.26
+   },
+   "due_to_body": {
+    "p50_ms": 4.97,
+    "p95_ms": 6.37,
+    "p99_ms": 7.32,
+    "max_ms": 24.38
+   },
+   "cpu_ms_per_request": 3.7
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "sixteen",
+   "load": "offered",
+   "rep": 2,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.36,
+   "wall_s": 9.978,
+   "rps": 40.1,
+   "p50_ms": 3.28,
+   "p95_ms": 4.4,
+   "p99_ms": 5.7,
+   "max_ms": 6.61,
+   "send_to_body": {
+    "p50_ms": 3.11,
+    "p95_ms": 4.24,
+    "p99_ms": 5.56,
+    "max_ms": 6.48
+   },
+   "due_to_body": {
+    "p50_ms": 3.28,
+    "p95_ms": 4.4,
+    "p99_ms": 5.7,
+    "max_ms": 6.61
+   },
+   "cpu_ms_per_request": 1.925
+  },
+  {
+   "arm": "safe",
+   "shape": "sixteen",
+   "load": "closed",
+   "rep": 2,
+   "requests": 5246,
+   "taken": 5246,
+   "slots": null,
+   "warm_requests": 1691,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.011,
+   "rps": 524.0,
+   "p50_ms": 13.33,
+   "p95_ms": 25.93,
+   "p99_ms": 40.07,
+   "max_ms": 54.58,
+   "send_to_body": {
+    "p50_ms": 13.33,
+    "p95_ms": 25.93,
+    "p99_ms": 40.07,
+    "max_ms": 54.58
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 4.533
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "sixteen",
+   "load": "closed",
+   "rep": 2,
+   "requests": 9735,
+   "taken": 9735,
+   "slots": null,
+   "warm_requests": 2900,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.005,
+   "rps": 973.0,
+   "p50_ms": 7.67,
+   "p95_ms": 11.88,
+   "p99_ms": 13.69,
+   "max_ms": 17.47,
+   "send_to_body": {
+    "p50_ms": 7.67,
+    "p95_ms": 11.88,
+    "p99_ms": 13.69,
+    "max_ms": 17.47
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 2.188
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "unique",
+   "load": "offered",
+   "rep": 2,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.36,
+   "wall_s": 9.986,
+   "rps": 40.1,
+   "p50_ms": 12.04,
+   "p95_ms": 31.36,
+   "p99_ms": 39.7,
+   "max_ms": 40.9,
+   "send_to_body": {
+    "p50_ms": 11.89,
+    "p95_ms": 31.23,
+    "p99_ms": 39.53,
+    "max_ms": 40.68
+   },
+   "due_to_body": {
+    "p50_ms": 12.04,
+    "p95_ms": 31.36,
+    "p99_ms": 39.7,
+    "max_ms": 40.9
+   },
+   "cpu_ms_per_request": 11.45
+  },
+  {
+   "arm": "safe",
+   "shape": "unique",
+   "load": "offered",
+   "rep": 2,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.31,
+   "wall_s": 9.986,
+   "rps": 40.1,
+   "p50_ms": 11.64,
+   "p95_ms": 30.82,
+   "p99_ms": 33.49,
+   "max_ms": 35.32,
+   "send_to_body": {
+    "p50_ms": 11.5,
+    "p95_ms": 30.7,
+    "p99_ms": 33.37,
+    "max_ms": 35.22
+   },
+   "due_to_body": {
+    "p50_ms": 11.64,
+    "p95_ms": 30.82,
+    "p99_ms": 33.49,
+    "max_ms": 35.32
+   },
+   "cpu_ms_per_request": 11.2
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "unique",
+   "load": "closed",
+   "rep": 2,
+   "requests": 1960,
+   "taken": 1960,
+   "slots": null,
+   "warm_requests": 546,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.015,
+   "rps": 195.7,
+   "p50_ms": 36.47,
+   "p95_ms": 71.53,
+   "p99_ms": 87.18,
+   "max_ms": 118.86,
+   "send_to_body": {
+    "p50_ms": 36.47,
+    "p95_ms": 71.53,
+    "p99_ms": 87.18,
+    "max_ms": 118.86
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 16.005
+  },
+  {
+   "arm": "safe",
+   "shape": "unique",
+   "load": "closed",
+   "rep": 2,
+   "requests": 1961,
+   "taken": 1961,
+   "slots": null,
+   "warm_requests": 601,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.043,
+   "rps": 195.3,
+   "p50_ms": 39.62,
+   "p95_ms": 72.47,
+   "p99_ms": 86.87,
+   "max_ms": 103.09,
+   "send_to_body": {
+    "p50_ms": 39.62,
+    "p95_ms": 72.47,
+    "p99_ms": 86.87,
+    "max_ms": 103.09
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 15.492
+  },
+  {
+   "arm": "safe",
+   "shape": "none",
+   "load": "offered",
+   "rep": 2,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.3,
+   "wall_s": 9.98,
+   "rps": 40.1,
+   "p50_ms": 4.73,
+   "p95_ms": 5.42,
+   "p99_ms": 5.9,
+   "max_ms": 6.11,
+   "send_to_body": {
+    "p50_ms": 4.61,
+    "p95_ms": 5.26,
+    "p99_ms": 5.76,
+    "max_ms": 5.93
+   },
+   "due_to_body": {
+    "p50_ms": 4.73,
+    "p95_ms": 5.42,
+    "p99_ms": 5.9,
+    "max_ms": 6.11
+   },
+   "cpu_ms_per_request": 3.275
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "none",
+   "load": "offered",
+   "rep": 2,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.27,
+   "wall_s": 9.979,
+   "rps": 40.1,
+   "p50_ms": 4.64,
+   "p95_ms": 5.29,
+   "p99_ms": 5.77,
+   "max_ms": 11.6,
+   "send_to_body": {
+    "p50_ms": 4.53,
+    "p95_ms": 5.16,
+    "p99_ms": 5.66,
+    "max_ms": 11.42
+   },
+   "due_to_body": {
+    "p50_ms": 4.64,
+    "p95_ms": 5.29,
+    "p99_ms": 5.77,
+    "max_ms": 11.6
+   },
+   "cpu_ms_per_request": 3.275
+  },
+  {
+   "arm": "safe",
+   "shape": "none",
+   "load": "closed",
+   "rep": 2,
+   "requests": 5821,
+   "taken": 5821,
+   "slots": null,
+   "warm_requests": 1700,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.012,
+   "rps": 581.4,
+   "p50_ms": 11.94,
+   "p95_ms": 20.54,
+   "p99_ms": 25.17,
+   "max_ms": 44.15,
+   "send_to_body": {
+    "p50_ms": 11.94,
+    "p95_ms": 20.54,
+    "p99_ms": 25.17,
+    "max_ms": 44.15
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 4.104
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "none",
+   "load": "closed",
+   "rep": 2,
+   "requests": 5803,
+   "taken": 5803,
+   "slots": null,
+   "warm_requests": 1742,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.005,
+   "rps": 580.0,
+   "p50_ms": 11.9,
+   "p95_ms": 20.45,
+   "p99_ms": 25.44,
+   "max_ms": 55.86,
+   "send_to_body": {
+    "p50_ms": 11.9,
+    "p95_ms": 20.45,
+    "p99_ms": 25.44,
+    "max_ms": 55.86
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 4.094
+  },
+  {
+   "arm": "safe",
+   "shape": "one",
+   "load": "offered",
+   "rep": 3,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.27,
+   "wall_s": 9.986,
+   "rps": 40.1,
+   "p50_ms": 10.72,
+   "p95_ms": 28.62,
+   "p99_ms": 33.51,
+   "max_ms": 34.3,
+   "send_to_body": {
+    "p50_ms": 10.59,
+    "p95_ms": 28.52,
+    "p99_ms": 33.4,
+    "max_ms": 34.19
+   },
+   "due_to_body": {
+    "p50_ms": 10.72,
+    "p95_ms": 28.62,
+    "p99_ms": 33.51,
+    "max_ms": 34.3
+   },
+   "cpu_ms_per_request": 10.125
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "one",
+   "load": "offered",
+   "rep": 3,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.25,
+   "wall_s": 9.979,
+   "rps": 40.1,
+   "p50_ms": 3.96,
+   "p95_ms": 5.33,
+   "p99_ms": 5.56,
+   "max_ms": 5.71,
+   "send_to_body": {
+    "p50_ms": 3.82,
+    "p95_ms": 5.21,
+    "p99_ms": 5.46,
+    "max_ms": 5.57
+   },
+   "due_to_body": {
+    "p50_ms": 3.96,
+    "p95_ms": 5.33,
+    "p99_ms": 5.56,
+    "max_ms": 5.71
+   },
+   "cpu_ms_per_request": 2.6
+  },
+  {
+   "arm": "safe",
+   "shape": "one",
+   "load": "closed",
+   "rep": 3,
+   "requests": 2194,
+   "taken": 2194,
+   "slots": null,
+   "warm_requests": 658,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.026,
+   "rps": 218.8,
+   "p50_ms": 32.37,
+   "p95_ms": 66.2,
+   "p99_ms": 82.54,
+   "max_ms": 110.72,
+   "send_to_body": {
+    "p50_ms": 32.37,
+    "p95_ms": 66.2,
+    "p99_ms": 82.54,
+    "max_ms": 110.72
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 14.248
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "one",
+   "load": "closed",
+   "rep": 3,
+   "requests": 6964,
+   "taken": 6964,
+   "slots": null,
+   "warm_requests": 2070,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.008,
+   "rps": 695.8,
+   "p50_ms": 9.85,
+   "p95_ms": 19.2,
+   "p99_ms": 22.74,
+   "max_ms": 28.9,
+   "send_to_body": {
+    "p50_ms": 9.85,
+    "p95_ms": 19.2,
+    "p99_ms": 22.74,
+    "max_ms": 28.9
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 3.143
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "sixteen",
+   "load": "offered",
+   "rep": 3,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.23,
+   "wall_s": 9.978,
+   "rps": 40.1,
+   "p50_ms": 3.59,
+   "p95_ms": 4.42,
+   "p99_ms": 5.6,
+   "max_ms": 6.66,
+   "send_to_body": {
+    "p50_ms": 3.46,
+    "p95_ms": 4.27,
+    "p99_ms": 5.48,
+    "max_ms": 6.55
+   },
+   "due_to_body": {
+    "p50_ms": 3.59,
+    "p95_ms": 4.42,
+    "p99_ms": 5.6,
+    "max_ms": 6.66
+   },
+   "cpu_ms_per_request": 2.1
+  },
+  {
+   "arm": "safe",
+   "shape": "sixteen",
+   "load": "offered",
+   "rep": 3,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.38,
+   "wall_s": 9.98,
+   "rps": 40.1,
+   "p50_ms": 5.26,
+   "p95_ms": 6.33,
+   "p99_ms": 7.09,
+   "max_ms": 25.18,
+   "send_to_body": {
+    "p50_ms": 5.14,
+    "p95_ms": 6.19,
+    "p99_ms": 6.92,
+    "max_ms": 24.95
+   },
+   "due_to_body": {
+    "p50_ms": 5.26,
+    "p95_ms": 6.33,
+    "p99_ms": 7.09,
+    "max_ms": 25.18
+   },
+   "cpu_ms_per_request": 3.85
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "sixteen",
+   "load": "closed",
+   "rep": 3,
+   "requests": 9092,
+   "taken": 9092,
+   "slots": null,
+   "warm_requests": 2875,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.007,
+   "rps": 908.6,
+   "p50_ms": 8.45,
+   "p95_ms": 12.68,
+   "p99_ms": 14.58,
+   "max_ms": 19.32,
+   "send_to_body": {
+    "p50_ms": 8.45,
+    "p95_ms": 12.68,
+    "p99_ms": 14.58,
+    "max_ms": 19.32
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 2.149
+  },
+  {
+   "arm": "safe",
+   "shape": "sixteen",
+   "load": "closed",
+   "rep": 3,
+   "requests": 5562,
+   "taken": 5562,
+   "slots": null,
+   "warm_requests": 1569,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.008,
+   "rps": 555.8,
+   "p50_ms": 12.0,
+   "p95_ms": 26.83,
+   "p99_ms": 39.18,
+   "max_ms": 54.61,
+   "send_to_body": {
+    "p50_ms": 12.0,
+    "p95_ms": 26.83,
+    "p99_ms": 39.18,
+    "max_ms": 54.61
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 4.675
+  },
+  {
+   "arm": "safe",
+   "shape": "unique",
+   "load": "offered",
+   "rep": 3,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.35,
+   "wall_s": 9.986,
+   "rps": 40.1,
+   "p50_ms": 11.44,
+   "p95_ms": 29.03,
+   "p99_ms": 37.42,
+   "max_ms": 38.57,
+   "send_to_body": {
+    "p50_ms": 11.32,
+    "p95_ms": 28.9,
+    "p99_ms": 37.28,
+    "max_ms": 38.46
+   },
+   "due_to_body": {
+    "p50_ms": 11.44,
+    "p95_ms": 29.03,
+    "p99_ms": 37.42,
+    "max_ms": 38.57
+   },
+   "cpu_ms_per_request": 10.825
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "unique",
+   "load": "offered",
+   "rep": 3,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.27,
+   "wall_s": 9.986,
+   "rps": 40.1,
+   "p50_ms": 11.8,
+   "p95_ms": 31.22,
+   "p99_ms": 35.1,
+   "max_ms": 38.78,
+   "send_to_body": {
+    "p50_ms": 11.67,
+    "p95_ms": 31.1,
+    "p99_ms": 34.97,
+    "max_ms": 38.66
+   },
+   "due_to_body": {
+    "p50_ms": 11.8,
+    "p95_ms": 31.22,
+    "p99_ms": 35.1,
+    "max_ms": 38.78
+   },
+   "cpu_ms_per_request": 11.275
+  },
+  {
+   "arm": "safe",
+   "shape": "unique",
+   "load": "closed",
+   "rep": 3,
+   "requests": 1994,
+   "taken": 1994,
+   "slots": null,
+   "warm_requests": 616,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.033,
+   "rps": 198.7,
+   "p50_ms": 32.67,
+   "p95_ms": 80.28,
+   "p99_ms": 97.35,
+   "max_ms": 121.8,
+   "send_to_body": {
+    "p50_ms": 32.67,
+    "p95_ms": 80.28,
+    "p99_ms": 97.35,
+    "max_ms": 121.8
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 15.08
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "unique",
+   "load": "closed",
+   "rep": 3,
+   "requests": 1964,
+   "taken": 1964,
+   "slots": null,
+   "warm_requests": 601,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.029,
+   "rps": 195.8,
+   "p50_ms": 36.75,
+   "p95_ms": 69.34,
+   "p99_ms": 83.92,
+   "max_ms": 122.22,
+   "send_to_body": {
+    "p50_ms": 36.75,
+    "p95_ms": 69.34,
+    "p99_ms": 83.92,
+    "max_ms": 122.22
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 16.054
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "none",
+   "load": "offered",
+   "rep": 3,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.31,
+   "wall_s": 9.98,
+   "rps": 40.1,
+   "p50_ms": 4.52,
+   "p95_ms": 5.14,
+   "p99_ms": 5.49,
+   "max_ms": 6.13,
+   "send_to_body": {
+    "p50_ms": 4.41,
+    "p95_ms": 5.02,
+    "p99_ms": 5.38,
+    "max_ms": 6.04
+   },
+   "due_to_body": {
+    "p50_ms": 4.52,
+    "p95_ms": 5.14,
+    "p99_ms": 5.49,
+    "max_ms": 6.13
+   },
+   "cpu_ms_per_request": 3.125
+  },
+  {
+   "arm": "safe",
+   "shape": "none",
+   "load": "offered",
+   "rep": 3,
+   "requests": 400,
+   "taken": 400,
+   "slots": 400,
+   "warm_requests": 120,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": 0.29,
+   "wall_s": 9.98,
+   "rps": 40.1,
+   "p50_ms": 4.68,
+   "p95_ms": 5.56,
+   "p99_ms": 5.9,
+   "max_ms": 6.26,
+   "send_to_body": {
+    "p50_ms": 4.56,
+    "p95_ms": 5.42,
+    "p99_ms": 5.76,
+    "max_ms": 6.15
+   },
+   "due_to_body": {
+    "p50_ms": 4.68,
+    "p95_ms": 5.56,
+    "p99_ms": 5.9,
+    "max_ms": 6.26
+   },
+   "cpu_ms_per_request": 3.3
+  },
+  {
+   "arm": "safe+savedq",
+   "shape": "none",
+   "load": "closed",
+   "rep": 3,
+   "requests": 5598,
+   "taken": 5598,
+   "slots": null,
+   "warm_requests": 1715,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.009,
+   "rps": 559.3,
+   "p50_ms": 11.8,
+   "p95_ms": 24.2,
+   "p99_ms": 29.24,
+   "max_ms": 54.24,
+   "send_to_body": {
+    "p50_ms": 11.8,
+    "p95_ms": 24.2,
+    "p99_ms": 29.24,
+    "max_ms": 54.24
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 4.048
+  },
+  {
+   "arm": "safe",
+   "shape": "none",
+   "load": "closed",
+   "rep": 3,
+   "requests": 5861,
+   "taken": 5861,
+   "slots": null,
+   "warm_requests": 1654,
+   "problems": [],
+   "valid": true,
+   "late": 0,
+   "max_lag_ms": null,
+   "wall_s": 10.01,
+   "rps": 585.5,
+   "p50_ms": 11.98,
+   "p95_ms": 19.72,
+   "p99_ms": 23.42,
+   "max_ms": 53.02,
+   "send_to_body": {
+    "p50_ms": 11.98,
+    "p95_ms": 19.72,
+    "p99_ms": 23.42,
+    "max_ms": 53.02
+   },
+   "due_to_body": null,
+   "cpu_ms_per_request": 4.127
+  }
+ ],
+ "problems": [],
+ "searches": {
+  "one": "severity:(major OR critical) AND service:web AND NOT group:disk",
+  "sixteen": [
+   "severity:critical AND group:net",
+   "severity:critical AND group:os",
+   "severity:critical AND group:app",
+   "severity:critical AND group:disk",
+   "severity:major AND group:net",
+   "severity:major AND group:os",
+   "severity:major AND group:app",
+   "severity:major AND group:disk",
+   "severity:minor AND group:net",
+   "severity:minor AND group:os",
+   "severity:minor AND group:app",
+   "severity:minor AND group:disk",
+   "severity:warning AND group:net",
+   "severity:warning AND group:os",
+   "severity:warning AND group:app",
+   "severity:warning AND group:disk"
+  ],
+  "unique": "severity:(major OR minor) AND NOT service:mail AND NOT resource:zz<run>n<number>"
+ },
+ "sources_sha256": {
+  "alerta_fast.py": "306d3846fa15e6b3e07d6f32d3ee693d4fdfcacaf0e4ee3e6ad65dbb2c95f621",
+  "savedq_load.py": "58309729bc93b0f0ebae03ebe740525a677ca7db15a08d73c759cd49f8790b5b"
+ },
+ "unique": {
+  "sent": 24549,
+  "asked_again": 22,
+  "answers_that_differ": 0
+ },
+ "table": [
+  {
+   "shape": "one",
+   "load": "offered",
+   "safe": {
+    "rps": {
+     "median": 40.1,
+     "each": [
+      40.1,
+      40.1,
+      40.1,
+      40.1
+     ]
+    },
+    "p50_ms": {
+     "median": 10.98,
+     "each": [
+      10.97,
+      11.03,
+      10.99,
+      10.72
+     ]
+    },
+    "p95_ms": {
+     "median": 28.775,
+     "each": [
+      28.93,
+      28.61,
+      30.32,
+      28.62
+     ]
+    },
+    "p99_ms": {
+     "median": 35.13,
+     "each": [
+      36.75,
+      38.29,
+      32.89,
+      33.51
+     ]
+    },
+    "max_ms": {
+     "median": 37.05,
+     "each": [
+      39.64,
+      39.31,
+      34.79,
+      34.3
+     ]
+    },
+    "cpu_ms_per_request": {
+     "median": 10.288,
+     "each": [
+      10.175,
+      10.4,
+      10.45,
+      10.125
+     ]
+    },
+    "late": 0,
+    "max_lag_ms": 0.33,
+    "requests": 1600
+   },
+   "safe+savedq": {
+    "rps": {
+     "median": 40.1,
+     "each": [
+      40.1,
+      40.1,
+      40.1,
+      40.1
+     ]
+    },
+    "p50_ms": {
+     "median": 4.185,
+     "each": [
+      4.14,
+      4.25,
+      4.23,
+      3.96
+     ]
+    },
+    "p95_ms": {
+     "median": 5.51,
+     "each": [
+      5.57,
+      5.45,
+      5.57,
+      5.33
+     ]
+    },
+    "p99_ms": {
+     "median": 5.95,
+     "each": [
+      6.11,
+      5.79,
+      6.11,
+      5.56
+     ]
+    },
+    "max_ms": {
+     "median": 6.38,
+     "each": [
+      30.15,
+      6.21,
+      6.55,
+      5.71
+     ]
+    },
+    "cpu_ms_per_request": {
+     "median": 2.763,
+     "each": [
+      2.675,
+      2.875,
+      2.85,
+      2.6
+     ]
+    },
+    "late": 0,
+    "max_lag_ms": 0.38,
+    "requests": 1600
+   }
+  },
+  {
+   "shape": "one",
+   "load": "closed",
+   "safe": {
+    "rps": {
+     "median": 218.4,
+     "each": [
+      218.0,
+      196.2,
+      222.2,
+      218.8
+     ]
+    },
+    "p50_ms": {
+     "median": 32.25,
+     "each": [
+      32.13,
+      38.78,
+      31.98,
+      32.37
+     ]
+    },
+    "p95_ms": {
+     "median": 66.59,
+     "each": [
+      66.98,
+      73.2,
+      64.32,
+      66.2
+     ]
+    },
+    "p99_ms": {
+     "median": 83.45,
+     "each": [
+      84.36,
+      85.94,
+      77.72,
+      82.54
+     ]
+    },
+    "max_ms": {
+     "median": 104.095,
+     "each": [
+      103.57,
+      104.62,
+      99.76,
+      110.72
+     ]
+    },
+    "cpu_ms_per_request": {
+     "median": 14.184,
+     "each": [
+      14.447,
+      12.925,
+      14.12,
+      14.248
+     ]
+    },
+    "late": 0,
+    "max_lag_ms": null,
+    "requests": 8584
+   },
+   "safe+savedq": {
+    "rps": {
+     "median": 696.7,
+     "each": [
+      715.6,
+      694.6,
+      697.6,
+      695.8
+     ]
+    },
+    "p50_ms": {
+     "median": 10.175,
+     "each": [
+      9.9,
+      10.47,
+      10.45,
+      9.85
+     ]
+    },
+    "p95_ms": {
+     "median": 16.71,
+     "each": [
+      16.79,
+      16.63,
+      16.62,
+      19.2
+     ]
+    },
+    "p99_ms": {
+     "median": 20.305,
+     "each": [
+      20.64,
+      19.97,
+      19.41,
+      22.74
+     ]
+    },
+    "max_ms": {
+     "median": 38.3,
+     "each": [
+      47.88,
+      44.07,
+      32.53,
+      28.9
+     ]
+    },
+    "cpu_ms_per_request": {
+     "median": 3.128,
+     "each": [
+      3.158,
+      3.113,
+      3.1,
+      3.143
+     ]
+    },
+    "late": 0,
+    "max_lag_ms": null,
+    "requests": 28058
+   }
+  },
+  {
+   "shape": "sixteen",
+   "load": "offered",
+   "safe": {
+    "rps": {
+     "median": 40.1,
+     "each": [
+      40.1,
+      40.1,
+      40.1,
+      40.1
+     ]
+    },
+    "p50_ms": {
+     "median": 5.2,
+     "each": [
+      5.54,
+      5.14,
+      4.97,
+      5.26
+     ]
+    },
+    "p95_ms": {
+     "median": 6.35,
+     "each": [
+      7.03,
+      6.18,
+      6.37,
+      6.33
+     ]
+    },
+    "p99_ms": {
+     "median": 7.205,
+     "each": [
+      7.59,
+      6.86,
+      7.32,
+      7.09
+     ]
+    },
+    "max_ms": {
+     "median": 24.78,
+     "each": [
+      25.31,
+      23.32,
+      24.38,
+      25.18
+     ]
+    },
+    "cpu_ms_per_request": {
+     "median": 3.838,
+     "each": [
+      4.25,
+      3.825,
+      3.7,
+      3.85
+     ]
+    },
+    "late": 0,
+    "max_lag_ms": 0.38,
+    "requests": 1600
+   },
+   "safe+savedq": {
+    "rps": {
+     "median": 40.1,
+     "each": [
+      40.1,
+      40.1,
+      40.1,
+      40.1
+     ]
+    },
+    "p50_ms": {
+     "median": 3.5,
+     "each": [
+      3.54,
+      3.46,
+      3.28,
+      3.59
+     ]
+    },
+    "p95_ms": {
+     "median": 4.445,
+     "each": [
+      4.54,
+      4.47,
+      4.4,
+      4.42
+     ]
+    },
+    "p99_ms": {
+     "median": 5.65,
+     "each": [
+      5.43,
+      6.16,
+      5.7,
+      5.6
+     ]
+    },
+    "max_ms": {
+     "median": 6.635,
+     "each": [
+      5.7,
+      22.68,
+      6.61,
+      6.66
+     ]
+    },
+    "cpu_ms_per_request": {
+     "median": 2.088,
+     "each": [
+      2.125,
+      2.075,
+      1.925,
+      2.1
+     ]
+    },
+    "late": 0,
+    "max_lag_ms": 0.36,
+    "requests": 1600
+   }
+  },
+  {
+   "shape": "sixteen",
+   "load": "closed",
+   "safe": {
+    "rps": {
+     "median": 550.8,
+     "each": [
+      545.8,
+      566.4,
+      524.0,
+      555.8
+     ]
+    },
+    "p50_ms": {
+     "median": 12.57,
+     "each": [
+      12.27,
+      12.87,
+      13.33,
+      12.0
+     ]
+    },
+    "p95_ms": {
+     "median": 26.38,
+     "each": [
+      27.4,
+      23.33,
+      25.93,
+      26.83
+     ]
+    },
+    "p99_ms": {
+     "median": 39.625,
+     "each": [
+      41.71,
+      37.34,
+      40.07,
+      39.18
+     ]
+    },
+    "max_ms": {
+     "median": 55.24,
+     "each": [
+      61.63,
+      55.87,
+      54.58,
+      54.61
+     ]
+    },
+    "cpu_ms_per_request": {
+     "median": 4.691,
+     "each": [
+      4.706,
+      4.712,
+      4.533,
+      4.675
+     ]
+    },
+    "late": 0,
+    "max_lag_ms": null,
+    "requests": 21939
+   },
+   "safe+savedq": {
+    "rps": {
+     "median": 971.95,
+     "each": [
+      970.9,
+      986.2,
+      973.0,
+      908.6
+     ]
+    },
+    "p50_ms": {
+     "median": 7.68,
+     "each": [
+      7.69,
+      7.59,
+      7.67,
+      8.45
+     ]
+    },
+    "p95_ms": {
+     "median": 11.845,
+     "each": [
+      11.81,
+      11.29,
+      11.88,
+      12.68
+     ]
+    },
+    "p99_ms": {
+     "median": 13.625,
+     "each": [
+      13.56,
+      13.26,
+      13.69,
+      14.58
+     ]
+    },
+    "max_ms": {
+     "median": 18.4,
+     "each": [
+      17.48,
+      30.78,
+      17.47,
+      19.32
+     ]
+    },
+    "cpu_ms_per_request": {
+     "median": 2.188,
+     "each": [
+      2.201,
+      2.187,
+      2.188,
+      2.149
+     ]
+    },
+    "late": 0,
+    "max_lag_ms": null,
+    "requests": 38410
+   }
+  },
+  {
+   "shape": "unique",
+   "load": "offered",
+   "safe": {
+    "rps": {
+     "median": 40.1,
+     "each": [
+      40.0,
+      40.1,
+      40.1,
+      40.1
+     ]
+    },
+    "p50_ms": {
+     "median": 11.66,
+     "each": [
+      12.31,
+      11.68,
+      11.64,
+      11.44
+     ]
+    },
+    "p95_ms": {
+     "median": 30.855,
+     "each": [
+      33.32,
+      30.89,
+      30.82,
+      29.03
+     ]
+    },
+    "p99_ms": {
+     "median": 36.335,
+     "each": [
+      41.32,
+      35.25,
+      33.49,
+      37.42
+     ]
+    },
+    "max_ms": {
+     "median": 39.075,
+     "each": [
+      43.76,
+      39.58,
+      35.32,
+      38.57
+     ]
+    },
+    "cpu_ms_per_request": {
+     "median": 11.162,
+     "each": [
+      11.825,
+      11.125,
+      11.2,
+      10.825
+     ]
+    },
+    "late": 0,
+    "max_lag_ms": 0.35,
+    "requests": 1600
+   },
+   "safe+savedq": {
+    "rps": {
+     "median": 40.1,
+     "each": [
+      40.1,
+      40.0,
+      40.1,
+      40.1
+     ]
+    },
+    "p50_ms": {
+     "median": 11.92,
+     "each": [
+      12.2,
+      11.79,
+      12.04,
+      11.8
+     ]
+    },
+    "p95_ms": {
+     "median": 31.585,
+     "each": [
+      33.74,
+      31.81,
+      31.36,
+      31.22
+     ]
+    },
+    "p99_ms": {
+     "median": 39.49,
+     "each": [
+      39.68,
+      39.3,
+      39.7,
+      35.1
+     ]
+    },
+    "max_ms": {
+     "median": 40.7,
+     "each": [
+      40.5,
+      40.91,
+      40.9,
+      38.78
+     ]
+    },
+    "cpu_ms_per_request": {
+     "median": 11.412,
+     "each": [
+      11.65,
+      11.375,
+      11.45,
+      11.275
+     ]
+    },
+    "late": 0,
+    "max_lag_ms": 0.36,
+    "requests": 1600
+   }
+  },
+  {
+   "shape": "unique",
+   "load": "closed",
+   "safe": {
+    "rps": {
+     "median": 196.85,
+     "each": [
+      195.4,
+      198.3,
+      195.3,
+      198.7
+     ]
+    },
+    "p50_ms": {
+     "median": 36.145,
+     "each": [
+      36.26,
+      36.03,
+      39.62,
+      32.67
+     ]
+    },
+    "p95_ms": {
+     "median": 72.345,
+     "each": [
+      72.22,
+      71.16,
+      72.47,
+      80.28
+     ]
+    },
+    "p99_ms": {
+     "median": 89.185,
+     "each": [
+      91.04,
+      87.33,
+      86.87,
+      97.35
+     ]
+    },
+    "max_ms": {
+     "median": 114.005,
+     "each": [
+      121.15,
+      106.86,
+      103.09,
+      121.8
+     ]
+    },
+    "cpu_ms_per_request": {
+     "median": 15.637,
+     "each": [
+      15.912,
+      15.782,
+      15.492,
+      15.08
+     ]
+    },
+    "late": 0,
+    "max_lag_ms": null,
+    "requests": 7901
+   },
+   "safe+savedq": {
+    "rps": {
+     "median": 195.1,
+     "each": [
+      192.2,
+      194.5,
+      195.7,
+      195.8
+     ]
+    },
+    "p50_ms": {
+     "median": 36.645,
+     "each": [
+      36.72,
+      36.57,
+      36.47,
+      36.75
+     ]
+    },
+    "p95_ms": {
+     "median": 72.19,
+     "each": [
+      74.11,
+      72.85,
+      71.53,
+      69.34
+     ]
+    },
+    "p99_ms": {
+     "median": 88.92,
+     "each": [
+      91.15,
+      90.66,
+      87.18,
+      83.92
+     ]
+    },
+    "max_ms": {
+     "median": 119.855,
+     "each": [
+      111.56,
+      120.85,
+      118.86,
+      122.22
+     ]
+    },
+    "cpu_ms_per_request": {
+     "median": 16.045,
+     "each": [
+      16.293,
+      16.036,
+      16.005,
+      16.054
+     ]
+    },
+    "late": 0,
+    "max_lag_ms": null,
+    "requests": 7800
+   }
+  },
+  {
+   "shape": "none",
+   "load": "offered",
+   "safe": {
+    "rps": {
+     "median": 40.1,
+     "each": [
+      40.1,
+      40.1,
+      40.1,
+      40.1
+     ]
+    },
+    "p50_ms": {
+     "median": 4.75,
+     "each": [
+      4.85,
+      4.77,
+      4.73,
+      4.68
+     ]
+    },
+    "p95_ms": {
+     "median": 5.555,
+     "each": [
+      5.8,
+      5.55,
+      5.42,
+      5.56
+     ]
+    },
+    "p99_ms": {
+     "median": 5.9,
+     "each": [
+      6.24,
+      5.87,
+      5.9,
+      5.9
+     ]
+    },
+    "max_ms": {
+     "median": 6.185,
+     "each": [
+      24.77,
+      5.94,
+      6.11,
+      6.26
+     ]
+    },
+    "cpu_ms_per_request": {
+     "median": 3.325,
+     "each": [
+      3.35,
+      3.35,
+      3.275,
+      3.3
+     ]
+    },
+    "late": 0,
+    "max_lag_ms": 0.36,
+    "requests": 1600
+   },
+   "safe+savedq": {
+    "rps": {
+     "median": 40.1,
+     "each": [
+      40.1,
+      40.1,
+      40.1,
+      40.1
+     ]
+    },
+    "p50_ms": {
+     "median": 4.615,
+     "each": [
+      4.72,
+      4.59,
+      4.64,
+      4.52
+     ]
+    },
+    "p95_ms": {
+     "median": 5.34,
+     "each": [
+      5.45,
+      5.39,
+      5.29,
+      5.14
+     ]
+    },
+    "p99_ms": {
+     "median": 5.815,
+     "each": [
+      6.0,
+      5.86,
+      5.77,
+      5.49
+     ]
+    },
+    "max_ms": {
+     "median": 8.905,
+     "each": [
+      6.21,
+      24.33,
+      11.6,
+      6.13
+     ]
+    },
+    "cpu_ms_per_request": {
+     "median": 3.237,
+     "each": [
+      3.25,
+      3.225,
+      3.275,
+      3.125
+     ]
+    },
+    "late": 0,
+    "max_lag_ms": 0.34,
+    "requests": 1600
+   }
+  },
+  {
+   "shape": "none",
+   "load": "closed",
+   "safe": {
+    "rps": {
+     "median": 574.8,
+     "each": [
+      568.2,
+      561.5,
+      581.4,
+      585.5
+     ]
+    },
+    "p50_ms": {
+     "median": 11.96,
+     "each": [
+      12.42,
+      11.66,
+      11.94,
+      11.98
+     ]
+    },
+    "p95_ms": {
+     "median": 21.01,
+     "each": [
+      21.48,
+      24.22,
+      20.54,
+      19.72
+     ]
+    },
+    "p99_ms": {
+     "median": 25.45,
+     "each": [
+      25.73,
+      29.57,
+      25.17,
+      23.42
+     ]
+    },
+    "max_ms": {
+     "median": 43.085,
+     "each": [
+      36.76,
+      42.02,
+      44.15,
+      53.02
+     ]
+    },
+    "cpu_ms_per_request": {
+     "median": 4.091,
+     "each": [
+      4.078,
+      4.034,
+      4.104,
+      4.127
+     ]
+    },
+    "late": 0,
+    "max_lag_ms": null,
+    "requests": 22989
+   },
+   "safe+savedq": {
+    "rps": {
+     "median": 569.1,
+     "each": [
+      577.0,
+      561.2,
+      580.0,
+      559.3
+     ]
+    },
+    "p50_ms": {
+     "median": 11.85,
+     "each": [
+      11.95,
+      11.76,
+      11.9,
+      11.8
+     ]
+    },
+    "p95_ms": {
+     "median": 22.37,
+     "each": [
+      20.76,
+      23.98,
+      20.45,
+      24.2
+     ]
+    },
+    "p99_ms": {
+     "median": 27.34,
+     "each": [
+      24.9,
+      29.91,
+      25.44,
+      29.24
+     ]
+    },
+    "max_ms": {
+     "median": 56.095,
+     "each": [
+      60.86,
+      56.33,
+      55.86,
+      54.24
+     ]
+    },
+    "cpu_ms_per_request": {
+     "median": 4.071,
+     "each": [
+      4.094,
+      4.035,
+      4.094,
+      4.048
+     ]
+    },
+    "late": 0,
+    "max_lag_ms": null,
+    "requests": 22794
+   }
+  }
+ ]
+}
