@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-22 19:25 EST by claude-alrust, the sole writer of this
+_Last updated: 2026-11-22 21:54 EST by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox. Times
 written from 2026-11-15 14:13 EST on are Nassau local time (DECISIONS Y63);
 earlier ones are UTC (`Z`)._
@@ -13,7 +13,7 @@ tuning and Patroni/etcd tuning for three sites (sites A and B host Alerta and
 PostgreSQL; site C hosts only the third etcd member, the witness); no alrust
 product work. For a proposed full hosted Alerta benchmark in this work, the
 owner accepts Codex's agreement to the exact run, subject to its stated head,
-cost, attempt and the other existing gates (Codex's relay `01cc3608`).
+cost, attempt and the other existing gates (Claude's signed relay to Codex `01cc3608`).
 
 **Merge rule, 2026-11-22.** The advisor tool is available again in Claude's
 session since the morning of 2026-11-22, so Y73 lapsed and Y48 applies
@@ -32,7 +32,10 @@ corpus checksum (Cargo.lock), and the Compose smoke (its build step exited 1;
 the hashed logs do not show which instruction, so the cause is not
 confirmed). #285's next head `46ac4ffc` has Codex's regenerated corpus
 (`40d07353`, reviewed by Claude: the two crates' legal texts are byte-equal to
-the old ones); its CI decides the Compose question.
+the old ones). At `46ac4ffc` all 17 checks passed, Compose smoke and cargo-deny
+included; the first failure's instruction remains unknown. Codex approved
+`46ac4ffc` (`591421e1`); it was then behind main, so `6f34f456` merges main
+into it, with Cargo.lock, DECISIONS and `third_party/rust` unchanged.
 
 **Full hosted runs, 2026-11-22** (one attempt each, agreed by Codex, $0):
 - bench two-site, run 45037764779 at `0fc64977` (agreement `69cce14f`): 13
@@ -44,8 +47,8 @@ the old ones); its CI decides the Compose question.
 - addon savedq load, run 45054378079 at `1203a8af` (agreement `0394b9d8`): 64
   of 64 cells valid. One repeated search: server CPU per request -73%
   (offered load) and -78% (closed loop); a new text every time: +2% and +3%.
-  Report: PR #286, with a finding
-  about Alerta's own parser (an ungrouped `a AND b AND c` loses `c`).
+  Report: PR #286, merged, with a finding about Alerta's own parser (an
+  ungrouped `a AND b AND c` loses `c`).
 
 **Merged, 2026-11-16 to 2026-11-22 (Nassau dates):** #264 (2026-11-16
 20:19:32 EST, `fc3554c9`, without an advisor; see 2026-11-16 below). From
@@ -54,16 +57,18 @@ the old ones); its CI decides the Compose question.
 10:39:17 EST, `21ec7f66`, tree = approved tree `8187e81d`) and #284
 (2026-11-22 19:23:36 EST, `c3eafd03`, tree = approved tree `a9f3eb25`; Codex
 `8922c965` said the step needs no new owner decision, and Claude consulted
-the advisor before the merge: no objection).
+the advisor before the merge: no objection) and #286 (2026-11-22 21:53:17
+EST, `e319390d`, tree = approved tree `47cdaa5d`; Codex `591421e1`, the same
+two conditions).
 
 **Open, in the agreed order** (each later head needs a new Codex review and
-the advisor): #285 (url, head `46ac4ffc`); #281 savedq (approved at
+the advisor): #285 (url, head `6f34f456`); #281 savedq (approved at
 `fc6f976c`; needs a merge of main after #285); #282 savedq load (approved at
 `1203a8af`); #283
 onecount/nosentry fixes (approved at `9452ff7e`; needs its add-on pin
 rebound, and its check's text must say that the held-context case passes
 before the fix too, since each `/alerts` request has its own time cut-off);
-#286 (saved-search report, head `96e8a22d`); #287 (this STATUS). Codex proposals not yet taken up: `alertlinks` and
+#287 (this STATUS). Codex proposals not yet taken up: `alertlinks` and
 `fastdates` (`ec61babb`), the history projection (`8ec81447`).
 
 ## Current phase
