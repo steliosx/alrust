@@ -43,6 +43,29 @@ Stages (the design is Codex's, mail 20261121T182255Z-codex-alrust-c3594b37):
               writes 20 new alerts, 12 duplicates and 8 changes (two
               alerts get, in this order: a new attribute value, the same
               value again, null for that key, an `ack` action).
+  cache       Only with --stages ...,cache. P's route and `safe`, with
+              Varnish at each data site in front of that site's
+              primary-aware HAProxy (Codex's designs c3594b37, a8c78a38).
+              Per 5 s: at each site two tenants' list and count, each read
+              by two readers (16 reads), and 4 writes (duplicates, a tenth
+              new). Writes go straight to the HAProxy in every arm. Arms:
+              DS and DA, reads straight to the HAProxy, the second reader
+              2.5 s (staggered) or 50 ms (aligned) after the first, both
+              with the tenant's key; FA, aligned, through Varnish with every
+              request passed (the proxy's own cost); CA, aligned, through
+              Varnish with a CACHE_TTL s cache of the exact list and count
+              URLs for the lab's keys (cache_vcl()); CP, as CA with the
+              second reader's own key (personal credentials: nothing to
+              share). Orders DS/DA/FA/CA/CP and the reverse. A cache hit
+              may show what the origin answered up to CACHE_TTL + CACHE_SLACK
+              before it was sent (reconcile()); hits do not reach Alerta, so
+              the key-use and timer checks count origin answers only. After
+              the timed part, in every arm: tenant-0's list is read at both
+              sites, a new alert is written, and each site reads until its
+              list shows it; then a read-only probe key is read twice at
+              each site, deleted, and read until refused. Each arm records
+              its answers (hit, origin, pass), Varnish's counters and the
+              probes' seconds.
 
 A dashboard read is one request of a tenant's key: GET /alerts (newest
 first, one page) or GET /alerts/count, in turn. Every key belongs to one
@@ -160,15 +183,28 @@ PREFLIGHT_ARMS = (("stock", "stock", None), ("safe", "safe", "safe"),
                   ("noecho", "safe+noecho", "safe,noecho"))
 PLACEMENT_ORDERS = (("L", "P", "N"), ("P", "N", "L"), ("N", "L", "P"))
 FRESH_ORDERS = (("P", "N"), ("N", "P"))
-# mode: (seconds of a block, placement blocks, fresh blocks)
-MODES = {"quick": (20, 1, 1), "full": (50, 3, 2)}
+# The cache stage (Codex's designs c3594b37 and a8c78a38): P's route and
+# `safe`; writes go straight to the site's primary-aware HAProxy in every
+# arm. Dashboard reads go straight there (D), through the site's own
+# Varnish with every request passed (F), or through it with a cache of
+# CACHE_TTL seconds (C). arm: (read entry, credentials, cadence).
+CACHE_ARMS = {"DS": ("direct", "shared", "staggered"), "DA": ("direct", "shared", "aligned"),
+              "FA": ("pass", "shared", "aligned"), "CA": ("cache", "shared", "aligned"),
+              "CP": ("cache", "personal", "aligned")}
+CACHE_ORDERS = (("DS", "DA", "FA", "CA", "CP"), ("CP", "CA", "FA", "DA", "DS"))
+CACHE_TTL = 1          # seconds an answer may be kept
+CACHE_SLACK = 1.0      # Varnish's Age is whole seconds, and a fill takes time
+PROBE_LIMIT = 6.0      # seconds a visibility probe waits for its answer
+STAGES = ("placement", "fresh", "cache")
+# mode: (seconds of a block, placement blocks, fresh blocks, cache blocks)
+MODES = {"quick": (20, 1, 1, 1), "full": (50, 3, 2, 2)}
 TENANTS = tuple(f"tenant-{i}" for i in range(4))
 STABLE = 6            # stored alerts of each tenant that get duplicates
 BACKGROUND = 22       # more stored alerts of each tenant
 TARGETS = 2           # stored alerts of each tenant for the changes
 RATE = 4              # requests per second
 PAGE = 25
-SCHEMA = 2  # 2: finish_offset_s; credential_scan of publish()
+SCHEMA = 3  # 2: finish_offset_s; credential_scan of publish(). 3: the cache stage
 LIST = f"/alerts?page-size={PAGE}&sort-by=lastReceiveTime"
 COUNT = "/alerts/count"
 READS = ("list", "count")
@@ -180,6 +216,8 @@ TIMERS = {"received": POSTS, "queries": ("list",), "counts": ("count",)}
 SENTINEL = 20
 TIMEOUT = 8
 IDLE = 20
+VARNISH_COUNTERS = ("MAIN.client_req", "MAIN.cache_hit", "MAIN.cache_miss", "MAIN.cache_hitpass",
+                    "MAIN.s_pass", "MAIN.backend_req")
 LOCAL = threading.local()
 
 
@@ -237,6 +275,86 @@ def plan(stage, block, seconds):
     return ops
 
 
+def cache_plan(block, seconds, cadence):
+    """The requests of one cache block for one cadence. Per 5 s: at each
+    site, two tenants' list and count, each read by two readers (16 reads),
+    and 4 writes. The second reader reads 50 ms after the first (aligned)
+    or 2.5 s after it, within the same 5 s (staggered). The writes and the
+    first readers are the same for both cadences."""
+    rng = random.Random(f"cache/{block}")
+    cycles = seconds // 5
+    writes = cycles * 4
+    new = round(writes / 10)
+    kinds = ["new"] * new + ["dup"] * (writes - new)
+    rng.shuffle(kinds)
+    ops, write = [], 0
+    for cycle in range(cycles):
+        base = cycle * 5
+        tenants = (TENANTS[(2 * cycle) % len(TENANTS)], TENANTS[(2 * cycle + 1) % len(TENANTS)])
+        reads = [(site, tenant, kind) for site in SITES for tenant in tenants for kind in READS]
+        for j, (site, tenant, kind) in enumerate(reads):
+            first = j * 0.5
+            second = (first + (0.05 if cadence == "aligned" else 2.5)) % 5
+            for reader, offset in ((0, first), (1, second)):
+                ops.append({"op": f"cache-{block}-{cycle}-{j}-{reader}", "offset": round(base + offset, 3),
+                            "site": site, "kind": kind, "tenant": tenant, "resource": None, "reader": reader})
+        for w in range(4):
+            kind = kinds[write]
+            tenant = TENANTS[(write + write // len(TENANTS)) % len(TENANTS)]
+            resource = (f"repeat-{(write // len(TENANTS)) % STABLE}" if kind == "dup"
+                        else f"fresh-cache-{block}-{write}")
+            ops.append({"op": f"cache-{block}-{cycle}-w{w}", "offset": base + w * 1.25 + 0.25,
+                        "site": SITES[w % 2], "kind": kind, "tenant": tenant, "resource": resource})
+            write += 1
+    return sorted(ops, key=lambda op: (op["offset"], op["op"]))
+
+
+def cache_vcl(mode, backend_port, keys):
+    """The VCL of one site's Varnish. `pass`: every request goes to the
+    origin. `cache`: only a GET of the stage's list or count URL, exactly,
+    with exactly one of the lab's keys and no cookie or X-API-Key; the key
+    has the host, URL, Authorization and Accept-Encoding; only a 200 without
+    Set-Cookie or a no-cache answer is kept, for at most CACHE_TTL seconds,
+    with no grace. X-Bench-Cache says hit, origin or pass."""
+    head = f'vcl 4.1;\nbackend default {{ .host = "{HOST}"; .port = "{backend_port}"; }}\n'
+    if mode == "pass":
+        return head + ('sub vcl_recv { return(pass); }\n'
+                       'sub vcl_deliver { set resp.http.X-Bench-Cache = "pass"; }\n')
+    if mode != "cache" or not keys or not all(k.isalnum() for k in keys):
+        raise ValueError("cache_vcl: mode pass or cache, and plain keys")
+    urls = "|".join(url.replace("?", "[?]") for url in (LIST, COUNT))
+    return head + f"""sub vcl_recv {{
+    if (req.method != "GET" || req.http.Cookie || req.http.X-API-Key) {{ return(pass); }}
+    if (req.http.Authorization !~ "^Key ({'|'.join(sorted(keys))})$") {{ return(pass); }}
+    if (req.url !~ "^({urls})$") {{ return(pass); }}
+    return(hash);
+}}
+sub vcl_hash {{
+    hash_data(req.http.host);
+    hash_data(req.url);
+    hash_data(req.http.Authorization);
+    hash_data(req.http.Accept-Encoding);
+    return(lookup);
+}}
+sub vcl_backend_response {{
+    set beresp.grace = 0s;
+    set beresp.keep = 0s;
+    if (beresp.status != 200 || beresp.http.Set-Cookie || beresp.http.Vary == "*"
+        || beresp.http.Cache-Control ~ "(?i)no-store|no-cache|private|must-revalidate|proxy-revalidate"
+        || beresp.http.Pragma ~ "(?i)no-cache" || beresp.ttl <= 0s) {{
+        set beresp.uncacheable = true;
+        return(deliver);
+    }}
+    if (beresp.ttl > {CACHE_TTL}s) {{ set beresp.ttl = {CACHE_TTL}s; }}
+    return(deliver);
+}}
+sub vcl_deliver {{
+    if (obj.hits > 0) {{ set resp.http.X-Bench-Cache = "hit"; }}
+    else {{ set resp.http.X-Bench-Cache = "origin"; }}
+}}
+"""
+
+
 def change_request(kind, alert_id, value="moved"):
     if kind == "ack":
         return f"/alert/{alert_id}/action", {"action": "ack", "text": "benchmark"}
@@ -257,7 +375,7 @@ def request(epoch, port, method, path, key, body=None):
     if connection is None:
         connection = HTTPConnection(HOST, port, timeout=TIMEOUT)
     answer = {"status": None, "raw": b"", "app_site": None, "proxy_site": None, "worker": None,
-              "reused": connection.sock is not None, "error": None}
+              "reused": connection.sock is not None, "error": None, "cache": None}
     headers = {"Accept": "application/json", "Authorization": f"Key {key}"}
     data = None
     if body is not None:
@@ -269,7 +387,8 @@ def request(epoch, port, method, path, key, body=None):
         answer.update(raw=response.read(), status=response.status,
                       app_site=response.getheader("X-Alrust-Bench-App-Site"),
                       proxy_site=response.getheader("X-Alrust-Bench-Site"),
-                      worker=response.getheader("X-Alrust-Bench-Worker"))
+                      worker=response.getheader("X-Alrust-Bench-Worker"),
+                      cache=response.getheader("X-Bench-Cache"))
         LOCAL.connections[port] = (connection, time.monotonic())
     except (OSError, HTTPException) as exc:
         connection.close()
@@ -293,7 +412,7 @@ def sample(epoch, port, key, op, ids, phase, due):
     row = {"op": op["op"], "phase": phase, "site": op["site"], "tenant": tenant, "kind": kind,
            "resource": resource, "status": answer["status"], "error": answer["error"], "ok": False,
            "app_site": answer["app_site"], "proxy_site": answer["proxy_site"], "worker": answer["worker"],
-           "reused": answer["reused"],
+           "reused": answer["reused"], "cache": answer["cache"], "reader": op.get("reader"),
            "arrival": due, "start": started, "end": ended}
     if answer["status"] != (201 if kind in POSTS else 200):
         return row
@@ -378,7 +497,10 @@ def reconcile(rows, orders, names):
             return [alert for alert in states[k] if alert not in late]
 
         for read in (row for row in mine if row["kind"] in READS and row["ok"]):
-            low = sum(1 for write in writes if write["end"] <= read["start"])
+            # A cache hit shows what the origin answered up to CACHE_TTL
+            # (and the slack) before the request was sent.
+            began = read["start"] - (CACHE_TTL + CACHE_SLACK if read.get("cache") == "hit" else 0)
+            low = sum(1 for write in writes if write["end"] <= began)
             high = sum(1 for write in writes if write["start"] < read["end"])
             read["states"] = [low, high]
             if high > known:
@@ -528,7 +650,7 @@ def lab_args(tools, output):
         wal_outage=0, health_trace=False, bulk_alerts=0, search_index="stock", clone_strategy="wal-log",
         file_copy_method="copy", dashboard_encoding=None, cool_start_c=75,
         # Each site's HAProxy names its site in the answers of its Alerta.
-        operator_route_trace=True)
+        operator_route_trace=True, varnishd=tools.varnishd, varnishstat=tools.varnishstat)
 
 
 class PlacementLab(hosted_lab.VirtualLab):
@@ -539,6 +661,11 @@ class PlacementLab(hosted_lab.VirtualLab):
         # request of the benchmark is that user's.
         self.env = {**self.env, "CUSTOMER_VIEWS": "True", "ADMIN_USERS": "bench"}
         self.keys = {tenant: secrets.token_hex(20) for tenant in TENANTS}
+        # The cache stage's second reader of a tenant (personal credentials),
+        # and the key of its revocation probe (tenant-0's, read only).
+        self.personal_keys = {tenant: secrets.token_hex(20) for tenant in TENANTS}
+        self.probe_key = secrets.token_hex(20)
+        self.cache_dirs = {}
         self.settings = defaultdict(list)
 
     async def start_app(self, stack, site, slot, db, feature, label):
@@ -572,7 +699,8 @@ class PlacementLab(hosted_lab.VirtualLab):
         """The credentials of this lab, for the search of the output."""
         # The verifier is SCRAM-SHA-256$<count>:<salt>$<stored key>:<server key>.
         parts = [part for part in self.verifier.replace("$", ":").split(":")[2:] if len(part) >= 16]
-        return [self.password, self.key, self.verifier, *parts, *self.client_keys, *self.keys.values()]
+        return [self.password, self.key, self.verifier, *parts, *self.client_keys, *self.keys.values(),
+                *self.personal_keys.values(), self.probe_key]
 
     def private_files(self):
         modes = {"directory": self.root.stat().st_mode & 0o777,
@@ -589,7 +717,16 @@ class PlacementLab(hosted_lab.VirtualLab):
                 'INSERT INTO keys (id,key,"user",scopes,text,expire_time,count,customer) '
                 f"VALUES ('bench-key-{index}','{key}','user-{index}',ARRAY['read','write'],"
                 f"'benchmark',timezone('UTC',now())+interval '1 day',0,'{tenant}');\n"
-                for index, (tenant, key) in enumerate(self.keys.items())), "The insert of the tenant keys")
+                for index, (tenant, key) in enumerate(self.keys.items()))
+                + "".join(
+                'INSERT INTO keys (id,key,"user",scopes,text,expire_time,count,customer) '
+                f"VALUES ('bench-key-p-{index}','{key}','user-p-{index}',ARRAY['read'],"
+                f"'benchmark',timezone('UTC',now())+interval '1 day',0,'{tenant}');\n"
+                for index, (tenant, key) in enumerate(self.personal_keys.items()))
+                + 'INSERT INTO keys (id,key,"user",scopes,text,expire_time,count,customer) '
+                f"VALUES ('probe-key','{self.probe_key}','user-probe',ARRAY['read'],"
+                f"'benchmark',timezone('UTC',now())+interval '1 day',0,'{TENANTS[0]}');\n",
+                "The insert of the tenant keys")
             # host-0000 is the alert that fastpath_check.py copies.
             for resource, tenant in [*itertools.product(seed_resources(), TENANTS), ("host-0000", TENANTS[0])]:
                 answer = await asyncio.to_thread(request, "seed", self.p("a", "vm1"), "POST", "/alert",
@@ -631,7 +768,9 @@ class PlacementLab(hosted_lab.VirtualLab):
         return None
 
     def key_uses(self, db):
-        return self.json_sql(db, "SELECT json_object_agg(customer, count) FROM keys WHERE id LIKE 'bench-key-%'")
+        # The sum of a tenant's keys (the cache stage gives each tenant two).
+        return self.json_sql(db, "SELECT json_object_agg(customer, n) FROM (SELECT customer, sum(count)::int n "
+                                 "FROM keys WHERE id LIKE 'bench-key-%' GROUP BY customer) s")
 
     def final_state(self, db, site="a"):
         return self.json_sql(db, """
@@ -735,8 +874,110 @@ class PlacementLab(hosted_lab.VirtualLab):
         result["ok"] = not problems
         return result
 
-    async def arm_run(self, name, arm, ops, block_start):
-        route, feature, wanted_fast = ARMS[arm]
+    async def caches(self, stack, name, mode):
+        """One varnishd at each data site, in front of that site's
+        primary-aware HAProxy, started empty for this arm. {site: port}."""
+        ports = run_lab.reserve([(site, "varnish") for site in SITES])
+        keys = [*self.keys.values(), *self.personal_keys.values(), self.probe_key]
+        self.cache_dirs, result = {}, {}
+        for site in SITES:
+            d = self.root / f"varnish-{name}-{site}"
+            d.mkdir(mode=0o700)
+            vcl = d / "lab.vcl"  # it names the keys: the lab's 0700 directory only
+            with os.fdopen(os.open(vcl, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as file:
+                file.write(cache_vcl(mode, self.port(site, "primary"), keys))
+            port = ports[site, "varnish"]
+            argv = [str(self.args.varnishd), "-F", "-n", str(d / "work"), "-a", f"{HOST}:{port}",
+                    "-f", str(vcl), "-s", "malloc,64m", "-t", str(CACHE_TTL), "-p", "http_gzip_support=off"]
+            await stack.enter_async_context(run_lab.process(argv, {"PATH": "/usr/bin:/bin", "TMPDIR": str(d)},
+                                                            self.logs / f"varnish-{name}-{site}.log"))
+            self.cache_dirs[site], result[site] = d / "work", port
+        await wait_until(lambda: all(run_lab.http(port, "/management/gtg")[0] == 200 for port in result.values()),
+                         "the two Varnish caches")
+        return result
+
+    def cache_counters(self):
+        result = {}
+        for site, d in self.cache_dirs.items():
+            done = subprocess.run([str(self.args.varnishstat), "-n", str(d), "-1"], stdout=subprocess.PIPE,
+                                  stderr=subprocess.DEVNULL, text=True, timeout=20)
+            result[site] = {parts[0]: int(parts[1]) for parts in map(str.split, done.stdout.splitlines())
+                            if len(parts) >= 2 and parts[0] in VARNISH_COUNTERS and parts[1].isdigit()}
+        return result
+
+    async def cache_probes(self, name, read_ports, ids, rows, index):
+        """After the timed part, the same in every arm of a cache block.
+        (1) Tenant-0's list is read at both sites (a warm cache), a new alert
+        of tenant-0 is written straight to site A's primary-aware HAProxy,
+        and each site reads the list through the arm's read entry every
+        0.1 s until a page has it. (2) The probe key's list is read twice at
+        each site, the key is deleted, and each site reads until one read is
+        refused. Seconds are from the write's answer and from the delete.
+        The write is a row of the ledger (it is in the final state of every
+        arm). Origin answers are counted for the key-use and timer checks."""
+        tenant, problems = TENANTS[0], []
+        result = {"origin_list_reads": 0, "tenant_origin_reads": 0}
+
+        async def get(site, key):
+            answer = await asyncio.to_thread(request, name, read_ports[site], "GET", LIST, key)
+            if answer["status"] == 200 and answer["cache"] != "hit":
+                result["origin_list_reads"] += 1
+                result["tenant_origin_reads"] += key == self.keys[tenant]
+            return answer
+
+        for site in SITES:
+            await get(site, self.keys[tenant])
+        op = {"op": f"probe-{name}", "site": "a", "tenant": tenant, "kind": "new",
+              "resource": f"probe-cache-{index}"}
+        row = await asyncio.to_thread(sample, name, self.port("a", "primary"), self.keys[tenant], op, ids,
+                                      "probe", time.monotonic())
+        rows.append(row)
+        seen = {site: None for site in SITES}
+        if row["ok"]:
+            acked = row["end"]
+            while None in seen.values() and time.monotonic() < acked + PROBE_LIMIT:
+                for site in SITES:
+                    if seen[site] is None:
+                        answer = await get(site, self.keys[tenant])
+                        try:
+                            page = ([a["id"] for a in json.loads(answer["raw"]).get("alerts", [])]
+                                    if answer["status"] == 200 else [])
+                        except (ValueError, AttributeError, TypeError):
+                            page = []
+                        if row["alert_id"] in page:
+                            seen[site] = round(time.monotonic() - acked, 3)
+                await asyncio.sleep(0.1)
+        result["new_alert_seen_s"] = seen
+        for site in SITES:
+            for _ in range(2):
+                await get(site, self.probe_key)
+        await asyncio.to_thread(self.private_sql, name, "DELETE FROM keys WHERE id = 'probe-key';\n",
+                                "The delete of the probe key")
+        deleted = time.monotonic()
+        last_ok, refused = {site: None for site in SITES}, {site: None for site in SITES}
+        while None in refused.values() and time.monotonic() < deleted + PROBE_LIMIT:
+            for site in SITES:
+                if refused[site] is None:
+                    answer = await get(site, self.probe_key)
+                    seconds = round(time.monotonic() - deleted, 3)
+                    if answer["status"] == 200:
+                        last_ok[site] = seconds
+                    elif answer["status"] in (401, 403):
+                        refused[site] = seconds
+            await asyncio.sleep(0.1)
+        result.update(revoked_last_200_s=last_ok, revoked_first_refusal_s=refused)
+        for what, bad in (("the probe's new alert was not written", not row["ok"]),
+                          (f"the new alert was not seen within {PROBE_LIMIT} s: {seen}", None in seen.values()),
+                          (f"the deleted key was still answered after {PROBE_LIMIT} s: {refused}",
+                           None in refused.values())):
+            if bad:
+                problems.append(what)
+        result["problems"] = problems
+        return result
+
+    async def arm_run(self, name, arm, ops, block_start, index=0):
+        route, feature, wanted_fast = ARMS["P" if arm in CACHE_ARMS else arm]
+        entry, credentials, cadence = CACHE_ARMS.get(arm, ("direct", "shared", None))
         clone = await self.clone_fixture(name)
         ids, orders = self.fixture(name)
         keys_before, timers_before = self.key_uses(name), self.alert_timers(name)
@@ -744,11 +985,20 @@ class PlacementLab(hosted_lab.VirtualLab):
                          "kind": kind, "resource": None}
                         for phase in ("warm", "final") for site in SITES for tenant in TENANTS for kind in READS]
         rows = []
+        probes, cache_counts = None, None
         async with AsyncExitStack() as stack:
             await self.apps(stack, name, feature)
+            read_ports = {site: self.port(site, route) for site in SITES}
+            if entry != "direct":
+                read_ports = await self.caches(stack, name, entry)
 
             async def send(op, phase, due, lanes=None):
-                call = (sample, name, self.port(op["site"], route), self.keys[op["tenant"]], op, ids, phase)
+                if op["kind"] in READS:
+                    personal = credentials == "personal" and op.get("reader") == 1
+                    key = (self.personal_keys if personal else self.keys)[op["tenant"]]
+                    call = (sample, name, read_ports[op["site"]], key, op, ids, phase)
+                else:
+                    call = (sample, name, self.port(op["site"], route), self.keys[op["tenant"]], op, ids, phase)
                 if lanes is None or op["kind"] in READS:
                     return await asyncio.to_thread(*call, due or time.monotonic())
                 async with lanes[op["tenant"]]:
@@ -770,8 +1020,12 @@ class PlacementLab(hosted_lab.VirtualLab):
             wal_bytes = int(self.sql("postgres", f"SELECT pg_wal_lsn_diff(pg_current_wal_insert_lsn(),'{wal_before}')"))
             scope_after = run_lab.cgroup_cpu_stats()
             pool_after, cpu_after = self.pool_stats(name), self.cpu_sample()
+            if arm in CACHE_ARMS:
+                probes = await self.cache_probes(name, read_ports, ids, rows, index)
             for op in tenant_reads[len(tenant_reads) // 2:]:
                 rows.append(await send(op, "final", None))
+            if entry != "direct":
+                cache_counts = self.cache_counters()
         updates = await asyncio.to_thread(self.row_updates, name)
         _, orders_after = self.fixture(name)
         state = self.final_state(name)
@@ -796,11 +1050,17 @@ class PlacementLab(hosted_lab.VirtualLab):
         wrong_site = [row["op"] for row in rows if row["status"] is not None and (
             row["worker"] not in ("vm1", "vm2")
             or (row["app_site"], row["proxy_site"]) != (("a", "a") if route == "primary" else (row["site"], None)))]
-        answered = Counter(row["tenant"] for row in rows if row["status"] is not None)
+        # A cache hit does not reach Alerta: no key use, no timer.
+        answered = Counter(row["tenant"] for row in rows if row["status"] is not None and row.get("cache") != "hit")
+        if probes:
+            answered[TENANTS[0]] += probes["tenant_origin_reads"]
         keys_wanted = {tenant: keys_before[tenant] + answered[tenant] for tenant in TENANTS}
-        good = Counter(row["kind"] for row in rows if row["ok"])
+        good = Counter(row["kind"] for row in rows if row["ok"] and row.get("cache") != "hit")
         timers_wanted = {timer: timers_before.get(timer, 0) + sum(good[kind] for kind in kinds)
                          for timer, kinds in TIMERS.items()}
+        if probes:
+            timers_wanted["queries"] += probes["origin_list_reads"]
+            problems += probes["problems"]
         stored = {(row["customer"], row["resource"]): row for row in state}
         changed = sorted({(op["tenant"], op["resource"]) for op in ops if op["kind"] in CHANGES})
         for what, bad in (
@@ -855,19 +1115,27 @@ class PlacementLab(hosted_lab.VirtualLab):
             "changed_alerts": {f"{key[0]}/{key[1]}": stored.get(key) for key in changed},
             "final_state_sha256": hashlib.sha256(json.dumps(state, sort_keys=True).encode()).hexdigest(),
             "settings": self.settings[name],
+            **({"read_entry": entry, "credentials": credentials, "cadence": cadence,
+                "cache_answers": Counter(f"{row['phase']}/{row.get('cache')}" for row in rows
+                                         if row["kind"] in READS),
+                "varnish": cache_counts, "probes": probes} if arm in CACHE_ARMS else {}),
         }, rows
 
     async def block(self, stage, index, order, seconds, t0):
-        ops = plan(stage, index, seconds)
+        plans = ({cadence: cache_plan(index, seconds, cadence) for cadence in ("aligned", "staggered")}
+                 if stage == "cache" else {None: plan(stage, index, seconds)})
+        ops = next(iter(plans.values()))
+        digests = {str(c): hashlib.sha256(json.dumps(p, sort_keys=True).encode()).hexdigest() for c, p in plans.items()}
         record = {"stage": stage, "block": index, "order": list(order), "seconds": seconds,
                   "offered": Counter(CLASS[op["kind"]] for op in ops),
-                  "plan_sha256": hashlib.sha256(json.dumps(ops, sort_keys=True).encode()).hexdigest(),
+                  "plan_sha256": digests["None"] if stage != "cache" else digests,
                   "links": await self.links(), "runs": []}
         ledger = []
         for position, arm in enumerate(order):
             name = f"{stage[0]}{index}{arm.lower()}"
             started = time.monotonic()
-            run, rows = await self.arm_run(name, arm, ops, t0)
+            arm_ops = plans[CACHE_ARMS[arm][2]] if stage == "cache" else ops
+            run, rows = await self.arm_run(name, arm, arm_ops, t0, index)
             run.update(position=position, wall_s=round(time.monotonic() - started, 1))
             record["runs"].append(run)
             ledger += [{"stage": stage, "block": index, "arm": arm, "position": position, **row} for row in rows]
@@ -875,7 +1143,8 @@ class PlacementLab(hosted_lab.VirtualLab):
         equal = len({run["final_state_sha256"] for run in record["runs"]}) == 1
         record["final_states_equal"] = equal
         record["valid"] = equal and all(run["valid"] for run in record["runs"])
-        pairs = (("L", "P"), ("P", "N"), ("L", "N")) if stage == "placement" else (("P", "N"),)
+        pairs = {"placement": (("L", "P"), ("P", "N"), ("L", "N")), "fresh": (("P", "N"),),
+                 "cache": (("DS", "DA"), ("DA", "FA"), ("FA", "CA"), ("CA", "CP"), ("DA", "CA"))}[stage]
         record["differences"] = differences(record["runs"], pairs) if record["valid"] else {}
         return record, ledger
 
@@ -1030,7 +1299,7 @@ def summary(record):
         lines += [f"- REJECTED {block['stage']} block {block['block']}: final states equal "
                   f"{block['final_states_equal']}; "
                   + "; ".join(f"{run['arm']}: {run['problems']}" for run in block["runs"] if run["problems"])]
-    for stage in ("placement", "fresh"):
+    for stage in STAGES:
         chosen = [block for block in blocks if block["stage"] == stage and block["valid"]]
         if not chosen:
             continue
@@ -1059,6 +1328,28 @@ def summary(record):
                              f"{run['primary_wal_bytes']} | {cpu.get('app_a')} / {cpu.get('app_b')} | "
                              f"{cpu.get('postgres_a')} | {run['reads_missing_an_alert'].get('a', 0)} / "
                              f"{run['reads_missing_an_alert'].get('b', 0)} |")
+    cache_blocks = [block for block in blocks if block["stage"] == "cache"]
+    if cache_blocks:
+        lines += ["", "### Cache stage: answers, origin requests and probes", "",
+                  "D: reads straight to the site's primary-aware HAProxy; F: through the site's Varnish with every "
+                  f"request passed; C: through it with a {CACHE_TTL} s cache. Second letter: S the second reader "
+                  "2.5 s after the first, A 50 ms after, P aligned with its own key. Writes go straight in every arm. "
+                  "Probes: seconds from a new alert's answer until each site's list showed it, and from a key's "
+                  "delete to the last 200 and the first refusal.", "",
+                  "| block | arm | timed reads hit / origin / pass | Varnish backend requests A / B "
+                  "| new alert seen A / B | revoked key A: last 200, refused | revoked key B: last 200, refused |",
+                  "|---|---|---|---|---|---|---|"]
+        for block in cache_blocks:
+            for run in block["runs"]:
+                answers, varnish, probes = run.get("cache_answers", {}), run.get("varnish") or {}, run.get("probes") or {}
+                seen, last, refused = (probes.get(k, {}) for k in
+                                       ("new_alert_seen_s", "revoked_last_200_s", "revoked_first_refusal_s"))
+                lines.append(
+                    f"| {block['block']} | {run['arm']} | {answers.get('timed/hit', 0)} / "
+                    f"{answers.get('timed/origin', 0)} / {answers.get('timed/pass', 0)} | "
+                    f"{varnish.get('a', {}).get('MAIN.backend_req', '-')} / "
+                    f"{varnish.get('b', {}).get('MAIN.backend_req', '-')} | {seen.get('a')} / {seen.get('b')} | "
+                    f"{last.get('a')}, {refused.get('a')} | {last.get('b')}, {refused.get('b')} |")
     scan = record.get("credential_scan")
     if scan:
         lines += ["", f"Search of the output for the lab's credentials: {scan['files']} files, "
@@ -1070,7 +1361,7 @@ def summary(record):
 
 
 async def run(tools):
-    seconds, placement_blocks, fresh_blocks = MODES[tools.mode]
+    seconds, placement_blocks, fresh_blocks, cache_blocks = MODES[tools.mode]
     published = tools.output
     begin_output(published)
     # Private; publish() copies from here what it searched.
@@ -1079,6 +1370,9 @@ async def run(tools):
     record = {"schema": SCHEMA, "mode": tools.mode, "ok": False, "block_seconds": seconds,
               "cgroup": require_hosted(), "sources": sources(), "addon_blob": blob_id(ADDON),
               "arms": {arm: {"route": route, "ALERTA_FAST": fast} for arm, (route, _, fast) in ARMS.items()},
+              "stages": list(tools.stages),
+              "cache_arms": {arm: dict(zip(("read_entry", "credentials", "cadence"), spec))
+                             for arm, spec in CACHE_ARMS.items()} if "cache" in tools.stages else None,
               "plugins": PLUGINS, "tenants": len(TENANTS), "alerts_per_tenant": len(seed_resources()),
               "netem": {k: v for k, v in os.environ.items() if k.startswith("ALRUST_NETEM_")},
               "blocks": []}
@@ -1111,7 +1405,9 @@ async def run(tools):
                 if record["preflight"]["ok"]:
                     t0 = time.monotonic()
                     todo = ([("placement", i, PLACEMENT_ORDERS[i]) for i in range(placement_blocks)]
-                            + [("fresh", i, FRESH_ORDERS[i]) for i in range(fresh_blocks)])
+                            + [("fresh", i, FRESH_ORDERS[i]) for i in range(fresh_blocks)]
+                            + [("cache", i, CACHE_ORDERS[i]) for i in range(cache_blocks)])
+                    todo = [item for item in todo if item[0] in tools.stages]
                     for stage, index, order in todo:
                         block, rows = await lab.block(stage, index, order, seconds, t0)
                         record["blocks"].append(block)
@@ -1145,7 +1441,7 @@ def self_test():
         ("quick", "fresh"): {"list": 32, "count": 32, "create": 8, "duplicate": 4, "change": 4},
         ("full", "placement"): {"list": 80, "count": 80, "duplicate": 36, "create": 4},
         ("full", "fresh"): {"list": 80, "count": 80, "create": 20, "duplicate": 12, "change": 8}}
-    for mode, (seconds, _, _) in MODES.items():
+    for mode, (seconds, *_) in MODES.items():
         for stage in ("placement", "fresh"):
             ops = plan(stage, 0, seconds)
             got = Counter(CLASS[op["kind"]] for op in ops)
@@ -1167,6 +1463,35 @@ def self_test():
     assert full[0] == {"list": 80, "count": 80, "dup": 36, "new": 4}, full[0]
     assert full[1] == {"list": 80, "count": 80, "create": 20, "dup": 12,
                        "changed": 2, "same": 2, "null": 2, "ack": 2}, full[1]
+    for seconds in (20, 50):
+        aligned, staggered = cache_plan(0, seconds, "aligned"), cache_plan(0, seconds, "staggered")
+        for ops in (aligned, staggered):
+            got = Counter(CLASS[op["kind"]] for op in ops)
+            assert got["list"] == got["count"] == seconds // 5 * 8 and got["duplicate"] + got["create"] == seconds // 5 * 4
+            assert len({op["op"] for op in ops}) == len(ops) and all(0 <= op["offset"] < seconds for op in ops)
+            assert ops == sorted(ops, key=lambda op: (op["offset"], op["op"]))
+        pick = lambda ops, test: sorted((op["op"], op["offset"]) for op in ops if test(op))
+        assert pick(aligned, lambda op: op.get("reader") != 1) == pick(staggered, lambda op: op.get("reader") != 1)
+        assert [op for op in aligned if op["kind"] in POSTS] == [op for op in staggered if op["kind"] in POSTS]
+        for ops, gap in ((aligned, 0.05), (staggered, 2.5)):
+            by = {op["op"]: op for op in ops}
+            for op in ops:
+                if op.get("reader") == 1:
+                    first = by[op["op"][:-1] + "0"]
+                    assert round((op["offset"] - first["offset"]) % 5, 3) == gap, (op, first)
+                    assert (op["site"], op["tenant"], op["kind"]) == (first["site"], first["tenant"], first["kind"])
+        assert cache_plan(0, seconds, "aligned") == aligned and cache_plan(1, seconds, "aligned") != aligned
+    vcl = cache_vcl("cache", 1234, ["bb11", "aa22"])
+    assert '"^Key (aa22|bb11)$"' in vcl and f".port = \"1234\"" in vcl and "set beresp.ttl = 1s" in vcl
+    assert '"^(/alerts[?]page-size=25&sort-by=lastReceiveTime|/alerts/count)$"' in vcl
+    assert "set beresp.grace = 0s" in vcl and "X-Bench-Cache = \"hit\"" in vcl
+    assert "return(hash)" not in cache_vcl("pass", 1234, []) and "return(pass)" in cache_vcl("pass", 1234, [])
+    for bad in (("cache", 1, []), ("cache", 1, ["a b"]), ("other", 1, ["ab"])):
+        try:
+            cache_vcl(*bad)
+        except ValueError:
+            continue
+        raise AssertionError(bad)
 
     # id7 is a `major` alert, id3 the alert that gets the `ack`; the others
     # and the new alert are `minor`.
@@ -1221,7 +1546,13 @@ def self_test():
         # During the duplicate and the create. The duplicate is after the
         # read's time, so the create is also: `new` cannot be there without id7.
         (read("list", 0.9, 3.6, ["new", *no7], ["new", *no7]), False, None),
-        (read("list", 0.9, 3.6, no7, no7), True, True)]
+        (read("list", 0.9, 3.6, no7, no7), True, True),
+        # A cache hit can show what the origin answered up to CACHE_TTL and
+        # the slack before it was sent: the state before the duplicate...
+        (read("list", 1.5, 1.7, first, first, cache="hit"), True, False),
+        (read("list", 3.7, 3.8, moved, moved, cache="hit"), True, False),   # ...or before the create
+        (read("list", 5.0, 5.1, first, first, cache="hit"), False, None),   # not older than that
+        (read("list", 1.5, 1.7, first, first, cache="origin"), False, None)]
     rows = [write("dup", 1.0, 1.4, "repeat-0", "id7"), write("create", 3.0, 3.5, "fresh-x-0-1", "new"),
             write("ack", 5.0, 5.2, "mutate-0"), *(case[0] for case in cases)]
     last = reconcile(rows, {"t": first, "other": first}, names)
@@ -1389,9 +1720,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--mode", choices=MODES, default="quick")
+    parser.add_argument("--stages", default="placement,fresh",
+                        help=f"comma-separated, in this order: {','.join(STAGES)} (default placement,fresh)")
     for name in ("etcd", "haproxy", "pgbouncer", "pg-bin", "venv", "output"):
         parser.add_argument(f"--{name}", type=lambda item: Path(item).resolve())
+    parser.add_argument("--varnishd", type=Path, default=Path("/usr/sbin/varnishd"))
+    parser.add_argument("--varnishstat", type=Path, default=Path("/usr/bin/varnishstat"))
     tools = parser.parse_args()
+    tools.stages = tuple(stage for stage in STAGES if stage in tools.stages.split(","))
+    if not tools.stages or set(parser.parse_args().stages.split(",")) - set(STAGES):
+        parser.error(f"--stages: one or more of {','.join(STAGES)}")
     if tools.self_test:
         return self_test()
     if None in (tools.etcd, tools.haproxy, tools.pgbouncer, tools.pg_bin, tools.venv, tools.output):
