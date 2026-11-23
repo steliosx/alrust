@@ -1,0 +1,91 @@
+# Two default patches of scripts/bench/alerta_fast.py (an add-on for stock
+# Alerta 9.1.0), `onecount` and `nosentry`, checked for an installation
+# that runs its own Python code with Alerta: scripts/bench/defaults_check.py,
+# on one GitHub-hosted runner with PostgreSQL 18.7 and the reference Alerta
+# environment of scripts/bench/setup.sh. Synthetic data only; no Sentry
+# SDK starts and nothing is sent. Not a benchmark and not a required check.
+name: addon defaults check
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/bench/alerta_fast.py
+      - scripts/bench/defaults_check.py
+      - scripts/bench/setup.sh
+      - .github/workflows/addon-defaults.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: addon-defaults-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: onecount and nosentry with own code (PostgreSQL 18.7)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
+        with:
+          # The reference Alerta is installed from the pinned submodule.
+          submodules: true
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0 (Node24)
+        with:
+          python-version: "3.12"
+      - name: PostgreSQL 18.7 and the reference Alerta environment
+        timeout-minutes: 10
+        run: scripts/bench/setup.sh
+      - name: defaults check
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/defaults-out"
+          mkdir -- "$out"
+          # The throwaway cluster of setup.sh: its password is public text.
+          PGPASSWORD=postgres "$BENCH_PG_BIN/psql" -h 127.0.0.1 -p 5432 -U postgres -d postgres \
+            -v ON_ERROR_STOP=1 -c 'CREATE DATABASE defaults_check'
+          cd "$BENCH_WORK"
+          env -i PATH="$BENCH_ALERTA_VENV/bin:/usr/bin:/bin" HOME="$BENCH_WORK" \
+            DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/defaults_check \
+            SECRET_KEY=bench-not-secret LOG_LEVEL=WARNING \
+            "$BENCH_ALERTA_VENV/bin/python" -I "$GITHUB_WORKSPACE/scripts/bench/defaults_check.py" \
+            "$out/defaults-check.json" 2>&1 | tee "$out/defaults-check.log"
+      - name: The same check on the add-on before these fixes (three cases must fail)
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/defaults-out"
+          before="$RUNNER_TEMP/addon-before"
+          mkdir -- "$before"
+          # main at 021ffc87, before the fixes: alerta_fast.py blob c858e280.
+          git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1 origin 021ffc8779e09f72e7863dd648c6aca455cfdb9a
+          git -C "$GITHUB_WORKSPACE" show 021ffc8779e09f72e7863dd648c6aca455cfdb9a:scripts/bench/alerta_fast.py \
+            > "$before/alerta_fast.py"
+          [ "$(git hash-object "$before/alerta_fast.py")" = c858e28004376b33163c26d3040ce2c1afead7f7 ]
+          PGPASSWORD=postgres "$BENCH_PG_BIN/psql" -h 127.0.0.1 -p 5432 -U postgres -d postgres \
+            -v ON_ERROR_STOP=1 -c 'CREATE DATABASE defaults_before'
+          cd "$BENCH_WORK"
+          status=0
+          env -i PATH="$BENCH_ALERTA_VENV/bin:/usr/bin:/bin" HOME="$BENCH_WORK" DEFAULTS_ADDON_DIR="$before" \
+            DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/defaults_before \
+            SECRET_KEY=bench-not-secret LOG_LEVEL=WARNING \
+            "$BENCH_ALERTA_VENV/bin/python" -I "$GITHUB_WORKSPACE/scripts/bench/defaults_check.py" \
+            "$out/defaults-before.json" > "$out/defaults-before.log" 2>&1 || status=$?
+          cat -- "$out/defaults-before.log"
+          [ "$status" = 1 ]
+          python3 -I -c 'import json, sys
+          d = json.load(open(sys.argv[1]))
+          failed = sorted(r["case"] for r in d["results"] if r["problems"])
+          wanted = ["nosentry: no SENTRY_DSN, nosentry on", "nosentry: the import of alerta.app fails", "onecount"]
+          print("failed before the fixes:", failed)
+          sys.exit(0 if failed == wanted else 1)' "$out/defaults-before.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node24)
+        if: always()
+        with:
+          name: addon-defaults-check
+          path: ${{ runner.temp }}/defaults-out/
+          if-no-files-found: warn
