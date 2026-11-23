@@ -1,7 +1,7 @@
 {
   "cargo_lock": {
     "bytes": 54706,
-    "sha256": "38195e0448779c14a050fe460805ce2ac32ec7fac7a0cb84a19ffb2a0a8cce4c"
+    "sha256": "31a9ad93a5b1ce53c4fa9cc5f2075cab13893bceabb6a02020afab99aed99da9"
   },
   "license_policy": "Declared expressions retained literally, including AND and legacy slash forms. All selected candidate texts are retained; no OR branch or original-code license is selected.",
   "packages": [
@@ -1678,12 +1678,12 @@
     },
     {
       "archive": {
-        "bytes": 9347,
-        "sha256": "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf",
-        "url": "https://static.crates.io/crates/form_urlencoded/form_urlencoded-1.2.2.crate"
+        "bytes": 9323,
+        "sha256": "afa489199eaffb1211795df1c6236ce1ad0d41a6fa45250add73e3b02420f06e",
+        "url": "https://static.crates.io/crates/form_urlencoded/form_urlencoded-1.2.3.crate"
       },
       "declared_license": "MIT OR Apache-2.0",
-      "id": "form_urlencoded@1.2.2",
+      "id": "form_urlencoded@1.2.3",
       "resolved_feature_sets": {
         "host": [
           [
@@ -1705,16 +1705,16 @@
       ],
       "texts": [
         {
-          "archive_member": "form_urlencoded-1.2.2/LICENSE-APACHE",
+          "archive_member": "form_urlencoded-1.2.3/LICENSE-APACHE",
           "bytes": 10847,
-          "path": "texts/form_urlencoded-1.2.2/LICENSE-APACHE",
+          "path": "texts/form_urlencoded-1.2.3/LICENSE-APACHE",
           "selection": "whole archive member",
           "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
         },
         {
-          "archive_member": "form_urlencoded-1.2.2/LICENSE-MIT",
+          "archive_member": "form_urlencoded-1.2.3/LICENSE-MIT",
           "bytes": 1072,
-          "path": "texts/form_urlencoded-1.2.2/LICENSE-MIT",
+          "path": "texts/form_urlencoded-1.2.3/LICENSE-MIT",
           "selection": "whole archive member",
           "sha256": "20c7855c364d57ea4c97889a5e8d98470a9952dade37bd9248b9a54431670e5e"
         }
@@ -22418,12 +22418,12 @@
     },
     {
       "archive": {
-        "bytes": 86512,
-        "sha256": "ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed",
-        "url": "https://static.crates.io/crates/url/url-2.5.8.crate"
+        "bytes": 89968,
+        "sha256": "f00cd2407bb42c0ef17be88d4cf020f5cceffd121665bac9b8b9493a369b3b1a",
+        "url": "https://static.crates.io/crates/url/url-2.5.9.crate"
       },
       "declared_license": "MIT OR Apache-2.0",
-      "id": "url@2.5.8",
+      "id": "url@2.5.9",
       "resolved_feature_sets": {
         "host": [
           [
@@ -22444,16 +22444,16 @@
       ],
       "texts": [
         {
-          "archive_member": "url-2.5.8/LICENSE-APACHE",
+          "archive_member": "url-2.5.9/LICENSE-APACHE",
           "bytes": 10847,
-          "path": "texts/url-2.5.8/LICENSE-APACHE",
+          "path": "texts/url-2.5.9/LICENSE-APACHE",
           "selection": "whole archive member",
           "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
         },
         {
-          "archive_member": "url-2.5.8/LICENSE-MIT",
+          "archive_member": "url-2.5.9/LICENSE-MIT",
           "bytes": 1072,
-          "path": "texts/url-2.5.8/LICENSE-MIT",
+          "path": "texts/url-2.5.9/LICENSE-MIT",
           "selection": "whole archive member",
           "sha256": "b38f11f6096706e6de553dabe2a7ed142d59b6fa8c97e290c67496154745cdd5"
         }
@@ -24658,7 +24658,7 @@
     "scope": "Conservative legal-text retention for selected package archives, including inactive-feature source notices. Not a binary SBOM or complete distribution/legal clearance.",
     "static_graph_evidence": {
       "bytes": 45063,
-      "sha256": "caf56c2e652fff4fe06a72b61ffef7ab5bb70cbbef4d9554b5b2510d6e869fd7"
+      "sha256": "5157c17857410894664d917db6ba27d056040d3b0aee5844700e91932100c1aa"
     },
     "target": "x86_64-unknown-linux-gnu",
     "target_packages": 138,
@@ -24668,7 +24668,7 @@
     {
       "bytes": 54706,
       "path": "Cargo.lock",
-      "sha256": "38195e0448779c14a050fe460805ce2ac32ec7fac7a0cb84a19ffb2a0a8cce4c"
+      "sha256": "31a9ad93a5b1ce53c4fa9cc5f2075cab13893bceabb6a02020afab99aed99da9"
     },
     {
       "bytes": 3776,
@@ -24716,5 +24716,5 @@
       "sha256": "795d1a3c779bea031369cbb2ec7cb44a234216a0c4ed5a22de8da46197b997c3"
     }
   ],
-  "source_parent": "8a30c19fd6663c42d7fdebc9adb86de276bda7d8"
+  "source_parent": "d36debcb7ebf7888748cc1facc5868a77f4cc48b"
 }
