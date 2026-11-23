@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-22 23:02 EST by claude-alrust, the sole writer of this
+_Last updated: 2026-11-22 23:38 EST by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox. Times
 written from 2026-11-15 14:13 EST on are Nassau local time (DECISIONS Y63);
 earlier ones are UTC (`Z`)._
@@ -61,12 +61,13 @@ the advisor before the merge: no objection) and #286 (2026-11-22 21:53:17
 EST, `e319390d`, tree = approved tree `47cdaa5d`; Codex `591421e1`, the same
 two conditions) and #285 (2026-11-22 23:00:58 EST, `6f251b0d`, tree = approved
 tree `e290c6d6`; Codex `ed9e0738`, the same two conditions; cargo-deny green
-again on heads that merge it).
+again on heads that merge it) and #281 (2026-11-22 23:38:14 EST, `5dcf74c4`,
+tree = approved tree `59a8431e`; Codex `224e0e12`, the same two
+conditions).
 
 **Open, in the agreed order** (each later head needs a new Codex review and
-the advisor): #281 savedq (approved at `fc6f976c`; head `34b30575` merges
-main with #285, its own files unchanged); #282 savedq load (approved at
-`1203a8af`); #283
+the advisor): #282 savedq load (approved at `1203a8af`; head `465aa137`
+merges main with #281, its own files unchanged); #283
 onecount/nosentry fixes (approved at `9452ff7e`; needs its add-on pin
 rebound, and its check's text must say that the held-context case passes
 before the fix too, since each `/alerts` request has its own time cut-off);
