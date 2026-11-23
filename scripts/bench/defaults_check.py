@@ -16,10 +16,15 @@ counted.
     must count the new alert (total, severity and status counts), and each
     request must make one grouped query and call neither of Alerta's two
     count functions.
+    This case passes before the fix too: Alerta's /alerts gives each
+    request its own time cut-off (its query time is in the query's
+    values), so the cache key on `g` never repeated across these
+    requests. It checks that the fix keeps one grouped query per request.
   - A request with no outer context: the same.
   - An application context and no request (a tool): the counts must come
     from Alerta's two functions, one call each, and see an alert made
-    between two calls.
+    between two calls. This is the case that fails before the fix (the
+    same query object, so the same key, on the same `g`).
 
 nosentry. Before alerta_fast is imported, the child puts a recorder in
 place of sentry_sdk.init: it records who called it and returns a marker,
