@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-22 21:54 EST by claude-alrust, the sole writer of this
+_Last updated: 2026-11-22 23:02 EST by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox. Times
 written from 2026-11-15 14:13 EST on are Nassau local time (DECISIONS Y63);
 earlier ones are UTC (`Z`)._
@@ -59,11 +59,13 @@ into it, with Cargo.lock, DECISIONS and `third_party/rust` unchanged.
 `8922c965` said the step needs no new owner decision, and Claude consulted
 the advisor before the merge: no objection) and #286 (2026-11-22 21:53:17
 EST, `e319390d`, tree = approved tree `47cdaa5d`; Codex `591421e1`, the same
-two conditions).
+two conditions) and #285 (2026-11-22 23:00:58 EST, `6f251b0d`, tree = approved
+tree `e290c6d6`; Codex `ed9e0738`, the same two conditions; cargo-deny green
+again on heads that merge it).
 
 **Open, in the agreed order** (each later head needs a new Codex review and
-the advisor): #285 (url, head `6f34f456`); #281 savedq (approved at
-`fc6f976c`; needs a merge of main after #285); #282 savedq load (approved at
+the advisor): #281 savedq (approved at `fc6f976c`; head `34b30575` merges
+main with #285, its own files unchanged); #282 savedq load (approved at
 `1203a8af`); #283
 onecount/nosentry fixes (approved at `9452ff7e`; needs its add-on pin
 rebound, and its check's text must say that the held-context case passes
