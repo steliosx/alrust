@@ -88,12 +88,20 @@ unless it is named: ALERTA_FAST=safe,hot,noecho.
                          two UPDATEs that changed nothing. Alerta itself
                          has no trigger. The row's xmin does not change
                          and no WAL is written for it.
+  alertlinks OPT-IN. Reuse the alert link prefix on the current request
+            when serializing ordinary alert IDs with an HTTP(S) base URL.
+            For example, set ALERTA_FAST=safe,alertlinks. Custom model URL
+            helpers keep their behavior. Unusual IDs and bases use Alerta's
+            original helper. The alert and history models share one prefix.
   nolog     Alerta formats every SQL statement for a debug message before
             the logger checks its level. Skip that unless DEBUG is on.
   onecount  The list and the count read severity and status totals with
             two scans of the same rows. Read both with one grouped query.
   nosentry  Alerta starts the Sentry SDK even with no SENTRY_DSN, which
             wraps every request. Do not start it when no DSN is set.
+  fastdates Opt in to native millisecond formatting in this application's
+            stock HTTP JSON provider for ordinary, timezone-naive datetimes
+            from year 1000. Every other value uses the installed encoder.
 
 Written against Alerta 9.1.0 (f4312727). The names it replaces are checked
 at start-up: a release that moves one of them stops the server with a
@@ -109,7 +117,7 @@ import threading
 import time
 
 SAFE = ("reuse", "nolog", "onecount", "nosentry")
-ALL = SAFE + ("hot", "noecho")
+ALL = SAFE + ("hot", "noecho", "alertlinks", "fastdates")
 FEATURES = set()
 for _name in os.environ.get("ALERTA_FAST", "safe").split(","):
     if _name == "safe":
@@ -402,7 +410,174 @@ if "onecount" in FEATURES:
     Backend.get_counts_by_severity = lambda self, query=None: _counts(self, query, "severity")
     Backend.get_counts_by_status = lambda self, query=None: _counts(self, query, "status")
 
+# ------------------------------------------------------------- alertlinks
+
+if "alertlinks" in FEATURES:
+    import hashlib
+    import re
+    import urllib.parse
+    from functools import wraps
+    from types import CodeType, FunctionType
+
+    from flask import Config, Flask, Request, current_app, has_request_context, request
+
+    from alerta.models import alert as _alert_model, history as _history_model
+    from alerta.utils import response as _response
+
+    _original_url = _response.absolute_url
+    _stdlib_join = urllib.parse.urljoin
+    _simple_alert_path = re.compile(r"/alert/[A-Za-z0-9_-]+")
+    _simple_http_base = re.compile(
+        r"https?://[A-Za-z0-9-]+(?:[.][A-Za-z0-9-]+)*(?::[0-9]{1,5})?(?:/[A-Za-z0-9_~-]+)*/?"
+    )
+    _missing_prefix = object()
+
+    def _stock_url_code():
+        # File identity alone would accept a runtime replacement in this module.
+        try:
+            with open(_response.__file__, "rb") as source_file:
+                source = source_file.read()
+        except (OSError, TypeError):
+            return None
+        if hashlib.sha256(source).hexdigest() != "4560a19f3a7dce5c3db4555b4276fb7ab39a5cd8ad7612ded893facd79902b4c":
+            return None
+        code = compile(source, _response.__file__, "exec", dont_inherit=True)
+        return next(c for c in code.co_consts if isinstance(c, CodeType) and c.co_name == "absolute_url")
+
+    class _AlertPrefix(tuple):
+        pass
+
+    def _alert_link(path=""):
+        if (type(path) is not str or not _simple_alert_path.fullmatch(path) or not has_request_context()
+                or _original_url.__code__ is not _installed_code
+                or _response.urljoin is not _stdlib_join or _stdlib_join.__code__ is not _join_code
+                or _response.current_app is not current_app or _response.request is not request):
+            return _original_url(path)
+
+        req = request._get_current_object()
+        application = current_app._get_current_object()
+        if type(req) is not Request or type(application) is not Flask or type(application.config) is not Config:
+            return _original_url(path)
+        base = application.config.get("BASE_URL", _missing_prefix)
+        if base is None or (type(base) is str and not base):
+            try:
+                base = req.url_root
+            except Exception:
+                return _response.urljoin("//", path[1:])  # stock falls back to base "/"
+        if type(base) is not str:
+            return _original_url(path)
+        saved = req.__dict__.get("_alerta_fast_link_prefix", _missing_prefix)
+        if type(saved) is _AlertPrefix and saved[0] == base:
+            return saved[1] + path[7:]
+        if (saved is not _missing_prefix and type(saved) is not _AlertPrefix) or not _simple_http_base.fullmatch(base):
+            return _original_url(path)
+        # Use the same join as the pinned helper on the first actual href.
+        href = _response.urljoin(base + "/", path[1:])
+        alert_id = path[7:]
+        prefix = href[:-len(alert_id)]
+        req.__dict__["_alerta_fast_link_prefix"] = _AlertPrefix((base, prefix))
+        return href
+
+    if (type(_original_url) is FunctionType and _original_url.__globals__ is vars(_response)
+            and _original_url.__code__ == _stock_url_code() and _original_url.__defaults__ == ("",)
+            and type(_stdlib_join) is FunctionType and _stdlib_join.__globals__ is vars(urllib.parse)
+            and _stdlib_join.__code__.co_name == "urljoin"
+            and _stdlib_join.__code__.co_filename == urllib.parse.__file__):
+        _installed_code = _original_url.__code__
+        _join_code = _stdlib_join.__code__
+        _alert_link = wraps(_original_url)(_alert_link)
+        for _model in (_alert_model, _history_model):
+            if _model.absolute_url is _original_url:
+                _model.absolute_url = _alert_link
+
 # -------------------------------------------------------------------- app
 
 log.warning("alerta_fast patches: %s", ",".join(f for f in ALL if f in FEATURES) or "none")
 app = alerta.app.create_app()
+
+if "fastdates" in FEATURES:
+    import hashlib
+    from datetime import datetime
+    from pathlib import Path
+    from types import CodeType, FunctionType
+    from weakref import ref
+    from alerta.utils import format as _format
+
+    def _install_fastdates(provider):
+        provider_type, encoder, formatter = _format.AlertaJsonProvider, _format.CustomJSONEncoder, _format.DateTime
+        if type(provider) is not provider_type or "dumps" in vars(provider):
+            return False
+        try:
+            filename = _format.__file__
+            source = Path(filename).read_bytes()
+        except (OSError, TypeError):
+            return False
+        # Compare the live methods with the pinned file too: a plugin can
+        # already have changed one without touching its installed source.
+        if hashlib.sha256(source).hexdigest() != "428fca4ef83cd9e8009fabbae58e69cb8061f7b130f2232f86711b1ed892e6ee":
+            return False
+        compiled = compile(source, filename, "exec", dont_inherit=True)
+
+        def stock(owner, name, method):
+            if type(owner) is not type or owner.__name__ != name or owner.__module__ != _format.__name__:
+                return False
+            fn = getattr(owner, method, None)
+            if type(fn) is not FunctionType or fn.__globals__ is not vars(_format) or method not in vars(owner):
+                return False
+            return any(fn.__code__ == code for cls in compiled.co_consts
+                       if isinstance(cls, CodeType) and cls.co_name == name
+                       for code in cls.co_consts if isinstance(code, CodeType) and code.co_name == method)
+
+        if not (stock(provider_type, "AlertaJsonProvider", "dumps")
+                and stock(encoder, "CustomJSONEncoder", "default") and stock(formatter, "DateTime", "iso8601")):
+            return False
+        dumps, default, iso = provider_type.dumps, encoder.default, formatter.iso8601
+        # Keep an existing custom descriptor or another installation's target.
+        if vars(provider_type).get("dumps") is not dumps:
+            return False
+        dumps_code, default_code, iso_code = dumps.__code__, default.__code__, iso.__code__
+        json_dumps = _format.json.dumps
+        if (type(json_dumps) is not FunctionType or json_dumps.__module__ != "json"
+                or json_dumps.__globals__ is not vars(_format.json)):
+            return False
+
+        class FastEncoder(encoder):
+            def default(self, value):
+                if (type(value) is datetime and _format.datetime.datetime is datetime
+                        and value.tzinfo is None and value.year >= 1000):
+                    # Keep the stock imports and BSON precedence, including
+                    # the error behavior of a site's custom module.
+                    from alerta.models.alert import Alert, History  # noqa: F401
+                    try:
+                        from bson import ObjectId
+                        if isinstance(value, ObjectId):
+                            return str(value)
+                    except ModuleNotFoundError:
+                        pass
+                    current_iso = _format.DateTime.iso8601
+                    if _format.DateTime is formatter and current_iso is iso and iso.__code__ is iso_code:
+                        return value.isoformat("T", "milliseconds") + "Z"
+                    return current_iso(value)
+                return super().default(value)
+
+        def http_dumps(self, obj, **kwargs):
+            if (dumps.__code__ is not dumps_code or _format.CustomJSONEncoder is not encoder
+                    or encoder.default is not default or default.__code__ is not default_code
+                    or _format.json.dumps is not json_dumps or "default" in kwargs or "cls" in kwargs):
+                return dumps(self, obj, **kwargs)
+            kwargs.setdefault("ensure_ascii", self.ensure_ascii)
+            kwargs.setdefault("sort_keys", self.sort_keys)
+            return _format.json.dumps(obj, **kwargs, cls=FastEncoder)
+
+        target = ref(provider)
+
+        class AppDumps:
+            def __get__(self, instance, owner=None):
+                method = http_dumps if instance is not None and instance is target() else dumps
+                return method.__get__(instance, owner)
+
+        provider_type.dumps = AppDumps()
+        return True
+
+    if not _install_fastdates(app.json):
+        log.warning("alerta_fast: fastdates skipped for a customized HTTP JSON provider or formatter")
