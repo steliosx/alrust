@@ -6,8 +6,10 @@ sites with a witness, using configuration, PostgreSQL itself and one add-on file
 collects what the reports found, in one place, with pictures. Each finding links to its report,
 where the method, the checks and the raw results are.
 
-**Read every number with its conditions.** The runs used GitHub-hosted runners (4 vCPUs) with
-synthetic alerts, and the two-site runs used emulated links between the sites on one machine.
+**Read every number with its conditions.** The three charted reports below used GitHub-hosted
+runners (4 vCPUs) with synthetic alerts, and the two-site run used emulated links between the
+sites on one machine. Some reports in the index were made on other machines (a laptop); each
+report names its machine.
 The numbers are diagnostic and relative to those runs. They are not a capacity claim for your
 installation.
 
@@ -201,11 +203,13 @@ for them.
   ([#291](https://github.com/steliosx/alrust/pull/291)). On the runners, PostgreSQL's
   collation is `C.UTF-8` from the C library. With that collation, the primary key on `alerts.id`
   cannot answer `id LIKE 'prefix%'`, so the two tag and attribute `UPDATE`s of ② read the whole
-  table. An index with `text_pattern_ops` can answer it. The first test run's query plans agree
-  (a full scan without the index, an index scan with it). Full runs at 1,000 and 100,000 alerts
-  will measure what this changes.
-- **A response cache at each site** with Varnish behind HAProxy
-  ([#290](https://github.com/steliosx/alrust/pull/290)).
+  table. An index with `text_pattern_ops` can answer it. In the first test run, probes of that
+  prefix predicate on 100,000 alerts showed a full scan without the index and an index scan with
+  it. Those probes are not Alerta's full statements, so they give no timing for the deployed
+  `UPDATE`s; the corrected suite will measure that.
+- **A response cache at each site** ([#290](https://github.com/steliosx/alrust/pull/290)): an
+  eligible read enters the site's Varnish first, whose backend is the site's primary-aware
+  HAProxy; writes bypass Varnish.
 - **Building alert pages with less CPU**, the opt-in `alertlinks` and `fastdates` patches, with
   a byte-for-byte check against Alerta's own answers
   ([#288](https://github.com/steliosx/alrust/pull/288)).
