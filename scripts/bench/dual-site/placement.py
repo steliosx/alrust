@@ -150,7 +150,7 @@ import run_lab  # noqa: E402
 from run_lab import HOST, SITES, percentile, wait_until  # noqa: E402
 
 ADDON = HERE.parent / "alerta_fast.py"
-ADDON_BLOB = "abe21508f8936e9f347a4d12cc2a76237e1f6b51"
+ADDON_BLOB = "99adfccf560c6b162ad7e86b1796817d19602ba5"
 PLUGINS = "remote_ip,reject,heartbeat,blackout,forwarder"
 # arm: (route, run_lab feature, ALERTA_FAST the processes must have)
 ARMS = {"L": ("local", "safe", "safe"),
