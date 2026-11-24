@@ -40,7 +40,9 @@ two synthetic keys, not a production configuration.
 - **Run:** GitHub Actions run 44875194302, attempt 1, workflow `bench compare`, mode `full`, suite
   `cache`, on `main` at `0579d64c313eef50f8cb002319516047d23c6419`. Started 2026-11-21T06:21:57Z (UTC).
   Started by hand (workflow_dispatch) on `main` by the project's agent, after the owner approved one full
-  run of this suite. The review of this report is the first independent check of the result.
+  run of this suite. The project's reviewer (Codex) checked the run on 21 November (12:16 UTC): 78
+  of 78 cells under the gate of that time. The review of this report checked its tables against the
+  original artifact.
 - **Artifact:** `bench-compare-44875194302-1`, 3420710 bytes, digest
   `sha256:d2593907d8e83c6f44c3451d22dbfa5b1f795fa0f5392f2f4d1bd602e39f8374` as GitHub reports it.
   GitHub keeps the artifact until 2026-11-28T06:57:48Z. The results file here stays.

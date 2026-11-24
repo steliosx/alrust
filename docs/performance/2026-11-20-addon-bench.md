@@ -27,7 +27,8 @@ patches of the add-on `scripts/bench/alerta_fast.py` as they were at that time: 
 - **Run:** GitHub Actions run 44818483781, attempt 1, workflow `bench compare`, mode `full`, suite
   `addon`, on `main` at `9b59d75acd9caf8772f315515013afdee82a5cbc`. Started by hand
   (workflow_dispatch) on `main` by the project's agent, after the owner approved one full run of
-  this suite. The review of this report is the first independent check of the result. The run
+  this suite. The project's reviewer (Codex) checked the run on 21 November (02:28 UTC): 108 of
+  108 cells. The review of this report checked its tables against the original artifact. The run
   started at 2026-11-20T21:14:02Z.
 - **Artifact:** `bench-compare-44818483781-1`, 2006778 bytes, digest
   `sha256:327714733e7f4155cf82bd42f8c980e410194ce7878a5da8c8174df9bee67423` as GitHub reports it.
@@ -210,8 +211,8 @@ the same repetition. The base's own repetitions are given in its row.
 - **`safe` is a smaller step on top of `reuse`:** count at 8 clients 1333.2 to 1631.8; duplicate
   writes at 8 clients 915.6 to 999.5.
 - **`hot` is a further step on top of `safe`:** count at 1 client 603.5 to 859.4; list at 8 clients
-  522.2 to 634.8. Its commits per request fall to 0.00 for the reads, which is the one-write-a-second
-  effect.
+  522.2 to 634.8. Its commits per request fall to 0.00 or 0.01 for the reads (0.01 for list at 8 clients),
+  which is the one-write-a-second effect.
 - **`pgbu-nofwd` gets part of the gain with no code change.** It is below `reuse` in all six pairs.
 - **The base's gap to `alrust` remains** (reference only). Count at 8 clients: 311.5 against 7356.5.
 

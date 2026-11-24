@@ -25,8 +25,8 @@ reference only. It is in the tables for scale, and the report is about Alerta.
 
 ## The question
 
-The `tuning` suite runs the same cases and gates as the other suites. Every arm has 4 gunicorn
-workers of 4 threads (`4x4`). Only the named setting differs from the base (`alerta-4x4`):
+The `tuning` suite runs the same cases and gates as the other suites. Every Alerta arm has 4 gunicorn
+workers of 4 threads (`4x4`); `alrust` is the native Rust server. Only the named setting differs from the base (`alerta-4x4`):
 
 | Arm | What differs from the base |
 |---|---|
@@ -44,7 +44,9 @@ No add-on file is used in this suite. Alerta 9.1.0 runs as released.
 - **Run:** GitHub Actions run 44764620681, attempt 1, workflow `bench compare`, mode `full`, suite
   `tuning`, on `main` at `5199aa385d08bb78ca669e207dfa4a6bdba21748`. Started 2026-11-20T15:34:25Z.
   Started by hand (workflow_dispatch) on `main` by the project's agent, after the owner approved one
-  full run of this suite. The review of this report is the first independent check of the result.
+  full run of this suite. The project's reviewer (Codex) checked the run on 20 November: artifact 14646724521,
+  all 90 stock-Alerta cells, 15 fixture checks, the raw status codes and the duplicate increments.
+  The review of this report checked its tables against the original artifact.
 - **Artifact:** `bench-compare-44764620681-1`, 4522207 bytes, digest
   `sha256:60ae1e18733f0b33a226fea92c720d3ce9721fa785c848a4db6f301d6492f313` as GitHub reports it.
   GitHub keeps the artifact until 2026-11-27T16:20:31Z. The results file here stays.
@@ -79,7 +81,7 @@ rewrites the alert's tags and attributes on every receive, so the tag order that
 exercised by this case.
 
 Requests per second in each repetition, and the change against the base in the same repetition
-(from `perrep-tuning.md`):
+(from the cells of the results file):
 
 | Clients | Arm | Repetition 0 | Repetition 1 | Repetition 2 | Median | Change against the base, each repetition |
 |---:|---|---:|---:|---:|---:|---|
