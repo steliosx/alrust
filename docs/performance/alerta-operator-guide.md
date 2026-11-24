@@ -31,11 +31,12 @@ Report: [2026-11-22-two-site-placement.md](2026-11-22-two-site-placement.md).
 
 - **Remove `forwarder` from `PLUGINS` if you do not forward alerts.** With no destination, the
   plugin forwards nothing. But its `post_receive` returns the alert, so Alerta writes the alert's
-  tags and attributes again on every receive. On one site, with 8 clients, removing it gave 39% to
-  45% more duplicate writes per second, in each repetition.
+  tags and attributes again on every receive. On one site, with 8 clients and the add-on's default (`safe`) patches in
+  both arms, removing it gave 39% to 45% more duplicate writes per second, in each repetition.
+  That run did not measure the removal on Alerta without the add-on.
 - **If you need `forwarder`, the add-on's opt-in `noecho` leaves out the writes that change
-  nothing.** On one site, with 8 clients sending one fixed duplicate: 21% to 31% more duplicate
-  writes per second. At two sites, alert-row updates fell from 116 to 36 per run in the placement
+  nothing.** On one site, with 8 clients sending one fixed duplicate, beside the `safe` patches: 21% to 31%
+  more duplicate writes per second. At two sites, alert-row updates fell from 116 to 36 per run in the placement
   stage and from 92 to 20 in the fresh stage, and the primary wrote 6% to 14% less WAL in the
   four pairs that can be compared (one pair is left out). Requests were not faster at that load:
   the median site B duplicate write was 1.2 to 2.4 ms slower. Before you turn it on, read what
