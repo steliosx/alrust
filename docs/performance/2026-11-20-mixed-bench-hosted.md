@@ -37,7 +37,10 @@ and they do not transfer to another machine or workload.
 | Artifact | `bench-compare-44744034066-1`, 14031833 bytes, digest `sha256:7f4f73973595ad09ad80e995ece954e2705bf8732cc5180a4c6ef3b7128110c1` as GitHub reports it, kept by GitHub until 2026-11-27T13:46:33Z |
 | Results file | [2026-11-20-mixed-bench-hosted-results.json](2026-11-20-mixed-bench-hosted-results.json), the run's `results.json`, unchanged; it stays after the artifact expires |
 
-The review of this report is the first independent check of the result.
+Codex checked this run on 20 November, before this report existed: its checkpoint of that day
+(`benchmark-window-20261120T124851Z/CHECKPOINT.md`, cited in its signed review `cfc43820`) records
+this run and 45 of 45 cells and checks passing. This page adds the report in the repository, the
+results file, and a second check of the artifact.
 
 **What changed since the 17 November run** (`d9550949` to `38c67138`): nothing under
 `scripts/bench/` or in the workflow. In `crates/`, 9 files gained 2234 lines and lost none: new
@@ -114,17 +117,19 @@ Rates in each repetition (`-` where the cell has no such class):
 
 Medians of each run, and the change from 17 to 20 November. The 17 November medians are those of
 [its report](2026-11-17-mixed-bench.md). Both runs used the same harness on runners of the same
-type, not the same machine.
+type, not the same machine. Every percentage on this page is computed from the unrounded medians
+of the two results files and then rounded to one decimal, so a few differ by 0.1 from what the
+rounded table values give.
 
 | case | arm | writes/s 17 Nov | writes/s 20 Nov | change | reads/s 17 Nov | reads/s 20 Nov | change |
 |---|---|---:|---:|---:|---:|---:|---:|
 | writers-alone | alrust-p16 | 4700.4 | 4641.0 | -1.3% | - | - | - |
 | writers-alone | alrust-p32 | 4681.9 | 4643.4 | -0.8% | - | - | - |
-| writers-alone | alrust-p64 | 4694.3 | 4645.0 | -1.1% | - | - | - |
+| writers-alone | alrust-p64 | 4694.3 | 4645.0 | -1.0% | - | - | - |
 | writers-alone | alrust-p16-immediate | 4052.7 | 3992.0 | -1.5% | - | - | - |
 | writers-alone | alerta-4x4-pgb | 307.3 | 304.3 | -1.0% | - | - | - |
 | readers-alone | alrust-p16 | - | - | - | 1068.9 | 1065.2 | -0.3% |
-| readers-alone | alrust-p32 | - | - | - | 1058.5 | 1059.0 | +0.0% |
+| readers-alone | alrust-p32 | - | - | - | 1058.5 | 1059.0 | +0.1% |
 | readers-alone | alrust-p64 | - | - | - | 1067.8 | 1041.9 | -2.4% |
 | readers-alone | alrust-p16-immediate | - | - | - | 1042.2 | 1030.4 | -1.1% |
 | readers-alone | alerta-4x4-pgb | - | - | - | 258.6 | 268.2 | +3.7% |
@@ -132,14 +137,14 @@ type, not the same machine.
 | mixed | alrust-p32 | 380.2 | 375.9 | -1.1% | 422.7 | 419.2 | -0.8% |
 | mixed | alrust-p64 | 383.2 | 372.3 | -2.8% | 420.1 | 420.2 | +0.0% |
 | mixed | alrust-p16-immediate | 329.2 | 330.1 | +0.3% | 418.7 | 418.5 | -0.0% |
-| mixed | alerta-4x4-pgb | 92.7 | 92.7 | +0.0% | 174.2 | 177.6 | +2.0% |
+| mixed | alerta-4x4-pgb | 92.7 | 92.7 | -0.0% | 174.2 | 177.6 | +2.0% |
 
 ## What the run shows, on this workload and this runner
 
 - **Repeatability of rates.** Two runs three days apart, with the same harness, give median rates
   within 3% for every alrust cell and within 4% for every Alerta cell. The pool-size and key-use
   findings of the 17 November report hold in this run too.
-- **Latency repeats less well for Alerta.** alrust's p50 and p99 medians moved by −2.8% to +3.5%
+- **Latency repeats less well for Alerta.** alrust's p50 and p99 medians moved by −2.8% to +3.6%
   (the largest: mixed write p50 at a pool of 64, 20.57 to 21.30 ms). Alerta's moved by −9.7% to
   +22.6%: readers-alone p50 45.21 to 55.42 ms while its rate rose 3.7%, and mixed read p99 179.55
   to 194.73 ms.
@@ -155,7 +160,9 @@ type, not the same machine.
   writes 330.1 against 345.5/s; mixed reads equal.
 - **Alerta.** Its writers again did not reach all 8,000 identities in a cell (final rows 7192 alone
   and 2884 mixed), so its row history differs from alrust's, as on 17 November. Its mixed writes
-  varied from 77.8 to 110.8/s between repetitions, much more than any alrust cell.
+  varied from 77.8 to 110.8/s between repetitions: the largest is 42.4% above the smallest. No
+  alrust cell has a relative spread above 3.6%. (In writes per second, alrust's writers-alone cell
+  at a pool of 64 has the wider range, 4638.4 to 4697.8, which is 1.3%.)
 
 ## What it does not show
 
