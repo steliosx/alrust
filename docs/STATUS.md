@@ -1,9 +1,106 @@
 # Status
 
-_Last updated: 2026-11-17 11:54 EST by claude-alrust, the sole writer of this
+_Last updated: 2026-11-23 22:27 EST by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox. Times
 written from 2026-11-15 14:13 EST on are Nassau local time (DECISIONS Y63);
 earlier ones are UTC (`Z`)._
+
+## Alerta add-on work, 2026-11-17 to 2026-11-23 (newest first)
+
+**Owner direction, 2026-11-21:** for 30 days (to about 2026-12-21), Alerta
+only: the `alerta_fast.py` add-on for stock Alerta (no fork), PostgreSQL
+tuning and Patroni/etcd tuning for three sites (sites A and B host Alerta and
+PostgreSQL; site C hosts only the third etcd member, the witness); no alrust
+product work. For a proposed full hosted Alerta benchmark in this work, the
+owner accepts Codex's agreement to the exact run, subject to its stated head,
+cost, attempt and the other existing gates (Claude's signed relay to Codex `01cc3608`).
+
+**Merge rule, 2026-11-22.** The advisor tool is available again in Claude's
+session since the morning of 2026-11-22, so Y73 lapsed and Y48 applies
+again as written. Record: Claude merged #280 at 10:39 EST under Y73's
+conditions after the advisor had returned. Codex's signed sequence
+`59e293a5` covered Y48 (1); Claude did not consult the advisor on that merge
+before it (Y48 (2)); afterwards the advisor said its gates were met.
+
+**cargo-deny red (not required).** RUSTSEC-2026-0592 (`url` 2.5.8, via sqlx)
+fails the check on the heads that still lock `url` 2.5.8. The advisor
+objected to merging while any check is red. The owner chose a lock-file fix,
+then "Skip the 7-day rule once" when the resolver refused `url` 2.5.9 under
+the 7-day publish age (DECISIONS Y78, on PR #285). At #285's first head
+`d36debcb`, cargo-deny passed and two required checks failed: the notice
+corpus checksum (Cargo.lock), and the Compose smoke (its build step exited 1;
+the hashed logs do not show which instruction, so the cause is not
+confirmed). #285's next head `46ac4ffc` has Codex's regenerated corpus
+(`40d07353`, reviewed by Claude: the two crates' legal texts are byte-equal to
+the old ones). At `46ac4ffc` all 17 checks passed, Compose smoke and cargo-deny
+included; the first failure's instruction remains unknown. Codex approved
+`46ac4ffc` (`591421e1`); it was then behind main, so `6f34f456` merges main
+into it, with Cargo.lock, DECISIONS and `third_party/rust` unchanged.
+
+**Full hosted runs, 2026-11-22** (one attempt each, agreed by Codex, $0):
+- bench two-site, run 45037764779 at `0fc64977` (agreement `69cce14f`): 13
+  of 13 arm runs valid. With site A primary and both sites healthy, sending
+  site B's requests to the Alerta at site A gave median reductions of 354 to
+  360 ms for site B reads and 909 to 916 ms for site B duplicate writes;
+  `noecho` cut alert-row updates (116 to 36, 92 to 20) with no latency gain.
+  Report: PR #284, merged.
+- addon savedq load, run 45054378079 at `1203a8af` (agreement `0394b9d8`): 64
+  of 64 cells valid. One repeated search: server CPU per request -73%
+  (offered load) and -78% (closed loop); a new text every time: +2% and +3%.
+  Report: PR #286, merged, with a finding about Alerta's own parser (an
+  ungrouped `a AND b AND c` loses `c`).
+
+**Merged, 2026-11-16 to 2026-11-23 (Nassau dates):** #264 (2026-11-16
+20:19:32 EST, `fc3554c9`, without an advisor; see 2026-11-16 below). From
+2026-11-17: #267, #266, #236, #238, #268, #269, #240, #265, #272, #273, #274,
+#275, #276, #278, #279, #277 (2026-11-21 22:20:51 EST), #280 (2026-11-22
+10:39:17 EST, `21ec7f66`, tree = approved tree `8187e81d`) and #284
+(2026-11-22 19:23:36 EST, `c3eafd03`, tree = approved tree `a9f3eb25`; Codex
+`8922c965` said the step needs no new owner decision, and Claude consulted
+the advisor before the merge: no objection) and #286 (2026-11-22 21:53:17
+EST, `e319390d`, tree = approved tree `47cdaa5d`; Codex `591421e1`, the same
+two conditions) and #285 (2026-11-22 23:00:58 EST, `6f251b0d`, tree = approved
+tree `e290c6d6`; Codex `ed9e0738`, the same two conditions; cargo-deny green
+again on heads that merge it) and #281 (2026-11-22 23:38:14 EST, `5dcf74c4`,
+tree = approved tree `59a8431e`; Codex `224e0e12`, the same two
+conditions) and #282 (2026-11-23 12:40:19 EST, `b3ec4391`, tree = approved
+tree `cb106ba5`; Codex `b05dc239`: "The Codex review condition is satisfied
+for this head."; Claude consulted the advisor before the merge: no objection)
+and #283 (2026-11-23 16:42:44 EST, `19212625`, tree = approved tree
+`8bf6bcb6`; Codex `1b5ee5b6`: "This records Y48(1) for this exact #283
+head."; Claude consulted the advisor before the merge: no objection).
+
+**Open, in the agreed order** (each later head needs a new Codex review and
+the advisor): #287 (this STATUS); #289 operator guide (`savedq` on main,
+default 256); #288 `alertlinks`/`fastdates` (opt-in page patches; its update
+with main rebinds both add-on pins to the integrated add-on blob); #290
+two-site cache stage (Varnish per site; at `7584c513`, quick run
+45233471446 had 10 of 10 arm runs valid, and Codex asked for changes
+(`3cf24fe0`): a valid page must hold an id known to be the tenant's, and
+wrong answers after the delete must count also when late; head `8f3fb33d`
+has both, and Codex asked for one more change (`3f4a7aff`): keep the HTTP
+status and cache marker when a body read times out after the headers).
+Also open: #291 PostgreSQL tuning step 1 (the id prefix index alone; Codex
+asked for changes, `d6a8bd86`); #292 the findings page in
+`docs/performance/`; #293 and #294, reports of five earlier full runs that
+had none (owner request, 2026-11-23). Codex proposals not yet taken up: the
+history projection (`8ec81447`).
+
+**Design questions answered by Codex, 2026-11-23** (answers, not reviews
+of an implementation): the PostgreSQL tuning suite starts with a
+single-site comparison of the id index alone (`b773fbe0`); its
+implementation is #291. For the recovery stage and the routing of
+Patroni's etcd client traffic, first verify the DCS client paths in use,
+then compare P and N at S20 (`9811910d`). The next recovery and routing
+proposal, or its exact source, is Claude's to send.
+
+**Lab finding, 2026-11-23.** In the two-site lab, Patroni at both sites lists
+etcd member a first and keeps the first member that works, so Patroni's etcd
+client traffic goes to local ports with no added delay; only etcd peer
+traffic uses the shaped links. Results so far measure Patroni with a
+near-zero DCS round trip. A local change that sends client traffic through
+the shaped relays and checks the connections in use is not yet sent; it is
+part of Claude's next proposal (see above).
 
 ## Current phase
 
