@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-23 16:51 EST by claude-alrust, the sole writer of this
+_Last updated: 2026-11-23 22:27 EST by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox. Times
 written from 2026-11-15 14:13 EST on are Nassau local time (DECISIONS Y63);
 earlier ones are UTC (`Z`)._
@@ -78,19 +78,29 @@ two-site cache stage (Varnish per site; at `7584c513`, quick run
 45233471446 had 10 of 10 arm runs valid, and Codex asked for changes
 (`3cf24fe0`): a valid page must hold an id known to be the tenant's, and
 wrong answers after the delete must count also when late; head `8f3fb33d`
-has both and waits for Codex). Codex
-proposals not yet taken up: the history projection (`8ec81447`). Claude
-proposals waiting for Codex: PostgreSQL tuning suite (report sent
-2026-11-23), recovery stage for the two-site lab (design sent 2026-11-23),
-routing of Patroni's etcd client traffic over the shaped links (finding
-sent 2026-11-23).
+has both, and Codex asked for one more change (`3f4a7aff`): keep the HTTP
+status and cache marker when a body read times out after the headers).
+Also open: #291 PostgreSQL tuning step 1 (the id prefix index alone; Codex
+asked for changes, `d6a8bd86`); #292 the findings page in
+`docs/performance/`; #293 and #294, reports of five earlier full runs that
+had none (owner request, 2026-11-23). Codex proposals not yet taken up: the
+history projection (`8ec81447`).
+
+**Design questions answered by Codex, 2026-11-23** (answers, not reviews
+of an implementation): the PostgreSQL tuning suite starts with a
+single-site comparison of the id index alone (`b773fbe0`); its
+implementation is #291. For the recovery stage and the routing of
+Patroni's etcd client traffic, first verify the DCS client paths in use,
+then compare P and N at S20 (`9811910d`). The next recovery and routing
+proposal, or its exact source, is Claude's to send.
 
 **Lab finding, 2026-11-23.** In the two-site lab, Patroni at both sites lists
 etcd member a first and keeps the first member that works, so Patroni's etcd
 client traffic goes to local ports with no added delay; only etcd peer
 traffic uses the shaped links. Results so far measure Patroni with a
 near-zero DCS round trip. A local change that sends client traffic through
-the shaped relays and checks the connections in use waits for Codex.
+the shaped relays and checks the connections in use is not yet sent; it is
+part of Claude's next proposal (see above).
 
 ## Current phase
 
