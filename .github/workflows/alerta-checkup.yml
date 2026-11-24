@@ -1,0 +1,109 @@
+# The read-only checkup of docs/performance/measure-your-own-alerta.md,
+# scripts/bench/alerta_checkup.sql, run by a role that can only read, on a
+# throwaway Alerta 9.1.0 database (PostgreSQL 18.7, scripts/bench/setup.sh)
+# while stock Alerta receives a known number of duplicates. It shows that
+# every query of the file runs without write rights on 18.7, that the role
+# cannot write, and that the file's counts match the known traffic; a
+# second run takes the default path (a plain wait). Synthetic data
+# only. Not a benchmark and not a required check.
+name: alerta checkup sql
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/bench/alerta_checkup.sql
+      - scripts/bench/checkup_ci.py
+      - scripts/bench/setup.sh
+      - .github/workflows/alerta-checkup.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alerta-checkup-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: read-only checkup on stock Alerta (PostgreSQL 18.7)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
+        with:
+          # The reference Alerta is installed from the pinned submodule.
+          submodules: true
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0 (Node24)
+        with:
+          python-version: "3.12"
+      - name: PostgreSQL 18.7 and the reference Alerta environment
+        timeout-minutes: 10
+        run: scripts/bench/setup.sh
+      - name: checkup as a read-only role
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/checkup-out"
+          mkdir -- "$out"
+          # The throwaway cluster of setup.sh: its passwords are public text.
+          admin=("$BENCH_PG_BIN/psql" -X -h 127.0.0.1 -p 5432 -U postgres -v ON_ERROR_STOP=1)
+          PGPASSWORD=postgres "${admin[@]}" -d postgres -c 'CREATE DATABASE checkup'
+          load="$RUNNER_TEMP/checkup-load.sh"
+          cat > "$load" <<EOF
+          #!/bin/sh
+          cd "$BENCH_WORK" && exec env -i PATH="$BENCH_ALERTA_VENV/bin:/usr/bin:/bin" HOME="$BENCH_WORK" \
+            DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/checkup \
+            SECRET_KEY=bench-not-secret LOG_LEVEL=WARNING \
+            "$BENCH_ALERTA_VENV/bin/python" -I "$GITHUB_WORKSPACE/scripts/bench/checkup_ci.py" "\$1"
+          EOF
+          chmod +x -- "$load"
+          "$load" prime
+          PGPASSWORD=postgres "${admin[@]}" -d checkup <<'SQL'
+          CREATE ROLE checkup LOGIN PASSWORD 'checkup';
+          GRANT CONNECT ON DATABASE checkup TO checkup;
+          GRANT USAGE ON SCHEMA public TO checkup;
+          GRANT SELECT ON ALL TABLES IN SCHEMA public TO checkup;
+          GRANT pg_read_all_stats TO checkup;
+          SQL
+          reader=("$BENCH_PG_BIN/psql" -X -h 127.0.0.1 -p 5432 -U checkup -d checkup -v ON_ERROR_STOP=1)
+          # The role cannot write.
+          if PGPASSWORD=checkup "${reader[@]}" -c 'UPDATE alerts SET text = text' 2> "$out/write.err"; then
+            echo "the read-only role could write"; exit 1
+          fi
+          grep -q 'permission denied' "$out/write.err"
+          # The checkup, with the known traffic in its wait.
+          PGPASSWORD=checkup CHECKUP_WAIT="$load load" "${reader[@]}" -v interval=1 \
+            -f scripts/bench/alerta_checkup.sql | tee "$out/checkup.txt"
+          python3 -I - "$out/checkup.txt" <<'PY'
+          import re, sys
+          text = open(sys.argv[1]).read()
+          def value(name):
+              m = re.search(rf"^{name}\s*\|\s*(\S+)\s*$", text, re.M)
+              if not m:
+                  sys.exit(f"{name} is missing from the checkup's output")
+              return float(m.group(1))
+          got = {n: value(n) for n in ("alert_receives", "alert_queries", "sessions_per_receive_or_query",
+                                       "alert_row_updates", "alert_row_updates_per_receive")}
+          print(got)
+          problems = []
+          if got["alert_receives"] != 20 or got["alert_queries"] != 10:
+              problems.append("receives or queries differ from the known traffic (20, 10)")
+          # Stock Alerta opens one PostgreSQL session per request (plus the load process's start).
+          if not 0.95 <= got["sessions_per_receive_or_query"] <= 1.2:
+              problems.append("sessions per request are not about 1")
+          # A duplicate with the default plugins: the duplicate UPDATE, then forwarder's echo of
+          # the tags and of the attributes (docs/performance/2026-11-21-fastpath-bench.md).
+          if got["alert_row_updates"] != 60 or got["alert_row_updates_per_receive"] != 3.0:
+              problems.append("alert row updates are not 3 per duplicate receive")
+          if "QUERY PLAN" not in text:
+              problems.append("no plan of the predicate in the output")
+          if problems:
+              sys.exit("; ".join(problems))
+          print("checkup counts match the known traffic")
+          PY
+          # The default path, as an operator runs it: a plain wait, no hook.
+          PGPASSWORD=checkup "${reader[@]}" -v interval=1 -f scripts/bench/alerta_checkup.sql \
+            | tee "$out/checkup-plain.txt"
+          grep -Eq '^alert_row_updates_per_receive *\|' "$out/checkup-plain.txt"
