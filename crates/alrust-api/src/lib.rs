@@ -1910,11 +1910,15 @@ async fn housekeeping(
     };
     let expired_s = seconds("expired", st.cfg.delete_expired_after_s)?;
     let info_s = seconds("info", st.cfg.delete_info_after_s)?;
-    let expired = st.store.housekeeping(expired_s, info_s).await?;
-    let count = expired.len();
-    Ok(Json(
-        json!({"status": "ok", "expired": expired, "unshelve": [], "unack": [], "count": count}),
-    ))
+    let done = st.store.housekeeping(expired_s, info_s).await?;
+    let count = done.expired.len() + done.unshelve.len() + done.unack.len();
+    Ok(Json(json!({
+        "status": "ok",
+        "expired": done.expired,
+        "unshelve": done.unshelve,
+        "unack": done.unack,
+        "count": count,
+    })))
 }
 
 #[cfg(test)]

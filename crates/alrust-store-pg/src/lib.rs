@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use alrust_domain::{
     Alert, ApiKey, DEFAULT_PREVIOUS_SEVERITY, Heartbeat, HistoryEntry, HistoryOutput,
-    INFORM_SEVERITY, NORMAL_SEVERITY, change_type, status, trend, truncate_ms,
+    INFORM_SEVERITY, NORMAL_SEVERITY, action, change_type, status, trend, truncate_ms,
 };
 use alrust_engine::{
     HistInfo, Timeouts, Transition, TransitionError, TransitionInput, action_timeout, hist_info,
@@ -1828,7 +1828,7 @@ impl Store {
         &self,
         expired_after_s: i64,
         info_after_s: i64,
-    ) -> Result<Vec<String>, StoreError> {
+    ) -> Result<Housekeeping, StoreError> {
         // K2.1: elapsed seconds since last_receive_time, compared numerically
         // with the raw timeout. A NULL timeout never expires (K2.2), and 0
         // never expires (K2.3).
@@ -1867,6 +1867,21 @@ impl Store {
                 .bind(now)
                 .fetch_all(&self.pool)
                 .await?;
+        // K0.3: every list is selected before any action runs.
+        let unshelve = self
+            .timed_out(
+                status::SHELVED,
+                action::SHELVE,
+                self.cfg.shelve_timeout,
+                now,
+            )
+            .await?;
+        let unack = self
+            .timed_out(status::ACK, action::ACK, self.cfg.ack_timeout, now)
+            .await?;
+        // The ids this run expired: a selected row that fails the re-check
+        // below was changed by someone else, and is not counted (K3.5).
+        let mut expired_here = Vec::new();
         for id in &ids {
             let mut tx = self.pool.begin().await?;
             // Re-check under the row lock: a receive or action since the
@@ -1883,12 +1898,106 @@ impl Store {
                 let a = row_to_alert(&row)?;
                 self.apply_action(&mut tx, a, "expired", "alert timeout", None, "housekeeping")
                     .await?;
+                expired_here.push(id.clone());
             }
             tx.commit().await?;
         }
+        let rules = [
+            (status::SHELVED, action::SHELVE, self.cfg.shelve_timeout),
+            (status::ACK, action::ACK, self.cfg.ack_timeout),
+        ];
+        for (rule, list) in rules.into_iter().zip([&unshelve, &unack]) {
+            for id in list {
+                self.time_out(id, rule, now, &expired_here).await?;
+            }
+        }
         // The response lists the ids selected before processing (K4.1).
-        Ok(ids)
+        Ok(Housekeeping {
+            expired: ids,
+            unshelve,
+            unack,
+        })
     }
+
+    /// K3.1: the alerts in `state` with any history entry of `kind` in that
+    /// state whose timeout has passed since the row's `update_time`
+    /// (`pg.py:1508-1534`). `COALESCE` appears only in the `!= 0` test, so a
+    /// NULL entry timeout never fires (K3.2). Sorted by id, as `DISTINCT ON
+    /// (a.id)` returns them.
+    async fn timed_out(
+        &self,
+        state: &str,
+        kind: &str,
+        default_timeout: i64,
+        now: NaiveDateTime,
+    ) -> Result<Vec<String>, StoreError> {
+        Ok(sqlx::query_scalar(
+            "SELECT DISTINCT a.id FROM alerts a, UNNEST(a.history) h
+              WHERE a.status = $1 AND h.type = $2 AND h.status = $1
+                AND COALESCE(h.timeout, $3) <> 0
+                AND EXTRACT(EPOCH FROM ($4 - a.update_time)) > h.timeout
+              ORDER BY a.id",
+        )
+        .bind(state)
+        .bind(kind)
+        .bind(default_timeout)
+        .bind(now)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    /// K3.4: the `timeout` action on one selected alert, under its row lock.
+    /// It runs when [`Store::timed_out`]'s test still holds for the locked
+    /// row at the run's `now`, or when this same run expired it (K3.5: it
+    /// then ends `open` or `ack`, not `expired`). An alert a concurrent
+    /// request has changed since the selection (a new status, or the same
+    /// status with a fresh `update_time`) is left alone; the reference
+    /// applies the action to the alert as it was selected.
+    /// `rule` is (state, history kind, default timeout).
+    async fn time_out(
+        &self,
+        id: &str,
+        (state, kind, default_timeout): (&str, &str, i64),
+        now: NaiveDateTime,
+        expired_here: &[String],
+    ) -> Result<(), StoreError> {
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query(
+            "SELECT a.*, (a.status = $2 AND EXISTS (
+                     SELECT 1 FROM UNNEST(a.history) h
+                      WHERE h.type = $3 AND h.status = $2
+                        AND COALESCE(h.timeout, $4) <> 0
+                        AND EXTRACT(EPOCH FROM ($5 - a.update_time)) > h.timeout)) AS due
+               FROM alerts a WHERE a.id = $1 FOR UPDATE",
+        )
+        .bind(id)
+        .bind(state)
+        .bind(kind)
+        .bind(default_timeout)
+        .bind(now)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some(row) = row {
+            let due: bool = row.try_get("due")?;
+            let a = row_to_alert(&row)?;
+            let expired_now = a.status == status::EXPIRED && expired_here.iter().any(|e| e == id);
+            if due || expired_now {
+                self.apply_action(&mut tx, a, action::TIMEOUT, "", None, "housekeeping")
+                    .await?;
+            }
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+}
+
+/// What `POST /management/housekeeping` reports (K4.1): the ids selected
+/// for each action, before any ran. Deletions are not listed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Housekeeping {
+    pub expired: Vec<String>,
+    pub unshelve: Vec<String>,
+    pub unack: Vec<String>,
 }
 
 #[cfg(test)]
