@@ -96,6 +96,9 @@ jobs:
       - name: Mixed suite gate tests (no server)
         timeout-minutes: 2
         run: python3 -I scripts/bench/test_mixed_checks.py
+      - name: pgtune suite self-test (no server)
+        timeout-minutes: 2
+        run: python3 -I -B scripts/bench/pgtune_suite.py
       # A suite without PostgreSQL 19 must not care about port 5433. Only
       # the regression check asks for this (input occupy_5433, quick compare):
       # no other run binds or looks at the port. The process holds the port

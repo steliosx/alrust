@@ -39,30 +39,68 @@ count bodies differ from the seed's).
 Recorded before any cell (prepare()):
   database  each pgtune copy's collation, ctype, locale provider and
             locale, and the collation of alerts.id; the indexes of alerts;
-  plans     on a throwaway copy (bench_pgtune_plan), EXPLAIN (ANALYZE,
-            BUFFERS, FORMAT JSON) of Alerta's three write statements of a
-            duplicate receive, with the literal values psycopg2 sends: the
-            tag and attribute updates by id (an existing alert's id), and
-            the dedup UPDATE; first without FAST_INDEX, then with it.
-            The statements run (the copy is not used again).
+  probes    on a throwaway copy (bench_pgtune_plan), EXPLAIN (ANALYZE,
+            BUFFERS, FORMAT JSON) of three predicate probes: UPDATEs with
+            the WHERE clauses of Alerta's tag, attribute and duplicate
+            writes (an existing alert's id and identity), which set a
+            column to itself or only the counter. They are not Alerta's
+            statements: their plans show which scan each predicate gets;
+            their times and buffers are the probes', not those of the
+            deployed statements (the write cells measure those through
+            Alerta). First without FAST_INDEX, then with it. The probes
+            run (the copy is not used again).
+Order (order()): the four arms are two pairs, stock and `safe`, each a
+control and its index arm. pg_suite.pair_order() places them: the pairs
+move by one each repetition, and which member runs first changes with the
+pair and the repetition (with an odd number of repetitions one member is
+first once more). Each repetition's order is in the record, with the pair
+and the member of each arm; pair_changes() gives, per pair, case, clients
+and repetition, the index arm's change against its control.
+In each write cell, the WAL insert position is read at the two points
+where the duplicate-count gate reads (after the warm-up and after the
+timed run, each after the cell's pause), so WAL per write of the timed
+window divides that window's WAL by that window's saved duplicates.
+WAL is the cluster's, not the copy's: autovacuum or a checkpoint in the
+window adds to it. So a CHECKPOINT runs before each write cell's server
+starts (before_write()): every cell then writes its first full-page
+images in start-up and warm-up, and no timed checkpoint (5 minutes
+apart by default) is due inside a cell of well under a minute. As a
+backstop, each read also takes the last completed checkpoint's redo
+position and pg_stat_checkpointer's counts; if either changed in the
+window the cell is marked (`checkpoint_in_window`) and its WAL is left
+out of pair_changes(). The mark shows a checkpoint that completed, or
+that the counters already report; it is not proof that none started.
+Every write cell has its own new copy of the template, so each member
+of a pair starts from the same table state.
 After each write cell (after_write()), once its server has stopped:
   pgbouncer's server connections to the copy are closed (KILL, then
   RESUME), and the counters are read only when no backend is left on the
   copy (a backend writes its counts before it leaves pg_stat_activity):
   per table, row inserts, row updates and HOT updates (and the HOT share);
-  the copy's WAL (pg_current_wal_insert_lsn() before the server started
-  and after the barrier; the cluster has no other load then); and the
-  successful writes of the copy (the primed alert and its duplicates:
-  duplicate_count + 1), so WAL bytes per successful write.
+  the copy's lifecycle WAL (pg_current_wal_insert_lsn() after the
+  CHECKPOINT before the server started, and after the barrier: start-up, schema statements, warm-up,
+  checks and stop included) and its successful writes (the primed alert
+  and its duplicates: duplicate_count + 1), kept apart from the timed
+  window above. The alerts, metrics and keys tables must each have
+  counters; a missing one is incomplete evidence.
 A failed barrier or measurement makes the cell invalid.
 """
 
 import json
 import os
 import subprocess
+import sys
 import time
+from pathlib import Path
+
+# `python3 -I` leaves the script's directory off the path.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import pg_suite  # noqa: E402
 
 SEED_TEMPLATE = "bench_seed_pgtune"
+# The tables a write cell must have counters for (stock Alerta and `safe`
+# write each on every duplicate receive).
+COUNTED = ("alerts", "keys", "metrics")
 PLAN_DB = "bench_pgtune_plan"
 ROWS_ALLOWED = (1000, 100000)
 
@@ -165,15 +203,19 @@ def database(bc, db):
             "id_collation": id_collation, "alerts_indexes": indexes.split("\n") if indexes else []}
 
 
-def statements(bc, db):
-    """Alerta's three write statements of a duplicate receive, as psycopg2
-    sends them (literal values), on an existing seeded alert."""
+def probes(bc, db):
+    """Three predicate probes on an existing seeded alert: UPDATEs with the
+    WHERE clauses of Alerta's update_tags(), update_attributes() and
+    dedup_alert(), which set a column to itself or only the counter. Not
+    Alerta's statements (those bind new values and, for the duplicate,
+    set many more columns); only their plans are compared."""
     row = bc.sql_json(db, "SELECT row_to_json(a) FROM (SELECT id, environment, resource, event, severity "
                           "FROM alerts WHERE resource = 'host-0001') a")
     by_id = f"WHERE id = '{row['id']}' OR id LIKE '{row['id']}%'"
-    return {"update_tags": f"UPDATE alerts SET tags = tags {by_id} RETURNING *",
-            "update_attributes": f"UPDATE alerts SET attributes = attributes {by_id} RETURNING attributes",
-            "dedup_alert": (f"UPDATE alerts SET duplicate_count = duplicate_count + 1 "
+    return {"tags_predicate_probe": f"UPDATE alerts SET tags = tags {by_id} RETURNING *",
+            "attributes_predicate_probe": f"UPDATE alerts SET attributes = attributes {by_id} "
+                                          "RETURNING attributes",
+            "dedup_predicate_probe": (f"UPDATE alerts SET duplicate_count = duplicate_count + 1 "
                             f"WHERE environment = '{row['environment']}' AND resource = '{row['resource']}' "
                             f"AND event = '{row['event']}' AND severity = '{row['severity']}' "
                             "AND customer IS NULL RETURNING *")}
@@ -203,17 +245,105 @@ def prepare(bc, record, dbs):
     """The records of the header, before pgbouncer starts."""
     rec = record["pgtune"]
     rec["databases"] = {name: database(bc, name) for key, name in dbs.items() if template(key) == SEED_TEMPLATE}
-    texts = statements(bc, PLAN_DB)
-    rec["statements"] = texts
+    texts = probes(bc, PLAN_DB)
+    rec["probes"] = texts
     rec["plans"] = {"without_index": {k: plan(bc, PLAN_DB, s) for k, s in texts.items()}}
     bc.psql(PLAN_DB, bc.FAST_INDEX)
     bc.psql(PLAN_DB, "ANALYZE alerts")
     rec["plans"]["with_index"] = {k: plan(bc, PLAN_DB, s) for k, s in texts.items()}
     rec["cells"] = []
+    rec["order"] = []
 
 
-def wal_lsn(bc):
+def before_write(bc):
+    """Before a write cell's server starts: a CHECKPOINT (see the header),
+    then the WAL insert position where the cell's lifecycle begins."""
+    bc.psql("postgres", "CHECKPOINT")
     return bc.psql("postgres", "SELECT pg_current_wal_insert_lsn()")
+
+
+def wal_mark(bc):
+    """One read: the WAL insert position (not the write position, which
+    lags it), the last checkpoint's redo position and the checkpoints
+    counted so far."""
+    return bc.sql_json("postgres", "SELECT json_build_object('lsn', pg_current_wal_insert_lsn()::text, "
+                                   "'redo_lsn', (SELECT redo_lsn::text FROM pg_control_checkpoint()), "
+                                   "'checkpoints', (SELECT num_timed + num_requested FROM pg_stat_checkpointer))")
+
+
+def lsn_int(lsn):
+    high, low = lsn.split("/")
+    return (int(high, 16) << 32) + int(low, 16)
+
+
+def timed_window(persisted):
+    """The timed window of one write cell, from the two marks and the two
+    duplicate counts bench_compare.cell() took at the same points (pure).
+    None where a part is missing."""
+    before, after = persisted.get("wal_before"), persisted.get("wal_after")
+    d0, d1 = persisted.get("dup_before"), persisted.get("dup_after")
+    marks = isinstance(before, dict) and isinstance(after, dict)
+    wal = lsn_int(after["lsn"]) - lsn_int(before["lsn"]) if marks else None
+    writes = d1 - d0 if isinstance(d0, int) and isinstance(d1, int) else None
+    checkpoint = ((before["redo_lsn"], before["checkpoints"]) != (after["redo_lsn"], after["checkpoints"])
+                  if marks else None)
+    return {"wal_bytes": wal, "writes": writes, "checkpoint_in_window": checkpoint,
+            "wal_bytes_per_write": round(wal / writes, 1) if wal is not None and writes else None}
+
+
+def pair_of(arm):
+    """(pair, member) of a pgtune arm."""
+    options = arm.split("-")[2:]
+    return ("safe" if "safe" in options else "stock", "index" if "idx" in options else "control")
+
+
+def order(bc, rep):
+    """The four arms in the order of one repetition (see the header).
+    pg_suite.pair_order() speaks of versions 18 and 19: here 18 is the
+    control and 19 the index arm of a pair."""
+    by = {pair_of(arm): arm for arm in arms(bc)}
+    return [{"rep": rep, "position": position, "pair": pair, "member": "control" if v == 18 else "index",
+             "arm": by[(pair, "control" if v == 18 else "index")], "first_of_its_pair": position % 2 == 0}
+            for position, (v, pair) in enumerate(pg_suite.pair_order(["stock", "safe"], rep))]
+
+
+def change(new, old):
+    return round(100 * (new / old - 1), 2) if old and new is not None else None
+
+
+def pair_changes(record):
+    """Per pair, case, clients and repetition: the index arm against its
+    control in that repetition (pure). A row has a `problem` and no change
+    when a cell is absent or not valid; the WAL change is None when a
+    checkpoint fell in either timed window or a part is missing."""
+    cells = {(c["arm"], c["case"], c["c"], c["rep"]): c for c in record["cells"] if is_arm(c["arm"])}
+    first = {(o["arm"], o["rep"]): o["first_of_its_pair"] for o in record["pgtune"].get("order", [])}
+    out = []
+    for (arm, case, conc, rep), index in sorted(cells.items()):
+        pair, member = pair_of(arm)
+        if member != "index":
+            continue
+        control_arm = "-".join(part for part in arm.split("-") if part != "idx")
+        control = cells.get((control_arm, case, conc, rep))
+        row = {"pair": pair, "case": case, "c": conc, "rep": rep, "control": control_arm, "index": arm,
+               "index_ran_first": first.get((arm, rep))}
+        if control is None or not (control.get("valid") and index.get("valid")):
+            row["problem"] = "the control cell is absent" if control is None else "a cell of the pair is not valid"
+            out.append(row)
+            continue
+        for field in ("rps", "p50_ms", "p99_ms"):
+            row[f"control_{field}"], row[f"index_{field}"] = control[field], index[field]
+            row[f"{field}_change_pct"] = change(index[field], control[field])
+        if case == "write-dup":
+            tc = (control.get("pgtune") or {}).get("timed") or {}
+            ti = (index.get("pgtune") or {}).get("timed") or {}
+            clean = tc.get("checkpoint_in_window") is False and ti.get("checkpoint_in_window") is False
+            row["control_timed_wal_per_write"] = tc.get("wal_bytes_per_write")
+            row["index_timed_wal_per_write"] = ti.get("wal_bytes_per_write")
+            row["timed_wal_per_write_change_pct"] = (change(ti.get("wal_bytes_per_write"),
+                                                            tc.get("wal_bytes_per_write")) if clean else None)
+        out.append(row)
+    return out
 
 
 def pgbouncer_admin(bc, command):
@@ -232,12 +362,17 @@ def quiet(bc, db, tenths=100):
     return False
 
 
-def measure(tables, wal_bytes, writes):
-    """Per-table HOT shares and WAL per successful write (pure)."""
+def measure(tables, lifecycle_wal, lifecycle_writes, timed):
+    """Per-table HOT shares, the timed window and the lifecycle, each with
+    its own WAL and its own writes (pure). `missing_counters` names the
+    COUNTED tables with no counters."""
     per_table = {t["table"]: {**t, "hot_share": round(t["hot"] / t["upd"], 3) if t["upd"] else None}
                  for t in tables}
-    return {"tables": per_table, "wal_bytes": wal_bytes, "successful_writes": writes,
-            "wal_bytes_per_write": round(wal_bytes / writes, 1) if writes else None}
+    return {"tables": per_table, "missing_counters": [t for t in COUNTED if t not in per_table],
+            "timed": timed,
+            "lifecycle": {"wal_bytes": lifecycle_wal, "writes": lifecycle_writes,
+                          "wal_bytes_per_write": (round(lifecycle_wal / lifecycle_writes, 1)
+                                                  if lifecycle_writes else None)}}
 
 
 def after_write(bc, record, arm, rep, conc, db, lsn_before):
@@ -257,11 +392,17 @@ def after_write(bc, record, arm, rep, conc, db, lsn_before):
                              "'upd', n_tup_upd, 'hot', n_tup_hot_upd, 'dead', n_dead_tup) ORDER BY relname), "
                              "'[]') FROM pg_stat_user_tables WHERE n_tup_ins + n_tup_upd > 0")
     wal = int(bc.psql("postgres", f"SELECT pg_wal_lsn_diff(pg_current_wal_insert_lsn(), '{lsn_before}')"))
-    after = (cell.get("persisted") or {}).get("dup_after")
+    persisted = cell.get("persisted") or {}
+    after = persisted.get("dup_after")
     writes = after + 1 if isinstance(after, int) else 0
-    result = {"arm": arm, "c": conc, "rep": rep, "db": db, **measure(tables, wal, writes), "problems": problems}
+    result = {"arm": arm, "c": conc, "rep": rep, "db": db,
+              **measure(tables, wal, writes, timed_window(persisted)), "problems": problems}
     if not writes:
         problems.append("no successful write is known")
+    if result["timed"]["wal_bytes"] is None or not result["timed"]["writes"]:
+        problems.append("the timed window's WAL or writes are not known")
+    for table in result["missing_counters"]:
+        problems.append(f"no counters for the {table} table (incomplete evidence)")
     cell["pgtune"] = result
     if problems:
         cell["valid"] = False
@@ -274,17 +415,34 @@ def summary(record):
     first = next(iter(rec.get("databases", {}).values()), {})
     lines.append(f"Collation {first.get('collate')!r}, ctype {first.get('ctype')!r}, provider "
                  f"{first.get('locale_provider')!r}, alerts.id collation {first.get('id_collation')!r}.")
-    lines += ["", "| statement | index | seq scan | indexes | execution ms |", "|---|---|---|---|---|"]
+    lines += ["", "Predicate probes (not Alerta's statements; the plan of each WHERE clause only):", "",
+              "| probe | index | seq scan | indexes |", "|---|---|---|---|"]
     for which, plans in rec.get("plans", {}).items():
         for name, p in plans.items():
             lines.append(f"| {name} | {which.replace('_', ' ')} | {p['sequential_scan']} | "
-                         f"{', '.join(p['indexes']) or '-'} | {p['execution_ms']} |")
-    lines += ["", "| arm | c | rep | WAL bytes per write | alerts HOT share | alerts row updates | problems |",
-              "|---|---|---|---|---|---|---|"]
+                         f"{', '.join(p['indexes']) or '-'} |")
+    lines += ["", "Write cells. Timed: the timed window's WAL over that window's saved duplicates. "
+                  "Lifecycle: start-up to stop, over all saved writes. WAL is the cluster's.", "",
+              "| arm | c | rep | timed WAL bytes per write | checkpoint in window | lifecycle WAL bytes per write "
+              "| alerts HOT share | alerts row updates | problems |", "|---|---|---|---|---|---|---|---|---|"]
     for c in rec.get("cells", []):
         alerts = c["tables"].get("alerts", {})
-        lines.append(f"| {c['arm']} | {c['c']} | {c['rep']} | {c['wal_bytes_per_write']} | "
+        lines.append(f"| {c['arm']} | {c['c']} | {c['rep']} | {c['timed']['wal_bytes_per_write']} | "
+                     f"{c['timed']['checkpoint_in_window']} | {c['lifecycle']['wal_bytes_per_write']} | "
                      f"{alerts.get('hot_share')} | {alerts.get('upd')} | {'; '.join(c['problems']) or '-'} |")
+    lines += ["", "Index arm against its control, in the same repetition (order: " + "; ".join(
+                  f"r{r}: " + ", ".join(o["arm"] for o in rec.get("order", []) if o["rep"] == r)
+                  for r in sorted({o["rep"] for o in rec.get("order", [])})) + ").", "",
+              "| pair | case | c | rep | index ran first | control/s | index/s | change | p50 change "
+              "| timed WAL per write change |", "|---|---|---|---|---|---|---|---|---|---|"]
+    for r in rec.get("pair_changes", []):
+        if "problem" in r:
+            lines.append(f"| {r['pair']} | {r['case']} | {r['c']} | {r['rep']} | {r['index_ran_first']} | "
+                         f"{r['problem']} | | | | |")
+            continue
+        lines.append(f"| {r['pair']} | {r['case']} | {r['c']} | {r['rep']} | {r['index_ran_first']} | "
+                     f"{r['control_rps']:.1f} | {r['index_rps']:.1f} | {r['rps_change_pct']:+.1f}% | "
+                     f"{r['p50_ms_change_pct']:+.1f}% | {r.get('timed_wal_per_write_change_pct', '-')} |")
     return lines
 
 
@@ -294,10 +452,74 @@ def self_test():
     assert is_arm("alerta-4x4-pgb-safe-idx-pgt") and not is_arm("alerta-4x4-pgb") and not is_arm("alrust")
     assert template(("alerta-4x4-pgb-pgt", "read")) == SEED_TEMPLATE
     assert template(("pgtune-plan",)) == SEED_TEMPLATE and template(("alerta-4x4-pgb", "read")) == "bench_seed"
+    # The timed window: its own WAL over its own writes, apart from the lifecycle.
+    assert lsn_int("1/A0") - lsn_int("0/FFFFFF00") == 0x1A0
+    mark = {"lsn": "0/1000000", "redo_lsn": "0/900000", "checkpoints": 3}
+    later = dict(mark, lsn="0/1014000")
+    persisted = {"dup_before": 5, "dup_after": 25, "wal_before": mark, "wal_after": later}
+    t = timed_window(persisted)
+    assert t == {"wal_bytes": 81920, "writes": 20, "checkpoint_in_window": False, "wal_bytes_per_write": 4096.0}
+    assert timed_window(dict(persisted, wal_after=dict(later, checkpoints=4)))["checkpoint_in_window"] is True
+    assert timed_window(dict(persisted, wal_after=dict(later, redo_lsn="0/1001000")))["checkpoint_in_window"]
+    assert timed_window({"dup_before": 5, "dup_after": 25})["wal_bytes"] is None
+    assert timed_window(dict(persisted, dup_after=None))["wal_bytes_per_write"] is None
+    assert timed_window(dict(persisted, dup_after=5))["wal_bytes_per_write"] is None
     m = measure([{"table": "alerts", "ins": 1, "upd": 40, "hot": 30, "dead": 2},
-                 {"table": "keys", "ins": 0, "upd": 0, "hot": 0, "dead": 0}], 81920, 20)
+                 {"table": "keys", "ins": 0, "upd": 0, "hot": 0, "dead": 0}], 500000, 26, t)
     assert m["tables"]["alerts"]["hot_share"] == 0.75 and m["tables"]["keys"]["hot_share"] is None
-    assert m["wal_bytes_per_write"] == 4096.0 and measure([], 10, 0)["wal_bytes_per_write"] is None
+    assert m["missing_counters"] == ["metrics"] and m["timed"]["wal_bytes_per_write"] == 4096.0
+    # A busier arm does not look cheaper: the lifecycle figure is its own number.
+    assert m["lifecycle"] == {"wal_bytes": 500000, "writes": 26, "wal_bytes_per_write": 19230.8}
+    assert measure([], 10, 0, t)["lifecycle"]["wal_bytes_per_write"] is None
+    assert measure([], 10, 0, t)["missing_counters"] == list(COUNTED)
+
+    # Order: two pairs; over four repetitions each member is first twice,
+    # each pair leads twice, and every repetition holds each arm once.
+    class BC:
+        VCPUS = 4
+    names = arms(BC)
+    assert [pair_of(a) for a in names] == [("stock", "control"), ("stock", "index"),
+                                           ("safe", "control"), ("safe", "index")]
+    firsts, leads = {a: 0 for a in names}, {"stock": 0, "safe": 0}
+    for r in range(4):
+        o = order(BC, r)
+        assert sorted(x["arm"] for x in o) == sorted(names)
+        assert [x["pair"] for x in o][0::2] == [x["pair"] for x in o][1::2]  # a pair's members are adjacent
+        assert all(pair_of(x["arm"]) == (x["pair"], x["member"]) for x in o)
+        leads[o[0]["pair"]] += 1
+        for x in o:
+            firsts[x["arm"]] += x["first_of_its_pair"]
+    assert set(firsts.values()) == {2} and leads == {"stock": 2, "safe": 2}, (firsts, leads)
+    three = [x for r in range(3) for x in order(BC, r)]
+    assert all(sum(x["first_of_its_pair"] for x in three if x["arm"] == a) in (1, 2) for a in names)
+
+    # Pair changes: per repetition, index against its control.
+    def one(arm, case, rps, rep=0, valid=True, wal=None, checkpoint=False):
+        c = {"arm": arm, "case": case, "c": 8, "rep": rep, "rps": rps, "p50_ms": 1000 / rps,
+             "p99_ms": 2000 / rps, "valid": valid}
+        if wal:
+            c["pgtune"] = {"timed": {"wal_bytes_per_write": wal, "checkpoint_in_window": checkpoint}}
+        return c
+    rec = {"pgtune": {"order": order(BC, 0)},
+           "cells": [one(names[0], "write-dup", 100.0, wal=4000.0), one(names[1], "write-dup", 150.0, wal=3000.0),
+                     one(names[2], "write-dup", 200.0, wal=4000.0),
+                     one(names[3], "write-dup", 100.0, wal=3000.0, checkpoint=True),
+                     one(names[0], "list", 50.0, rep=1), one(names[1], "list", 55.0, rep=1, valid=False),
+                     one(names[3], "count", 10.0, rep=2), one("alerta-4x4-pgb", "list", 1.0)]}
+    rows_ = {(r["pair"], r["case"], r["rep"]): r for r in pair_changes(rec)}
+    assert len(rows_) == 4
+    stock = rows_[("stock", "write-dup", 0)]
+    assert stock["rps_change_pct"] == 50.0 and stock["timed_wal_per_write_change_pct"] == -25.0
+    assert stock["index_ran_first"] is False and rows_[("safe", "write-dup", 0)]["index_ran_first"] is True
+    safe = rows_[("safe", "write-dup", 0)]
+    assert safe["rps_change_pct"] == -50.0 and safe["timed_wal_per_write_change_pct"] is None
+    assert safe["index_timed_wal_per_write"] == 3000.0
+    assert rows_[("stock", "list", 1)]["problem"] == "a cell of the pair is not valid"
+    assert rows_[("safe", "count", 2)]["problem"] == "the control cell is absent"
+    record = {"pgtune": {"rows": 1000, "order": order(BC, 0), "pair_changes": pair_changes(rec),
+                         "cells": [{"arm": names[0], "c": 8, "rep": 0, **m, "problems": []}]}}
+    text = "\n".join(summary(record))
+    assert "not Alerta's statements" in text and "+50.0%" in text and "execution ms" not in text
     os.environ["PGTUNE_ROWS"] = "1000"
     assert rows() == 1000
     os.environ["PGTUNE_ROWS"] = "5"

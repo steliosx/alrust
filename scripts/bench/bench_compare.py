@@ -635,6 +635,8 @@ def cell(arm, proc, base, case, conc, rep, db, json_flag, record):
         if persisted["dup_before"] != warm["ok"]:
             persisted["problems"].append(f"after the warm-up duplicate_count is "
                                          f"{persisted['dup_before']!r}, {warm['ok']} counted")
+        if pgtune_suite.is_arm(arm):  # the timed window's WAL (pgtune_suite.py); other arms: no read
+            persisted["wal_before"] = pgtune_suite.wal_mark(sys.modules[__name__])
     pg0, srv0, pm0 = pg_db_stats(db), tree_cpu(proc.pid), tree_cpu(postmaster_pid())
     t0 = time.monotonic()
     j = oha(base, case, conc, TIMED_S, raw_dir / names["timed"], json_flag)
@@ -650,6 +652,8 @@ def cell(arm, proc, base, case, conc, rep, db, json_flag, record):
         rows = dup_rows(db)
         after = rows[0]["duplicate_count"] if len(rows) == 1 else None
         persisted["dup_after"] = after
+        if pgtune_suite.is_arm(arm):
+            persisted["wal_after"] = pgtune_suite.wal_mark(sys.modules[__name__])
         before = persisted["dup_before"]
         if before is None or after is None or after - before != s["ok"]:
             persisted["problems"].append(f"timed: duplicate_count {before!r} -> {after!r}, "
@@ -1278,7 +1282,14 @@ def main():
         if mixed and not run_mixed(record, dbs):
             all_ok = False
         for rep in range(REPS if compare else 0):
-            order = ARMS[rep % len(ARMS):] + ARMS[:rep % len(ARMS)]
+            # The pgtune arms run in their pairs' order (pgtune_suite.order()),
+            # after the other arms, which move by one each repetition.
+            others = [arm for arm in ARMS if not pgtune_suite.is_arm(arm)]
+            order = others[rep % len(others):] + others[:rep % len(others)] if others else []
+            if PGTUNE:
+                placed = pgtune_suite.order(sys.modules[__name__], rep)
+                record["pgtune"]["order"] += placed
+                order += [o["arm"] for o in placed]
             for arm in order:
                 db = dbs[(arm, "read")]
                 with open(OUT / f"server-{arm}-r{rep}-read.log", "w") as logf:
@@ -1296,7 +1307,7 @@ def main():
                         stop(proc)
                 for conc in CONCURRENCY:
                     db = dbs[(arm, "write", rep, conc)]
-                    lsn = pgtune_suite.wal_lsn(sys.modules[__name__]) if pgtune_suite.is_arm(arm) else None
+                    lsn = pgtune_suite.before_write(sys.modules[__name__]) if pgtune_suite.is_arm(arm) else None
                     with open(OUT / f"server-{arm}-r{rep}-write-c{conc}.log", "w") as logf:
                         proc, base = start(arm, db, logf)
                         try:
@@ -1312,6 +1323,11 @@ def main():
     finally:
         stop(pgb)
         cells_ok = cell_gate(record)
+        if "order" in record.get("pgtune", {}):
+            try:
+                record["pgtune"]["pair_changes"] = pgtune_suite.pair_changes(record)
+            except Exception as e:  # a partial run still keeps results.json
+                record["pgtune"]["pair_changes_error"] = repr(e)
         (OUT / "results.json").write_text(json.dumps(record, indent=1))
         try:
             write_summary(record)
@@ -1319,6 +1335,8 @@ def main():
             print(f"summary failed: {e!r}", file=sys.stderr)
     if not all_ok:
         sys.exit("a correctness check, or a cell of the cache or pg19 suite, failed; see results.json")
+    if record.get("pgtune", {}).get("pair_changes_error"):
+        sys.exit(f"pgtune pair changes failed: {record['pgtune']['pair_changes_error']}")
     if not cells_ok:
         g = record["cell_gate"]
         sys.exit(f"compare cells [arm, case, c, repetition]: {len(g['missing'])} missing {g['missing']}, "
