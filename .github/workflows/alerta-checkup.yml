@@ -2,10 +2,13 @@
 # scripts/bench/alerta_checkup.sql, run by a role that can only read, on a
 # throwaway Alerta 9.1.0 database (PostgreSQL 18.7, scripts/bench/setup.sh)
 # while stock Alerta receives a known number of duplicates. It shows that
-# every query of the file runs without write rights on 18.7, that the role
-# cannot write, and that the file's counts match the known traffic; a
-# second run takes the default path (a plain wait). Synthetic data
-# only. Not a benchmark and not a required check.
+# every query of the file runs on 18.7 with the column grants of the guide
+# and nothing more, that the role can neither write nor read key material,
+# that the file's counts match the known traffic, that an idle interval
+# gives zeros and `undetermined` ratios, and that a bad interval reads
+# nothing. The traffic is this harness's own: the file has no hook, so the
+# job sends it while the file waits. Synthetic data only. Not a benchmark
+# and not a required check.
 name: alerta checkup sql
 
 on:
@@ -64,46 +67,93 @@ jobs:
           CREATE ROLE checkup LOGIN PASSWORD 'checkup';
           GRANT CONNECT ON DATABASE checkup TO checkup;
           GRANT USAGE ON SCHEMA public TO checkup;
-          GRANT SELECT ON ALL TABLES IN SCHEMA public TO checkup;
-          GRANT pg_read_all_stats TO checkup;
+          GRANT SELECT (id) ON alerts TO checkup;
+          GRANT SELECT ("group", name, type, count) ON metrics TO checkup;
           SQL
           reader=("$BENCH_PG_BIN/psql" -X -h 127.0.0.1 -p 5432 -U checkup -d checkup -v ON_ERROR_STOP=1)
-          # The role cannot write.
-          if PGPASSWORD=checkup "${reader[@]}" -c 'UPDATE alerts SET text = text' 2> "$out/write.err"; then
-            echo "the read-only role could write"; exit 1
+          export PGPASSWORD=checkup
+          # The role cannot write, and cannot read key material or alert content.
+          n=0
+          for sql in 'UPDATE alerts SET text = text' "INSERT INTO metrics (\"group\", name, type) VALUES ('a', 'b', 'c')" \
+                     'DELETE FROM alerts' 'SELECT key FROM keys' 'SELECT * FROM keys' 'SELECT text FROM alerts' \
+                     'SELECT * FROM users' 'CREATE TABLE checkup_probe (i int)'; do
+            n=$((n + 1))
+            if "${reader[@]}" -c "$sql" > /dev/null 2> "$out/denied-$n.err"; then
+              echo "the checkup role could run: $sql"; exit 1
+            fi
+            grep -q 'permission denied' "$out/denied-$n.err"
+          done
+          # A bad interval reads nothing; so does a command in the place of the interval.
+          for bad in 0 3601 abc '1; touch /tmp/checkup-injected' '$(touch /tmp/checkup-injected)'; do
+            "${reader[@]}" -v interval="$bad" -f scripts/bench/alerta_checkup.sql > "$out/bad.txt" 2> "$out/bad.err"
+            grep -q 'interval must be a whole number' "$out/bad.err"
+            if [ -s "$out/bad.txt" ]; then echo "interval '$bad' still read something"; exit 1; fi
+          done
+          # The checkup, with the known traffic sent by this job while the file waits. A command
+          # in an inherited variable (the name of a hook this file once had) must not run.
+          CHECKUP_WAIT="touch /tmp/checkup-injected" "${reader[@]}" -v interval=30 \
+            -f scripts/bench/alerta_checkup.sql > "$out/checkup.txt" 2> "$out/checkup.err" &
+          checkup=$!
+          for _ in $(seq 60); do
+            grep -q 'first snapshot taken' "$out/checkup.err" && break
+            sleep 0.5
+          done
+          grep -q 'first snapshot taken' "$out/checkup.err"
+          "$load" load
+          # The traffic ended before the second snapshot began.
+          if grep -q 'taking the second snapshot' "$out/checkup.err"; then
+            echo "the load did not end before the second snapshot"; exit 1
           fi
-          grep -q 'permission denied' "$out/write.err"
-          # The checkup, with the known traffic in its wait.
-          PGPASSWORD=checkup CHECKUP_WAIT="$load load" "${reader[@]}" -v interval=1 \
-            -f scripts/bench/alerta_checkup.sql | tee "$out/checkup.txt"
-          python3 -I - "$out/checkup.txt" <<'PY'
+          wait "$checkup"
+          cat "$out/checkup.txt" "$out/checkup.err"
+          if [ -e /tmp/checkup-injected ]; then echo "a command from the environment or the interval ran"; exit 1; fi
+          # The idle baseline: the same file, nothing sent.
+          "${reader[@]}" -v interval=2 -f scripts/bench/alerta_checkup.sql | tee "$out/checkup-idle.txt"
+          python3 -I - "$out/checkup.txt" "$out/checkup-idle.txt" <<'PY'
           import re, sys
-          text = open(sys.argv[1]).read()
-          def value(name):
-              m = re.search(rf"^{name}\s*\|\s*(\S+)\s*$", text, re.M)
-              if not m:
-                  sys.exit(f"{name} is missing from the checkup's output")
-              return float(m.group(1))
-          got = {n: value(n) for n in ("alert_receives", "alert_queries", "sessions_per_receive_or_query",
-                                       "alert_row_updates", "alert_row_updates_per_receive")}
-          print(got)
+          def values(path):
+              text = open(path).read()
+              def value(name):
+                  m = re.search(rf"^{name}\s*\|\s*(.*?)\s*$", text, re.M)
+                  if not m:
+                      sys.exit(f"{name} is missing from {path}")
+                  return m.group(1)
+              return text, {n: value(n) for n in (
+                  "result", "seconds", "alert_receives", "alert_queries", "new_sessions",
+                  "sessions_per_receive_or_query", "alert_row_updates", "alert_row_updates_per_receive",
+                  "hot_update_percent", "alerts_inserted")}
           problems = []
-          if got["alert_receives"] != 20 or got["alert_queries"] != 10:
+          text, got = values(sys.argv[1])
+          print("with traffic:", got)
+          if got["result"] != "ok":
+              problems.append(f"result is {got['result']!r}")
+          if (got["alert_receives"], got["alert_queries"]) != ("20", "10"):
               problems.append("receives or queries differ from the known traffic (20, 10)")
           # Stock Alerta opens one PostgreSQL session per request (plus the load process's start).
-          if not 0.95 <= got["sessions_per_receive_or_query"] <= 1.2:
-              problems.append("sessions per request are not about 1")
+          try:
+              if not 0.95 <= float(got["sessions_per_receive_or_query"]) <= 1.2:
+                  problems.append("sessions per request are not about 1")
+          except ValueError:
+              problems.append("sessions per request are not a number")
           # A duplicate with the default plugins: the duplicate UPDATE, then forwarder's echo of
           # the tags and of the attributes (docs/performance/2026-11-21-fastpath-bench.md).
-          if got["alert_row_updates"] != 60 or got["alert_row_updates_per_receive"] != 3.0:
+          if (got["alert_row_updates"], got["alert_row_updates_per_receive"]) != ("60", "3.00"):
               problems.append("alert row updates are not 3 per duplicate receive")
-          if "QUERY PLAN" not in text:
-              problems.append("no plan of the predicate in the output")
+          if got["alerts_inserted"] != "0":
+              problems.append("alerts were inserted")
+          if "QUERY PLAN" not in text or "is_standby" not in text:
+              problems.append("the plan or the standby flag is missing")
+          text, idle = values(sys.argv[2])
+          print("idle:", idle)
+          if idle["result"] != "ok":
+              problems.append(f"idle result is {idle['result']!r}")
+          for name in ("alert_receives", "alert_queries", "alert_row_updates", "alerts_inserted"):
+              if idle[name] != "0":
+                  problems.append(f"idle {name} is {idle[name]}, not 0")
+          for name in ("sessions_per_receive_or_query", "alert_row_updates_per_receive", "hot_update_percent"):
+              if idle[name] != "undetermined":
+                  problems.append(f"idle {name} is {idle[name]!r}, not undetermined")
           if problems:
               sys.exit("; ".join(problems))
-          print("checkup counts match the known traffic")
+          print("checkup counts match the known traffic; the idle interval gives zeros and undetermined ratios")
           PY
-          # The default path, as an operator runs it: a plain wait, no hook.
-          PGPASSWORD=checkup "${reader[@]}" -v interval=1 -f scripts/bench/alerta_checkup.sql \
-            | tee "$out/checkup-plain.txt"
-          grep -Eq '^alert_row_updates_per_receive *\|' "$out/checkup-plain.txt"

@@ -22,42 +22,53 @@ lists what each patch changes.
 
 ### A1. A role that can only read
 
-Ask the person who runs your PostgreSQL for a role that can read Alerta's tables and the
-statistics views, and nothing else. Creating a role is itself a change to the cluster, so it is
-theirs to make. This is what the project's CI check uses (on its own throwaway database):
+Ask the person who runs your PostgreSQL for a role that can read the five columns the checkup
+reads, and nothing else. Creating a role is itself a change to the cluster, so it is theirs to
+make. These are the grants of the project's CI check (on its own throwaway database):
 
 ```sql
 CREATE ROLE checkup LOGIN PASSWORD '<a password>';
 GRANT CONNECT ON DATABASE <alerta database> TO checkup;
 GRANT USAGE ON SCHEMA public TO checkup;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO checkup;
-GRANT pg_read_all_stats TO checkup;  -- only needed to see other sessions' statements
+GRANT SELECT (id) ON alerts TO checkup;
+GRANT SELECT ("group", name, type, count) ON metrics TO checkup;
 ```
 
-An existing monitoring role with the same or fewer rights also works.
+With these, the role cannot read the content of an alert, the `keys` table (API keys) or the
+`users` table, and it cannot write; the CI check tries each and is refused. Do not grant `SELECT`
+on all tables for this, and do not use a role that already has it: the checkup needs no more than
+the above. The statistics and catalog views it reads are open to every role.
 
 ### A2. Run the checkup
 
 [`scripts/bench/alerta_checkup.sql`](../../scripts/bench/alerta_checkup.sql) needs PostgreSQL 14
-or newer (it has run with psql and PostgreSQL 18.7 only):
+or newer (it has run with psql and PostgreSQL 18.7 only). Run it against the primary:
 
 ```sh
 psql "<connection string of the read-only role>" -X -v interval=300 -f scripts/bench/alerta_checkup.sql
 ```
 
-It reads settings, catalog and statistics views and Alerta's own `metrics` table. It plans one
-predicate with plain `EXPLAIN` (the predicate is not run). It takes two snapshots of counters
-`interval` seconds apart and prints the differences. Every query runs in a `READ ONLY`
-transaction with a 5 s statement timeout and a 1 s lock timeout, and the wait between the
-snapshots holds no transaction open. It never runs `EXPLAIN ANALYZE`, never resets a statistic and
-never loads an extension. Pick a time of ordinary traffic. Read the file before you run it, and
-leave the `CHECKUP_WAIT` environment variable unset (it is for the CI check).
+It reads settings, catalog and statistics views and four columns of Alerta's own `metrics`
+table. It plans one predicate with plain `EXPLAIN` (the predicate is not run). It takes two
+snapshots of counters `interval` seconds apart (a whole number from 1 to 3600) and prints the
+differences. Every query that reads the database runs in a `READ ONLY` transaction, and each
+transaction sets its own limits (`SET LOCAL`): 5 s for a statement, 1 s for a lock. The limits
+therefore also hold behind a pooler in transaction mode. The wait between the snapshots is a
+fixed `sleep` on your own host, with no transaction open. The file never runs `EXPLAIN ANALYZE`,
+never resets a statistic, never loads an extension, and runs no command taken from the
+environment. Pick a time of ordinary traffic, and read the file before you run it.
 
 The [`alerta checkup sql`](../../.github/workflows/alerta-checkup.yml) workflow runs this file as
-a role like the one above, on PostgreSQL 18.7 only, while stock Alerta receives 20 duplicates of
-one alert and answers 10 alert lists. It checks that the role cannot write, and that the file
-reports 20 receives, 10 queries, about one PostgreSQL session per request and three row updates
-of `alerts` per duplicate. A second run takes the default path, with a plain wait.
+the role above, on PostgreSQL 18.7 only. While the file waits, the job sends stock Alerta 20
+duplicates of one alert and 10 alert-list requests; the file itself sends nothing. The job checks
+that:
+
+- the role can neither write nor read `keys`, `users` or an alert's text;
+- an interval that is not a number from 1 to 3600 reads nothing, and a command in its place does
+  not run;
+- the file reports 20 receives, 10 queries, about one PostgreSQL session per request and three
+  row updates of `alerts` per duplicate;
+- an idle interval reports zeros, and `undetermined` for each ratio.
 
 The output has three parts:
 
@@ -67,9 +78,20 @@ The output has three parts:
    and attribute writes use (`WHERE id=… OR id LIKE …`).
 3. **Activity over the interval:** alert receives and alert queries (from Alerta's own timers),
    new PostgreSQL sessions per receive or query, row updates of `alerts` per receive, the share
-   of those that were HOT updates, and alerts inserted. Other routes (keys, heartbeats,
-   blackouts, the web UI's other calls) also open sessions and some update rows, so read these
-   ratios as upper bounds.
+   of all row updates of `alerts` that were HOT updates, and alerts inserted.
+
+**These ratios are indicators, not measurements of one request.** The three sources count
+different things: sessions are those of the whole database (every route and every other client
+of it), row updates are those of the whole `alerts` table (actions, housekeeping and other
+programs included), and receives and queries are only what Alerta's two timers counted. A ratio
+near the lab's value is a reason to look further on a copy (part B); it does not prove the cause.
+The result says `undetermined` when the server is a standby, when the two snapshots are not of
+the same running database (a restart, another server behind the same address, or a statistics
+reset), when a counter went back, or when nothing was counted in the interval.
+
+The plan in part 2 is also only a clue. It is the plan of a `SELECT` with that predicate for an
+id that does not exist. The plan and the cost of the real `UPDATE` can only be seen with your
+data on a separate copy.
 
 If your server already loads `pg_stat_statements`, its view shows which statements take the most
 time; do not load it just for this.
@@ -103,9 +125,19 @@ on new logging on production for this.
   installed as on production.
 - **The data:** restore your newest backup there, or a dump from a replica. A `pg_dump` of the
   primary is a long read; if that is the only way, run it at a quiet time.
-- **Nothing leaves the copy.** Before you start its Alerta: empty `FWD_DESTINATIONS`; remove every
-  plugin and webhook that sends mail, chat messages or HTTP requests; make sure no monitoring
-  system sends alerts to it.
+- **Nothing leaves the copy.** Configuration alone is not enough, because a plugin can still
+  call out. Before you start Alerta or any plugin on the copy:
+  - block the copy host's outbound network access to your production systems and to the
+    internet (a firewall rule or an isolated network), and check that it is blocked;
+  - check that `DATABASE_URL` in the copy's configuration names the copy's own PostgreSQL, not
+    production. Binding Alerta to `127.0.0.1` limits who can call it; it does not limit what it
+    calls;
+  - empty `FWD_DESTINATIONS`, and remove every plugin and webhook that sends mail, chat messages
+    or HTTP requests;
+  - make sure no monitoring system sends alerts to it.
+- **A key for the test only.** Create a new API key on the copy for the load, and do not use a
+  production key in commands or scripts. The copy still holds the production keys: one more
+  reason to protect it.
 - **Protect the copy like production.** The dump holds your alerts, API keys and user records.
   Keep it and the results inside your network, and delete the copy when you are done.
 - **The same configuration as production otherwise:** plugins, pooler, workers and threads.
@@ -156,14 +188,14 @@ not use that patch.
 
 ## C. Read the result
 
-What a checkup observation points to, and what the lab measured for it. Each lab number holds
+What a checkup observation may point to, and what the lab measured for it. Each lab number holds
 only under its condition; follow the link for the method and the limits.
 
 | You see | It points to | Lab result (condition) | Report |
 |---|---|---|---|
 | `sessions_per_receive_or_query` about 1 or more, no pooler | Each request opens a PostgreSQL session | PgBouncer over TCP: +18% to +39% requests/s, stock Alerta. The add-on's `reuse` (one kept connection per worker thread), duplicate writes at 8 clients: 263.4 to 915.6 per second (`forwarder` removed in both) | [tuning](2026-11-20-tuning-bench.md), [add-on](2026-11-20-addon-bench.md) |
 | `alert_row_updates_per_receive` near 3, with `forwarder` in `PLUGINS` and no `FWD_DESTINATIONS` | Two of three row updates of a duplicate are an echo | Removing `forwarder`: +8% to +11% duplicate writes/s on stock Alerta, +39% to +45% with the add-on's `safe` patches (8 clients). With `forwarder` kept, `noecho`: +21% to +31% (8 clients, `safe`) | [tuning](2026-11-20-tuning-bench.md), [fastpath](2026-11-21-fastpath-bench.md) |
-| `Seq Scan on alerts` in the plan of part 2, and a large table | The tag and attribute writes read the whole table (the plan decides; the collation shown is context only) | No result yet: the index is being measured on a large table ([#291](https://github.com/steliosx/alrust/pull/291)). At 1,000 alerts it gave 3% to 5% at 1 client and nothing at 8 | [fastpath](2026-11-21-fastpath-bench.md) |
+| `Seq Scan on alerts` in the plan of part 2, and a large table | The tag and attribute writes may read the whole table (a clue: the real `UPDATE`'s plan needs a copy; the collation shown is context only) | No result yet: the index is being measured on a large table ([#291](https://github.com/steliosx/alrust/pull/291)). At 1,000 alerts it gave 3% to 5% at 1 client and nothing at 8 | [fastpath](2026-11-21-fastpath-bench.md) |
 | Many requests with the same few `q=` texts | The search text is parsed again on every request | `savedq`: server CPU per request −73% for one recurring search, −47% for 16 in turn; +2% to 3% when every text is new | [savedq](2026-11-22-savedq-load.md) |
 | Long `q=` chains such as `a AND b AND c` | Alerta's parser keeps only the first two terms | Group them: `(a AND b) AND c` | [savedq](2026-11-22-savedq-load.md#a-finding-about-alertas-own-parser) |
 | Two data sites, site B's users served by site B's Alerta | Every SQL statement crosses the link to the primary | 50 ms link: site B list 459–464 → 103–104 ms, duplicate write 971–977 → 61–63 ms when HAProxy sends the request to the primary's site | [two-site placement](2026-11-22-two-site-placement.md) |

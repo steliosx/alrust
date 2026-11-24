@@ -9,7 +9,7 @@ Run with the reference Alerta environment's Python and DATABASE_URL set:
 
 prime: Alerta makes its tables at start; one new alert and one alert list,
 so the `metrics` timers exist before the checkup's first snapshot.
-load:  the checkup's wait (CHECKUP_WAIT): RECEIVES duplicates of that
+load:  sent by the job while the checkup waits: RECEIVES duplicates of that
 alert and QUERIES alert lists, then a pause so PostgreSQL's statistics
 are flushed. Each request is checked; a wrong answer exits 1.
 """
