@@ -13,6 +13,10 @@ pub mod key_usage;
 pub mod startup;
 pub mod topn;
 
+// The admin lists (permissions; groups and users to follow).
+pub mod list_query;
+pub mod perms;
+
 use std::sync::Arc;
 
 use alrust_domain::{
