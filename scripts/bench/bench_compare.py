@@ -112,6 +112,11 @@ stops the run before anything is scored.
     indexes it uses, and not gated: under collation C the primary key's
     index could already serve it.
 
+The "pgtune" suite (scripts/bench/pgtune_suite.py, its header) measures
+PostgreSQL changes for Alerta one at a time, behind pgbouncer, on copies
+with PGTUNE_ROWS alerts (1000 or 100000). Step 1 is the ID prefix index
+(FAST_INDEX) alone, with stock Alerta and with the add-on's default.
+
 BENCH_MODE selects "quick" (plumbing: 1 repetition, c=1, 5 s; the default)
 or "full". The workflow passes "quick" on pull requests and the dispatch
 input otherwise (DECISIONS Y69).
@@ -164,6 +169,7 @@ from urllib.parse import urlsplit
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cache_suite  # noqa: E402
 import pg_suite  # noqa: E402
+import pgtune_suite  # noqa: E402
 from mixed_checks import cell_valid, served_time_problems  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -179,8 +185,9 @@ if MODE not in ("quick", "full"):
     sys.exit(f"BENCH_MODE must be quick or full, not {MODE!r}")
 QUICK = MODE == "quick"
 SUITE = os.environ.get("BENCH_SUITE", "compare")
-if SUITE not in ("compare", "mixed", "both", "tuning", "addon", "fastpath", "cache", "pg19", "all"):
-    sys.exit(f"BENCH_SUITE must be compare, mixed, both, tuning, addon, fastpath, cache, pg19 or all, not {SUITE!r}")
+if SUITE not in ("compare", "mixed", "both", "tuning", "addon", "fastpath", "cache", "pg19", "pgtune", "all"):
+    sys.exit("BENCH_SUITE must be compare, mixed, both, tuning, addon, fastpath, cache, pg19, pgtune or all, "
+             f"not {SUITE!r}")
 
 KEY = "bench-key-0123456789abcdef0123456789abcdef"
 HEADERS = {
@@ -215,17 +222,20 @@ FAST_INDEX = "CREATE INDEX IF NOT EXISTS alerts_id_pattern ON alerts (id text_pa
 CACHE = SUITE in ("cache", "all")
 # The pg19 suite is scripts/bench/pg_suite.py.
 PG19 = SUITE in ("pg19", "all")
+# The pgtune suite is scripts/bench/pgtune_suite.py (its arms are compare arms).
+PGTUNE = SUITE in ("pgtune", "all")
 if SUITE == "all" and MODE == "full":
     # Every arm's 18 cells and the 45 mixed cells, at 20 s each, are more
     # than an hour before any start, stop or check: more than the benchmark
     # step allows.
     sys.exit("BENCH_SUITE=all is for the quick check only. A full run takes one of "
-             "compare, mixed, both, tuning, addon, fastpath, cache or pg19; start one run for each.")
+             "compare, mixed, both, tuning, addon, fastpath, cache, pg19 or pgtune; start one run for each.")
 # The arms of the compare cases in this run, each once, in order.
 ARMS = list(dict.fromkeys((COMPARE_ARMS if SUITE in ("compare", "both", "all") else [])
                           + (TUNE_ARMS if SUITE in ("tuning", "all") else [])
                           + (ADDON_ARMS if ADDON else [])
-                          + (FAST_ARMS if FAST else [])))
+                          + (FAST_ARMS if FAST else [])
+                          + (pgtune_suite.arms(sys.modules[__name__]) if PGTUNE else [])))
 # Arm options that load scripts/bench/alerta_fast.py, and its ALERTA_FAST value.
 ADDON_OPTIONS = {"reuse": "reuse", "safe": "safe", "hot": "hot", "noecho": "noecho"}
 # Alerta's default PLUGINS (settings.py) without `forwarder`.
@@ -332,7 +342,8 @@ def start(arm, db, logf, extra_env=None, port=8081):
     else:
         workers, threads = (int(x) for x in arm.split("-")[1].split("x"))
         options = arm.split("-")[2:]
-        unknown = set(options) - {"pgb", "pgbu", "nofwd", "idx", *ADDON_OPTIONS}
+        # `pgt` names the pgtune suite's arms (and their seed); it changes nothing here.
+        unknown = set(options) - {"pgb", "pgbu", "nofwd", "idx", "pgt", *ADDON_OPTIONS}
         if unknown:
             raise ValueError(f"{arm}: unknown options {sorted(unknown)}")
         if "pgbu" in options:
@@ -541,7 +552,7 @@ def normalized(value):
     return value
 
 
-FIRST_BODIES = {}  # the run's first checked arm: its normalized list and count bodies
+FIRST_BODIES = {}  # per seed, the run's first checked arm: its normalized list and count bodies
 
 
 def check(arm, base, db, record):
@@ -561,9 +572,11 @@ def check(arm, base, db, record):
     groups_ok = (count.get("severityCounts") == expected_groups(db, "severity")
                  and count.get("statusCounts") == expected_groups(db, "status"))
     bodies = {"list": normalized(body), "count": normalized(count)}
-    reference = FIRST_BODIES.setdefault("arm", arm)
-    FIRST_BODIES.setdefault("bodies", bodies)
-    cross_arm_ok = bodies == FIRST_BODIES["bodies"]
+    # The pgtune arms' copies have more alerts (their count differs), so they
+    # are compared with the first pgtune arm.
+    first = FIRST_BODIES.setdefault(pgtune_suite.is_arm(arm), {"arm": arm, "bodies": bodies})
+    reference = first["arm"]
+    cross_arm_ok = bodies == first["bodies"]
     ok = basic_ok and not field_diffs and groups_ok and cross_arm_ok
     record["checks"].append({"arm": arm, "db": db, "ok": ok, "basic_ok": basic_ok,
                              "fields_ok": not field_diffs, "field_diffs": field_diffs[:20],
@@ -644,8 +657,9 @@ def cell(arm, proc, base, case, conc, rep, db, json_flag, record):
         if len(rows) != 1 or not dup_identity_ok(rows[0], persisted["prime_id"]):
             persisted["problems"].append(f"after the timed run the database has {rows!r}")
         total = int(psql(db, "SELECT count(*) FROM alerts"))
-        if total != record["seed"]["alerts"] + 1:
-            persisted["problems"].append(f"{total} alerts, {record['seed']['alerts'] + 1} expected")
+        seeded = record["pgtune"]["seed_alerts"] if pgtune_suite.is_arm(arm) else record["seed"]["alerts"]
+        if total != seeded + 1:
+            persisted["problems"].append(f"{total} alerts, {seeded + 1} expected")
         persisted["ok"] = not persisted["problems"]
         s["persisted"] = persisted
     hz = os.sysconf("SC_CLK_TCK")
@@ -1166,6 +1180,7 @@ auth_type = hba
 auth_hba_file = {d}/hba.conf
 auth_file = {d}/userlist.txt
 pool_mode = transaction
+admin_users = postgres
 default_pool_size = 16
 max_client_conn = 400
 ignore_startup_parameters = extra_float_digits,options
@@ -1207,6 +1222,8 @@ def main():
                                   for k, v in HEADERS.items()}}}
     json_flag = oha_json_flag()
     seed(record)
+    if PGTUNE:
+        pgtune_suite.seed(sys.modules[__name__], record)
     # Every copy is made now: a template must have no connection open, and
     # pgbouncer keeps server connections once it starts.
     dbs = {}
@@ -1218,6 +1235,8 @@ def main():
         dbs[("fastpath-probe",)] = "bench_fastpath_probe"
     if CACHE:
         dbs.update(cache_suite.databases(sys.modules[__name__]))
+    if PGTUNE:
+        dbs[("pgtune-plan",)] = pgtune_suite.PLAN_DB
     for arm in ARMS if compare else []:
         safe = arm.replace("-", "_")
         dbs[(arm, "read")] = f"bench_read_{safe}"
@@ -1228,12 +1247,12 @@ def main():
         for name in MIX_CELLS:
             for rep in range(REPS):
                 dbs[(arm, "mixed", name, rep)] = (f"bench_mix_{arm}_{name}_r{rep}").replace("-", "_")
-    for name in dbs.values():
+    for key, name in dbs.items():
         # The seeding server's backends may still be exiting: a template with
         # any connection open cannot be copied, so retry briefly.
         for attempt in range(10):
             try:
-                psql("postgres", f"CREATE DATABASE {name} TEMPLATE bench_seed")
+                psql("postgres", f"CREATE DATABASE {name} TEMPLATE {pgtune_suite.template(key)}")
                 break
             except subprocess.CalledProcessError:
                 if attempt == 9:
@@ -1251,6 +1270,8 @@ def main():
         probe_fastpath(record)
     if PG19:
         pg_suite.prepare(sys.modules[__name__], record)
+    if PGTUNE:
+        pgtune_suite.prepare(sys.modules[__name__], record, dbs)
     pgb = start_pgbouncer(pg_suite.pgbouncer_databases(sys.modules[__name__]) if PG19 else "")
     all_ok = True
     try:
@@ -1275,12 +1296,15 @@ def main():
                         stop(proc)
                 for conc in CONCURRENCY:
                     db = dbs[(arm, "write", rep, conc)]
+                    lsn = pgtune_suite.wal_lsn(sys.modules[__name__]) if pgtune_suite.is_arm(arm) else None
                     with open(OUT / f"server-{arm}-r{rep}-write-c{conc}.log", "w") as logf:
                         proc, base = start(arm, db, logf)
                         try:
                             cell(arm, proc, base, "write-dup", conc, rep, db, json_flag, record)
                         finally:
                             stop(proc)
+                    if lsn is not None:
+                        pgtune_suite.after_write(sys.modules[__name__], record, arm, rep, conc, db, lsn)
         if CACHE and not cache_suite.run(sys.modules[__name__], record, dbs):
             all_ok = False
         if PG19 and not pg_suite.run(sys.modules[__name__], record, json_flag):
@@ -1403,6 +1427,8 @@ def write_summary(record):
         lines += cache_suite.summary(record)
     if "pg19" in record:
         lines += pg_suite.summary(record)
+    if "pgtune" in record:
+        lines += pgtune_suite.summary(record)
     (OUT / "summary.md").write_text("\n".join(lines) + "\n")
 
 
