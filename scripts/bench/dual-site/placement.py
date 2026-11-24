@@ -75,7 +75,9 @@ Stages (the design is Codex's, mail 20261121T182255Z-codex-alrust-c3594b37):
               after a refusal, and any wrong page, wrong refusal or other
               HTTP status make the arm invalid, also when they complete
               after the deadline; a read cut at the deadline with no HTTP
-              answer is only late. Each arm records its answers (hit,
+              headers is only late. A body cut off after its headers is an
+              error, and its known status counts (an origin 200 is one).
+              Each arm records its answers (hit,
               origin, pass), Varnish's counters and the probes' seconds.
 
 A dashboard read is one request of a tenant's key: GET /alerts (newest
@@ -375,7 +377,11 @@ def change_request(kind, alert_id, value="moved"):
 
 def request(epoch, port, method, path, key, body=None, timeout=TIMEOUT):
     """One HTTP request on this thread's kept connection to `port`. Never
-    sent a second time. `timeout` bounds each wait for the socket."""
+    sent a second time. `timeout` bounds each wait for the socket. The
+    status and the route and cache headers are kept as soon as the headers
+    arrive; `complete` is true only when the whole body was read too. A
+    failure after the headers keeps them, with `error` set and `complete`
+    false; `status` is None only when no headers arrived."""
     if getattr(LOCAL, "epoch", None) != epoch:
         for connection, _ in getattr(LOCAL, "connections", {}).values():
             connection.close()
@@ -391,7 +397,7 @@ def request(epoch, port, method, path, key, body=None, timeout=TIMEOUT):
         if connection.sock is not None:
             connection.sock.settimeout(timeout)
     answer = {"status": None, "raw": b"", "app_site": None, "proxy_site": None, "worker": None,
-              "reused": connection.sock is not None, "error": None, "cache": None}
+              "reused": connection.sock is not None, "error": None, "cache": None, "complete": False}
     headers = {"Accept": "application/json", "Authorization": f"Key {key}"}
     data = None
     if body is not None:
@@ -400,16 +406,23 @@ def request(epoch, port, method, path, key, body=None, timeout=TIMEOUT):
     try:
         connection.request(method, path, body=data, headers=headers)
         response = connection.getresponse()
-        answer.update(raw=response.read(), status=response.status,
+        answer.update(status=response.status,
                       app_site=response.getheader("X-Alrust-Bench-App-Site"),
                       proxy_site=response.getheader("X-Alrust-Bench-Site"),
                       worker=response.getheader("X-Alrust-Bench-Worker"),
                       cache=response.getheader("X-Bench-Cache"))
+        answer["raw"] = response.read()
+        answer["complete"] = True
         LOCAL.connections[port] = (connection, time.monotonic())
     except (OSError, HTTPException) as exc:
         connection.close()
         answer["error"] = type(exc).__name__
     return answer
+
+
+def complete_status(answer):
+    """The HTTP status of an answer whose body arrived whole, else None."""
+    return answer["status"] if answer["complete"] else None
 
 
 def sample(epoch, port, key, op, ids, phase, due):
@@ -429,8 +442,8 @@ def sample(epoch, port, key, op, ids, phase, due):
            "resource": resource, "status": answer["status"], "error": answer["error"], "ok": False,
            "app_site": answer["app_site"], "proxy_site": answer["proxy_site"], "worker": answer["worker"],
            "reused": answer["reused"], "cache": answer["cache"], "reader": op.get("reader"),
-           "arrival": due, "start": started, "end": ended}
-    if answer["status"] != (201 if kind in POSTS else 200):
+           "complete": answer["complete"], "arrival": due, "start": started, "end": ended}
+    if answer["error"] or answer["status"] != (201 if kind in POSTS else 200):
         return row
     try:
         data = json.loads(answer["raw"])
@@ -471,9 +484,15 @@ def probe_record(site, sent, done, answer, tenant, known):
     and at least one id in `known` (ids known to be the tenant's, from the
     fixture and the acked writes; no page order is assumed). A 401 or 403
     is a valid refusal only with Alerta's error body; any other status is
-    an error."""
+    an error. A read that failed keeps its transport error: with no headers
+    its status is None; with headers but a body that did not arrive whole,
+    it keeps the HTTP status and cache marker and is neither a valid page
+    nor a refusal."""
     record = {"site": site, "sent": sent, "done": done, "status": answer["status"],
-              "cache": answer["cache"], "error": answer["error"], "ids": None}
+              "cache": answer["cache"], "error": answer["error"], "ids": None,
+              "complete": answer["complete"]}
+    if answer["error"]:
+        return record
     try:
         data = json.loads(answer["raw"]) if answer["status"] is not None else None
     except ValueError:
@@ -532,9 +551,10 @@ def revocation(records, start, deadline):
     key); every 200 after the site's first refusal, whenever it completed;
     the first valid refusal by the deadline (only these count as
     refusals); `late`, the valid answers that completed after the deadline
-    and the reads that timed out after it with no HTTP answer (the wait was
+    and the reads that timed out after it with no HTTP headers (the wait was
     cut at the deadline); and `errors`, every other answer or failure, on
-    time or late."""
+    time or late, among them a body cut off after its headers (its known
+    status still counts above)."""
     out = {"last_cached_200_s": dict.fromkeys(SITES), "origin_200_s": {s: [] for s in SITES},
            "first_refusal_s": dict.fromkeys(SITES), "200_after_refusal_s": {s: [] for s in SITES},
            "late": {s: 0 for s in SITES}, "errors": []}
@@ -879,7 +899,7 @@ class PlacementLab(hosted_lab.VirtualLab):
             for resource, tenant in [*itertools.product(seed_resources(), TENANTS), ("host-0000", TENANTS[0])]:
                 answer = await asyncio.to_thread(request, "seed", self.p("a", "vm1"), "POST", "/alert",
                                                  self.keys[tenant], alert_body(resource))
-                if answer["status"] != 201:
+                if answer["status"] != 201 or not answer["complete"]:
                     raise RuntimeError(f"Seed failed at {tenant} {resource}: HTTP {answer['status']} "
                                        f"{answer['error']} {answer['raw'][:160]!r}")
                 await asyncio.sleep(0.02)
@@ -984,8 +1004,8 @@ class PlacementLab(hosted_lab.VirtualLab):
             target = ids[tenant, "mutate-0"]
             async with AsyncExitStack() as stack:
                 await self.apps(stack, db, feature)
-                statuses = [(await asyncio.to_thread(request, db, port, "POST", "/alert", key,
-                                                     alert_body("sentinel-0")))["status"]
+                statuses = [complete_status(await asyncio.to_thread(request, db, port, "POST", "/alert", key,
+                                                                    alert_body("sentinel-0")))
                             for _ in range(SENTINEL + 1)]
             # Read with Alerta stopped: HAProxy's health checks of a running
             # Alerta keep backends on the database.
@@ -996,7 +1016,7 @@ class PlacementLab(hosted_lab.VirtualLab):
                 for kind, value in (("same", "lab"), ("changed", "moved"), ("null", None), ("ack", None)):
                     path, body = change_request(kind, target, value)
                     answer = await asyncio.to_thread(request, db, port, "PUT", path, key, body)
-                    changes.append([kind, answer["status"], answer["raw"].decode(errors="replace")[:200]])
+                    changes.append([kind, complete_status(answer), answer["raw"].decode(errors="replace")[:200]])
             rows = {row["resource"]: row for row in self.final_state(db) if row["customer"] == tenant}
             result["http"][name] = {
                 "post_statuses_not_201": sum(1 for status in statuses if status != 201),
@@ -1124,7 +1144,8 @@ class PlacementLab(hosted_lab.VirtualLab):
 
         def evidence(records, start):
             return [{"site": r["site"], "sent_s": round(r["sent"] - start, 3), "done_s": round(r["done"] - start, 3),
-                     "status": r["status"], "cache": r["cache"], "error": r["error"]} for r in records]
+                     "status": r["status"], "cache": r["cache"], "error": r["error"],
+                     "complete": r["complete"]} for r in records]
 
         primed = await prime(self.keys[tenant], "new alert probe")
         op = {"op": f"probe-{name}", "site": "a", "tenant": tenant, "kind": "new",
@@ -1317,7 +1338,8 @@ class PlacementLab(hosted_lab.VirtualLab):
             "cpu_ms": {k: round((cpu_after[k] - v) * 1000 / os.sysconf("SC_CLK_TCK"), 1)
                        for k, v in cpu_before.items()},
             "cgroup_cpu_delta": {k: v - scope_before[k] for k, v in scope_after.items() if k in scope_before},
-            "transport_errors": Counter(row["error"] for row in rows if row["status"] is None),
+            # No headers, or headers and a body cut off (its status is kept in the row).
+            "transport_errors": Counter(row["error"] for row in rows if not row["complete"]),
             "changed_alerts": {f"{key[0]}/{key[1]}": stored.get(key) for key in changed},
             "final_state_sha256": hashlib.sha256(json.dumps(state, sort_keys=True).encode()).hexdigest(),
             "settings": self.settings[name],
@@ -1935,7 +1957,8 @@ def self_test():
     refusal = json.dumps({"status": "error", "message": "API key parameter is invalid"}).encode()
 
     def answer(status, raw=b"", cache=None, error=None):
-        return {"status": status, "raw": raw, "cache": cache, "error": error}
+        return {"status": status, "raw": raw, "cache": cache, "error": error,
+                "complete": status is not None and error is None}
 
     def probe(site, done, status, raw=b"", cache=None, sent=None, known=frozenset({"x", "new"}), error=None):
         return probe_record(site, done if sent is None else sent, done, answer(status, raw, cache, error),
@@ -2026,6 +2049,57 @@ def self_test():
     reset = revocation([*refused, probe("a", 26.2, None, sent=25.9, error="ConnectionResetError")], 20.0, 26.0)
     assert reset["errors"] == [{"site": "a", "s": 6.2, "status": None, "error": "ConnectionResetError", "late": True}]
     assert probe_problems(*clean[:7], reset)
+    # A body cut off after the headers: the known status and cache marker stay,
+    # the read is an error (never a page or a refusal, never a no-answer timeout),
+    # and an origin 200 still counts as one, on time or late.
+    cut = probe("a", 26.3, 200, b'{"stat', "origin", sent=25.8, error="TimeoutError")
+    assert (cut["status"], cut["cache"], cut["error"], cut["ids"], cut["complete"]) == (
+        200, "origin", "TimeoutError", None, False), cut
+    body_cut = revocation([*refused, cut], 20.0, 26.0)
+    assert body_cut["origin_200_s"]["a"] == [6.3] and body_cut["200_after_refusal_s"]["a"] == [6.3], body_cut
+    assert body_cut["late"] == {"a": 0, "b": 0}, body_cut
+    assert body_cut["errors"] == [{"site": "a", "s": 6.3, "status": 200, "error": "TimeoutError", "late": True}]
+    assert probe_problems(*clean[:7], body_cut)
+    early_cut = revocation([*refused, probe("b", 21.0, 200, b"{", "origin", error="IncompleteRead")], 20.0, 26.0)
+    assert early_cut["origin_200_s"]["b"] == [1.0] and early_cut["errors"][0]["late"] is False, early_cut
+    # A cut 401 is not a refusal: alone at its site, the site has none, and the read is an error.
+    cut_refusal = revocation([probe("b", 20.6, 401, refusal),
+                              probe("a", 21.5, 401, b'{"st', error="TimeoutError")], 20.0, 26.0)
+    assert cut_refusal["first_refusal_s"] == {"a": None, "b": 0.6}, cut_refusal
+    assert cut_refusal["errors"] == [{"site": "a", "s": 1.5, "status": 401, "error": "TimeoutError",
+                                      "late": False}], cut_refusal
+    # request() on a real socket: headers then a stalled body, and no headers at all.
+    import socket
+
+    def stalled_server(reply):
+        server = socket.socket()
+        server.bind((HOST, 0))
+        server.listen(1)
+
+        def run():
+            conn, _ = server.accept()
+            conn.recv(65536)
+            if reply:
+                conn.sendall(reply)
+            time.sleep(1.5)
+            conn.close()
+            server.close()
+        threading.Thread(target=run, daemon=True).start()
+        return server.getsockname()[1]
+
+    headers_then_stall = (b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n"
+                          b"X-Bench-Cache: miss\r\nX-Alrust-Bench-App-Site: a\r\n\r\n{\"sta")
+    got = request("self-test", stalled_server(headers_then_stall), "GET", LIST, "k", timeout=0.3)
+    assert (got["status"], got["cache"], got["app_site"], got["complete"]) == (200, "miss", "a", False), got
+    assert got["error"] == "TimeoutError" and complete_status(got) is None, got
+    got = request("self-test", stalled_server(b""), "GET", LIST, "k", timeout=0.3)
+    assert (got["status"], got["error"], got["complete"]) == (None, "TimeoutError", False), got
+    # sample() keeps the transport error of a cut body (it does not parse it as "not_json"):
+    # here the server closes after part of the body (the default timeout is longer).
+    row = sample("self-test", stalled_server(headers_then_stall), "k",
+                 {"op": "t", "site": "a", "tenant": TENANTS[0], "kind": "list", "resource": None},
+                 {}, "timed", 0.0)
+    assert (row["status"], row["error"], row["ok"], row["complete"]) == (200, "IncompleteRead", False, False), row
     assert within({"t": 5}, {"t": 4}, {"t": 1}) and not within({"t": 6}, {"t": 4}, {"t": 1})
     assert not within({"t": 3}, {"t": 4}, {"t": 1}) and not within(None, {"t": 4}, {})
     assert within({"t": 4, "u": 2}, {"t": 4, "u": 2}, {}) and not within({"t": 4}, {"t": 4, "u": 2}, {})
