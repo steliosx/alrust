@@ -14,8 +14,10 @@
 -- Expected for a login that can only do what the checkup needs:
 --   1. no row (the login is a member of no other role);
 --   2. superuser f, create_in_database f, create_in_public f;
---   3. can_write f for every table; can_read_whole_table f for every table;
---      can_read_some_column t for `alerts` and `metrics` only.
+--   3. can_write f and can_read_whole_table f for every table; readable_columns
+--      exactly `id` for `alerts`, exactly `count, group, name, type` for
+--      `metrics`, and empty for every other table. The last column says `ok`
+--      or names what is missing or unexpected.
 -- It looks at the `public` schema of this database only.
 
 \set ON_ERROR_STOP on
@@ -33,12 +35,32 @@ SELECT current_setting('is_superuser') = 'on' AS superuser,
        has_schema_privilege(current_user, 'public', 'CREATE') AS create_in_public;
 \echo
 \echo '== 3. Tables of schema public (expected: can_write f and can_read_whole_table f everywhere;'
-\echo '      can_read_some_column t for alerts and metrics only)'
-SELECT c.relname AS table_name,
-       (has_any_column_privilege(current_user, c.oid, 'INSERT, UPDATE')
-        OR has_table_privilege(current_user, c.oid, 'DELETE, TRUNCATE')) AS can_write,
-       has_table_privilege(current_user, c.oid, 'SELECT') AS can_read_whole_table,
-       has_any_column_privilege(current_user, c.oid, 'SELECT') AS can_read_some_column
-  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
- WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') ORDER BY 1;
+\echo '      readable_columns: id for alerts; count, group, name, type for metrics; none elsewhere)'
+WITH need(table_name, column_name) AS (
+  VALUES ('alerts', 'id'), ('metrics', 'group'), ('metrics', 'name'), ('metrics', 'type'), ('metrics', 'count')),
+t AS (
+  SELECT c.oid, c.relname::text AS table_name
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')),
+cols AS (
+  SELECT t.table_name, a.attname::text AS column_name,
+         has_column_privilege(current_user, t.oid, a.attnum, 'SELECT') AS readable
+    FROM t JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum > 0 AND NOT a.attisdropped)
+SELECT t.table_name,
+       (has_any_column_privilege(current_user, t.oid, 'INSERT, UPDATE')
+        OR has_table_privilege(current_user, t.oid, 'DELETE, TRUNCATE')) AS can_write,
+       has_table_privilege(current_user, t.oid, 'SELECT') AS can_read_whole_table,
+       coalesce((SELECT string_agg(column_name, ', ' ORDER BY column_name)
+                   FROM cols WHERE cols.table_name = t.table_name AND readable), '') AS readable_columns,
+       coalesce(nullif(concat_ws('; ',
+         'missing: ' || (SELECT string_agg(need.column_name, ', ' ORDER BY need.column_name) FROM need
+                          WHERE need.table_name = t.table_name
+                            AND NOT EXISTS (SELECT 1 FROM cols WHERE cols.table_name = need.table_name
+                                               AND cols.column_name = need.column_name AND cols.readable)),
+         'unexpected: ' || (SELECT string_agg(cols.column_name, ', ' ORDER BY cols.column_name) FROM cols
+                             WHERE cols.table_name = t.table_name AND cols.readable
+                               AND NOT EXISTS (SELECT 1 FROM need WHERE need.table_name = cols.table_name
+                                                  AND need.column_name = cols.column_name))), ''), 'ok')
+         AS compared_to_the_checkup
+  FROM t ORDER BY 1;
 COMMIT;

@@ -59,8 +59,10 @@ Expected for a login that can only do what the checkup needs:
 
 1. no role that the login is a member of (or only roles the DBA knows to be harmless);
 2. `f` for superuser, for creating in the database and for creating in the `public` schema;
-3. for every table, `f` for writing and `f` for reading the whole table; reading some column is
-   `t` for `alerts` and `metrics` only, so `keys` and `users` show `f` three times.
+3. for every table, `f` for writing and `f` for reading the whole table. The readable columns
+   are exactly `id` for `alerts` and exactly `count, group, name, type` for `metrics`, and none
+   for every other table (`keys` and `users` among them). The last column says `ok`, or names
+   each column that is missing or unexpected.
 
 If a value differs, do not run the checkup with this login; what to change is the DBA's decision.
 The file looks at the `public` schema of one database only: if Alerta's tables are in another
@@ -92,8 +94,9 @@ that:
 
 - the role can neither write nor read `keys`, `users` or an alert's text, and the privileges
   file of A1 reports exactly the expected values for it;
-- the privileges file reports a login that may create in `public`, and one that is a member of
-  a role with `SELECT` on `keys`;
+- the privileges file reports a login that may create in `public` and is a member of a role
+  with `SELECT` on `keys`, a login whose only excess is `SELECT` on the `text` column of
+  `alerts`, and a login that lacks one of the `metrics` columns;
 - an interval that is not a number from 1 to 3600 reads nothing, and a command in its place does
   not run;
 - the file reports 20 receives, 10 queries, about one PostgreSQL session per request and three

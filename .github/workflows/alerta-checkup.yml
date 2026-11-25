@@ -95,10 +95,27 @@ jobs:
           GRANT CONNECT ON DATABASE checkup TO checkup_loose;
           GRANT USAGE, CREATE ON SCHEMA public TO checkup_loose;
           GRANT SELECT (id), UPDATE (text) ON alerts TO checkup_loose;
+          -- Only excess: one sensitive column of alerts.
+          CREATE ROLE checkup_text LOGIN PASSWORD 'checkup';
+          GRANT CONNECT ON DATABASE checkup TO checkup_text;
+          GRANT USAGE ON SCHEMA public TO checkup_text;
+          GRANT SELECT (id, text) ON alerts TO checkup_text;
+          GRANT SELECT ("group", name, type, count) ON metrics TO checkup_text;
+          -- Only fault: a required column of metrics is not granted.
+          CREATE ROLE checkup_short LOGIN PASSWORD 'checkup';
+          GRANT CONNECT ON DATABASE checkup TO checkup_short;
+          GRANT USAGE ON SCHEMA public TO checkup_short;
+          GRANT SELECT (id) ON alerts TO checkup_short;
+          GRANT SELECT ("group", name, type) ON metrics TO checkup_short;
           SQL
+          for who in text short; do
+            "$BENCH_PG_BIN/psql" -X -h 127.0.0.1 -p 5432 -U "checkup_$who" -d checkup -v ON_ERROR_STOP=1 \
+              -At -f scripts/bench/alerta_checkup_privileges.sql | tee "$out/privileges-$who.txt"
+          done
           "$BENCH_PG_BIN/psql" -X -h 127.0.0.1 -p 5432 -U checkup_loose -d checkup -v ON_ERROR_STOP=1 \
             -At -f scripts/bench/alerta_checkup_privileges.sql | tee "$out/privileges-loose.txt"
-          python3 -I - "$out/privileges.txt" "$out/privileges-loose.txt" <<'PY'
+          python3 -I - "$out/privileges.txt" "$out/privileges-loose.txt" "$out/privileges-text.txt" \
+            "$out/privileges-short.txt" <<'PY'
           import sys
           def parts(path):
               out, part = {}, None
@@ -119,20 +136,33 @@ jobs:
           for need in ("alerts", "metrics", "keys", "users"):
               if need not in tables:
                   problems.append(f"table {need} is missing from the privileges output")
-          for name, flags in tables.items():
-              want = "f|f|t" if name in ("alerts", "metrics") else "f|f|f"
-              if flags != want:
-                  problems.append(f"checkup role: table {name} is {flags}, expected {want}")
+          EXACT = {"alerts": "f|f|id|ok", "metrics": "f|f|count, group, name, type|ok"}
+          def exact(who, got, differ=None):
+              differ = differ or {}
+              for name, flags in got.items():
+                  want = differ.get(name) or EXACT.get(name, "f|f||ok")
+                  if flags != want:
+                      problems.append(f"{who}: table {name} is {flags!r}, expected {want!r}")
+          exact("checkup role", tables)
           loose = parts(sys.argv[2])
           ltables = dict(row.split("|", 1) for row in loose.get("3", []))
           if loose.get("1") != ["keyreader"]:
               problems.append(f"loose login: member_of is {loose.get('1')}")
           if loose.get("2") != ["f|f|t"]:
               problems.append(f"loose login: superuser/create are {loose.get('2')}")
-          if ltables.get("keys") != "f|t|t":
+          if not (ltables.get("keys") or "").startswith("f|t|") or "unexpected: " not in ltables.get("keys", ""):
               problems.append(f"loose login: keys is {ltables.get('keys')}")
-          if ltables.get("alerts") != "t|f|t":
+          if ltables.get("alerts") != "t|f|id|ok":
               problems.append(f"loose login: alerts is {ltables.get('alerts')}")
+          # A login whose only excess is one sensitive column, and one that lacks a required column:
+          # memberships and create flags are as for the checkup role; one table row differs.
+          for who, path, differ in (
+                  ("text login", sys.argv[3], {"alerts": "f|f|id, text|unexpected: text"}),
+                  ("short login", sys.argv[4], {"metrics": "f|f|group, name, type|missing: count"})):
+              other = parts(path)
+              if other.get("1") != [] or other.get("2") != ["f|f|f"]:
+                  problems.append(f"{who}: parts 1 and 2 are {other.get('1')} {other.get('2')}")
+              exact(who, dict(row.split("|", 1) for row in other.get("3", [])), differ)
           if problems:
               sys.exit("; ".join(problems))
           print(f"privileges file: expected values for the checkup role ({len(tables)} tables), excess shown for the loose login")
