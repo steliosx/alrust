@@ -5,8 +5,9 @@
 # every query of the file runs on 18.7 with the column grants of the guide
 # and nothing more, that the role can neither write nor read key material,
 # that the file's counts match the known traffic, that an idle interval
-# gives zeros and `undetermined` ratios, and that a bad interval reads
-# nothing. The traffic is this harness's own: the file has no hook, so the
+# gives zeros and `undetermined` ratios, that a bad interval reads
+# nothing, and that scripts/bench/alerta_checkup_privileges.sql reports the
+# expected effective privileges for that role and the excess of a looser one. The traffic is this harness's own: the file has no hook, so the
 # job sends it while the file waits. Synthetic data only. Not a benchmark
 # and not a required check.
 name: alerta checkup sql
@@ -16,6 +17,7 @@ on:
   pull_request:
     paths:
       - scripts/bench/alerta_checkup.sql
+      - scripts/bench/alerta_checkup_privileges.sql
       - scripts/bench/checkup_ci.py
       - scripts/bench/setup.sh
       - .github/workflows/alerta-checkup.yml
@@ -83,6 +85,58 @@ jobs:
             fi
             grep -q 'permission denied' "$out/denied-$n.err"
           done
+          # The privileges file of the guide: exactly the expected values for the checkup role,
+          # and the excess of a login that may create in public and is a member of a key reader.
+          "${reader[@]}" -At -f scripts/bench/alerta_checkup_privileges.sql | tee "$out/privileges.txt"
+          PGPASSWORD=postgres "${admin[@]}" -d checkup <<'SQL'
+          CREATE ROLE keyreader NOLOGIN;
+          GRANT SELECT ON keys TO keyreader;
+          CREATE ROLE checkup_loose LOGIN PASSWORD 'checkup' IN ROLE keyreader;
+          GRANT CONNECT ON DATABASE checkup TO checkup_loose;
+          GRANT USAGE, CREATE ON SCHEMA public TO checkup_loose;
+          GRANT SELECT (id), UPDATE (text) ON alerts TO checkup_loose;
+          SQL
+          "$BENCH_PG_BIN/psql" -X -h 127.0.0.1 -p 5432 -U checkup_loose -d checkup -v ON_ERROR_STOP=1 \
+            -At -f scripts/bench/alerta_checkup_privileges.sql | tee "$out/privileges-loose.txt"
+          python3 -I - "$out/privileges.txt" "$out/privileges-loose.txt" <<'PY'
+          import sys
+          def parts(path):
+              out, part = {}, None
+              for line in open(path).read().splitlines():
+                  if line.startswith("== "):
+                      part = line[3]
+                      out[part] = []
+                  elif line.strip() and not line.startswith("  ") and part:
+                      out[part].append(line)
+              return out
+          problems = []
+          tight = parts(sys.argv[1])
+          tables = dict(row.split("|", 1) for row in tight.get("3", []))
+          if tight.get("1") != []:
+              problems.append(f"checkup role is a member of {tight.get('1')}")
+          if tight.get("2") != ["f|f|f"]:
+              problems.append(f"checkup role: superuser/create are {tight.get('2')}")
+          for need in ("alerts", "metrics", "keys", "users"):
+              if need not in tables:
+                  problems.append(f"table {need} is missing from the privileges output")
+          for name, flags in tables.items():
+              want = "f|f|t" if name in ("alerts", "metrics") else "f|f|f"
+              if flags != want:
+                  problems.append(f"checkup role: table {name} is {flags}, expected {want}")
+          loose = parts(sys.argv[2])
+          ltables = dict(row.split("|", 1) for row in loose.get("3", []))
+          if loose.get("1") != ["keyreader"]:
+              problems.append(f"loose login: member_of is {loose.get('1')}")
+          if loose.get("2") != ["f|f|t"]:
+              problems.append(f"loose login: superuser/create are {loose.get('2')}")
+          if ltables.get("keys") != "f|t|t":
+              problems.append(f"loose login: keys is {ltables.get('keys')}")
+          if ltables.get("alerts") != "t|f|t":
+              problems.append(f"loose login: alerts is {ltables.get('alerts')}")
+          if problems:
+              sys.exit("; ".join(problems))
+          print(f"privileges file: expected values for the checkup role ({len(tables)} tables), excess shown for the loose login")
+          PY
           # A bad interval reads nothing; so does a command in the place of the interval.
           for bad in 0 3601 abc '1; touch /tmp/checkup-injected' '$(touch /tmp/checkup-injected)'; do
             "${reader[@]}" -v interval="$bad" -f scripts/bench/alerta_checkup.sql > "$out/bad.txt" 2> "$out/bad.err"

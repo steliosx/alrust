@@ -34,10 +34,37 @@ GRANT SELECT (id) ON alerts TO checkup;
 GRANT SELECT ("group", name, type, count) ON metrics TO checkup;
 ```
 
-With these, the role cannot read the content of an alert, the `keys` table (API keys) or the
-`users` table, and it cannot write; the CI check tries each and is refused. Do not grant `SELECT`
-on all tables for this, and do not use a role that already has it: the checkup needs no more than
-the above. The statistics and catalog views it reads are open to every role.
+Do not grant `SELECT` on all tables for this, and do not use a role that already has it: the
+checkup needs no more than the above. The statistics and catalog views it reads are open to every
+role.
+
+**These grants alone do not prove what the role can do.** A role also has what `PUBLIC` has,
+what the roles it is a member of have, and what was granted before. On PostgreSQL 14, and on a
+database that was made on 14 or older and then upgraded or restored, every role can usually
+create objects in the `public` schema
+([PostgreSQL 15 release notes](https://www.postgresql.org/docs/15/release-15.html#RELEASE-15-MIGRATION)).
+The CI check shows that the role is refused each write and each sensitive read on its own new
+PostgreSQL 18.7 database; it shows nothing about yours.
+
+Before the first run on production, ask the DBA to run
+[`scripts/bench/alerta_checkup_privileges.sql`](../../scripts/bench/alerta_checkup_privileges.sql)
+as the checkup login. It reads the login's effective privileges with PostgreSQL's own
+`has_*_privilege` functions, in one `READ ONLY` transaction, and changes nothing:
+
+```sh
+psql "<connection string of the read-only role>" -X -f scripts/bench/alerta_checkup_privileges.sql
+```
+
+Expected for a login that can only do what the checkup needs:
+
+1. no role that the login is a member of (or only roles the DBA knows to be harmless);
+2. `f` for superuser, for creating in the database and for creating in the `public` schema;
+3. for every table, `f` for writing and `f` for reading the whole table; reading some column is
+   `t` for `alerts` and `metrics` only, so `keys` and `users` show `f` three times.
+
+If a value differs, do not run the checkup with this login; what to change is the DBA's decision.
+The file looks at the `public` schema of one database only: if Alerta's tables are in another
+schema, or the login can connect to other databases, the DBA checks those too.
 
 ### A2. Run the checkup
 
@@ -63,7 +90,10 @@ the role above, on PostgreSQL 18.7 only. While the file waits, the job sends sto
 duplicates of one alert and 10 alert-list requests; the file itself sends nothing. The job checks
 that:
 
-- the role can neither write nor read `keys`, `users` or an alert's text;
+- the role can neither write nor read `keys`, `users` or an alert's text, and the privileges
+  file of A1 reports exactly the expected values for it;
+- the privileges file reports a login that may create in `public`, and one that is a member of
+  a role with `SELECT` on `keys`;
 - an interval that is not a number from 1 to 3600 reads nothing, and a command in its place does
   not run;
 - the file reports 20 receives, 10 queries, about one PostgreSQL session per request and three
@@ -73,7 +103,7 @@ that:
 The output has three parts:
 
 1. **Server and database:** the PostgreSQL version, the database's collation and its provider,
-   and four settings.
+   and three settings (`max_connections`, `shared_buffers`, `synchronous_commit`).
 2. **The `alerts` table:** its size, its indexes, and the plan of the predicate that Alerta's tag
    and attribute writes use (`WHERE id=… OR id LIKE …`).
 3. **Activity over the interval:** alert receives and alert queries (from Alerta's own timers),
@@ -85,9 +115,11 @@ different things: sessions are those of the whole database (every route and ever
 of it), row updates are those of the whole `alerts` table (actions, housekeeping and other
 programs included), and receives and queries are only what Alerta's two timers counted. A ratio
 near the lab's value is a reason to look further on a copy (part B); it does not prove the cause.
-The result says `undetermined` when the server is a standby, when the two snapshots are not of
-the same running database (a restart, another server behind the same address, or a statistics
-reset), when a counter went back, or when nothing was counted in the interval.
+The `result` field says `undetermined`, with the reason, when the server is a standby, when the
+two snapshots are not of the same running database (a restart, another server behind the same
+address, or a statistics reset), or when a counter or the clock went back. An interval in which
+nothing was counted is a valid sample: `result` is `ok`, the counts are 0, and each ratio says
+`undetermined` because it has nothing to divide by.
 
 The plan in part 2 is also only a clue. It is the plan of a `SELECT` with that predicate for an
 id that does not exist. The plan and the cost of the real `UPDATE` can only be seen with your
@@ -188,13 +220,15 @@ not use that patch.
 
 ## C. Read the result
 
-What a checkup observation may point to, and what the lab measured for it. Each lab number holds
-only under its condition; follow the link for the method and the limits.
+What a checkup observation may point to, and what the lab measured for it. The second column is
+a hypothesis to check on the copy (part B), not a diagnosis: the checkup's ratios come from
+counters of the whole database and of the whole table. Each lab number holds only under its
+condition; follow the link for the method and the limits.
 
-| You see | It points to | Lab result (condition) | Report |
+| You see | Hypothesis to check on the copy | Lab result (condition) | Report |
 |---|---|---|---|
-| `sessions_per_receive_or_query` about 1 or more, no pooler | Each request opens a PostgreSQL session | PgBouncer over TCP: +18% to +39% requests/s, stock Alerta. The add-on's `reuse` (one kept connection per worker thread), duplicate writes at 8 clients: 263.4 to 915.6 per second (`forwarder` removed in both) | [tuning](2026-11-20-tuning-bench.md), [add-on](2026-11-20-addon-bench.md) |
-| `alert_row_updates_per_receive` near 3, with `forwarder` in `PLUGINS` and no `FWD_DESTINATIONS` | Two of three row updates of a duplicate are an echo | Removing `forwarder`: +8% to +11% duplicate writes/s on stock Alerta, +39% to +45% with the add-on's `safe` patches (8 clients). With `forwarder` kept, `noecho`: +21% to +31% (8 clients, `safe`) | [tuning](2026-11-20-tuning-bench.md), [fastpath](2026-11-21-fastpath-bench.md) |
+| `sessions_per_receive_or_query` about 1 or more, no pooler | Each request may open its own PostgreSQL session (other clients of the database add sessions too) | PgBouncer over TCP: +18% to +39% requests/s, stock Alerta. The add-on's `reuse` (one kept connection per worker thread), duplicate writes at 8 clients: 263.4 to 915.6 per second (`forwarder` removed in both) | [tuning](2026-11-20-tuning-bench.md), [add-on](2026-11-20-addon-bench.md) |
+| `alert_row_updates_per_receive` near 3, with `forwarder` in `PLUGINS` and no `FWD_DESTINATIONS` | Two of three row updates of a duplicate may be `forwarder`'s echo (other writers of `alerts` add updates too) | Removing `forwarder`: +8% to +11% duplicate writes/s on stock Alerta, +39% to +45% with the add-on's `safe` patches (8 clients). With `forwarder` kept, `noecho`: +21% to +31% (8 clients, `safe`) | [tuning](2026-11-20-tuning-bench.md), [fastpath](2026-11-21-fastpath-bench.md) |
 | `Seq Scan on alerts` in the plan of part 2, and a large table | The tag and attribute writes may read the whole table (a clue: the real `UPDATE`'s plan needs a copy; the collation shown is context only) | No result yet: the index is being measured on a large table ([#291](https://github.com/steliosx/alrust/pull/291)). At 1,000 alerts it gave 3% to 5% at 1 client and nothing at 8 | [fastpath](2026-11-21-fastpath-bench.md) |
 | Many requests with the same few `q=` texts | The search text is parsed again on every request | `savedq`: server CPU per request −73% for one recurring search, −47% for 16 in turn; +2% to 3% when every text is new | [savedq](2026-11-22-savedq-load.md) |
 | Long `q=` chains such as `a AND b AND c` | Alerta's parser keeps only the first two terms | Group them: `(a AND b) AND c` | [savedq](2026-11-22-savedq-load.md#a-finding-about-alertas-own-parser) |
