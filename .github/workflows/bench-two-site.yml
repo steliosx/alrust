@@ -17,6 +17,10 @@ on:
         type: choice
         options: [full, quick]
         default: full
+      stages:
+        description: "comma-separated: placement, fresh, cache (the cache stage of Codex's design)"
+        type: string
+        default: placement,fresh
   pull_request:
     paths:
       - scripts/bench/dual-site/**
@@ -66,6 +70,8 @@ jobs:
         timeout-minutes: 55
         env:
           BENCH_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'quick' }}
+          # A pull request runs every stage quick (plumbing).
+          BENCH_STAGES: ${{ github.event_name == 'workflow_dispatch' && inputs.stages || 'placement,fresh,cache' }}
         run: |
           set -euo pipefail
           out="$RUNNER_TEMP/two-site-out"
@@ -81,7 +87,7 @@ jobs:
             /usr/bin/unshare --net --pid --fork --kill-child --mount-proc \
             /bin/bash "$d/hosted-netem.sh" "$(readlink /proc/self/ns/net)" "$(id -u)" "$(id -g)" \
             /usr/bin/timeout --signal=INT --kill-after=25s 2900 \
-            "$BENCH_ALERTA_VENV/bin/python" -I -B "$d/placement.py" --mode "$BENCH_MODE" --output "$out" \
+            "$BENCH_ALERTA_VENV/bin/python" -I -B "$d/placement.py" --mode "$BENCH_MODE" --stages "$BENCH_STAGES" --output "$out" \
               --etcd "$BENCH_WORK/bin/etcd" --haproxy "$BENCH_WORK/bin/haproxy" --pgbouncer "$BENCH_PGBOUNCER" \
               --pg-bin "$BENCH_PG_BIN" --venv "$BENCH_ALERTA_VENV" || status=$?
           if [ -f "$out/summary.md" ]; then
