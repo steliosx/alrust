@@ -1,0 +1,7152 @@
+{
+ "mode": "full",
+ "suite": "pgtune",
+ "arms": [
+  "alerta-4x4-pgb-pgt",
+  "alerta-4x4-pgb-idx-pgt",
+  "alerta-4x4-pgb-safe-pgt",
+  "alerta-4x4-pgb-safe-idx-pgt"
+ ],
+ "reps": 3,
+ "warm_s": 5,
+ "timed_s": 15,
+ "concurrency": [
+  1,
+  8
+ ],
+ "vcpus": 4,
+ "checks": [
+  {
+   "arm": "alerta-4x4-pgb-pgt",
+   "db": "bench_read_alerta_4x4_pgb_pgt",
+   "ok": true,
+   "basic_ok": true,
+   "fields_ok": true,
+   "field_diffs": [],
+   "groups_ok": true,
+   "cross_arm_ok": true,
+   "reference_arm": "alerta-4x4-pgb-pgt",
+   "list_bytes": 44248,
+   "list_content_encoding": null,
+   "count_bytes": 210,
+   "count_content_encoding": null,
+   "severityCounts": {
+    "critical": 20000,
+    "major": 20000,
+    "minor": 20000,
+    "normal": 20000,
+    "warning": 20000
+   },
+   "statusCounts": {
+    "closed": 20000,
+    "open": 80000
+   }
+  },
+  {
+   "arm": "alerta-4x4-pgb-idx-pgt",
+   "db": "bench_read_alerta_4x4_pgb_idx_pgt",
+   "ok": true,
+   "basic_ok": true,
+   "fields_ok": true,
+   "field_diffs": [],
+   "groups_ok": true,
+   "cross_arm_ok": true,
+   "reference_arm": "alerta-4x4-pgb-pgt",
+   "list_bytes": 44248,
+   "list_content_encoding": null,
+   "count_bytes": 210,
+   "count_content_encoding": null,
+   "severityCounts": {
+    "critical": 20000,
+    "major": 20000,
+    "minor": 20000,
+    "normal": 20000,
+    "warning": 20000
+   },
+   "statusCounts": {
+    "closed": 20000,
+    "open": 80000
+   }
+  },
+  {
+   "arm": "alerta-4x4-pgb-safe-idx-pgt",
+   "db": "bench_read_alerta_4x4_pgb_safe_idx_pgt",
+   "ok": true,
+   "basic_ok": true,
+   "fields_ok": true,
+   "field_diffs": [],
+   "groups_ok": true,
+   "cross_arm_ok": true,
+   "reference_arm": "alerta-4x4-pgb-pgt",
+   "list_bytes": 44248,
+   "list_content_encoding": null,
+   "count_bytes": 210,
+   "count_content_encoding": null,
+   "severityCounts": {
+    "critical": 20000,
+    "major": 20000,
+    "minor": 20000,
+    "normal": 20000,
+    "warning": 20000
+   },
+   "statusCounts": {
+    "closed": 20000,
+    "open": 80000
+   }
+  },
+  {
+   "arm": "alerta-4x4-pgb-safe-pgt",
+   "db": "bench_read_alerta_4x4_pgb_safe_pgt",
+   "ok": true,
+   "basic_ok": true,
+   "fields_ok": true,
+   "field_diffs": [],
+   "groups_ok": true,
+   "cross_arm_ok": true,
+   "reference_arm": "alerta-4x4-pgb-pgt",
+   "list_bytes": 44248,
+   "list_content_encoding": null,
+   "count_bytes": 210,
+   "count_content_encoding": null,
+   "severityCounts": {
+    "critical": 20000,
+    "major": 20000,
+    "minor": 20000,
+    "normal": 20000,
+    "warning": 20000
+   },
+   "statusCounts": {
+    "closed": 20000,
+    "open": 80000
+   }
+  },
+  {
+   "arm": "alerta-4x4-pgb-safe-pgt",
+   "db": "bench_read_alerta_4x4_pgb_safe_pgt",
+   "ok": true,
+   "basic_ok": true,
+   "fields_ok": true,
+   "field_diffs": [],
+   "groups_ok": true,
+   "cross_arm_ok": true,
+   "reference_arm": "alerta-4x4-pgb-pgt",
+   "list_bytes": 44248,
+   "list_content_encoding": null,
+   "count_bytes": 210,
+   "count_content_encoding": null,
+   "severityCounts": {
+    "critical": 20000,
+    "major": 20000,
+    "minor": 20000,
+    "normal": 20000,
+    "warning": 20000
+   },
+   "statusCounts": {
+    "closed": 20000,
+    "open": 80000
+   }
+  },
+  {
+   "arm": "alerta-4x4-pgb-safe-idx-pgt",
+   "db": "bench_read_alerta_4x4_pgb_safe_idx_pgt",
+   "ok": true,
+   "basic_ok": true,
+   "fields_ok": true,
+   "field_diffs": [],
+   "groups_ok": true,
+   "cross_arm_ok": true,
+   "reference_arm": "alerta-4x4-pgb-pgt",
+   "list_bytes": 44248,
+   "list_content_encoding": null,
+   "count_bytes": 210,
+   "count_content_encoding": null,
+   "severityCounts": {
+    "critical": 20000,
+    "major": 20000,
+    "minor": 20000,
+    "normal": 20000,
+    "warning": 20000
+   },
+   "statusCounts": {
+    "closed": 20000,
+    "open": 80000
+   }
+  },
+  {
+   "arm": "alerta-4x4-pgb-idx-pgt",
+   "db": "bench_read_alerta_4x4_pgb_idx_pgt",
+   "ok": true,
+   "basic_ok": true,
+   "fields_ok": true,
+   "field_diffs": [],
+   "groups_ok": true,
+   "cross_arm_ok": true,
+   "reference_arm": "alerta-4x4-pgb-pgt",
+   "list_bytes": 44248,
+   "list_content_encoding": null,
+   "count_bytes": 210,
+   "count_content_encoding": null,
+   "severityCounts": {
+    "critical": 20000,
+    "major": 20000,
+    "minor": 20000,
+    "normal": 20000,
+    "warning": 20000
+   },
+   "statusCounts": {
+    "closed": 20000,
+    "open": 80000
+   }
+  },
+  {
+   "arm": "alerta-4x4-pgb-pgt",
+   "db": "bench_read_alerta_4x4_pgb_pgt",
+   "ok": true,
+   "basic_ok": true,
+   "fields_ok": true,
+   "field_diffs": [],
+   "groups_ok": true,
+   "cross_arm_ok": true,
+   "reference_arm": "alerta-4x4-pgb-pgt",
+   "list_bytes": 44248,
+   "list_content_encoding": null,
+   "count_bytes": 210,
+   "count_content_encoding": null,
+   "severityCounts": {
+    "critical": 20000,
+    "major": 20000,
+    "minor": 20000,
+    "normal": 20000,
+    "warning": 20000
+   },
+   "statusCounts": {
+    "closed": 20000,
+    "open": 80000
+   }
+  },
+  {
+   "arm": "alerta-4x4-pgb-pgt",
+   "db": "bench_read_alerta_4x4_pgb_pgt",
+   "ok": true,
+   "basic_ok": true,
+   "fields_ok": true,
+   "field_diffs": [],
+   "groups_ok": true,
+   "cross_arm_ok": true,
+   "reference_arm": "alerta-4x4-pgb-pgt",
+   "list_bytes": 44248,
+   "list_content_encoding": null,
+   "count_bytes": 210,
+   "count_content_encoding": null,
+   "severityCounts": {
+    "critical": 20000,
+    "major": 20000,
+    "minor": 20000,
+    "normal": 20000,
+    "warning": 20000
+   },
+   "statusCounts": {
+    "closed": 20000,
+    "open": 80000
+   }
+  },
+  {
+   "arm": "alerta-4x4-pgb-idx-pgt",
+   "db": "bench_read_alerta_4x4_pgb_idx_pgt",
+   "ok": true,
+   "basic_ok": true,
+   "fields_ok": true,
+   "field_diffs": [],
+   "groups_ok": true,
+   "cross_arm_ok": true,
+   "reference_arm": "alerta-4x4-pgb-pgt",
+   "list_bytes": 44248,
+   "list_content_encoding": null,
+   "count_bytes": 210,
+   "count_content_encoding": null,
+   "severityCounts": {
+    "critical": 20000,
+    "major": 20000,
+    "minor": 20000,
+    "normal": 20000,
+    "warning": 20000
+   },
+   "statusCounts": {
+    "closed": 20000,
+    "open": 80000
+   }
+  },
+  {
+   "arm": "alerta-4x4-pgb-safe-idx-pgt",
+   "db": "bench_read_alerta_4x4_pgb_safe_idx_pgt",
+   "ok": true,
+   "basic_ok": true,
+   "fields_ok": true,
+   "field_diffs": [],
+   "groups_ok": true,
+   "cross_arm_ok": true,
+   "reference_arm": "alerta-4x4-pgb-pgt",
+   "list_bytes": 44248,
+   "list_content_encoding": null,
+   "count_bytes": 210,
+   "count_content_encoding": null,
+   "severityCounts": {
+    "critical": 20000,
+    "major": 20000,
+    "minor": 20000,
+    "normal": 20000,
+    "warning": 20000
+   },
+   "statusCounts": {
+    "closed": 20000,
+    "open": 80000
+   }
+  },
+  {
+   "arm": "alerta-4x4-pgb-safe-pgt",
+   "db": "bench_read_alerta_4x4_pgb_safe_pgt",
+   "ok": true,
+   "basic_ok": true,
+   "fields_ok": true,
+   "field_diffs": [],
+   "groups_ok": true,
+   "cross_arm_ok": true,
+   "reference_arm": "alerta-4x4-pgb-pgt",
+   "list_bytes": 44248,
+   "list_content_encoding": null,
+   "count_bytes": 210,
+   "count_content_encoding": null,
+   "severityCounts": {
+    "critical": 20000,
+    "major": 20000,
+    "minor": 20000,
+    "normal": 20000,
+    "warning": 20000
+   },
+   "statusCounts": {
+    "closed": 20000,
+    "open": 80000
+   }
+  }
+ ],
+ "cells": [
+  {
+   "rps": 14.891167259905044,
+   "p50_ms": 66.805222,
+   "p99_ms": 77.82182399999999,
+   "requests": 224,
+   "non_2xx": 0,
+   "ok": 224,
+   "errors": 0,
+   "size_per_request": 44248,
+   "warm": {
+    "rps": 14.71841176072289,
+    "p50_ms": 66.81780499999999,
+    "p99_ms": 82.41858500000001,
+    "requests": 74,
+    "non_2xx": 0,
+    "ok": 74,
+    "errors": 0,
+    "size_per_request": 44248
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-pgt-list-c1-r0.json",
+    "timed": "timed-alerta-4x4-pgb-pgt-list-c1-r0.json"
+   },
+   "arm": "alerta-4x4-pgb-pgt",
+   "case": "list",
+   "c": 1,
+   "rep": 0,
+   "db": "bench_read_alerta_4x4_pgb_pgt",
+   "wall_s": 15.047217887000045,
+   "server_cpu_s": 1.66,
+   "postgres_cpu_s": 37.27,
+   "pg_sessions": 0,
+   "pg_commits": 3540,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 15.803571428571429,
+   "server_cpu_ms_per_request": 7.410714285714286,
+   "postgres_cpu_ms_per_request": 166.38392857142858
+  },
+  {
+   "rps": 21.986570284425976,
+   "p50_ms": 339.021654,
+   "p99_ms": 597.262584,
+   "requests": 335,
+   "non_2xx": 0,
+   "ok": 335,
+   "errors": 0,
+   "size_per_request": 44248,
+   "warm": {
+    "rps": 21.40314740112083,
+    "p50_ms": 359.96572,
+    "p99_ms": 601.6958989999999,
+    "requests": 110,
+    "non_2xx": 0,
+    "ok": 110,
+    "errors": 0,
+    "size_per_request": 44248
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-pgt-list-c8-r0.json",
+    "timed": "timed-alerta-4x4-pgb-pgt-list-c8-r0.json"
+   },
+   "arm": "alerta-4x4-pgb-pgt",
+   "case": "list",
+   "c": 8,
+   "rep": 0,
+   "db": "bench_read_alerta_4x4_pgb_pgt",
+   "wall_s": 15.241400670000019,
+   "server_cpu_s": 3.58,
+   "postgres_cpu_s": 56.67,
+   "pg_sessions": 0,
+   "pg_commits": 3823,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 11.411940298507462,
+   "server_cpu_ms_per_request": 10.686567164179104,
+   "postgres_cpu_ms_per_request": 169.16417910447763
+  },
+  {
+   "rps": 23.353225539657267,
+   "p50_ms": 42.664031,
+   "p99_ms": 46.536902,
+   "requests": 351,
+   "non_2xx": 0,
+   "ok": 351,
+   "errors": 0,
+   "size_per_request": 210,
+   "warm": {
+    "rps": 23.974576012225466,
+    "p50_ms": 41.707648,
+    "p99_ms": 45.251762,
+    "requests": 120,
+    "non_2xx": 0,
+    "ok": 120,
+    "errors": 0,
+    "size_per_request": 210
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-pgt-count-c1-r0.json",
+    "timed": "timed-alerta-4x4-pgb-pgt-count-c1-r0.json"
+   },
+   "arm": "alerta-4x4-pgb-pgt",
+   "case": "count",
+   "c": 1,
+   "rep": 0,
+   "db": "bench_read_alerta_4x4_pgb_pgt",
+   "wall_s": 15.03498754100002,
+   "server_cpu_s": 1.87,
+   "postgres_cpu_s": 12.93,
+   "pg_sessions": 0,
+   "pg_commits": 1468,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 4.182336182336182,
+   "server_cpu_ms_per_request": 5.327635327635328,
+   "postgres_cpu_ms_per_request": 36.837606837606835
+  },
+  {
+   "rps": 88.86041377981218,
+   "p50_ms": 87.980958,
+   "p99_ms": 146.818328,
+   "requests": 1339,
+   "non_2xx": 0,
+   "ok": 1339,
+   "errors": 0,
+   "size_per_request": 210,
+   "warm": {
+    "rps": 86.71137397394406,
+    "p50_ms": 91.209727,
+    "p99_ms": 130.575457,
+    "requests": 439,
+    "non_2xx": 0,
+    "ok": 439,
+    "errors": 0,
+    "size_per_request": 210
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-pgt-count-c8-r0.json",
+    "timed": "timed-alerta-4x4-pgb-pgt-count-c8-r0.json"
+   },
+   "arm": "alerta-4x4-pgb-pgt",
+   "case": "count",
+   "c": 8,
+   "rep": 0,
+   "db": "bench_read_alerta_4x4_pgb_pgt",
+   "wall_s": 15.073780788000022,
+   "server_cpu_s": 9.49,
+   "postgres_cpu_s": 48.03,
+   "pg_sessions": 0,
+   "pg_commits": 5445,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 4.066467513069455,
+   "server_cpu_ms_per_request": 7.087378640776699,
+   "postgres_cpu_ms_per_request": 35.87005227781927
+  },
+  {
+   "rps": 33.00311546708544,
+   "p50_ms": 30.148162,
+   "p99_ms": 33.90179,
+   "requests": 496,
+   "non_2xx": 0,
+   "ok": 496,
+   "errors": 0,
+   "size_per_request": 1228,
+   "warm": {
+    "rps": 32.53284450516376,
+    "p50_ms": 30.251357,
+    "p99_ms": 35.88597,
+    "requests": 163,
+    "non_2xx": 0,
+    "ok": 163,
+    "errors": 0,
+    "size_per_request": 1227
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-pgt-write-dup-c1-r0.json",
+    "timed": "timed-alerta-4x4-pgb-pgt-write-dup-c1-r0.json"
+   },
+   "persisted": {
+    "prime_id": "4b9f9d6a-9975-4326-b96b-c9898a5b0726",
+    "problems": [],
+    "dup_before": 163,
+    "wal_before": {
+     "lsn": "0/8ACC8E80",
+     "redo_lsn": "0/8ABF8B78",
+     "checkpoints": 3
+    },
+    "dup_after": 659,
+    "wal_after": {
+     "lsn": "0/8AD47308",
+     "redo_lsn": "0/8ABF8B78",
+     "checkpoints": 3
+    },
+    "ok": true
+   },
+   "arm": "alerta-4x4-pgb-pgt",
+   "case": "write-dup",
+   "c": 1,
+   "rep": 0,
+   "db": "bench_write_alerta_4x4_pgb_pgt_r0_c1",
+   "wall_s": 15.03358188499999,
+   "server_cpu_s": 2.99,
+   "postgres_cpu_s": 11.26,
+   "pg_sessions": 0,
+   "pg_commits": 3267,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 6.586693548387097,
+   "server_cpu_ms_per_request": 6.028225806451613,
+   "postgres_cpu_ms_per_request": 22.701612903225808,
+   "pgtune": {
+    "arm": "alerta-4x4-pgb-pgt",
+    "c": 1,
+    "rep": 0,
+    "db": "bench_write_alerta_4x4_pgb_pgt_r0_c1",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 1979,
+      "hot": 1903,
+      "dead": 80,
+      "hot_share": 0.962
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 660,
+      "hot": 660,
+      "dead": 58,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 660,
+      "hot": 660,
+      "dead": 51,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 517256,
+     "writes": 496,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 1042.9
+    },
+    "lifecycle": {
+     "wal_bytes": 1369792,
+     "writes": 660,
+     "wal_bytes_per_write": 2075.4
+    },
+    "problems": []
+   }
+  },
+  {
+   "rps": 93.87624944791024,
+   "p50_ms": 84.888694,
+   "p99_ms": 143.28466600000002,
+   "requests": 1413,
+   "non_2xx": 0,
+   "ok": 1413,
+   "errors": 0,
+   "size_per_request": 1228,
+   "warm": {
+    "rps": 95.16958993908018,
+    "p50_ms": 76.514479,
+    "p99_ms": 238.926609,
+    "requests": 480,
+    "non_2xx": 0,
+    "ok": 480,
+    "errors": 0,
+    "size_per_request": 1227
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-pgt-write-dup-c8-r0.json",
+    "timed": "timed-alerta-4x4-pgb-pgt-write-dup-c8-r0.json"
+   },
+   "persisted": {
+    "prime_id": "9481d1b6-ecdb-424e-abf4-b01bdc7d1b6d",
+    "problems": [],
+    "dup_before": 480,
+    "wal_before": {
+     "lsn": "0/8AEC0D18",
+     "redo_lsn": "0/8AD47308",
+     "checkpoints": 4
+    },
+    "dup_after": 1893,
+    "wal_after": {
+     "lsn": "0/8B040B98",
+     "redo_lsn": "0/8AD47308",
+     "checkpoints": 4
+    },
+    "ok": true
+   },
+   "arm": "alerta-4x4-pgb-pgt",
+   "case": "write-dup",
+   "c": 8,
+   "rep": 0,
+   "db": "bench_write_alerta_4x4_pgb_pgt_r0_c8",
+   "wall_s": 15.056797232999998,
+   "server_cpu_s": 11.43,
+   "postgres_cpu_s": 31.46,
+   "pg_sessions": 0,
+   "pg_commits": 9843,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 6.966029723991507,
+   "server_cpu_ms_per_request": 8.089171974522293,
+   "postgres_cpu_ms_per_request": 22.264685067232836,
+   "pgtune": {
+    "arm": "alerta-4x4-pgb-pgt",
+    "c": 8,
+    "rep": 0,
+    "db": "bench_write_alerta_4x4_pgb_pgt_r0_c8",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 5681,
+      "hot": 5080,
+      "dead": 756,
+      "hot_share": 0.894
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 1894,
+      "hot": 1894,
+      "dead": 63,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 1894,
+      "hot": 1894,
+      "dead": 68,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 1572480,
+     "writes": 1413,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 1112.9
+    },
+    "lifecycle": {
+     "wal_bytes": 3119040,
+     "writes": 1894,
+     "wal_bytes_per_write": 1646.8
+    },
+    "problems": []
+   }
+  },
+  {
+   "rps": 14.719699013896431,
+   "p50_ms": 67.891637,
+   "p99_ms": 71.958563,
+   "requests": 221,
+   "non_2xx": 0,
+   "ok": 221,
+   "errors": 0,
+   "size_per_request": 44248,
+   "warm": {
+    "rps": 14.38611928235138,
+    "p50_ms": 69.191134,
+    "p99_ms": 83.143218,
+    "requests": 72,
+    "non_2xx": 0,
+    "ok": 72,
+    "errors": 0,
+    "size_per_request": 44248
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-idx-pgt-list-c1-r0.json",
+    "timed": "timed-alerta-4x4-pgb-idx-pgt-list-c1-r0.json"
+   },
+   "arm": "alerta-4x4-pgb-idx-pgt",
+   "case": "list",
+   "c": 1,
+   "rep": 0,
+   "db": "bench_read_alerta_4x4_pgb_idx_pgt",
+   "wall_s": 15.018642954000029,
+   "server_cpu_s": 1.66,
+   "postgres_cpu_s": 37.34,
+   "pg_sessions": 0,
+   "pg_commits": 3510,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 15.882352941176471,
+   "server_cpu_ms_per_request": 7.51131221719457,
+   "postgres_cpu_ms_per_request": 168.95927601809956
+  },
+  {
+   "rps": 22.525208925341456,
+   "p50_ms": 337.42578699999996,
+   "p99_ms": 594.6442589999999,
+   "requests": 344,
+   "non_2xx": 0,
+   "ok": 344,
+   "errors": 0,
+   "size_per_request": 44248,
+   "warm": {
+    "rps": 21.876030407806617,
+    "p50_ms": 346.064967,
+    "p99_ms": 544.839172,
+    "requests": 114,
+    "non_2xx": 0,
+    "ok": 114,
+    "errors": 0,
+    "size_per_request": 44248
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-idx-pgt-list-c8-r0.json",
+    "timed": "timed-alerta-4x4-pgb-idx-pgt-list-c8-r0.json"
+   },
+   "arm": "alerta-4x4-pgb-idx-pgt",
+   "case": "list",
+   "c": 8,
+   "rep": 0,
+   "db": "bench_read_alerta_4x4_pgb_idx_pgt",
+   "wall_s": 15.276471181000034,
+   "server_cpu_s": 3.65,
+   "postgres_cpu_s": 56.78,
+   "pg_sessions": 0,
+   "pg_commits": 3708,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 10.779069767441861,
+   "server_cpu_ms_per_request": 10.61046511627907,
+   "postgres_cpu_ms_per_request": 165.0581395348837
+  },
+  {
+   "rps": 22.294750288185803,
+   "p50_ms": 45.416585000000005,
+   "p99_ms": 47.990631,
+   "requests": 335,
+   "non_2xx": 0,
+   "ok": 335,
+   "errors": 0,
+   "size_per_request": 210,
+   "warm": {
+    "rps": 22.936187567401515,
+    "p50_ms": 44.131755,
+    "p99_ms": 47.237663999999995,
+    "requests": 115,
+    "non_2xx": 0,
+    "ok": 115,
+    "errors": 0,
+    "size_per_request": 210
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-idx-pgt-count-c1-r0.json",
+    "timed": "timed-alerta-4x4-pgb-idx-pgt-count-c1-r0.json"
+   },
+   "arm": "alerta-4x4-pgb-idx-pgt",
+   "case": "count",
+   "c": 1,
+   "rep": 0,
+   "db": "bench_read_alerta_4x4_pgb_idx_pgt",
+   "wall_s": 15.030919933000064,
+   "server_cpu_s": 1.86,
+   "postgres_cpu_s": 12.86,
+   "pg_sessions": 0,
+   "pg_commits": 1398,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 4.173134328358209,
+   "server_cpu_ms_per_request": 5.552238805970149,
+   "postgres_cpu_ms_per_request": 38.38805970149254
+  },
+  {
+   "rps": 86.62989014372954,
+   "p50_ms": 91.90620200000001,
+   "p99_ms": 143.35191,
+   "requests": 1306,
+   "non_2xx": 0,
+   "ok": 1306,
+   "errors": 0,
+   "size_per_request": 210,
+   "warm": {
+    "rps": 84.69869222325664,
+    "p50_ms": 94.645314,
+    "p99_ms": 136.753856,
+    "requests": 430,
+    "non_2xx": 0,
+    "ok": 430,
+    "errors": 0,
+    "size_per_request": 210
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-idx-pgt-count-c8-r0.json",
+    "timed": "timed-alerta-4x4-pgb-idx-pgt-count-c8-r0.json"
+   },
+   "arm": "alerta-4x4-pgb-idx-pgt",
+   "case": "count",
+   "c": 8,
+   "rep": 0,
+   "db": "bench_read_alerta_4x4_pgb_idx_pgt",
+   "wall_s": 15.08147094200001,
+   "server_cpu_s": 9.33,
+   "postgres_cpu_s": 46.76,
+   "pg_sessions": 0,
+   "pg_commits": 5219,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 3.9961715160796323,
+   "server_cpu_ms_per_request": 7.143950995405819,
+   "postgres_cpu_ms_per_request": 35.80398162327718
+  },
+  {
+   "rps": 126.19557249796635,
+   "p50_ms": 8.10689,
+   "p99_ms": 9.260561000000001,
+   "requests": 1894,
+   "non_2xx": 0,
+   "ok": 1894,
+   "errors": 0,
+   "size_per_request": 1228,
+   "warm": {
+    "rps": 121.72865013942739,
+    "p50_ms": 8.382112000000001,
+    "p99_ms": 9.073748,
+    "requests": 609,
+    "non_2xx": 0,
+    "ok": 609,
+    "errors": 0,
+    "size_per_request": 1227
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-idx-pgt-write-dup-c1-r0.json",
+    "timed": "timed-alerta-4x4-pgb-idx-pgt-write-dup-c1-r0.json"
+   },
+   "persisted": {
+    "prime_id": "0abe8de4-9ae6-4133-a18f-e01ecde17f35",
+    "problems": [],
+    "dup_before": 609,
+    "wal_before": {
+     "lsn": "0/8B291450",
+     "redo_lsn": "0/8B167B68",
+     "checkpoints": 5
+    },
+    "dup_after": 2503,
+    "wal_after": {
+     "lsn": "0/8B3FE0F0",
+     "redo_lsn": "0/8B167B68",
+     "checkpoints": 5
+    },
+    "ok": true
+   },
+   "arm": "alerta-4x4-pgb-idx-pgt",
+   "case": "write-dup",
+   "c": 1,
+   "rep": 0,
+   "db": "bench_write_alerta_4x4_pgb_idx_pgt_r0_c1",
+   "wall_s": 15.013583650999976,
+   "server_cpu_s": 10.3,
+   "postgres_cpu_s": 2.9,
+   "pg_sessions": 0,
+   "pg_commits": 12397,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 6.545406546990496,
+   "server_cpu_ms_per_request": 5.438225976768743,
+   "postgres_cpu_ms_per_request": 1.5311510031678985,
+   "pgtune": {
+    "arm": "alerta-4x4-pgb-idx-pgt",
+    "c": 1,
+    "rep": 0,
+    "db": "bench_write_alerta_4x4_pgb_idx_pgt_r0_c1",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 7511,
+      "hot": 7435,
+      "dead": 77,
+      "hot_share": 0.99
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 2504,
+      "hot": 2504,
+      "dead": 8,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 2504,
+      "hot": 2504,
+      "dead": 29,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 1494176,
+     "writes": 1894,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 788.9
+    },
+    "lifecycle": {
+     "wal_bytes": 2712760,
+     "writes": 2504,
+     "wal_bytes_per_write": 1083.4
+    },
+    "problems": []
+   }
+  },
+  {
+   "rps": 311.8145986748454,
+   "p50_ms": 25.382558,
+   "p99_ms": 38.547917,
+   "requests": 4682,
+   "non_2xx": 0,
+   "ok": 4682,
+   "errors": 0,
+   "size_per_request": 1229,
+   "warm": {
+    "rps": 324.69828462835045,
+    "p50_ms": 24.350458,
+    "p99_ms": 34.890738999999996,
+    "requests": 1629,
+    "non_2xx": 0,
+    "ok": 1629,
+    "errors": 0,
+    "size_per_request": 1228
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-idx-pgt-write-dup-c8-r0.json",
+    "timed": "timed-alerta-4x4-pgb-idx-pgt-write-dup-c8-r0.json"
+   },
+   "persisted": {
+    "prime_id": "56b746e6-f9df-47da-b0e5-a60acb5170b4",
+    "problems": [],
+    "dup_before": 1629,
+    "wal_before": {
+     "lsn": "0/8B667328",
+     "redo_lsn": "0/8B3FE0F0",
+     "checkpoints": 6
+    },
+    "dup_after": 6311,
+    "wal_after": {
+     "lsn": "0/8BB4A048",
+     "redo_lsn": "0/8B3FE0F0",
+     "checkpoints": 6
+    },
+    "ok": true
+   },
+   "arm": "alerta-4x4-pgb-idx-pgt",
+   "case": "write-dup",
+   "c": 8,
+   "rep": 0,
+   "db": "bench_write_alerta_4x4_pgb_idx_pgt_r0_c8",
+   "wall_s": 15.02132063900001,
+   "server_cpu_s": 38.1,
+   "postgres_cpu_s": 10.63,
+   "pg_sessions": 0,
+   "pg_commits": 32797,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 7.00491243058522,
+   "server_cpu_ms_per_request": 8.13754805638616,
+   "postgres_cpu_ms_per_request": 2.2703972661255873,
+   "pgtune": {
+    "arm": "alerta-4x4-pgb-idx-pgt",
+    "c": 8,
+    "rep": 0,
+    "db": "bench_write_alerta_4x4_pgb_idx_pgt_r0_c8",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 18935,
+      "hot": 17960,
+      "dead": 1118,
+      "hot_share": 0.949
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 6312,
+      "hot": 6307,
+      "dead": 191,
+      "hot_share": 0.999
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 6312,
+      "hot": 6309,
+      "dead": 142,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 5123360,
+     "writes": 4682,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 1094.3
+    },
+    "lifecycle": {
+     "wal_bytes": 7650952,
+     "writes": 6312,
+     "wal_bytes_per_write": 1212.1
+    },
+    "problems": []
+   }
+  },
+  {
+   "rps": 19.09328011348453,
+   "p50_ms": 52.301753,
+   "p99_ms": 55.130772,
+   "requests": 287,
+   "non_2xx": 0,
+   "ok": 287,
+   "errors": 0,
+   "size_per_request": 44248,
+   "warm": {
+    "rps": 19.245309813984374,
+    "p50_ms": 51.403620999999994,
+    "p99_ms": 72.336814,
+    "requests": 97,
+    "non_2xx": 0,
+    "ok": 97,
+    "errors": 0,
+    "size_per_request": 44248
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-idx-pgt-list-c1-r0.json",
+    "timed": "timed-alerta-4x4-pgb-safe-idx-pgt-list-c1-r0.json"
+   },
+   "arm": "alerta-4x4-pgb-safe-idx-pgt",
+   "case": "list",
+   "c": 1,
+   "rep": 0,
+   "db": "bench_read_alerta_4x4_pgb_safe_idx_pgt",
+   "wall_s": 15.03628844800005,
+   "server_cpu_s": 1.09,
+   "postgres_cpu_s": 39.15,
+   "pg_sessions": 0,
+   "pg_commits": 2862,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 9.97212543554007,
+   "server_cpu_ms_per_request": 3.797909407665505,
+   "postgres_cpu_ms_per_request": 136.41114982578398
+  },
+  {
+   "rps": 27.738400460883764,
+   "p50_ms": 267.986293,
+   "p99_ms": 509.412105,
+   "requests": 421,
+   "non_2xx": 0,
+   "ok": 421,
+   "errors": 0,
+   "size_per_request": 44248,
+   "warm": {
+    "rps": 27.49667101119269,
+    "p50_ms": 263.366266,
+    "p99_ms": 528.2296869999999,
+    "requests": 141,
+    "non_2xx": 0,
+    "ok": 141,
+    "errors": 0,
+    "size_per_request": 44248
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-idx-pgt-list-c8-r0.json",
+    "timed": "timed-alerta-4x4-pgb-safe-idx-pgt-list-c8-r0.json"
+   },
+   "arm": "alerta-4x4-pgb-safe-idx-pgt",
+   "case": "list",
+   "c": 8,
+   "rep": 0,
+   "db": "bench_read_alerta_4x4_pgb_safe_idx_pgt",
+   "wall_s": 15.18230285900006,
+   "server_cpu_s": 2.18,
+   "postgres_cpu_s": 57.91,
+   "pg_sessions": 0,
+   "pg_commits": 2670,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 6.342042755344418,
+   "server_cpu_ms_per_request": 5.178147268408551,
+   "postgres_cpu_ms_per_request": 137.55344418052258
+  },
+  {
+   "rps": 65.08792469493876,
+   "p50_ms": 15.196299,
+   "p99_ms": 17.196941,
+   "requests": 977,
+   "non_2xx": 0,
+   "ok": 977,
+   "errors": 0,
+   "size_per_request": 210,
+   "warm": {
+    "rps": 65.3648843108072,
+    "p50_ms": 15.182386000000001,
+    "p99_ms": 17.375439999999998,
+    "requests": 327,
+    "non_2xx": 0,
+    "ok": 327,
+    "errors": 0,
+    "size_per_request": 210
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-idx-pgt-count-c1-r0.json",
+    "timed": "timed-alerta-4x4-pgb-safe-idx-pgt-count-c1-r0.json"
+   },
+   "arm": "alerta-4x4-pgb-safe-idx-pgt",
+   "case": "count",
+   "c": 1,
+   "rep": 0,
+   "db": "bench_read_alerta_4x4_pgb_safe_idx_pgt",
+   "wall_s": 15.015325283999914,
+   "server_cpu_s": 1.23,
+   "postgres_cpu_s": 36.67,
+   "pg_sessions": 0,
+   "pg_commits": 5894,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 6.032753326509724,
+   "server_cpu_ms_per_request": 1.2589559877175025,
+   "postgres_cpu_ms_per_request": 37.53326509723644
+  },
+  {
+   "rps": 108.9563510396197,
+   "p50_ms": 70.76570699999999,
+   "p99_ms": 119.99310100000001,
+   "requests": 1639,
+   "non_2xx": 0,
+   "ok": 1639,
+   "errors": 0,
+   "size_per_request": 210,
+   "warm": {
+    "rps": 107.1366286359107,
+    "p50_ms": 73.274006,
+    "p99_ms": 120.147646,
+    "requests": 540,
+    "non_2xx": 0,
+    "ok": 540,
+    "errors": 0,
+    "size_per_request": 210
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-idx-pgt-count-c8-r0.json",
+    "timed": "timed-alerta-4x4-pgb-safe-idx-pgt-count-c8-r0.json"
+   },
+   "arm": "alerta-4x4-pgb-safe-idx-pgt",
+   "case": "count",
+   "c": 8,
+   "rep": 0,
+   "db": "bench_read_alerta_4x4_pgb_safe_idx_pgt",
+   "wall_s": 15.047889301000055,
+   "server_cpu_s": 2.86,
+   "postgres_cpu_s": 56.17,
+   "pg_sessions": 0,
+   "pg_commits": 7092,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 4.327028676021965,
+   "server_cpu_ms_per_request": 1.74496644295302,
+   "postgres_cpu_ms_per_request": 34.270896888346556
+  },
+  {
+   "rps": 229.2701369459533,
+   "p50_ms": 4.480186,
+   "p99_ms": 6.209851,
+   "requests": 3440,
+   "non_2xx": 0,
+   "ok": 3440,
+   "errors": 0,
+   "size_per_request": 1229,
+   "warm": {
+    "rps": 235.91551363422153,
+    "p50_ms": 4.206192,
+    "p99_ms": 6.1334,
+    "requests": 1181,
+    "non_2xx": 0,
+    "ok": 1181,
+    "errors": 0,
+    "size_per_request": 1228
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-idx-pgt-write-dup-c1-r0.json",
+    "timed": "timed-alerta-4x4-pgb-safe-idx-pgt-write-dup-c1-r0.json"
+   },
+   "persisted": {
+    "prime_id": "5cd3935f-51d4-4617-acb7-f898b4d48c18",
+    "problems": [],
+    "dup_before": 1181,
+    "wal_before": {
+     "lsn": "0/8BE5E230",
+     "redo_lsn": "0/8BCC6558",
+     "checkpoints": 7
+    },
+    "dup_after": 4621,
+    "wal_after": {
+     "lsn": "0/8C0F4518",
+     "redo_lsn": "0/8BCC6558",
+     "checkpoints": 7
+    },
+    "ok": true
+   },
+   "arm": "alerta-4x4-pgb-safe-idx-pgt",
+   "case": "write-dup",
+   "c": 1,
+   "rep": 0,
+   "db": "bench_write_alerta_4x4_pgb_safe_idx_pgt_r0_c1",
+   "wall_s": 15.009489266999935,
+   "server_cpu_s": 6.48,
+   "postgres_cpu_s": 5.02,
+   "pg_sessions": 0,
+   "pg_commits": 16305,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 4.7398255813953485,
+   "server_cpu_ms_per_request": 1.8837209302325582,
+   "postgres_cpu_ms_per_request": 1.4593023255813953,
+   "pgtune": {
+    "arm": "alerta-4x4-pgb-safe-idx-pgt",
+    "c": 1,
+    "rep": 0,
+    "db": "bench_write_alerta_4x4_pgb_safe_idx_pgt_r0_c1",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 13865,
+      "hot": 13789,
+      "dead": 77,
+      "hot_share": 0.995
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 4622,
+      "hot": 4622,
+      "dead": 20,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 4622,
+      "hot": 4622,
+      "dead": 2,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 2712296,
+     "writes": 3440,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 788.5
+    },
+    "lifecycle": {
+     "wal_bytes": 4382448,
+     "writes": 4622,
+     "wal_bytes_per_write": 948.2
+    },
+    "problems": []
+   }
+  },
+  {
+   "rps": 601.1365893514966,
+   "p50_ms": 13.205847,
+   "p99_ms": 20.365151,
+   "requests": 9025,
+   "non_2xx": 0,
+   "ok": 9025,
+   "errors": 0,
+   "size_per_request": 1229,
+   "warm": {
+    "rps": 620.6454663661709,
+    "p50_ms": 12.456358000000002,
+    "p99_ms": 19.101391,
+    "requests": 3109,
+    "non_2xx": 0,
+    "ok": 3109,
+    "errors": 0,
+    "size_per_request": 1228
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-idx-pgt-write-dup-c8-r0.json",
+    "timed": "timed-alerta-4x4-pgb-safe-idx-pgt-write-dup-c8-r0.json"
+   },
+   "persisted": {
+    "prime_id": "3f9ee338-cd8f-43fd-a234-ec0d0c710d04",
+    "problems": [],
+    "dup_before": 3109,
+    "wal_before": {
+     "lsn": "0/8C519BA8",
+     "redo_lsn": "0/8C0F4518",
+     "checkpoints": 8
+    },
+    "dup_after": 12134,
+    "wal_after": {
+     "lsn": "0/8CE4BD80",
+     "redo_lsn": "0/8C0F4518",
+     "checkpoints": 8
+    },
+    "ok": true
+   },
+   "arm": "alerta-4x4-pgb-safe-idx-pgt",
+   "case": "write-dup",
+   "c": 8,
+   "rep": 0,
+   "db": "bench_write_alerta_4x4_pgb_safe_idx_pgt_r0_c8",
+   "wall_s": 15.020237347000034,
+   "server_cpu_s": 22.6,
+   "postgres_cpu_s": 19.81,
+   "pg_sessions": 0,
+   "pg_commits": 44977,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 4.983601108033241,
+   "server_cpu_ms_per_request": 2.5041551246537397,
+   "postgres_cpu_ms_per_request": 2.1950138504155126,
+   "pgtune": {
+    "arm": "alerta-4x4-pgb-safe-idx-pgt",
+    "c": 8,
+    "rep": 0,
+    "db": "bench_write_alerta_4x4_pgb_safe_idx_pgt_r0_c8",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 36404,
+      "hot": 34171,
+      "dead": 2432,
+      "hot_share": 0.939
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 12135,
+      "hot": 12135,
+      "dead": 203,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 12135,
+      "hot": 12135,
+      "dead": 252,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 9642456,
+     "writes": 9025,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 1068.4
+    },
+    "lifecycle": {
+     "wal_bytes": 13989784,
+     "writes": 12135,
+     "wal_bytes_per_write": 1152.8
+    },
+    "problems": []
+   }
+  },
+  {
+   "rps": 19.37283950503041,
+   "p50_ms": 51.537292,
+   "p99_ms": 53.993027,
+   "requests": 291,
+   "non_2xx": 0,
+   "ok": 291,
+   "errors": 0,
+   "size_per_request": 44248,
+   "warm": {
+    "rps": 18.852888853312717,
+    "p50_ms": 51.72213300000001,
+    "p99_ms": 61.203955,
+    "requests": 95,
+    "non_2xx": 0,
+    "ok": 95,
+    "errors": 0,
+    "size_per_request": 44248
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-pgt-list-c1-r0.json",
+    "timed": "timed-alerta-4x4-pgb-safe-pgt-list-c1-r0.json"
+   },
+   "arm": "alerta-4x4-pgb-safe-pgt",
+   "case": "list",
+   "c": 1,
+   "rep": 0,
+   "db": "bench_read_alerta_4x4_pgb_safe_pgt",
+   "wall_s": 15.025798805000022,
+   "server_cpu_s": 1.07,
+   "postgres_cpu_s": 39.2,
+   "pg_sessions": 0,
+   "pg_commits": 2914,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 10.013745704467354,
+   "server_cpu_ms_per_request": 3.676975945017182,
+   "postgres_cpu_ms_per_request": 134.70790378006873
+  },
+  {
+   "rps": 27.87802445158036,
+   "p50_ms": 260.79571699999997,
+   "p99_ms": 494.11886,
+   "requests": 423,
+   "non_2xx": 0,
+   "ok": 423,
+   "errors": 0,
+   "size_per_request": 44248,
+   "warm": {
+    "rps": 27.495980786626536,
+    "p50_ms": 255.142113,
+    "p99_ms": 505.164033,
+    "requests": 142,
+    "non_2xx": 0,
+    "ok": 142,
+    "errors": 0,
+    "size_per_request": 44248
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-pgt-list-c8-r0.json",
+    "timed": "timed-alerta-4x4-pgb-safe-pgt-list-c8-r0.json"
+   },
+   "arm": "alerta-4x4-pgb-safe-pgt",
+   "case": "list",
+   "c": 8,
+   "rep": 0,
+   "db": "bench_read_alerta_4x4_pgb_safe_pgt",
+   "wall_s": 15.17795364899996,
+   "server_cpu_s": 2.15,
+   "postgres_cpu_s": 57.91,
+   "pg_sessions": 0,
+   "pg_commits": 2732,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 6.458628841607565,
+   "server_cpu_ms_per_request": 5.08274231678487,
+   "postgres_cpu_ms_per_request": 136.903073286052
+  },
+  {
+   "rps": 67.82219773601336,
+   "p50_ms": 14.61072,
+   "p99_ms": 16.420803000000003,
+   "requests": 1018,
+   "non_2xx": 0,
+   "ok": 1018,
+   "errors": 0,
+   "size_per_request": 210,
+   "warm": {
+    "rps": 67.91417684114302,
+    "p50_ms": 14.603309999999999,
+    "p99_ms": 16.769552,
+    "requests": 340,
+    "non_2xx": 0,
+    "ok": 340,
+    "errors": 0,
+    "size_per_request": 210
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-pgt-count-c1-r0.json",
+    "timed": "timed-alerta-4x4-pgb-safe-pgt-count-c1-r0.json"
+   },
+   "arm": "alerta-4x4-pgb-safe-pgt",
+   "case": "count",
+   "c": 1,
+   "rep": 0,
+   "db": "bench_read_alerta_4x4_pgb_safe_pgt",
+   "wall_s": 15.014683526999988,
+   "server_cpu_s": 1.23,
+   "postgres_cpu_s": 36.54,
+   "pg_sessions": 0,
+   "pg_commits": 6138,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 6.029469548133595,
+   "server_cpu_ms_per_request": 1.2082514734774066,
+   "postgres_cpu_ms_per_request": 35.89390962671906
+  },
+  {
+   "rps": 110.18590070227647,
+   "p50_ms": 70.15793400000001,
+   "p99_ms": 121.480879,
+   "requests": 1657,
+   "non_2xx": 0,
+   "ok": 1657,
+   "errors": 0,
+   "size_per_request": 210,
+   "warm": {
+    "rps": 111.65456698615783,
+    "p50_ms": 69.13629,
+    "p99_ms": 113.751059,
+    "requests": 563,
+    "non_2xx": 0,
+    "ok": 563,
+    "errors": 0,
+    "size_per_request": 210
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-pgt-count-c8-r0.json",
+    "timed": "timed-alerta-4x4-pgb-safe-pgt-count-c8-r0.json"
+   },
+   "arm": "alerta-4x4-pgb-safe-pgt",
+   "case": "count",
+   "c": 8,
+   "rep": 0,
+   "db": "bench_read_alerta_4x4_pgb_safe_pgt",
+   "wall_s": 15.043357456999956,
+   "server_cpu_s": 2.77,
+   "postgres_cpu_s": 56.19,
+   "pg_sessions": 0,
+   "pg_commits": 7198,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 4.343995171997586,
+   "server_cpu_ms_per_request": 1.671695835847918,
+   "postgres_cpu_ms_per_request": 33.910681955340976
+  },
+  {
+   "rps": 37.008988877942045,
+   "p50_ms": 26.967859,
+   "p99_ms": 30.178269,
+   "requests": 556,
+   "non_2xx": 0,
+   "ok": 556,
+   "errors": 0,
+   "size_per_request": 1228,
+   "warm": {
+    "rps": 36.214687711916056,
+    "p50_ms": 27.047112000000002,
+    "p99_ms": 34.362303,
+    "requests": 182,
+    "non_2xx": 0,
+    "ok": 182,
+    "errors": 0,
+    "size_per_request": 1227
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-pgt-write-dup-c1-r0.json",
+    "timed": "timed-alerta-4x4-pgb-safe-pgt-write-dup-c1-r0.json"
+   },
+   "persisted": {
+    "prime_id": "9ec6ed71-e4e2-46bd-932c-e0d8b7a3b1fe",
+    "problems": [],
+    "dup_before": 182,
+    "wal_before": {
+     "lsn": "0/8D1171C8",
+     "redo_lsn": "0/8D041510",
+     "checkpoints": 9
+    },
+    "dup_after": 738,
+    "wal_after": {
+     "lsn": "0/8D182810",
+     "redo_lsn": "0/8D041510",
+     "checkpoints": 9
+    },
+    "ok": true
+   },
+   "arm": "alerta-4x4-pgb-safe-pgt",
+   "case": "write-dup",
+   "c": 1,
+   "rep": 0,
+   "db": "bench_write_alerta_4x4_pgb_safe_pgt_r0_c1",
+   "wall_s": 15.028335735000041,
+   "server_cpu_s": 1.39,
+   "postgres_cpu_s": 12.8,
+   "pg_sessions": 0,
+   "pg_commits": 2651,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 4.767985611510792,
+   "server_cpu_ms_per_request": 2.5,
+   "postgres_cpu_ms_per_request": 23.02158273381295,
+   "pgtune": {
+    "arm": "alerta-4x4-pgb-safe-pgt",
+    "c": 1,
+    "rep": 0,
+    "db": "bench_write_alerta_4x4_pgb_safe_pgt_r0_c1",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 2216,
+      "hot": 2140,
+      "dead": 83,
+      "hot_share": 0.966
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 739,
+      "hot": 739,
+      "dead": 37,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 739,
+      "hot": 739,
+      "dead": 24,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 439880,
+     "writes": 556,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 791.2
+    },
+    "lifecycle": {
+     "wal_bytes": 1315376,
+     "writes": 739,
+     "wal_bytes_per_write": 1779.9
+    },
+    "problems": []
+   }
+  },
+  {
+   "rps": 107.45214238857021,
+   "p50_ms": 70.370612,
+   "p99_ms": 140.73734800000003,
+   "requests": 1619,
+   "non_2xx": 0,
+   "ok": 1619,
+   "errors": 0,
+   "size_per_request": 1228,
+   "warm": {
+    "rps": 98.58384237187774,
+    "p50_ms": 74.582067,
+    "p99_ms": 214.702264,
+    "requests": 498,
+    "non_2xx": 0,
+    "ok": 498,
+    "errors": 0,
+    "size_per_request": 1227
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-pgt-write-dup-c8-r0.json",
+    "timed": "timed-alerta-4x4-pgb-safe-pgt-write-dup-c8-r0.json"
+   },
+   "persisted": {
+    "prime_id": "984ed4ca-1527-4a67-8474-60b8ddb78eb9",
+    "problems": [],
+    "dup_before": 498,
+    "wal_before": {
+     "lsn": "0/8D2C9688",
+     "redo_lsn": "0/8D182810",
+     "checkpoints": 10
+    },
+    "dup_after": 2117,
+    "wal_after": {
+     "lsn": "0/8D4B88D0",
+     "redo_lsn": "0/8D182810",
+     "checkpoints": 10
+    },
+    "ok": true
+   },
+   "arm": "alerta-4x4-pgb-safe-pgt",
+   "case": "write-dup",
+   "c": 8,
+   "rep": 0,
+   "db": "bench_write_alerta_4x4_pgb_safe_pgt_r0_c8",
+   "wall_s": 15.072676280999985,
+   "server_cpu_s": 4.89,
+   "postgres_cpu_s": 35.55,
+   "pg_sessions": 0,
+   "pg_commits": 8042,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 4.967263743051266,
+   "server_cpu_ms_per_request": 3.020382952439778,
+   "postgres_cpu_ms_per_request": 21.95799876466955,
+   "pgtune": {
+    "arm": "alerta-4x4-pgb-safe-pgt",
+    "c": 8,
+    "rep": 0,
+    "db": "bench_write_alerta_4x4_pgb_safe_pgt_r0_c8",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 6353,
+      "hot": 5685,
+      "dead": 1064,
+      "hot_share": 0.895
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 2118,
+      "hot": 2118,
+      "dead": 57,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 2118,
+      "hot": 2118,
+      "dead": 51,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 2028104,
+     "writes": 1619,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 1252.7
+    },
+    "lifecycle": {
+     "wal_bytes": 3366896,
+     "writes": 2118,
+     "wal_bytes_per_write": 1589.7
+    },
+    "problems": []
+   }
+  },
+  {
+   "rps": 18.713759647735355,
+   "p50_ms": 53.342180000000006,
+   "p99_ms": 55.903932000000005,
+   "requests": 281,
+   "non_2xx": 0,
+   "ok": 281,
+   "errors": 0,
+   "size_per_request": 44248,
+   "warm": {
+    "rps": 18.50927451432726,
+    "p50_ms": 53.462061999999996,
+    "p99_ms": 58.840160000000004,
+    "requests": 93,
+    "non_2xx": 0,
+    "ok": 93,
+    "errors": 0,
+    "size_per_request": 44248
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-pgt-list-c1-r1.json",
+    "timed": "timed-alerta-4x4-pgb-safe-pgt-list-c1-r1.json"
+   },
+   "arm": "alerta-4x4-pgb-safe-pgt",
+   "case": "list",
+   "c": 1,
+   "rep": 1,
+   "db": "bench_read_alerta_4x4_pgb_safe_pgt",
+   "wall_s": 15.020506030999968,
+   "server_cpu_s": 1.09,
+   "postgres_cpu_s": 38.96,
+   "pg_sessions": 0,
+   "pg_commits": 2796,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 9.95017793594306,
+   "server_cpu_ms_per_request": 3.8790035587188614,
+   "postgres_cpu_ms_per_request": 138.64768683274022
+  },
+  {
+   "rps": 27.224057351836617,
+   "p50_ms": 268.493392,
+   "p99_ms": 514.977176,
+   "requests": 413,
+   "non_2xx": 0,
+   "ok": 413,
+   "errors": 0,
+   "size_per_request": 44248,
+   "warm": {
+    "rps": 27.05138182475491,
+    "p50_ms": 273.543506,
+    "p99_ms": 512.532923,
+    "requests": 140,
+    "non_2xx": 0,
+    "ok": 140,
+    "errors": 0,
+    "size_per_request": 44248
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-pgt-list-c8-r1.json",
+    "timed": "timed-alerta-4x4-pgb-safe-pgt-list-c8-r1.json"
+   },
+   "arm": "alerta-4x4-pgb-safe-pgt",
+   "case": "list",
+   "c": 8,
+   "rep": 1,
+   "db": "bench_read_alerta_4x4_pgb_safe_pgt",
+   "wall_s": 15.175423678000016,
+   "server_cpu_s": 2.17,
+   "postgres_cpu_s": 57.72,
+   "pg_sessions": 0,
+   "pg_commits": 2648,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 6.411622276029056,
+   "server_cpu_ms_per_request": 5.254237288135593,
+   "postgres_cpu_ms_per_request": 139.75786924939467
+  },
+  {
+   "rps": 61.55866767607399,
+   "p50_ms": 16.27947,
+   "p99_ms": 18.015453,
+   "requests": 924,
+   "non_2xx": 0,
+   "ok": 924,
+   "errors": 0,
+   "size_per_request": 210,
+   "warm": {
+    "rps": 59.966936270216436,
+    "p50_ms": 16.664882,
+    "p99_ms": 18.390449,
+    "requests": 300,
+    "non_2xx": 0,
+    "ok": 300,
+    "errors": 0,
+    "size_per_request": 210
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-pgt-count-c1-r1.json",
+    "timed": "timed-alerta-4x4-pgb-safe-pgt-count-c1-r1.json"
+   },
+   "arm": "alerta-4x4-pgb-safe-pgt",
+   "case": "count",
+   "c": 1,
+   "rep": 1,
+   "db": "bench_read_alerta_4x4_pgb_safe_pgt",
+   "wall_s": 15.014933414000097,
+   "server_cpu_s": 1.2,
+   "postgres_cpu_s": 36.97,
+   "pg_sessions": 0,
+   "pg_commits": 5584,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 6.043290043290043,
+   "server_cpu_ms_per_request": 1.2987012987012987,
+   "postgres_cpu_ms_per_request": 40.010822510822514
+  },
+  {
+   "rps": 114.83147902806432,
+   "p50_ms": 66.896072,
+   "p99_ms": 114.00215800000001,
+   "requests": 1728,
+   "non_2xx": 0,
+   "ok": 1728,
+   "errors": 0,
+   "size_per_request": 210,
+   "warm": {
+    "rps": 112.91540437486391,
+    "p50_ms": 67.19673700000001,
+    "p99_ms": 117.670809,
+    "requests": 571,
+    "non_2xx": 0,
+    "ok": 571,
+    "errors": 0,
+    "size_per_request": 210
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-pgt-count-c8-r1.json",
+    "timed": "timed-alerta-4x4-pgb-safe-pgt-count-c8-r1.json"
+   },
+   "arm": "alerta-4x4-pgb-safe-pgt",
+   "case": "count",
+   "c": 8,
+   "rep": 1,
+   "db": "bench_read_alerta_4x4_pgb_safe_pgt",
+   "wall_s": 15.053179454999963,
+   "server_cpu_s": 2.84,
+   "postgres_cpu_s": 56.14,
+   "pg_sessions": 0,
+   "pg_commits": 7524,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 4.354166666666667,
+   "server_cpu_ms_per_request": 1.6435185185185186,
+   "postgres_cpu_ms_per_request": 32.488425925925924
+  },
+  {
+   "rps": 44.686125025102335,
+   "p50_ms": 20.638452,
+   "p99_ms": 28.903395,
+   "requests": 671,
+   "non_2xx": 0,
+   "ok": 671,
+   "errors": 0,
+   "size_per_request": 1228,
+   "warm": {
+    "rps": 37.32336875657604,
+    "p50_ms": 26.905025,
+    "p99_ms": 31.374657,
+    "requests": 187,
+    "non_2xx": 0,
+    "ok": 187,
+    "errors": 0,
+    "size_per_request": 1227
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-pgt-write-dup-c1-r1.json",
+    "timed": "timed-alerta-4x4-pgb-safe-pgt-write-dup-c1-r1.json"
+   },
+   "persisted": {
+    "prime_id": "bdae1402-e42e-4af1-ac6c-bd9b1aac0c3d",
+    "problems": [],
+    "dup_before": 187,
+    "wal_before": {
+     "lsn": "0/8D6F7D88",
+     "redo_lsn": "0/8D622918",
+     "checkpoints": 11
+    },
+    "dup_after": 858,
+    "wal_after": {
+     "lsn": "0/8D784E90",
+     "redo_lsn": "0/8D622918",
+     "checkpoints": 11
+    },
+    "ok": true
+   },
+   "arm": "alerta-4x4-pgb-safe-pgt",
+   "case": "write-dup",
+   "c": 1,
+   "rep": 1,
+   "db": "bench_write_alerta_4x4_pgb_safe_pgt_r1_c1",
+   "wall_s": 15.020682201,
+   "server_cpu_s": 1.47,
+   "postgres_cpu_s": 12.58,
+   "pg_sessions": 0,
+   "pg_commits": 3234,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 4.819672131147541,
+   "server_cpu_ms_per_request": 2.1907600596125185,
+   "postgres_cpu_ms_per_request": 18.748137108792847,
+   "pgtune": {
+    "arm": "alerta-4x4-pgb-safe-pgt",
+    "c": 1,
+    "rep": 1,
+    "db": "bench_write_alerta_4x4_pgb_safe_pgt_r1_c1",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 2576,
+      "hot": 2500,
+      "dead": 83,
+      "hot_share": 0.97
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 859,
+      "hot": 859,
+      "dead": 0,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 859,
+      "hot": 859,
+      "dead": 0,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 577800,
+     "writes": 671,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 861.1
+    },
+    "lifecycle": {
+     "wal_bytes": 1451176,
+     "writes": 859,
+     "wal_bytes_per_write": 1689.4
+    },
+    "problems": []
+   }
+  },
+  {
+   "rps": 117.74714438848417,
+   "p50_ms": 64.976458,
+   "p99_ms": 127.65758799999999,
+   "requests": 1773,
+   "non_2xx": 0,
+   "ok": 1773,
+   "errors": 0,
+   "size_per_request": 1228,
+   "warm": {
+    "rps": 111.04761529651371,
+    "p50_ms": 66.189732,
+    "p99_ms": 170.199276,
+    "requests": 560,
+    "non_2xx": 0,
+    "ok": 560,
+    "errors": 0,
+    "size_per_request": 1227
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-pgt-write-dup-c8-r1.json",
+    "timed": "timed-alerta-4x4-pgb-safe-pgt-write-dup-c8-r1.json"
+   },
+   "persisted": {
+    "prime_id": "92f968dc-8754-4183-95c4-d10aff03620f",
+    "problems": [],
+    "dup_before": 560,
+    "wal_before": {
+     "lsn": "0/8D8F24C8",
+     "redo_lsn": "0/8D784E90",
+     "checkpoints": 12
+    },
+    "dup_after": 2333,
+    "wal_after": {
+     "lsn": "0/8DADF900",
+     "redo_lsn": "0/8D784E90",
+     "checkpoints": 12
+    },
+    "ok": true
+   },
+   "arm": "alerta-4x4-pgb-safe-pgt",
+   "case": "write-dup",
+   "c": 8,
+   "rep": 1,
+   "db": "bench_write_alerta_4x4_pgb_safe_pgt_r1_c8",
+   "wall_s": 15.062893987000052,
+   "server_cpu_s": 5.0,
+   "postgres_cpu_s": 35.03,
+   "pg_sessions": 0,
+   "pg_commits": 8881,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 5.009024252679075,
+   "server_cpu_ms_per_request": 2.820078962210942,
+   "postgres_cpu_ms_per_request": 19.75747320924986,
+   "pgtune": {
+    "arm": "alerta-4x4-pgb-safe-pgt",
+    "c": 8,
+    "rep": 1,
+    "db": "bench_write_alerta_4x4_pgb_safe_pgt_r1_c8",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 7001,
+      "hot": 6285,
+      "dead": 1035,
+      "hot_share": 0.898
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 2334,
+      "hot": 2334,
+      "dead": 50,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 2334,
+      "hot": 2334,
+      "dead": 73,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 2020408,
+     "writes": 1773,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 1139.5
+    },
+    "lifecycle": {
+     "wal_bytes": 3516832,
+     "writes": 2334,
+     "wal_bytes_per_write": 1506.8
+    },
+    "problems": []
+   }
+  },
+  {
+   "rps": 19.574253811708026,
+   "p50_ms": 51.111864,
+   "p99_ms": 54.561226999999995,
+   "requests": 294,
+   "non_2xx": 0,
+   "ok": 294,
+   "errors": 0,
+   "size_per_request": 44248,
+   "warm": {
+    "rps": 19.308502624835167,
+    "p50_ms": 51.63174,
+    "p99_ms": 58.239631,
+    "requests": 97,
+    "non_2xx": 0,
+    "ok": 97,
+    "errors": 0,
+    "size_per_request": 44248
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-idx-pgt-list-c1-r1.json",
+    "timed": "timed-alerta-4x4-pgb-safe-idx-pgt-list-c1-r1.json"
+   },
+   "arm": "alerta-4x4-pgb-safe-idx-pgt",
+   "case": "list",
+   "c": 1,
+   "rep": 1,
+   "db": "bench_read_alerta_4x4_pgb_safe_idx_pgt",
+   "wall_s": 15.02445226199984,
+   "server_cpu_s": 1.06,
+   "postgres_cpu_s": 39.35,
+   "pg_sessions": 0,
+   "pg_commits": 2936,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 9.986394557823129,
+   "server_cpu_ms_per_request": 3.6054421768707483,
+   "postgres_cpu_ms_per_request": 133.843537414966
+  },
+  {
+   "rps": 27.621426803060658,
+   "p50_ms": 264.55251200000004,
+   "p99_ms": 504.324099,
+   "requests": 419,
+   "non_2xx": 0,
+   "ok": 419,
+   "errors": 0,
+   "size_per_request": 44248,
+   "warm": {
+    "rps": 27.36327402202247,
+    "p50_ms": 258.694963,
+    "p99_ms": 515.761901,
+    "requests": 140,
+    "non_2xx": 0,
+    "ok": 140,
+    "errors": 0,
+    "size_per_request": 44248
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-idx-pgt-list-c8-r1.json",
+    "timed": "timed-alerta-4x4-pgb-safe-idx-pgt-list-c8-r1.json"
+   },
+   "arm": "alerta-4x4-pgb-safe-idx-pgt",
+   "case": "list",
+   "c": 8,
+   "rep": 1,
+   "db": "bench_read_alerta_4x4_pgb_safe_idx_pgt",
+   "wall_s": 15.174322185999927,
+   "server_cpu_s": 2.12,
+   "postgres_cpu_s": 57.88,
+   "pg_sessions": 0,
+   "pg_commits": 2684,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 6.405727923627685,
+   "server_cpu_ms_per_request": 5.059665871121719,
+   "postgres_cpu_ms_per_request": 138.1384248210024
+  },
+  {
+   "rps": 63.559973699788976,
+   "p50_ms": 15.700638999999999,
+   "p99_ms": 17.065642,
+   "requests": 954,
+   "non_2xx": 0,
+   "ok": 954,
+   "errors": 0,
+   "size_per_request": 210,
+   "warm": {
+    "rps": 63.701058064230516,
+    "p50_ms": 15.593905999999999,
+    "p99_ms": 17.051162,
+    "requests": 319,
+    "non_2xx": 0,
+    "ok": 319,
+    "errors": 0,
+    "size_per_request": 210
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-idx-pgt-count-c1-r1.json",
+    "timed": "timed-alerta-4x4-pgb-safe-idx-pgt-count-c1-r1.json"
+   },
+   "arm": "alerta-4x4-pgb-safe-idx-pgt",
+   "case": "count",
+   "c": 1,
+   "rep": 1,
+   "db": "bench_read_alerta_4x4_pgb_safe_idx_pgt",
+   "wall_s": 15.014402090999965,
+   "server_cpu_s": 1.27,
+   "postgres_cpu_s": 36.66,
+   "pg_sessions": 0,
+   "pg_commits": 5748,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 6.0251572327044025,
+   "server_cpu_ms_per_request": 1.3312368972746331,
+   "postgres_cpu_ms_per_request": 38.42767295597484
+  },
+  {
+   "rps": 108.07291292685687,
+   "p50_ms": 71.26018,
+   "p99_ms": 118.432382,
+   "requests": 1626,
+   "non_2xx": 0,
+   "ok": 1626,
+   "errors": 0,
+   "size_per_request": 210,
+   "warm": {
+    "rps": 105.33697178845425,
+    "p50_ms": 73.408742,
+    "p99_ms": 127.672527,
+    "requests": 531,
+    "non_2xx": 0,
+    "ok": 531,
+    "errors": 0,
+    "size_per_request": 210
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-idx-pgt-count-c8-r1.json",
+    "timed": "timed-alerta-4x4-pgb-safe-idx-pgt-count-c8-r1.json"
+   },
+   "arm": "alerta-4x4-pgb-safe-idx-pgt",
+   "case": "count",
+   "c": 8,
+   "rep": 1,
+   "db": "bench_read_alerta_4x4_pgb_safe_idx_pgt",
+   "wall_s": 15.050501626999903,
+   "server_cpu_s": 2.94,
+   "postgres_cpu_s": 56.07,
+   "pg_sessions": 0,
+   "pg_commits": 7052,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 4.337023370233703,
+   "server_cpu_ms_per_request": 1.8081180811808117,
+   "postgres_cpu_ms_per_request": 34.48339483394834
+  },
+  {
+   "rps": 243.39358083164427,
+   "p50_ms": 3.9090879999999997,
+   "p99_ms": 5.733538,
+   "requests": 3652,
+   "non_2xx": 0,
+   "ok": 3652,
+   "errors": 0,
+   "size_per_request": 1229,
+   "warm": {
+    "rps": 252.10097529152762,
+    "p50_ms": 3.730306,
+    "p99_ms": 5.621519999999999,
+    "requests": 1261,
+    "non_2xx": 0,
+    "ok": 1261,
+    "errors": 0,
+    "size_per_request": 1228
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-idx-pgt-write-dup-c1-r1.json",
+    "timed": "timed-alerta-4x4-pgb-safe-idx-pgt-write-dup-c1-r1.json"
+   },
+   "persisted": {
+    "prime_id": "1e90d2f7-eaf2-4623-a9a7-fee8ec37d319",
+    "problems": [],
+    "dup_before": 1261,
+    "wal_before": {
+     "lsn": "0/8DDFD1D0",
+     "redo_lsn": "0/8DC55FC0",
+     "checkpoints": 13
+    },
+    "dup_after": 4913,
+    "wal_after": {
+     "lsn": "0/8E0BC0B0",
+     "redo_lsn": "0/8DC55FC0",
+     "checkpoints": 13
+    },
+    "ok": true
+   },
+   "arm": "alerta-4x4-pgb-safe-idx-pgt",
+   "case": "write-dup",
+   "c": 1,
+   "rep": 1,
+   "db": "bench_write_alerta_4x4_pgb_safe_idx_pgt_r1_c1",
+   "wall_s": 15.009935925000036,
+   "server_cpu_s": 6.67,
+   "postgres_cpu_s": 5.2,
+   "pg_sessions": 0,
+   "pg_commits": 17448,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 4.777656078860898,
+   "server_cpu_ms_per_request": 1.826396495071194,
+   "postgres_cpu_ms_per_request": 1.4238773274917853,
+   "pgtune": {
+    "arm": "alerta-4x4-pgb-safe-idx-pgt",
+    "c": 1,
+    "rep": 1,
+    "db": "bench_write_alerta_4x4_pgb_safe_idx_pgt_r1_c1",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 14741,
+      "hot": 14665,
+      "dead": 80,
+      "hot_share": 0.995
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 4914,
+      "hot": 4914,
+      "dead": 39,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 4914,
+      "hot": 4914,
+      "dead": 19,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 2879200,
+     "writes": 3652,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 788.4
+    },
+    "lifecycle": {
+     "wal_bytes": 4612104,
+     "writes": 4914,
+     "wal_bytes_per_write": 938.6
+    },
+    "problems": []
+   }
+  },
+  {
+   "rps": 589.5388863805248,
+   "p50_ms": 13.473983,
+   "p99_ms": 21.6816,
+   "requests": 8851,
+   "non_2xx": 0,
+   "ok": 8851,
+   "errors": 0,
+   "size_per_request": 1229,
+   "warm": {
+    "rps": 621.4424964830876,
+    "p50_ms": 12.475576,
+    "p99_ms": 19.548357,
+    "requests": 3113,
+    "non_2xx": 0,
+    "ok": 3113,
+    "errors": 0,
+    "size_per_request": 1228
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-idx-pgt-write-dup-c8-r1.json",
+    "timed": "timed-alerta-4x4-pgb-safe-idx-pgt-write-dup-c8-r1.json"
+   },
+   "persisted": {
+    "prime_id": "b5987995-e9cd-4b49-a720-b72057cddd22",
+    "problems": [],
+    "dup_before": 3113,
+    "wal_before": {
+     "lsn": "0/8E4F25A8",
+     "redo_lsn": "0/8E0BC0B0",
+     "checkpoints": 14
+    },
+    "dup_after": 11964,
+    "wal_after": {
+     "lsn": "0/8EE5AF68",
+     "redo_lsn": "0/8E0BC0B0",
+     "checkpoints": 14
+    },
+    "ok": true
+   },
+   "arm": "alerta-4x4-pgb-safe-idx-pgt",
+   "case": "write-dup",
+   "c": 8,
+   "rep": 1,
+   "db": "bench_write_alerta_4x4_pgb_safe_idx_pgt_r1_c8",
+   "wall_s": 15.020082352999907,
+   "server_cpu_s": 22.44,
+   "postgres_cpu_s": 20.48,
+   "pg_sessions": 0,
+   "pg_commits": 44650,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 5.044627725680714,
+   "server_cpu_ms_per_request": 2.535306745000565,
+   "postgres_cpu_ms_per_request": 2.3138628403570216,
+   "pgtune": {
+    "arm": "alerta-4x4-pgb-safe-idx-pgt",
+    "c": 8,
+    "rep": 1,
+    "db": "bench_write_alerta_4x4_pgb_safe_idx_pgt_r1_c8",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 35894,
+      "hot": 33648,
+      "dead": 2487,
+      "hot_share": 0.937
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 11965,
+      "hot": 11957,
+      "dead": 234,
+      "hot_share": 0.999
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 11965,
+      "hot": 11959,
+      "dead": 215,
+      "hot_share": 0.999
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 9865664,
+     "writes": 8851,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 1114.6
+    },
+    "lifecycle": {
+     "wal_bytes": 14282216,
+     "writes": 11965,
+     "wal_bytes_per_write": 1193.7
+    },
+    "problems": []
+   }
+  },
+  {
+   "rps": 14.572402913542467,
+   "p50_ms": 68.497207,
+   "p99_ms": 71.370762,
+   "requests": 219,
+   "non_2xx": 0,
+   "ok": 219,
+   "errors": 0,
+   "size_per_request": 44248,
+   "warm": {
+    "rps": 14.661300961252664,
+    "p50_ms": 67.39524800000001,
+    "p99_ms": 84.16606,
+    "requests": 74,
+    "non_2xx": 0,
+    "ok": 74,
+    "errors": 0,
+    "size_per_request": 44248
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-idx-pgt-list-c1-r1.json",
+    "timed": "timed-alerta-4x4-pgb-idx-pgt-list-c1-r1.json"
+   },
+   "arm": "alerta-4x4-pgb-idx-pgt",
+   "case": "list",
+   "c": 1,
+   "rep": 1,
+   "db": "bench_read_alerta_4x4_pgb_idx_pgt",
+   "wall_s": 15.033203988999958,
+   "server_cpu_s": 1.7,
+   "postgres_cpu_s": 37.07,
+   "pg_sessions": 0,
+   "pg_commits": 3480,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 15.89041095890411,
+   "server_cpu_ms_per_request": 7.762557077625571,
+   "postgres_cpu_ms_per_request": 169.26940639269407
+  },
+  {
+   "rps": 22.028939530585994,
+   "p50_ms": 342.461275,
+   "p99_ms": 598.0873330000001,
+   "requests": 333,
+   "non_2xx": 0,
+   "ok": 333,
+   "errors": 0,
+   "size_per_request": 44248,
+   "warm": {
+    "rps": 21.696187606413524,
+    "p50_ms": 346.64581599999997,
+    "p99_ms": 579.7569930000001,
+    "requests": 113,
+    "non_2xx": 0,
+    "ok": 113,
+    "errors": 0,
+    "size_per_request": 44248
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-idx-pgt-list-c8-r1.json",
+    "timed": "timed-alerta-4x4-pgb-idx-pgt-list-c8-r1.json"
+   },
+   "arm": "alerta-4x4-pgb-idx-pgt",
+   "case": "list",
+   "c": 8,
+   "rep": 1,
+   "db": "bench_read_alerta_4x4_pgb_idx_pgt",
+   "wall_s": 15.121314262000169,
+   "server_cpu_s": 3.61,
+   "postgres_cpu_s": 56.1,
+   "pg_sessions": 0,
+   "pg_commits": 3616,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 10.85885885885886,
+   "server_cpu_ms_per_request": 10.84084084084084,
+   "postgres_cpu_ms_per_request": 168.46846846846847
+  },
+  {
+   "rps": 22.506939282086805,
+   "p50_ms": 44.647049,
+   "p99_ms": 47.044574999999995,
+   "requests": 338,
+   "non_2xx": 0,
+   "ok": 338,
+   "errors": 0,
+   "size_per_request": 210,
+   "warm": {
+    "rps": 23.047615353264177,
+    "p50_ms": 42.909598,
+    "p99_ms": 50.085459,
+    "requests": 116,
+    "non_2xx": 0,
+    "ok": 116,
+    "errors": 0,
+    "size_per_request": 210
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-idx-pgt-count-c1-r1.json",
+    "timed": "timed-alerta-4x4-pgb-idx-pgt-count-c1-r1.json"
+   },
+   "arm": "alerta-4x4-pgb-idx-pgt",
+   "case": "count",
+   "c": 1,
+   "rep": 1,
+   "db": "bench_read_alerta_4x4_pgb_idx_pgt",
+   "wall_s": 15.022420667999995,
+   "server_cpu_s": 1.85,
+   "postgres_cpu_s": 12.87,
+   "pg_sessions": 0,
+   "pg_commits": 1398,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 4.136094674556213,
+   "server_cpu_ms_per_request": 5.4733727810650885,
+   "postgres_cpu_ms_per_request": 38.07692307692308
+  },
+  {
+   "rps": 86.48160646375005,
+   "p50_ms": 92.202194,
+   "p99_ms": 132.015277,
+   "requests": 1302,
+   "non_2xx": 0,
+   "ok": 1302,
+   "errors": 0,
+   "size_per_request": 210,
+   "warm": {
+    "rps": 86.23205579746275,
+    "p50_ms": 92.605503,
+    "p99_ms": 130.993999,
+    "requests": 436,
+    "non_2xx": 0,
+    "ok": 436,
+    "errors": 0,
+    "size_per_request": 210
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-idx-pgt-count-c8-r1.json",
+    "timed": "timed-alerta-4x4-pgb-idx-pgt-count-c8-r1.json"
+   },
+   "arm": "alerta-4x4-pgb-idx-pgt",
+   "case": "count",
+   "c": 8,
+   "rep": 1,
+   "db": "bench_read_alerta_4x4_pgb_idx_pgt",
+   "wall_s": 15.06035081999994,
+   "server_cpu_s": 9.33,
+   "postgres_cpu_s": 48.58,
+   "pg_sessions": 0,
+   "pg_commits": 5304,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 4.073732718894009,
+   "server_cpu_ms_per_request": 7.1658986175115205,
+   "postgres_cpu_ms_per_request": 37.31182795698925
+  },
+  {
+   "rps": 126.1345170972696,
+   "p50_ms": 8.262533000000001,
+   "p99_ms": 9.577337,
+   "requests": 1893,
+   "non_2xx": 0,
+   "ok": 1893,
+   "errors": 0,
+   "size_per_request": 1228,
+   "warm": {
+    "rps": 126.88579258505574,
+    "p50_ms": 7.841687,
+    "p99_ms": 8.804605,
+    "requests": 635,
+    "non_2xx": 0,
+    "ok": 635,
+    "errors": 0,
+    "size_per_request": 1227
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-idx-pgt-write-dup-c1-r1.json",
+    "timed": "timed-alerta-4x4-pgb-idx-pgt-write-dup-c1-r1.json"
+   },
+   "persisted": {
+    "prime_id": "2abe04c0-86ba-4126-ac0b-1210431e485d",
+    "problems": [],
+    "dup_before": 635,
+    "wal_before": {
+     "lsn": "0/8F0A12B8",
+     "redo_lsn": "0/8EF720B0",
+     "checkpoints": 15
+    },
+    "dup_after": 2528,
+    "wal_after": {
+     "lsn": "0/8F20DB70",
+     "redo_lsn": "0/8EF720B0",
+     "checkpoints": 15
+    },
+    "ok": true
+   },
+   "arm": "alerta-4x4-pgb-idx-pgt",
+   "case": "write-dup",
+   "c": 1,
+   "rep": 1,
+   "db": "bench_write_alerta_4x4_pgb_idx_pgt_r1_c1",
+   "wall_s": 15.012990042999945,
+   "server_cpu_s": 10.33,
+   "postgres_cpu_s": 2.95,
+   "pg_sessions": 0,
+   "pg_commits": 12383,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 6.541468568409932,
+   "server_cpu_ms_per_request": 5.456946645536186,
+   "postgres_cpu_ms_per_request": 1.5583729529846804,
+   "pgtune": {
+    "arm": "alerta-4x4-pgb-idx-pgt",
+    "c": 1,
+    "rep": 1,
+    "db": "bench_write_alerta_4x4_pgb_idx_pgt_r1_c1",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 7586,
+      "hot": 7510,
+      "dead": 80,
+      "hot_share": 0.99
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 2529,
+      "hot": 2529,
+      "dead": 33,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 2529,
+      "hot": 2529,
+      "dead": 54,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 1493176,
+     "writes": 1893,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 788.8
+    },
+    "lifecycle": {
+     "wal_bytes": 2734576,
+     "writes": 2529,
+     "wal_bytes_per_write": 1081.3
+    },
+    "problems": []
+   }
+  },
+  {
+   "rps": 302.95382572164857,
+   "p50_ms": 25.866775,
+   "p99_ms": 42.964470999999996,
+   "requests": 4550,
+   "non_2xx": 0,
+   "ok": 4550,
+   "errors": 0,
+   "size_per_request": 1229,
+   "warm": {
+    "rps": 323.4224555467058,
+    "p50_ms": 24.358563,
+    "p99_ms": 37.063523,
+    "requests": 1621,
+    "non_2xx": 0,
+    "ok": 1621,
+    "errors": 0,
+    "size_per_request": 1228
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-idx-pgt-write-dup-c8-r1.json",
+    "timed": "timed-alerta-4x4-pgb-idx-pgt-write-dup-c8-r1.json"
+   },
+   "persisted": {
+    "prime_id": "1fc034b4-7d97-4588-b599-4a65c0783662",
+    "problems": [],
+    "dup_before": 1621,
+    "wal_before": {
+     "lsn": "0/8F477B80",
+     "redo_lsn": "0/8F20DB70",
+     "checkpoints": 16
+    },
+    "dup_after": 6171,
+    "wal_after": {
+     "lsn": "0/8F8B75B0",
+     "redo_lsn": "0/8F20DB70",
+     "checkpoints": 16
+    },
+    "ok": true
+   },
+   "arm": "alerta-4x4-pgb-idx-pgt",
+   "case": "write-dup",
+   "c": 8,
+   "rep": 1,
+   "db": "bench_write_alerta_4x4_pgb_idx_pgt_r1_c8",
+   "wall_s": 15.025011302999928,
+   "server_cpu_s": 37.39,
+   "postgres_cpu_s": 9.5,
+   "pg_sessions": 0,
+   "pg_commits": 32080,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 7.05054945054945,
+   "server_cpu_ms_per_request": 8.217582417582417,
+   "postgres_cpu_ms_per_request": 2.087912087912088,
+   "pgtune": {
+    "arm": "alerta-4x4-pgb-idx-pgt",
+    "c": 8,
+    "rep": 1,
+    "db": "bench_write_alerta_4x4_pgb_idx_pgt_r1_c8",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 18515,
+      "hot": 17701,
+      "dead": 924,
+      "hot_share": 0.956
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 6172,
+      "hot": 6172,
+      "dead": 98,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 6172,
+      "hot": 6172,
+      "dead": 128,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 4454960,
+     "writes": 4550,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 979.1
+    },
+    "lifecycle": {
+     "wal_bytes": 6986096,
+     "writes": 6172,
+     "wal_bytes_per_write": 1131.9
+    },
+    "problems": []
+   }
+  },
+  {
+   "rps": 14.565156658374665,
+   "p50_ms": 68.622856,
+   "p99_ms": 71.134413,
+   "requests": 219,
+   "non_2xx": 0,
+   "ok": 219,
+   "errors": 0,
+   "size_per_request": 44248,
+   "warm": {
+    "rps": 14.1105368596052,
+    "p50_ms": 69.60240900000001,
+    "p99_ms": 83.99836300000001,
+    "requests": 71,
+    "non_2xx": 0,
+    "ok": 71,
+    "errors": 0,
+    "size_per_request": 44248
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-pgt-list-c1-r1.json",
+    "timed": "timed-alerta-4x4-pgb-pgt-list-c1-r1.json"
+   },
+   "arm": "alerta-4x4-pgb-pgt",
+   "case": "list",
+   "c": 1,
+   "rep": 1,
+   "db": "bench_read_alerta_4x4_pgb_pgt",
+   "wall_s": 15.04066809799997,
+   "server_cpu_s": 1.68,
+   "postgres_cpu_s": 37.17,
+   "pg_sessions": 0,
+   "pg_commits": 3479,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 15.885844748858448,
+   "server_cpu_ms_per_request": 7.671232876712328,
+   "postgres_cpu_ms_per_request": 169.72602739726028
+  },
+  {
+   "rps": 21.9014126564276,
+   "p50_ms": 348.991668,
+   "p99_ms": 602.645222,
+   "requests": 333,
+   "non_2xx": 0,
+   "ok": 333,
+   "errors": 0,
+   "size_per_request": 44248,
+   "warm": {
+    "rps": 21.768628647821334,
+    "p50_ms": 342.326874,
+    "p99_ms": 615.493643,
+    "requests": 113,
+    "non_2xx": 0,
+    "ok": 113,
+    "errors": 0,
+    "size_per_request": 44248
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-pgt-list-c8-r1.json",
+    "timed": "timed-alerta-4x4-pgb-pgt-list-c8-r1.json"
+   },
+   "arm": "alerta-4x4-pgb-pgt",
+   "case": "list",
+   "c": 8,
+   "rep": 1,
+   "db": "bench_read_alerta_4x4_pgb_pgt",
+   "wall_s": 15.2092579199998,
+   "server_cpu_s": 3.62,
+   "postgres_cpu_s": 56.51,
+   "pg_sessions": 0,
+   "pg_commits": 3543,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 10.63963963963964,
+   "server_cpu_ms_per_request": 10.87087087087087,
+   "postgres_cpu_ms_per_request": 169.6996996996997
+  },
+  {
+   "rps": 22.794998237904977,
+   "p50_ms": 44.001884999999994,
+   "p99_ms": 46.427099999999996,
+   "requests": 342,
+   "non_2xx": 0,
+   "ok": 342,
+   "errors": 0,
+   "size_per_request": 210,
+   "warm": {
+    "rps": 22.944026432259044,
+    "p50_ms": 43.603139999999996,
+    "p99_ms": 46.529144,
+    "requests": 115,
+    "non_2xx": 0,
+    "ok": 115,
+    "errors": 0,
+    "size_per_request": 210
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-pgt-count-c1-r1.json",
+    "timed": "timed-alerta-4x4-pgb-pgt-count-c1-r1.json"
+   },
+   "arm": "alerta-4x4-pgb-pgt",
+   "case": "count",
+   "c": 1,
+   "rep": 1,
+   "db": "bench_read_alerta_4x4_pgb_pgt",
+   "wall_s": 15.008196506999866,
+   "server_cpu_s": 1.85,
+   "postgres_cpu_s": 12.88,
+   "pg_sessions": 0,
+   "pg_commits": 1420,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 4.152046783625731,
+   "server_cpu_ms_per_request": 5.409356725146199,
+   "postgres_cpu_ms_per_request": 37.66081871345029
+  },
+  {
+   "rps": 88.29012525121091,
+   "p50_ms": 90.986919,
+   "p99_ms": 130.284432,
+   "requests": 1330,
+   "non_2xx": 0,
+   "ok": 1330,
+   "errors": 0,
+   "size_per_request": 210,
+   "warm": {
+    "rps": 86.55882448300534,
+    "p50_ms": 89.004504,
+    "p99_ms": 154.482789,
+    "requests": 440,
+    "non_2xx": 0,
+    "ok": 440,
+    "errors": 0,
+    "size_per_request": 210
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-pgt-count-c8-r1.json",
+    "timed": "timed-alerta-4x4-pgb-pgt-count-c8-r1.json"
+   },
+   "arm": "alerta-4x4-pgb-pgt",
+   "case": "count",
+   "c": 8,
+   "rep": 1,
+   "db": "bench_read_alerta_4x4_pgb_pgt",
+   "wall_s": 15.069018843000094,
+   "server_cpu_s": 9.48,
+   "postgres_cpu_s": 48.33,
+   "pg_sessions": 0,
+   "pg_commits": 5414,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 4.070676691729323,
+   "server_cpu_ms_per_request": 7.12781954887218,
+   "postgres_cpu_ms_per_request": 36.338345864661655
+  },
+  {
+   "rps": 35.12185962354885,
+   "p50_ms": 29.408521,
+   "p99_ms": 32.604108,
+   "requests": 527,
+   "non_2xx": 0,
+   "ok": 527,
+   "errors": 0,
+   "size_per_request": 1228,
+   "warm": {
+    "rps": 33.03567608075094,
+    "p50_ms": 30.107632,
+    "p99_ms": 35.372206000000006,
+    "requests": 166,
+    "non_2xx": 0,
+    "ok": 166,
+    "errors": 0,
+    "size_per_request": 1227
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-pgt-write-dup-c1-r1.json",
+    "timed": "timed-alerta-4x4-pgb-pgt-write-dup-c1-r1.json"
+   },
+   "persisted": {
+    "prime_id": "f77077a8-342f-4b44-845e-dc1592a94b7e",
+    "problems": [],
+    "dup_before": 166,
+    "wal_before": {
+     "lsn": "0/8FAD78F0",
+     "redo_lsn": "0/8FA065F0",
+     "checkpoints": 17
+    },
+    "dup_after": 693,
+    "wal_after": {
+     "lsn": "0/8FB3D558",
+     "redo_lsn": "0/8FA065F0",
+     "checkpoints": 17
+    },
+    "ok": true
+   },
+   "arm": "alerta-4x4-pgb-pgt",
+   "case": "write-dup",
+   "c": 1,
+   "rep": 1,
+   "db": "bench_write_alerta_4x4_pgb_pgt_r1_c1",
+   "wall_s": 15.009729147999906,
+   "server_cpu_s": 3.08,
+   "postgres_cpu_s": 11.26,
+   "pg_sessions": 0,
+   "pg_commits": 3485,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 6.612903225806452,
+   "server_cpu_ms_per_request": 5.8444022770398485,
+   "postgres_cpu_ms_per_request": 21.366223908918407,
+   "pgtune": {
+    "arm": "alerta-4x4-pgb-pgt",
+    "c": 1,
+    "rep": 1,
+    "db": "bench_write_alerta_4x4_pgb_pgt_r1_c1",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 2081,
+      "hot": 2005,
+      "dead": 83,
+      "hot_share": 0.963
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 694,
+      "hot": 694,
+      "dead": 31,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 694,
+      "hot": 694,
+      "dead": 34,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 416872,
+     "writes": 527,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 791.0
+    },
+    "lifecycle": {
+     "wal_bytes": 1273496,
+     "writes": 694,
+     "wal_bytes_per_write": 1835.0
+    },
+    "problems": []
+   }
+  },
+  {
+   "rps": 99.44969306675037,
+   "p50_ms": 77.449348,
+   "p99_ms": 142.215239,
+   "requests": 1499,
+   "non_2xx": 0,
+   "ok": 1499,
+   "errors": 0,
+   "size_per_request": 1228,
+   "warm": {
+    "rps": 96.55904022868384,
+    "p50_ms": 75.425932,
+    "p99_ms": 241.58348099999998,
+    "requests": 489,
+    "non_2xx": 0,
+    "ok": 489,
+    "errors": 0,
+    "size_per_request": 1227
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-pgt-write-dup-c8-r1.json",
+    "timed": "timed-alerta-4x4-pgb-pgt-write-dup-c8-r1.json"
+   },
+   "persisted": {
+    "prime_id": "548e2405-41d6-4d73-bead-cf3be892ec1a",
+    "problems": [],
+    "dup_before": 489,
+    "wal_before": {
+     "lsn": "0/8FC87BB8",
+     "redo_lsn": "0/8FB3D558",
+     "checkpoints": 18
+    },
+    "dup_after": 1988,
+    "wal_after": {
+     "lsn": "0/8FE5D200",
+     "redo_lsn": "0/8FB3D558",
+     "checkpoints": 18
+    },
+    "ok": true
+   },
+   "arm": "alerta-4x4-pgb-pgt",
+   "case": "write-dup",
+   "c": 8,
+   "rep": 1,
+   "db": "bench_write_alerta_4x4_pgb_pgt_r1_c8",
+   "wall_s": 15.078240152000035,
+   "server_cpu_s": 12.03,
+   "postgres_cpu_s": 32.34,
+   "pg_sessions": 0,
+   "pg_commits": 10634,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 7.094062708472315,
+   "server_cpu_ms_per_request": 8.025350233488993,
+   "postgres_cpu_ms_per_request": 21.57438292194797,
+   "pgtune": {
+    "arm": "alerta-4x4-pgb-pgt",
+    "c": 8,
+    "rep": 1,
+    "db": "bench_write_alerta_4x4_pgb_pgt_r1_c8",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 5966,
+      "hot": 5329,
+      "dead": 951,
+      "hot_share": 0.893
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 1989,
+      "hot": 1989,
+      "dead": 64,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 1989,
+      "hot": 1989,
+      "dead": 88,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 1922632,
+     "writes": 1499,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 1282.6
+    },
+    "lifecycle": {
+     "wal_bytes": 3275736,
+     "writes": 1989,
+     "wal_bytes_per_write": 1646.9
+    },
+    "problems": []
+   }
+  },
+  {
+   "rps": 14.193601572669287,
+   "p50_ms": 70.273822,
+   "p99_ms": 74.5386,
+   "requests": 213,
+   "non_2xx": 0,
+   "ok": 213,
+   "errors": 0,
+   "size_per_request": 44248,
+   "warm": {
+    "rps": 14.22635013997884,
+    "p50_ms": 70.00402899999999,
+    "p99_ms": 82.546327,
+    "requests": 72,
+    "non_2xx": 0,
+    "ok": 72,
+    "errors": 0,
+    "size_per_request": 44248
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-pgt-list-c1-r2.json",
+    "timed": "timed-alerta-4x4-pgb-pgt-list-c1-r2.json"
+   },
+   "arm": "alerta-4x4-pgb-pgt",
+   "case": "list",
+   "c": 1,
+   "rep": 2,
+   "db": "bench_read_alerta_4x4_pgb_pgt",
+   "wall_s": 15.011629429999857,
+   "server_cpu_s": 1.68,
+   "postgres_cpu_s": 36.97,
+   "pg_sessions": 0,
+   "pg_commits": 3384,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 15.887323943661972,
+   "server_cpu_ms_per_request": 7.887323943661972,
+   "postgres_cpu_ms_per_request": 173.56807511737088
+  },
+  {
+   "rps": 21.797293543498824,
+   "p50_ms": 346.431394,
+   "p99_ms": 585.071586,
+   "requests": 331,
+   "non_2xx": 0,
+   "ok": 331,
+   "errors": 0,
+   "size_per_request": 44248,
+   "warm": {
+    "rps": 21.019609478121808,
+    "p50_ms": 354.359031,
+    "p99_ms": 586.105051,
+    "requests": 109,
+    "non_2xx": 0,
+    "ok": 109,
+    "errors": 0,
+    "size_per_request": 44248
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-pgt-list-c8-r2.json",
+    "timed": "timed-alerta-4x4-pgb-pgt-list-c8-r2.json"
+   },
+   "arm": "alerta-4x4-pgb-pgt",
+   "case": "list",
+   "c": 8,
+   "rep": 2,
+   "db": "bench_read_alerta_4x4_pgb_pgt",
+   "wall_s": 15.190269753000166,
+   "server_cpu_s": 3.6,
+   "postgres_cpu_s": 56.32,
+   "pg_sessions": 0,
+   "pg_commits": 3524,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 10.646525679758309,
+   "server_cpu_ms_per_request": 10.876132930513595,
+   "postgres_cpu_ms_per_request": 170.1510574018127
+  },
+  {
+   "rps": 22.535082119273778,
+   "p50_ms": 44.393494,
+   "p99_ms": 49.843144,
+   "requests": 339,
+   "non_2xx": 0,
+   "ok": 339,
+   "errors": 0,
+   "size_per_request": 210,
+   "warm": {
+    "rps": 22.78694448448617,
+    "p50_ms": 44.037261,
+    "p99_ms": 45.973026,
+    "requests": 114,
+    "non_2xx": 0,
+    "ok": 114,
+    "errors": 0,
+    "size_per_request": 210
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-pgt-count-c1-r2.json",
+    "timed": "timed-alerta-4x4-pgb-pgt-count-c1-r2.json"
+   },
+   "arm": "alerta-4x4-pgb-pgt",
+   "case": "count",
+   "c": 1,
+   "rep": 2,
+   "db": "bench_read_alerta_4x4_pgb_pgt",
+   "wall_s": 15.048082098000123,
+   "server_cpu_s": 1.86,
+   "postgres_cpu_s": 12.93,
+   "pg_sessions": 0,
+   "pg_commits": 1411,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 4.162241887905605,
+   "server_cpu_ms_per_request": 5.486725663716814,
+   "postgres_cpu_ms_per_request": 38.14159292035398
+  },
+  {
+   "rps": 84.60600029699732,
+   "p50_ms": 94.816569,
+   "p99_ms": 134.00356,
+   "requests": 1275,
+   "non_2xx": 0,
+   "ok": 1275,
+   "errors": 0,
+   "size_per_request": 210,
+   "warm": {
+    "rps": 84.81200376513895,
+    "p50_ms": 93.443501,
+    "p99_ms": 132.24930700000002,
+    "requests": 429,
+    "non_2xx": 0,
+    "ok": 429,
+    "errors": 0,
+    "size_per_request": 210
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-pgt-count-c8-r2.json",
+    "timed": "timed-alerta-4x4-pgb-pgt-count-c8-r2.json"
+   },
+   "arm": "alerta-4x4-pgb-pgt",
+   "case": "count",
+   "c": 8,
+   "rep": 2,
+   "db": "bench_read_alerta_4x4_pgb_pgt",
+   "wall_s": 15.075063980000095,
+   "server_cpu_s": 9.23,
+   "postgres_cpu_s": 48.55,
+   "pg_sessions": 0,
+   "pg_commits": 5129,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 4.022745098039215,
+   "server_cpu_ms_per_request": 7.23921568627451,
+   "postgres_cpu_ms_per_request": 38.07843137254902
+  },
+  {
+   "rps": 35.085459658688755,
+   "p50_ms": 29.738514000000002,
+   "p99_ms": 32.498051,
+   "requests": 527,
+   "non_2xx": 0,
+   "ok": 527,
+   "errors": 0,
+   "size_per_request": 1228,
+   "warm": {
+    "rps": 32.116461089418664,
+    "p50_ms": 30.65265,
+    "p99_ms": 36.142878,
+    "requests": 161,
+    "non_2xx": 0,
+    "ok": 161,
+    "errors": 0,
+    "size_per_request": 1227
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-pgt-write-dup-c1-r2.json",
+    "timed": "timed-alerta-4x4-pgb-pgt-write-dup-c1-r2.json"
+   },
+   "persisted": {
+    "prime_id": "a6e96778-46aa-49c5-a11e-0ab5713d5144",
+    "problems": [],
+    "dup_before": 161,
+    "wal_before": {
+     "lsn": "0/90013140",
+     "redo_lsn": "0/8FF431F8",
+     "checkpoints": 19
+    },
+    "dup_after": 688,
+    "wal_after": {
+     "lsn": "0/9007E548",
+     "redo_lsn": "0/8FF431F8",
+     "checkpoints": 19
+    },
+    "ok": true
+   },
+   "arm": "alerta-4x4-pgb-pgt",
+   "case": "write-dup",
+   "c": 1,
+   "rep": 2,
+   "db": "bench_write_alerta_4x4_pgb_pgt_r2_c1",
+   "wall_s": 15.025314093000134,
+   "server_cpu_s": 3.09,
+   "postgres_cpu_s": 11.1,
+   "pg_sessions": 0,
+   "pg_commits": 3397,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 6.445920303605313,
+   "server_cpu_ms_per_request": 5.863377609108159,
+   "postgres_cpu_ms_per_request": 21.062618595825427,
+   "pgtune": {
+    "arm": "alerta-4x4-pgb-pgt",
+    "c": 1,
+    "rep": 2,
+    "db": "bench_write_alerta_4x4_pgb_pgt_r2_c1",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 2066,
+      "hot": 1990,
+      "dead": 77,
+      "hot_share": 0.963
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 689,
+      "hot": 689,
+      "dead": 45,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 689,
+      "hot": 689,
+      "dead": 28,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 439304,
+     "writes": 527,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 833.6
+    },
+    "lifecycle": {
+     "wal_bytes": 1290880,
+     "writes": 689,
+     "wal_bytes_per_write": 1873.6
+    },
+    "problems": []
+   }
+  },
+  {
+   "rps": 106.55869243218758,
+   "p50_ms": 72.827133,
+   "p99_ms": 125.08306599999999,
+   "requests": 1605,
+   "non_2xx": 0,
+   "ok": 1605,
+   "errors": 0,
+   "size_per_request": 1228,
+   "warm": {
+    "rps": 99.44257973967247,
+    "p50_ms": 75.415563,
+    "p99_ms": 184.945797,
+    "requests": 503,
+    "non_2xx": 0,
+    "ok": 503,
+    "errors": 0,
+    "size_per_request": 1227
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-pgt-write-dup-c8-r2.json",
+    "timed": "timed-alerta-4x4-pgb-pgt-write-dup-c8-r2.json"
+   },
+   "persisted": {
+    "prime_id": "20176328-a95c-403d-9fff-2fb05b46aabd",
+    "problems": [],
+    "dup_before": 503,
+    "wal_before": {
+     "lsn": "0/901DBF50",
+     "redo_lsn": "0/9007E548",
+     "checkpoints": 20
+    },
+    "dup_after": 2108,
+    "wal_after": {
+     "lsn": "0/90396930",
+     "redo_lsn": "0/9007E548",
+     "checkpoints": 20
+    },
+    "ok": true
+   },
+   "arm": "alerta-4x4-pgb-pgt",
+   "case": "write-dup",
+   "c": 8,
+   "rep": 2,
+   "db": "bench_write_alerta_4x4_pgb_pgt_r2_c8",
+   "wall_s": 15.067339262000132,
+   "server_cpu_s": 12.56,
+   "postgres_cpu_s": 31.75,
+   "pg_sessions": 0,
+   "pg_commits": 11177,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 6.9638629283489095,
+   "server_cpu_ms_per_request": 7.825545171339564,
+   "postgres_cpu_ms_per_request": 19.781931464174455,
+   "pgtune": {
+    "arm": "alerta-4x4-pgb-pgt",
+    "c": 8,
+    "rep": 2,
+    "db": "bench_write_alerta_4x4_pgb_pgt_r2_c8",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 6326,
+      "hot": 5682,
+      "dead": 942,
+      "hot_share": 0.898
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 2109,
+      "hot": 2109,
+      "dead": 76,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 2109,
+      "hot": 2109,
+      "dead": 121,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 1812960,
+     "writes": 1605,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 1129.6
+    },
+    "lifecycle": {
+     "wal_bytes": 3244824,
+     "writes": 2109,
+     "wal_bytes_per_write": 1538.6
+    },
+    "problems": []
+   }
+  },
+  {
+   "rps": 14.86049496143913,
+   "p50_ms": 67.057812,
+   "p99_ms": 69.795468,
+   "requests": 223,
+   "non_2xx": 0,
+   "ok": 223,
+   "errors": 0,
+   "size_per_request": 44248,
+   "warm": {
+    "rps": 14.586464563140957,
+    "p50_ms": 68.208407,
+    "p99_ms": 80.986292,
+    "requests": 73,
+    "non_2xx": 0,
+    "ok": 73,
+    "errors": 0,
+    "size_per_request": 44248
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-idx-pgt-list-c1-r2.json",
+    "timed": "timed-alerta-4x4-pgb-idx-pgt-list-c1-r2.json"
+   },
+   "arm": "alerta-4x4-pgb-idx-pgt",
+   "case": "list",
+   "c": 1,
+   "rep": 2,
+   "db": "bench_read_alerta_4x4_pgb_idx_pgt",
+   "wall_s": 15.011065664999933,
+   "server_cpu_s": 1.68,
+   "postgres_cpu_s": 37.22,
+   "pg_sessions": 0,
+   "pg_commits": 3530,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 15.829596412556054,
+   "server_cpu_ms_per_request": 7.533632286995516,
+   "postgres_cpu_ms_per_request": 166.90582959641256
+  },
+  {
+   "rps": 22.354634013000112,
+   "p50_ms": 337.56926300000003,
+   "p99_ms": 597.348467,
+   "requests": 340,
+   "non_2xx": 0,
+   "ok": 340,
+   "errors": 0,
+   "size_per_request": 44248,
+   "warm": {
+    "rps": 22.27020267457872,
+    "p50_ms": 338.587359,
+    "p99_ms": 540.0544779999999,
+    "requests": 115,
+    "non_2xx": 0,
+    "ok": 115,
+    "errors": 0,
+    "size_per_request": 44248
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-idx-pgt-list-c8-r2.json",
+    "timed": "timed-alerta-4x4-pgb-idx-pgt-list-c8-r2.json"
+   },
+   "arm": "alerta-4x4-pgb-idx-pgt",
+   "case": "list",
+   "c": 8,
+   "rep": 2,
+   "db": "bench_read_alerta_4x4_pgb_idx_pgt",
+   "wall_s": 15.214101036999864,
+   "server_cpu_s": 3.63,
+   "postgres_cpu_s": 56.51,
+   "pg_sessions": 0,
+   "pg_commits": 3637,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 10.697058823529412,
+   "server_cpu_ms_per_request": 10.676470588235293,
+   "postgres_cpu_ms_per_request": 166.2058823529412
+  },
+  {
+   "rps": 23.621750825570558,
+   "p50_ms": 42.759784,
+   "p99_ms": 45.961054000000004,
+   "requests": 355,
+   "non_2xx": 0,
+   "ok": 355,
+   "errors": 0,
+   "size_per_request": 210,
+   "warm": {
+    "rps": 22.579013800149365,
+    "p50_ms": 43.954525000000004,
+    "p99_ms": 47.717052,
+    "requests": 113,
+    "non_2xx": 0,
+    "ok": 113,
+    "errors": 0,
+    "size_per_request": 210
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-idx-pgt-count-c1-r2.json",
+    "timed": "timed-alerta-4x4-pgb-idx-pgt-count-c1-r2.json"
+   },
+   "arm": "alerta-4x4-pgb-idx-pgt",
+   "case": "count",
+   "c": 1,
+   "rep": 2,
+   "db": "bench_read_alerta_4x4_pgb_idx_pgt",
+   "wall_s": 15.03331907100005,
+   "server_cpu_s": 1.84,
+   "postgres_cpu_s": 12.92,
+   "pg_sessions": 0,
+   "pg_commits": 1461,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 4.115492957746479,
+   "server_cpu_ms_per_request": 5.183098591549296,
+   "postgres_cpu_ms_per_request": 36.394366197183096
+  },
+  {
+   "rps": 91.56524589778228,
+   "p50_ms": 87.998563,
+   "p99_ms": 128.01958499999998,
+   "requests": 1379,
+   "non_2xx": 0,
+   "ok": 1379,
+   "errors": 0,
+   "size_per_request": 210,
+   "warm": {
+    "rps": 89.55624785273787,
+    "p50_ms": 88.986887,
+    "p99_ms": 124.463662,
+    "requests": 452,
+    "non_2xx": 0,
+    "ok": 452,
+    "errors": 0,
+    "size_per_request": 210
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-idx-pgt-count-c8-r2.json",
+    "timed": "timed-alerta-4x4-pgb-idx-pgt-count-c8-r2.json"
+   },
+   "arm": "alerta-4x4-pgb-idx-pgt",
+   "case": "count",
+   "c": 8,
+   "rep": 2,
+   "db": "bench_read_alerta_4x4_pgb_idx_pgt",
+   "wall_s": 15.065406221000103,
+   "server_cpu_s": 9.49,
+   "postgres_cpu_s": 48.36,
+   "pg_sessions": 0,
+   "pg_commits": 5618,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 4.073966642494561,
+   "server_cpu_ms_per_request": 6.881798404641044,
+   "postgres_cpu_ms_per_request": 35.068890500362585
+  },
+  {
+   "rps": 126.18939941678148,
+   "p50_ms": 8.2821,
+   "p99_ms": 8.961467,
+   "requests": 1894,
+   "non_2xx": 0,
+   "ok": 1894,
+   "errors": 0,
+   "size_per_request": 1228,
+   "warm": {
+    "rps": 132.1646023932321,
+    "p50_ms": 7.255167,
+    "p99_ms": 8.955767,
+    "requests": 662,
+    "non_2xx": 0,
+    "ok": 662,
+    "errors": 0,
+    "size_per_request": 1227
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-idx-pgt-write-dup-c1-r2.json",
+    "timed": "timed-alerta-4x4-pgb-idx-pgt-write-dup-c1-r2.json"
+   },
+   "persisted": {
+    "prime_id": "3b973966-b19d-403f-b31d-241c2880536c",
+    "problems": [],
+    "dup_before": 662,
+    "wal_before": {
+     "lsn": "0/905E3D00",
+     "redo_lsn": "0/904AF5B0",
+     "checkpoints": 21
+    },
+    "dup_after": 2556,
+    "wal_after": {
+     "lsn": "0/90750950",
+     "redo_lsn": "0/904AF5B0",
+     "checkpoints": 21
+    },
+    "ok": true
+   },
+   "arm": "alerta-4x4-pgb-idx-pgt",
+   "case": "write-dup",
+   "c": 1,
+   "rep": 2,
+   "db": "bench_write_alerta_4x4_pgb_idx_pgt_r2_c1",
+   "wall_s": 15.014083200999949,
+   "server_cpu_s": 10.28,
+   "postgres_cpu_s": 2.97,
+   "pg_sessions": 0,
+   "pg_commits": 12381,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 6.536958817317846,
+   "server_cpu_ms_per_request": 5.42766631467793,
+   "postgres_cpu_ms_per_request": 1.5681098204857444,
+   "pgtune": {
+    "arm": "alerta-4x4-pgb-idx-pgt",
+    "c": 1,
+    "rep": 2,
+    "db": "bench_write_alerta_4x4_pgb_idx_pgt_r2_c1",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 7670,
+      "hot": 7594,
+      "dead": 83,
+      "hot_share": 0.99
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 2557,
+      "hot": 2557,
+      "dead": 22,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 2557,
+      "hot": 2557,
+      "dead": 27,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 1494096,
+     "writes": 1894,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 788.9
+    },
+    "lifecycle": {
+     "wal_bytes": 2757328,
+     "writes": 2557,
+     "wal_bytes_per_write": 1078.3
+    },
+    "problems": []
+   }
+  },
+  {
+   "rps": 312.70932286199513,
+   "p50_ms": 25.265961,
+   "p99_ms": 38.865966,
+   "requests": 4696,
+   "non_2xx": 0,
+   "ok": 4696,
+   "errors": 0,
+   "size_per_request": 1229,
+   "warm": {
+    "rps": 322.42551061602416,
+    "p50_ms": 24.329476999999997,
+    "p99_ms": 38.521221000000004,
+    "requests": 1617,
+    "non_2xx": 0,
+    "ok": 1617,
+    "errors": 0,
+    "size_per_request": 1228
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-idx-pgt-write-dup-c8-r2.json",
+    "timed": "timed-alerta-4x4-pgb-idx-pgt-write-dup-c8-r2.json"
+   },
+   "persisted": {
+    "prime_id": "5003f5fe-4bb6-4070-aa31-d93a98f2ac99",
+    "problems": [],
+    "dup_before": 1617,
+    "wal_before": {
+     "lsn": "0/909B0E58",
+     "redo_lsn": "0/90750950",
+     "checkpoints": 22
+    },
+    "dup_after": 6313,
+    "wal_after": {
+     "lsn": "0/90E7B068",
+     "redo_lsn": "0/90750950",
+     "checkpoints": 22
+    },
+    "ok": true
+   },
+   "arm": "alerta-4x4-pgb-idx-pgt",
+   "case": "write-dup",
+   "c": 8,
+   "rep": 2,
+   "db": "bench_write_alerta_4x4_pgb_idx_pgt_r2_c8",
+   "wall_s": 15.023350961000006,
+   "server_cpu_s": 38.22,
+   "postgres_cpu_s": 10.34,
+   "pg_sessions": 0,
+   "pg_commits": 33224,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 7.07495741056218,
+   "server_cpu_ms_per_request": 8.138841567291312,
+   "postgres_cpu_ms_per_request": 2.2018739352640546,
+   "pgtune": {
+    "arm": "alerta-4x4-pgb-idx-pgt",
+    "c": 8,
+    "rep": 2,
+    "db": "bench_write_alerta_4x4_pgb_idx_pgt_r2_c8",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 18941,
+      "hot": 18029,
+      "dead": 1105,
+      "hot_share": 0.952
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 6314,
+      "hot": 6310,
+      "dead": 176,
+      "hot_share": 0.999
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 6314,
+      "hot": 6311,
+      "dead": 152,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 5022224,
+     "writes": 4696,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 1069.5
+    },
+    "lifecycle": {
+     "wal_bytes": 7513672,
+     "writes": 6314,
+     "wal_bytes_per_write": 1190.0
+    },
+    "problems": []
+   }
+  },
+  {
+   "rps": 18.87781504478192,
+   "p50_ms": 52.909997,
+   "p99_ms": 54.448903,
+   "requests": 284,
+   "non_2xx": 0,
+   "ok": 284,
+   "errors": 0,
+   "size_per_request": 44248,
+   "warm": {
+    "rps": 19.511557652460265,
+    "p50_ms": 50.697747,
+    "p99_ms": 65.05165000000001,
+    "requests": 98,
+    "non_2xx": 0,
+    "ok": 98,
+    "errors": 0,
+    "size_per_request": 44248
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-idx-pgt-list-c1-r2.json",
+    "timed": "timed-alerta-4x4-pgb-safe-idx-pgt-list-c1-r2.json"
+   },
+   "arm": "alerta-4x4-pgb-safe-idx-pgt",
+   "case": "list",
+   "c": 1,
+   "rep": 2,
+   "db": "bench_read_alerta_4x4_pgb_safe_idx_pgt",
+   "wall_s": 15.049071000999902,
+   "server_cpu_s": 1.1,
+   "postgres_cpu_s": 39.06,
+   "pg_sessions": 0,
+   "pg_commits": 2828,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 9.95774647887324,
+   "server_cpu_ms_per_request": 3.8732394366197185,
+   "postgres_cpu_ms_per_request": 137.53521126760563
+  },
+  {
+   "rps": 27.357689330090274,
+   "p50_ms": 268.405956,
+   "p99_ms": 534.9667139999999,
+   "requests": 415,
+   "non_2xx": 0,
+   "ok": 415,
+   "errors": 0,
+   "size_per_request": 44248,
+   "warm": {
+    "rps": 27.334504659636824,
+    "p50_ms": 266.38026199999996,
+    "p99_ms": 497.578566,
+    "requests": 141,
+    "non_2xx": 0,
+    "ok": 141,
+    "errors": 0,
+    "size_per_request": 44248
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-idx-pgt-list-c8-r2.json",
+    "timed": "timed-alerta-4x4-pgb-safe-idx-pgt-list-c8-r2.json"
+   },
+   "arm": "alerta-4x4-pgb-safe-idx-pgt",
+   "case": "list",
+   "c": 8,
+   "rep": 2,
+   "db": "bench_read_alerta_4x4_pgb_safe_idx_pgt",
+   "wall_s": 15.174264540999957,
+   "server_cpu_s": 2.21,
+   "postgres_cpu_s": 57.79,
+   "pg_sessions": 0,
+   "pg_commits": 2651,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 6.387951807228916,
+   "server_cpu_ms_per_request": 5.325301204819277,
+   "postgres_cpu_ms_per_request": 139.25301204819277
+  },
+  {
+   "rps": 65.59931255063886,
+   "p50_ms": 14.485701,
+   "p99_ms": 18.617257000000002,
+   "requests": 985,
+   "non_2xx": 0,
+   "ok": 985,
+   "errors": 0,
+   "size_per_request": 210,
+   "warm": {
+    "rps": 58.99108340845901,
+    "p50_ms": 16.987519,
+    "p99_ms": 18.297454000000002,
+    "requests": 296,
+    "non_2xx": 0,
+    "ok": 296,
+    "errors": 0,
+    "size_per_request": 210
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-idx-pgt-count-c1-r2.json",
+    "timed": "timed-alerta-4x4-pgb-safe-idx-pgt-count-c1-r2.json"
+   },
+   "arm": "alerta-4x4-pgb-safe-idx-pgt",
+   "case": "count",
+   "c": 1,
+   "rep": 2,
+   "db": "bench_read_alerta_4x4_pgb_safe_idx_pgt",
+   "wall_s": 15.020375680999905,
+   "server_cpu_s": 1.26,
+   "postgres_cpu_s": 36.51,
+   "pg_sessions": 0,
+   "pg_commits": 5923,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 6.013197969543147,
+   "server_cpu_ms_per_request": 1.2791878172588833,
+   "postgres_cpu_ms_per_request": 37.065989847715734
+  },
+  {
+   "rps": 119.79968145281987,
+   "p50_ms": 64.298473,
+   "p99_ms": 108.619574,
+   "requests": 1802,
+   "non_2xx": 0,
+   "ok": 1802,
+   "errors": 0,
+   "size_per_request": 210,
+   "warm": {
+    "rps": 117.11737692270356,
+    "p50_ms": 66.379545,
+    "p99_ms": 108.809708,
+    "requests": 591,
+    "non_2xx": 0,
+    "ok": 591,
+    "errors": 0,
+    "size_per_request": 210
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-idx-pgt-count-c8-r2.json",
+    "timed": "timed-alerta-4x4-pgb-safe-idx-pgt-count-c8-r2.json"
+   },
+   "arm": "alerta-4x4-pgb-safe-idx-pgt",
+   "case": "count",
+   "c": 8,
+   "rep": 2,
+   "db": "bench_read_alerta_4x4_pgb_safe_idx_pgt",
+   "wall_s": 15.046853112999997,
+   "server_cpu_s": 2.8,
+   "postgres_cpu_s": 56.24,
+   "pg_sessions": 0,
+   "pg_commits": 7888,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 4.377358490566038,
+   "server_cpu_ms_per_request": 1.5538290788013318,
+   "postgres_cpu_ms_per_request": 31.20976692563818
+  },
+  {
+   "rps": 245.19115397006098,
+   "p50_ms": 3.8624509999999996,
+   "p99_ms": 5.71877,
+   "requests": 3679,
+   "non_2xx": 0,
+   "ok": 3679,
+   "errors": 0,
+   "size_per_request": 1229,
+   "warm": {
+    "rps": 235.59940199908,
+    "p50_ms": 4.406428,
+    "p99_ms": 6.119096,
+    "requests": 1179,
+    "non_2xx": 0,
+    "ok": 1179,
+    "errors": 0,
+    "size_per_request": 1228
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-idx-pgt-write-dup-c1-r2.json",
+    "timed": "timed-alerta-4x4-pgb-safe-idx-pgt-write-dup-c1-r2.json"
+   },
+   "persisted": {
+    "prime_id": "b1b46a00-2017-4082-86fa-a3e18e6a5639",
+    "problems": [],
+    "dup_before": 1179,
+    "wal_before": {
+     "lsn": "0/911BC780",
+     "redo_lsn": "0/9100B838",
+     "checkpoints": 23
+    },
+    "dup_after": 4858,
+    "wal_after": {
+     "lsn": "0/91480950",
+     "redo_lsn": "0/9100B838",
+     "checkpoints": 23
+    },
+    "ok": true
+   },
+   "arm": "alerta-4x4-pgb-safe-idx-pgt",
+   "case": "write-dup",
+   "c": 1,
+   "rep": 2,
+   "db": "bench_write_alerta_4x4_pgb_safe_idx_pgt_r2_c1",
+   "wall_s": 15.009977405999962,
+   "server_cpu_s": 6.64,
+   "postgres_cpu_s": 5.3,
+   "pg_sessions": 0,
+   "pg_commits": 17490,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 4.75400924164175,
+   "server_cpu_ms_per_request": 1.8048382712693667,
+   "postgres_cpu_ms_per_request": 1.4406088611035608,
+   "pgtune": {
+    "arm": "alerta-4x4-pgb-safe-idx-pgt",
+    "c": 1,
+    "rep": 2,
+    "db": "bench_write_alerta_4x4_pgb_safe_idx_pgt_r2_c1",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 14576,
+      "hot": 14500,
+      "dead": 77,
+      "hot_share": 0.995
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 4859,
+      "hot": 4859,
+      "dead": 23,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 4859,
+      "hot": 4859,
+      "dead": 19,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 2900432,
+     "writes": 3679,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 788.4
+    },
+    "lifecycle": {
+     "wal_bytes": 4673664,
+     "writes": 4859,
+     "wal_bytes_per_write": 961.9
+    },
+    "problems": []
+   }
+  },
+  {
+   "rps": 627.1298084889887,
+   "p50_ms": 12.530498,
+   "p99_ms": 18.277425,
+   "requests": 9412,
+   "non_2xx": 0,
+   "ok": 9412,
+   "errors": 0,
+   "size_per_request": 1229,
+   "warm": {
+    "rps": 618.9943708508149,
+    "p50_ms": 12.593223,
+    "p99_ms": 19.461040999999998,
+    "requests": 3100,
+    "non_2xx": 0,
+    "ok": 3100,
+    "errors": 0,
+    "size_per_request": 1228
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-idx-pgt-write-dup-c8-r2.json",
+    "timed": "timed-alerta-4x4-pgb-safe-idx-pgt-write-dup-c8-r2.json"
+   },
+   "persisted": {
+    "prime_id": "81727919-d644-41e1-b1d1-7a065893b1e8",
+    "problems": [],
+    "dup_before": 3100,
+    "wal_before": {
+     "lsn": "0/918AFD00",
+     "redo_lsn": "0/91480988",
+     "checkpoints": 24
+    },
+    "dup_after": 12512,
+    "wal_after": {
+     "lsn": "0/9229D240",
+     "redo_lsn": "0/91480988",
+     "checkpoints": 24
+    },
+    "ok": true
+   },
+   "arm": "alerta-4x4-pgb-safe-idx-pgt",
+   "case": "write-dup",
+   "c": 8,
+   "rep": 2,
+   "db": "bench_write_alerta_4x4_pgb_safe_idx_pgt_r2_c8",
+   "wall_s": 15.015123649000088,
+   "server_cpu_s": 23.14,
+   "postgres_cpu_s": 21.3,
+   "pg_sessions": 0,
+   "pg_commits": 46763,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 4.968444538886528,
+   "server_cpu_ms_per_request": 2.458563535911602,
+   "postgres_cpu_ms_per_request": 2.263068423289418,
+   "pgtune": {
+    "arm": "alerta-4x4-pgb-safe-idx-pgt",
+    "c": 8,
+    "rep": 2,
+    "db": "bench_write_alerta_4x4_pgb_safe_idx_pgt_r2_c8",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 37538,
+      "hot": 34852,
+      "dead": 2986,
+      "hot_share": 0.928
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 12513,
+      "hot": 12513,
+      "dead": 147,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 12513,
+      "hot": 12513,
+      "dead": 332,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 10409280,
+     "writes": 9412,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 1106.0
+    },
+    "lifecycle": {
+     "wal_bytes": 14796776,
+     "writes": 12513,
+     "wal_bytes_per_write": 1182.5
+    },
+    "problems": []
+   }
+  },
+  {
+   "rps": 20.225004866329105,
+   "p50_ms": 49.372391,
+   "p99_ms": 52.290203,
+   "requests": 304,
+   "non_2xx": 0,
+   "ok": 304,
+   "errors": 0,
+   "size_per_request": 44248,
+   "warm": {
+    "rps": 19.871954425755106,
+    "p50_ms": 49.250172,
+    "p99_ms": 63.406729999999996,
+    "requests": 100,
+    "non_2xx": 0,
+    "ok": 100,
+    "errors": 0,
+    "size_per_request": 44248
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-pgt-list-c1-r2.json",
+    "timed": "timed-alerta-4x4-pgb-safe-pgt-list-c1-r2.json"
+   },
+   "arm": "alerta-4x4-pgb-safe-pgt",
+   "case": "list",
+   "c": 1,
+   "rep": 2,
+   "db": "bench_read_alerta_4x4_pgb_safe_pgt",
+   "wall_s": 15.03561977000004,
+   "server_cpu_s": 1.02,
+   "postgres_cpu_s": 39.62,
+   "pg_sessions": 0,
+   "pg_commits": 3026,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 9.953947368421053,
+   "server_cpu_ms_per_request": 3.3552631578947367,
+   "postgres_cpu_ms_per_request": 130.32894736842104
+  },
+  {
+   "rps": 28.78303172423363,
+   "p50_ms": 248.467407,
+   "p99_ms": 497.119437,
+   "requests": 435,
+   "non_2xx": 0,
+   "ok": 435,
+   "errors": 0,
+   "size_per_request": 44248,
+   "warm": {
+    "rps": 28.069089825229746,
+    "p50_ms": 246.070482,
+    "p99_ms": 514.786385,
+    "requests": 146,
+    "non_2xx": 0,
+    "ok": 146,
+    "errors": 0,
+    "size_per_request": 44248
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-pgt-list-c8-r2.json",
+    "timed": "timed-alerta-4x4-pgb-safe-pgt-list-c8-r2.json"
+   },
+   "arm": "alerta-4x4-pgb-safe-pgt",
+   "case": "list",
+   "c": 8,
+   "rep": 2,
+   "db": "bench_read_alerta_4x4_pgb_safe_pgt",
+   "wall_s": 15.11778587699996,
+   "server_cpu_s": 2.1,
+   "postgres_cpu_s": 57.74,
+   "pg_sessions": 0,
+   "pg_commits": 2822,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 6.487356321839081,
+   "server_cpu_ms_per_request": 4.827586206896552,
+   "postgres_cpu_ms_per_request": 132.73563218390805
+  },
+  {
+   "rps": 69.27103258756624,
+   "p50_ms": 14.320196000000001,
+   "p99_ms": 16.173724,
+   "requests": 1040,
+   "non_2xx": 0,
+   "ok": 1040,
+   "errors": 0,
+   "size_per_request": 210,
+   "warm": {
+    "rps": 72.67116106599838,
+    "p50_ms": 13.659795,
+    "p99_ms": 15.407378,
+    "requests": 364,
+    "non_2xx": 0,
+    "ok": 364,
+    "errors": 0,
+    "size_per_request": 210
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-pgt-count-c1-r2.json",
+    "timed": "timed-alerta-4x4-pgb-safe-pgt-count-c1-r2.json"
+   },
+   "arm": "alerta-4x4-pgb-safe-pgt",
+   "case": "count",
+   "c": 1,
+   "rep": 2,
+   "db": "bench_read_alerta_4x4_pgb_safe_pgt",
+   "wall_s": 15.018294811000032,
+   "server_cpu_s": 1.26,
+   "postgres_cpu_s": 36.53,
+   "pg_sessions": 0,
+   "pg_commits": 6272,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 6.030769230769231,
+   "server_cpu_ms_per_request": 1.2115384615384615,
+   "postgres_cpu_ms_per_request": 35.125
+  },
+  {
+   "rps": 119.20267414718383,
+   "p50_ms": 63.87508999999999,
+   "p99_ms": 112.28953,
+   "requests": 1794,
+   "non_2xx": 0,
+   "ok": 1794,
+   "errors": 0,
+   "size_per_request": 210,
+   "warm": {
+    "rps": 115.22813582831759,
+    "p50_ms": 66.409878,
+    "p99_ms": 118.346266,
+    "requests": 580,
+    "non_2xx": 0,
+    "ok": 580,
+    "errors": 0,
+    "size_per_request": 210
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-pgt-count-c8-r2.json",
+    "timed": "timed-alerta-4x4-pgb-safe-pgt-count-c8-r2.json"
+   },
+   "arm": "alerta-4x4-pgb-safe-pgt",
+   "case": "count",
+   "c": 8,
+   "rep": 2,
+   "db": "bench_read_alerta_4x4_pgb_safe_pgt",
+   "wall_s": 15.054991156000142,
+   "server_cpu_s": 2.78,
+   "postgres_cpu_s": 56.24,
+   "pg_sessions": 0,
+   "pg_commits": 7799,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 4.34726867335563,
+   "server_cpu_ms_per_request": 1.5496098104793756,
+   "postgres_cpu_ms_per_request": 31.348940914158305
+  },
+  {
+   "rps": 51.21634432411926,
+   "p50_ms": 18.276038,
+   "p99_ms": 28.279022,
+   "requests": 769,
+   "non_2xx": 0,
+   "ok": 769,
+   "errors": 0,
+   "size_per_request": 1228,
+   "warm": {
+    "rps": 44.95232207479038,
+    "p50_ms": 19.875594,
+    "p99_ms": 31.877837999999997,
+    "requests": 225,
+    "non_2xx": 0,
+    "ok": 225,
+    "errors": 0,
+    "size_per_request": 1227
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-pgt-write-dup-c1-r2.json",
+    "timed": "timed-alerta-4x4-pgb-safe-pgt-write-dup-c1-r2.json"
+   },
+   "persisted": {
+    "prime_id": "0414489c-8b00-4085-bc5c-e9dd7a8eb3a3",
+    "problems": [],
+    "dup_before": 225,
+    "wal_before": {
+     "lsn": "0/92573F68",
+     "redo_lsn": "0/92497B20",
+     "checkpoints": 25
+    },
+    "dup_after": 994,
+    "wal_after": {
+     "lsn": "0/92608620",
+     "redo_lsn": "0/92497B20",
+     "checkpoints": 25
+    },
+    "ok": true
+   },
+   "arm": "alerta-4x4-pgb-safe-pgt",
+   "case": "write-dup",
+   "c": 1,
+   "rep": 2,
+   "db": "bench_write_alerta_4x4_pgb_safe_pgt_r2_c1",
+   "wall_s": 15.01951696299966,
+   "server_cpu_s": 1.64,
+   "postgres_cpu_s": 12.08,
+   "pg_sessions": 0,
+   "pg_commits": 3643,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 4.7373211963589075,
+   "server_cpu_ms_per_request": 2.1326397919375815,
+   "postgres_cpu_ms_per_request": 15.708712613784135,
+   "pgtune": {
+    "arm": "alerta-4x4-pgb-safe-pgt",
+    "c": 1,
+    "rep": 2,
+    "db": "bench_write_alerta_4x4_pgb_safe_pgt_r2_c1",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 2984,
+      "hot": 2908,
+      "dead": 77,
+      "hot_share": 0.975
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 995,
+      "hot": 995,
+      "dead": 20,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 995,
+      "hot": 995,
+      "dead": 5,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 607928,
+     "writes": 769,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 790.5
+    },
+    "lifecycle": {
+     "wal_bytes": 1509936,
+     "writes": 995,
+     "wal_bytes_per_write": 1517.5
+    },
+    "problems": []
+   }
+  },
+  {
+   "rps": 121.79636836985654,
+   "p50_ms": 65.008152,
+   "p99_ms": 110.995705,
+   "requests": 1833,
+   "non_2xx": 0,
+   "ok": 1833,
+   "errors": 0,
+   "size_per_request": 1228,
+   "warm": {
+    "rps": 113.4880468407673,
+    "p50_ms": 65.01333600000001,
+    "p99_ms": 211.42253499999998,
+    "requests": 573,
+    "non_2xx": 0,
+    "ok": 573,
+    "errors": 0,
+    "size_per_request": 1227
+   },
+   "raw": {
+    "warm": "warm-alerta-4x4-pgb-safe-pgt-write-dup-c8-r2.json",
+    "timed": "timed-alerta-4x4-pgb-safe-pgt-write-dup-c8-r2.json"
+   },
+   "persisted": {
+    "prime_id": "235c96d0-979e-4e81-a905-e3198908b153",
+    "problems": [],
+    "dup_before": 573,
+    "wal_before": {
+     "lsn": "0/92761DB8",
+     "redo_lsn": "0/92608620",
+     "checkpoints": 26
+    },
+    "dup_after": 2406,
+    "wal_after": {
+     "lsn": "0/9296C928",
+     "redo_lsn": "0/92608620",
+     "checkpoints": 26
+    },
+    "ok": true
+   },
+   "arm": "alerta-4x4-pgb-safe-pgt",
+   "case": "write-dup",
+   "c": 8,
+   "rep": 2,
+   "db": "bench_write_alerta_4x4_pgb_safe_pgt_r2_c8",
+   "wall_s": 15.054847749000146,
+   "server_cpu_s": 4.79,
+   "postgres_cpu_s": 34.52,
+   "pg_sessions": 0,
+   "pg_commits": 9182,
+   "server_alive": true,
+   "valid": true,
+   "sessions_per_request": 0.0,
+   "commits_per_request": 5.009274413529733,
+   "server_cpu_ms_per_request": 2.613202400436443,
+   "postgres_cpu_ms_per_request": 18.832515002727767,
+   "pgtune": {
+    "arm": "alerta-4x4-pgb-safe-pgt",
+    "c": 8,
+    "rep": 2,
+    "db": "bench_write_alerta_4x4_pgb_safe_pgt_r2_c8",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 7220,
+      "hot": 6552,
+      "dead": 888,
+      "hot_share": 0.907
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 2407,
+      "hot": 2407,
+      "dead": 39,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 2407,
+      "hot": 2407,
+      "dead": 29,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 2141040,
+     "writes": 1833,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 1168.1
+    },
+    "lifecycle": {
+     "wal_bytes": 3555896,
+     "writes": 2407,
+     "wal_bytes_per_write": 1477.3
+    },
+    "problems": []
+   }
+  }
+ ],
+ "mixed_arms": [],
+ "mixed_cells": [],
+ "mixed": {
+  "writers": 8,
+  "readers": 16,
+  "identities_per_writer": 1000,
+  "arm_env": {
+   "alrust-p16": {
+    "ALRUST_DB_MAX_CONNECTIONS": "16",
+    "ALRUST_KEY_USAGE_IMMEDIATE": "false"
+   },
+   "alrust-p32": {
+    "ALRUST_DB_MAX_CONNECTIONS": "32",
+    "ALRUST_KEY_USAGE_IMMEDIATE": "false"
+   },
+   "alrust-p64": {
+    "ALRUST_DB_MAX_CONNECTIONS": "64",
+    "ALRUST_KEY_USAGE_IMMEDIATE": "false"
+   },
+   "alrust-p16-immediate": {
+    "ALRUST_DB_MAX_CONNECTIONS": "16",
+    "ALRUST_KEY_USAGE_IMMEDIATE": "true"
+   }
+  }
+ },
+ "env": {
+  "postgres": "PostgreSQL 18.7 (Ubuntu 18.7-1.pgdg24.04+2) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+  "pgbouncer": "PgBouncer 1.26.1\nlibevent 2.1.12-stable\nadns: c-ares 1.27.0\ntls: OpenSSL 3.0.13 30 Jan 2024\nsystemd: yes",
+  "oha": "oha 1.17.0",
+  "alrust_sha256": "3fd64c788e3f13da2476683267a1140d3cb2c735065976caff22e8ae81576c97",
+  "alrust_commit": "acd963188ac7818fcbb21ad12c8c20e302ac081d",
+  "alerta_commit": "f4312727783dad64198b62ed778bbca98a5144a3",
+  "runner": "Linux ubuntu24 20261116.133.1",
+  "headers": {
+   "Authorization": "Key <bench key>",
+   "Accept": "application/json",
+   "Accept-Encoding": "identity"
+  }
+ },
+ "seed": {
+  "alerts": 1000
+ },
+ "pgtune": {
+  "rows": 100000,
+  "seed_alerts": 100000,
+  "shape": {
+   "alerts": 100000,
+   "uuid_ids": 100000,
+   "own_last_receive_id": 100000,
+   "history_ids_own": 100000,
+   "history_entries": 100000,
+   "newest_50_seeded": 50,
+   "table_bytes": 76054528
+  },
+  "seed_problems": [],
+  "databases": {
+   "bench_pgtune_plan": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_read_alerta_4x4_pgb_pgt": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_write_alerta_4x4_pgb_pgt_r0_c1": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_write_alerta_4x4_pgb_pgt_r0_c8": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_write_alerta_4x4_pgb_pgt_r1_c1": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_write_alerta_4x4_pgb_pgt_r1_c8": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_write_alerta_4x4_pgb_pgt_r2_c1": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_write_alerta_4x4_pgb_pgt_r2_c8": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_read_alerta_4x4_pgb_idx_pgt": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE INDEX alerts_id_pattern ON public.alerts USING btree (id text_pattern_ops)",
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_write_alerta_4x4_pgb_idx_pgt_r0_c1": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE INDEX alerts_id_pattern ON public.alerts USING btree (id text_pattern_ops)",
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_write_alerta_4x4_pgb_idx_pgt_r0_c8": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE INDEX alerts_id_pattern ON public.alerts USING btree (id text_pattern_ops)",
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_write_alerta_4x4_pgb_idx_pgt_r1_c1": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE INDEX alerts_id_pattern ON public.alerts USING btree (id text_pattern_ops)",
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_write_alerta_4x4_pgb_idx_pgt_r1_c8": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE INDEX alerts_id_pattern ON public.alerts USING btree (id text_pattern_ops)",
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_write_alerta_4x4_pgb_idx_pgt_r2_c1": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE INDEX alerts_id_pattern ON public.alerts USING btree (id text_pattern_ops)",
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_write_alerta_4x4_pgb_idx_pgt_r2_c8": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE INDEX alerts_id_pattern ON public.alerts USING btree (id text_pattern_ops)",
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_read_alerta_4x4_pgb_safe_pgt": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_write_alerta_4x4_pgb_safe_pgt_r0_c1": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_write_alerta_4x4_pgb_safe_pgt_r0_c8": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_write_alerta_4x4_pgb_safe_pgt_r1_c1": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_write_alerta_4x4_pgb_safe_pgt_r1_c8": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_write_alerta_4x4_pgb_safe_pgt_r2_c1": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_write_alerta_4x4_pgb_safe_pgt_r2_c8": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_read_alerta_4x4_pgb_safe_idx_pgt": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE INDEX alerts_id_pattern ON public.alerts USING btree (id text_pattern_ops)",
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_write_alerta_4x4_pgb_safe_idx_pgt_r0_c1": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE INDEX alerts_id_pattern ON public.alerts USING btree (id text_pattern_ops)",
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_write_alerta_4x4_pgb_safe_idx_pgt_r0_c8": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE INDEX alerts_id_pattern ON public.alerts USING btree (id text_pattern_ops)",
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_write_alerta_4x4_pgb_safe_idx_pgt_r1_c1": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE INDEX alerts_id_pattern ON public.alerts USING btree (id text_pattern_ops)",
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_write_alerta_4x4_pgb_safe_idx_pgt_r1_c8": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE INDEX alerts_id_pattern ON public.alerts USING btree (id text_pattern_ops)",
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_write_alerta_4x4_pgb_safe_idx_pgt_r2_c1": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE INDEX alerts_id_pattern ON public.alerts USING btree (id text_pattern_ops)",
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   },
+   "bench_write_alerta_4x4_pgb_safe_idx_pgt_r2_c8": {
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+    "locale": null,
+    "id_collation": "default",
+    "alerts_indexes": [
+     "CREATE INDEX alerts_id_pattern ON public.alerts USING btree (id text_pattern_ops)",
+     "CREATE UNIQUE INDEX alerts_pkey ON public.alerts USING btree (id)",
+     "CREATE UNIQUE INDEX env_res_evt_cust_key ON public.alerts USING btree (environment, resource, event, COALESCE(customer, ''::text))"
+    ]
+   }
+  },
+  "probes": {
+   "tags_predicate_probe": "UPDATE alerts SET tags = tags WHERE id = 'd600bd0e-fe32-421c-b778-37cfb5871080' OR id LIKE 'd600bd0e-fe32-421c-b778-37cfb5871080%' RETURNING *",
+   "attributes_predicate_probe": "UPDATE alerts SET attributes = attributes WHERE id = 'd600bd0e-fe32-421c-b778-37cfb5871080' OR id LIKE 'd600bd0e-fe32-421c-b778-37cfb5871080%' RETURNING attributes",
+   "dedup_predicate_probe": "UPDATE alerts SET duplicate_count = duplicate_count + 1 WHERE environment = 'Production' AND resource = 'host-0001' AND event = 'DiskFull' AND severity = 'major' AND customer IS NULL RETURNING *"
+  },
+  "plans": {
+   "without_index": {
+    "tags_predicate_probe": {
+     "nodes": [
+      {
+       "node": "ModifyTable",
+       "index": null,
+       "condition": null,
+       "rows": 1.0
+      },
+      {
+       "node": "Seq Scan",
+       "index": null,
+       "condition": "((id = 'd600bd0e-fe32-421c-b778-37cfb5871080'::text) OR (id ~~ 'd600bd0e-fe32-421c-b778-37cfb5871080%'::text))",
+       "rows": 1.0
+      }
+     ],
+     "sequential_scan": true,
+     "indexes": [],
+     "execution_ms": 13.99,
+     "planning_ms": 0.265,
+     "shared_hit": 3,
+     "shared_read": 7149
+    },
+    "attributes_predicate_probe": {
+     "nodes": [
+      {
+       "node": "ModifyTable",
+       "index": null,
+       "condition": null,
+       "rows": 1.0
+      },
+      {
+       "node": "Seq Scan",
+       "index": null,
+       "condition": "((id = 'd600bd0e-fe32-421c-b778-37cfb5871080'::text) OR (id ~~ 'd600bd0e-fe32-421c-b778-37cfb5871080%'::text))",
+       "rows": 1.0
+      }
+     ],
+     "sequential_scan": true,
+     "indexes": [],
+     "execution_ms": 13.714,
+     "planning_ms": 0.263,
+     "shared_hit": 62,
+     "shared_read": 7089
+    },
+    "dedup_predicate_probe": {
+     "nodes": [
+      {
+       "node": "ModifyTable",
+       "index": null,
+       "condition": null,
+       "rows": 1.0
+      },
+      {
+       "node": "Index Scan",
+       "index": "env_res_evt_cust_key",
+       "condition": "((environment = 'Production'::text) AND (resource = 'host-0001'::text) AND (event = 'DiskFull'::text))",
+       "rows": 1.0
+      }
+     ],
+     "sequential_scan": false,
+     "indexes": [
+      "env_res_evt_cust_key"
+     ],
+     "execution_ms": 0.145,
+     "planning_ms": 0.222,
+     "shared_hit": 6,
+     "shared_read": 0
+    }
+   },
+   "with_index": {
+    "tags_predicate_probe": {
+     "nodes": [
+      {
+       "node": "ModifyTable",
+       "index": null,
+       "condition": null,
+       "rows": 1.0
+      },
+      {
+       "node": "Bitmap Heap Scan",
+       "index": null,
+       "condition": "((id = 'd600bd0e-fe32-421c-b778-37cfb5871080'::text) OR (id ~~ 'd600bd0e-fe32-421c-b778-37cfb5871080%'::text))",
+       "rows": 1.0
+      },
+      {
+       "node": "BitmapOr",
+       "index": null,
+       "condition": null,
+       "rows": 0.0
+      },
+      {
+       "node": "Bitmap Index Scan",
+       "index": "alerts_id_pattern",
+       "condition": "((id ~>=~ 'd600bd0e-fe32-421c-b778-37cfb5871080'::text) AND (id ~<~ 'd600bd0e-fe32-421c-b778-37cfb5871081'::text))",
+       "rows": 1.0
+      },
+      {
+       "node": "Bitmap Index Scan",
+       "index": "alerts_id_pattern",
+       "condition": "(id = 'd600bd0e-fe32-421c-b778-37cfb5871080'::text)",
+       "rows": 1.0
+      }
+     ],
+     "sequential_scan": false,
+     "indexes": [
+      "alerts_id_pattern"
+     ],
+     "execution_ms": 0.163,
+     "planning_ms": 0.517,
+     "shared_hit": 6,
+     "shared_read": 3
+    },
+    "attributes_predicate_probe": {
+     "nodes": [
+      {
+       "node": "ModifyTable",
+       "index": null,
+       "condition": null,
+       "rows": 1.0
+      },
+      {
+       "node": "Bitmap Heap Scan",
+       "index": null,
+       "condition": "((id = 'd600bd0e-fe32-421c-b778-37cfb5871080'::text) OR (id ~~ 'd600bd0e-fe32-421c-b778-37cfb5871080%'::text))",
+       "rows": 1.0
+      },
+      {
+       "node": "BitmapOr",
+       "index": null,
+       "condition": null,
+       "rows": 0.0
+      },
+      {
+       "node": "Bitmap Index Scan",
+       "index": "alerts_id_pattern",
+       "condition": "((id ~>=~ 'd600bd0e-fe32-421c-b778-37cfb5871080'::text) AND (id ~<~ 'd600bd0e-fe32-421c-b778-37cfb5871081'::text))",
+       "rows": 1.0
+      },
+      {
+       "node": "Bitmap Index Scan",
+       "index": "alerts_id_pattern",
+       "condition": "(id = 'd600bd0e-fe32-421c-b778-37cfb5871080'::text)",
+       "rows": 1.0
+      }
+     ],
+     "sequential_scan": false,
+     "indexes": [
+      "alerts_id_pattern"
+     ],
+     "execution_ms": 0.105,
+     "planning_ms": 0.386,
+     "shared_hit": 9,
+     "shared_read": 0
+    },
+    "dedup_predicate_probe": {
+     "nodes": [
+      {
+       "node": "ModifyTable",
+       "index": null,
+       "condition": null,
+       "rows": 1.0
+      },
+      {
+       "node": "Index Scan",
+       "index": "env_res_evt_cust_key",
+       "condition": "((environment = 'Production'::text) AND (resource = 'host-0001'::text) AND (event = 'DiskFull'::text))",
+       "rows": 1.0
+      }
+     ],
+     "sequential_scan": false,
+     "indexes": [
+      "env_res_evt_cust_key"
+     ],
+     "execution_ms": 0.115,
+     "planning_ms": 0.308,
+     "shared_hit": 6,
+     "shared_read": 0
+    }
+   }
+  },
+  "cells": [
+   {
+    "arm": "alerta-4x4-pgb-pgt",
+    "c": 1,
+    "rep": 0,
+    "db": "bench_write_alerta_4x4_pgb_pgt_r0_c1",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 1979,
+      "hot": 1903,
+      "dead": 80,
+      "hot_share": 0.962
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 660,
+      "hot": 660,
+      "dead": 58,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 660,
+      "hot": 660,
+      "dead": 51,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 517256,
+     "writes": 496,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 1042.9
+    },
+    "lifecycle": {
+     "wal_bytes": 1369792,
+     "writes": 660,
+     "wal_bytes_per_write": 2075.4
+    },
+    "problems": []
+   },
+   {
+    "arm": "alerta-4x4-pgb-pgt",
+    "c": 8,
+    "rep": 0,
+    "db": "bench_write_alerta_4x4_pgb_pgt_r0_c8",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 5681,
+      "hot": 5080,
+      "dead": 756,
+      "hot_share": 0.894
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 1894,
+      "hot": 1894,
+      "dead": 63,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 1894,
+      "hot": 1894,
+      "dead": 68,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 1572480,
+     "writes": 1413,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 1112.9
+    },
+    "lifecycle": {
+     "wal_bytes": 3119040,
+     "writes": 1894,
+     "wal_bytes_per_write": 1646.8
+    },
+    "problems": []
+   },
+   {
+    "arm": "alerta-4x4-pgb-idx-pgt",
+    "c": 1,
+    "rep": 0,
+    "db": "bench_write_alerta_4x4_pgb_idx_pgt_r0_c1",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 7511,
+      "hot": 7435,
+      "dead": 77,
+      "hot_share": 0.99
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 2504,
+      "hot": 2504,
+      "dead": 8,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 2504,
+      "hot": 2504,
+      "dead": 29,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 1494176,
+     "writes": 1894,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 788.9
+    },
+    "lifecycle": {
+     "wal_bytes": 2712760,
+     "writes": 2504,
+     "wal_bytes_per_write": 1083.4
+    },
+    "problems": []
+   },
+   {
+    "arm": "alerta-4x4-pgb-idx-pgt",
+    "c": 8,
+    "rep": 0,
+    "db": "bench_write_alerta_4x4_pgb_idx_pgt_r0_c8",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 18935,
+      "hot": 17960,
+      "dead": 1118,
+      "hot_share": 0.949
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 6312,
+      "hot": 6307,
+      "dead": 191,
+      "hot_share": 0.999
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 6312,
+      "hot": 6309,
+      "dead": 142,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 5123360,
+     "writes": 4682,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 1094.3
+    },
+    "lifecycle": {
+     "wal_bytes": 7650952,
+     "writes": 6312,
+     "wal_bytes_per_write": 1212.1
+    },
+    "problems": []
+   },
+   {
+    "arm": "alerta-4x4-pgb-safe-idx-pgt",
+    "c": 1,
+    "rep": 0,
+    "db": "bench_write_alerta_4x4_pgb_safe_idx_pgt_r0_c1",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 13865,
+      "hot": 13789,
+      "dead": 77,
+      "hot_share": 0.995
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 4622,
+      "hot": 4622,
+      "dead": 20,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 4622,
+      "hot": 4622,
+      "dead": 2,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 2712296,
+     "writes": 3440,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 788.5
+    },
+    "lifecycle": {
+     "wal_bytes": 4382448,
+     "writes": 4622,
+     "wal_bytes_per_write": 948.2
+    },
+    "problems": []
+   },
+   {
+    "arm": "alerta-4x4-pgb-safe-idx-pgt",
+    "c": 8,
+    "rep": 0,
+    "db": "bench_write_alerta_4x4_pgb_safe_idx_pgt_r0_c8",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 36404,
+      "hot": 34171,
+      "dead": 2432,
+      "hot_share": 0.939
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 12135,
+      "hot": 12135,
+      "dead": 203,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 12135,
+      "hot": 12135,
+      "dead": 252,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 9642456,
+     "writes": 9025,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 1068.4
+    },
+    "lifecycle": {
+     "wal_bytes": 13989784,
+     "writes": 12135,
+     "wal_bytes_per_write": 1152.8
+    },
+    "problems": []
+   },
+   {
+    "arm": "alerta-4x4-pgb-safe-pgt",
+    "c": 1,
+    "rep": 0,
+    "db": "bench_write_alerta_4x4_pgb_safe_pgt_r0_c1",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 2216,
+      "hot": 2140,
+      "dead": 83,
+      "hot_share": 0.966
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 739,
+      "hot": 739,
+      "dead": 37,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 739,
+      "hot": 739,
+      "dead": 24,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 439880,
+     "writes": 556,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 791.2
+    },
+    "lifecycle": {
+     "wal_bytes": 1315376,
+     "writes": 739,
+     "wal_bytes_per_write": 1779.9
+    },
+    "problems": []
+   },
+   {
+    "arm": "alerta-4x4-pgb-safe-pgt",
+    "c": 8,
+    "rep": 0,
+    "db": "bench_write_alerta_4x4_pgb_safe_pgt_r0_c8",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 6353,
+      "hot": 5685,
+      "dead": 1064,
+      "hot_share": 0.895
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 2118,
+      "hot": 2118,
+      "dead": 57,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 2118,
+      "hot": 2118,
+      "dead": 51,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 2028104,
+     "writes": 1619,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 1252.7
+    },
+    "lifecycle": {
+     "wal_bytes": 3366896,
+     "writes": 2118,
+     "wal_bytes_per_write": 1589.7
+    },
+    "problems": []
+   },
+   {
+    "arm": "alerta-4x4-pgb-safe-pgt",
+    "c": 1,
+    "rep": 1,
+    "db": "bench_write_alerta_4x4_pgb_safe_pgt_r1_c1",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 2576,
+      "hot": 2500,
+      "dead": 83,
+      "hot_share": 0.97
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 859,
+      "hot": 859,
+      "dead": 0,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 859,
+      "hot": 859,
+      "dead": 0,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 577800,
+     "writes": 671,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 861.1
+    },
+    "lifecycle": {
+     "wal_bytes": 1451176,
+     "writes": 859,
+     "wal_bytes_per_write": 1689.4
+    },
+    "problems": []
+   },
+   {
+    "arm": "alerta-4x4-pgb-safe-pgt",
+    "c": 8,
+    "rep": 1,
+    "db": "bench_write_alerta_4x4_pgb_safe_pgt_r1_c8",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 7001,
+      "hot": 6285,
+      "dead": 1035,
+      "hot_share": 0.898
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 2334,
+      "hot": 2334,
+      "dead": 50,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 2334,
+      "hot": 2334,
+      "dead": 73,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 2020408,
+     "writes": 1773,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 1139.5
+    },
+    "lifecycle": {
+     "wal_bytes": 3516832,
+     "writes": 2334,
+     "wal_bytes_per_write": 1506.8
+    },
+    "problems": []
+   },
+   {
+    "arm": "alerta-4x4-pgb-safe-idx-pgt",
+    "c": 1,
+    "rep": 1,
+    "db": "bench_write_alerta_4x4_pgb_safe_idx_pgt_r1_c1",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 14741,
+      "hot": 14665,
+      "dead": 80,
+      "hot_share": 0.995
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 4914,
+      "hot": 4914,
+      "dead": 39,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 4914,
+      "hot": 4914,
+      "dead": 19,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 2879200,
+     "writes": 3652,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 788.4
+    },
+    "lifecycle": {
+     "wal_bytes": 4612104,
+     "writes": 4914,
+     "wal_bytes_per_write": 938.6
+    },
+    "problems": []
+   },
+   {
+    "arm": "alerta-4x4-pgb-safe-idx-pgt",
+    "c": 8,
+    "rep": 1,
+    "db": "bench_write_alerta_4x4_pgb_safe_idx_pgt_r1_c8",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 35894,
+      "hot": 33648,
+      "dead": 2487,
+      "hot_share": 0.937
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 11965,
+      "hot": 11957,
+      "dead": 234,
+      "hot_share": 0.999
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 11965,
+      "hot": 11959,
+      "dead": 215,
+      "hot_share": 0.999
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 9865664,
+     "writes": 8851,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 1114.6
+    },
+    "lifecycle": {
+     "wal_bytes": 14282216,
+     "writes": 11965,
+     "wal_bytes_per_write": 1193.7
+    },
+    "problems": []
+   },
+   {
+    "arm": "alerta-4x4-pgb-idx-pgt",
+    "c": 1,
+    "rep": 1,
+    "db": "bench_write_alerta_4x4_pgb_idx_pgt_r1_c1",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 7586,
+      "hot": 7510,
+      "dead": 80,
+      "hot_share": 0.99
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 2529,
+      "hot": 2529,
+      "dead": 33,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 2529,
+      "hot": 2529,
+      "dead": 54,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 1493176,
+     "writes": 1893,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 788.8
+    },
+    "lifecycle": {
+     "wal_bytes": 2734576,
+     "writes": 2529,
+     "wal_bytes_per_write": 1081.3
+    },
+    "problems": []
+   },
+   {
+    "arm": "alerta-4x4-pgb-idx-pgt",
+    "c": 8,
+    "rep": 1,
+    "db": "bench_write_alerta_4x4_pgb_idx_pgt_r1_c8",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 18515,
+      "hot": 17701,
+      "dead": 924,
+      "hot_share": 0.956
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 6172,
+      "hot": 6172,
+      "dead": 98,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 6172,
+      "hot": 6172,
+      "dead": 128,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 4454960,
+     "writes": 4550,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 979.1
+    },
+    "lifecycle": {
+     "wal_bytes": 6986096,
+     "writes": 6172,
+     "wal_bytes_per_write": 1131.9
+    },
+    "problems": []
+   },
+   {
+    "arm": "alerta-4x4-pgb-pgt",
+    "c": 1,
+    "rep": 1,
+    "db": "bench_write_alerta_4x4_pgb_pgt_r1_c1",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 2081,
+      "hot": 2005,
+      "dead": 83,
+      "hot_share": 0.963
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 694,
+      "hot": 694,
+      "dead": 31,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 694,
+      "hot": 694,
+      "dead": 34,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 416872,
+     "writes": 527,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 791.0
+    },
+    "lifecycle": {
+     "wal_bytes": 1273496,
+     "writes": 694,
+     "wal_bytes_per_write": 1835.0
+    },
+    "problems": []
+   },
+   {
+    "arm": "alerta-4x4-pgb-pgt",
+    "c": 8,
+    "rep": 1,
+    "db": "bench_write_alerta_4x4_pgb_pgt_r1_c8",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 5966,
+      "hot": 5329,
+      "dead": 951,
+      "hot_share": 0.893
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 1989,
+      "hot": 1989,
+      "dead": 64,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 1989,
+      "hot": 1989,
+      "dead": 88,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 1922632,
+     "writes": 1499,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 1282.6
+    },
+    "lifecycle": {
+     "wal_bytes": 3275736,
+     "writes": 1989,
+     "wal_bytes_per_write": 1646.9
+    },
+    "problems": []
+   },
+   {
+    "arm": "alerta-4x4-pgb-pgt",
+    "c": 1,
+    "rep": 2,
+    "db": "bench_write_alerta_4x4_pgb_pgt_r2_c1",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 2066,
+      "hot": 1990,
+      "dead": 77,
+      "hot_share": 0.963
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 689,
+      "hot": 689,
+      "dead": 45,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 689,
+      "hot": 689,
+      "dead": 28,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 439304,
+     "writes": 527,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 833.6
+    },
+    "lifecycle": {
+     "wal_bytes": 1290880,
+     "writes": 689,
+     "wal_bytes_per_write": 1873.6
+    },
+    "problems": []
+   },
+   {
+    "arm": "alerta-4x4-pgb-pgt",
+    "c": 8,
+    "rep": 2,
+    "db": "bench_write_alerta_4x4_pgb_pgt_r2_c8",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 6326,
+      "hot": 5682,
+      "dead": 942,
+      "hot_share": 0.898
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 2109,
+      "hot": 2109,
+      "dead": 76,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 2109,
+      "hot": 2109,
+      "dead": 121,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 1812960,
+     "writes": 1605,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 1129.6
+    },
+    "lifecycle": {
+     "wal_bytes": 3244824,
+     "writes": 2109,
+     "wal_bytes_per_write": 1538.6
+    },
+    "problems": []
+   },
+   {
+    "arm": "alerta-4x4-pgb-idx-pgt",
+    "c": 1,
+    "rep": 2,
+    "db": "bench_write_alerta_4x4_pgb_idx_pgt_r2_c1",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 7670,
+      "hot": 7594,
+      "dead": 83,
+      "hot_share": 0.99
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 2557,
+      "hot": 2557,
+      "dead": 22,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 2557,
+      "hot": 2557,
+      "dead": 27,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 1494096,
+     "writes": 1894,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 788.9
+    },
+    "lifecycle": {
+     "wal_bytes": 2757328,
+     "writes": 2557,
+     "wal_bytes_per_write": 1078.3
+    },
+    "problems": []
+   },
+   {
+    "arm": "alerta-4x4-pgb-idx-pgt",
+    "c": 8,
+    "rep": 2,
+    "db": "bench_write_alerta_4x4_pgb_idx_pgt_r2_c8",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 18941,
+      "hot": 18029,
+      "dead": 1105,
+      "hot_share": 0.952
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 6314,
+      "hot": 6310,
+      "dead": 176,
+      "hot_share": 0.999
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 6314,
+      "hot": 6311,
+      "dead": 152,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 5022224,
+     "writes": 4696,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 1069.5
+    },
+    "lifecycle": {
+     "wal_bytes": 7513672,
+     "writes": 6314,
+     "wal_bytes_per_write": 1190.0
+    },
+    "problems": []
+   },
+   {
+    "arm": "alerta-4x4-pgb-safe-idx-pgt",
+    "c": 1,
+    "rep": 2,
+    "db": "bench_write_alerta_4x4_pgb_safe_idx_pgt_r2_c1",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 14576,
+      "hot": 14500,
+      "dead": 77,
+      "hot_share": 0.995
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 4859,
+      "hot": 4859,
+      "dead": 23,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 4859,
+      "hot": 4859,
+      "dead": 19,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 2900432,
+     "writes": 3679,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 788.4
+    },
+    "lifecycle": {
+     "wal_bytes": 4673664,
+     "writes": 4859,
+     "wal_bytes_per_write": 961.9
+    },
+    "problems": []
+   },
+   {
+    "arm": "alerta-4x4-pgb-safe-idx-pgt",
+    "c": 8,
+    "rep": 2,
+    "db": "bench_write_alerta_4x4_pgb_safe_idx_pgt_r2_c8",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 37538,
+      "hot": 34852,
+      "dead": 2986,
+      "hot_share": 0.928
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 12513,
+      "hot": 12513,
+      "dead": 147,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 12513,
+      "hot": 12513,
+      "dead": 332,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 10409280,
+     "writes": 9412,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 1106.0
+    },
+    "lifecycle": {
+     "wal_bytes": 14796776,
+     "writes": 12513,
+     "wal_bytes_per_write": 1182.5
+    },
+    "problems": []
+   },
+   {
+    "arm": "alerta-4x4-pgb-safe-pgt",
+    "c": 1,
+    "rep": 2,
+    "db": "bench_write_alerta_4x4_pgb_safe_pgt_r2_c1",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 2984,
+      "hot": 2908,
+      "dead": 77,
+      "hot_share": 0.975
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 995,
+      "hot": 995,
+      "dead": 20,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 995,
+      "hot": 995,
+      "dead": 5,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 607928,
+     "writes": 769,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 790.5
+    },
+    "lifecycle": {
+     "wal_bytes": 1509936,
+     "writes": 995,
+     "wal_bytes_per_write": 1517.5
+    },
+    "problems": []
+   },
+   {
+    "arm": "alerta-4x4-pgb-safe-pgt",
+    "c": 8,
+    "rep": 2,
+    "db": "bench_write_alerta_4x4_pgb_safe_pgt_r2_c8",
+    "tables": {
+     "alerts": {
+      "table": "alerts",
+      "ins": 1,
+      "upd": 7220,
+      "hot": 6552,
+      "dead": 888,
+      "hot_share": 0.907
+     },
+     "keys": {
+      "table": "keys",
+      "ins": 0,
+      "upd": 2407,
+      "hot": 2407,
+      "dead": 39,
+      "hot_share": 1.0
+     },
+     "metrics": {
+      "table": "metrics",
+      "ins": 0,
+      "upd": 2407,
+      "hot": 2407,
+      "dead": 29,
+      "hot_share": 1.0
+     }
+    },
+    "missing_counters": [],
+    "timed": {
+     "wal_bytes": 2141040,
+     "writes": 1833,
+     "checkpoint_in_window": false,
+     "wal_bytes_per_write": 1168.1
+    },
+    "lifecycle": {
+     "wal_bytes": 3555896,
+     "writes": 2407,
+     "wal_bytes_per_write": 1477.3
+    },
+    "problems": []
+   }
+  ],
+  "order": [
+   {
+    "rep": 0,
+    "position": 0,
+    "pair": "stock",
+    "member": "control",
+    "arm": "alerta-4x4-pgb-pgt",
+    "first_of_its_pair": true
+   },
+   {
+    "rep": 0,
+    "position": 1,
+    "pair": "stock",
+    "member": "index",
+    "arm": "alerta-4x4-pgb-idx-pgt",
+    "first_of_its_pair": false
+   },
+   {
+    "rep": 0,
+    "position": 2,
+    "pair": "safe",
+    "member": "index",
+    "arm": "alerta-4x4-pgb-safe-idx-pgt",
+    "first_of_its_pair": true
+   },
+   {
+    "rep": 0,
+    "position": 3,
+    "pair": "safe",
+    "member": "control",
+    "arm": "alerta-4x4-pgb-safe-pgt",
+    "first_of_its_pair": false
+   },
+   {
+    "rep": 1,
+    "position": 0,
+    "pair": "safe",
+    "member": "control",
+    "arm": "alerta-4x4-pgb-safe-pgt",
+    "first_of_its_pair": true
+   },
+   {
+    "rep": 1,
+    "position": 1,
+    "pair": "safe",
+    "member": "index",
+    "arm": "alerta-4x4-pgb-safe-idx-pgt",
+    "first_of_its_pair": false
+   },
+   {
+    "rep": 1,
+    "position": 2,
+    "pair": "stock",
+    "member": "index",
+    "arm": "alerta-4x4-pgb-idx-pgt",
+    "first_of_its_pair": true
+   },
+   {
+    "rep": 1,
+    "position": 3,
+    "pair": "stock",
+    "member": "control",
+    "arm": "alerta-4x4-pgb-pgt",
+    "first_of_its_pair": false
+   },
+   {
+    "rep": 2,
+    "position": 0,
+    "pair": "stock",
+    "member": "control",
+    "arm": "alerta-4x4-pgb-pgt",
+    "first_of_its_pair": true
+   },
+   {
+    "rep": 2,
+    "position": 1,
+    "pair": "stock",
+    "member": "index",
+    "arm": "alerta-4x4-pgb-idx-pgt",
+    "first_of_its_pair": false
+   },
+   {
+    "rep": 2,
+    "position": 2,
+    "pair": "safe",
+    "member": "index",
+    "arm": "alerta-4x4-pgb-safe-idx-pgt",
+    "first_of_its_pair": true
+   },
+   {
+    "rep": 2,
+    "position": 3,
+    "pair": "safe",
+    "member": "control",
+    "arm": "alerta-4x4-pgb-safe-pgt",
+    "first_of_its_pair": false
+   }
+  ],
+  "pair_changes": [
+   {
+    "pair": "stock",
+    "case": "count",
+    "c": 1,
+    "rep": 0,
+    "control": "alerta-4x4-pgb-pgt",
+    "index": "alerta-4x4-pgb-idx-pgt",
+    "index_ran_first": false,
+    "control_rps": 23.353225539657267,
+    "index_rps": 22.294750288185803,
+    "rps_change_pct": -4.53,
+    "control_p50_ms": 42.664031,
+    "index_p50_ms": 45.416585000000005,
+    "p50_ms_change_pct": 6.45,
+    "control_p99_ms": 46.536902,
+    "index_p99_ms": 47.990631,
+    "p99_ms_change_pct": 3.12
+   },
+   {
+    "pair": "stock",
+    "case": "count",
+    "c": 1,
+    "rep": 1,
+    "control": "alerta-4x4-pgb-pgt",
+    "index": "alerta-4x4-pgb-idx-pgt",
+    "index_ran_first": true,
+    "control_rps": 22.794998237904977,
+    "index_rps": 22.506939282086805,
+    "rps_change_pct": -1.26,
+    "control_p50_ms": 44.001884999999994,
+    "index_p50_ms": 44.647049,
+    "p50_ms_change_pct": 1.47,
+    "control_p99_ms": 46.427099999999996,
+    "index_p99_ms": 47.044574999999995,
+    "p99_ms_change_pct": 1.33
+   },
+   {
+    "pair": "stock",
+    "case": "count",
+    "c": 1,
+    "rep": 2,
+    "control": "alerta-4x4-pgb-pgt",
+    "index": "alerta-4x4-pgb-idx-pgt",
+    "index_ran_first": false,
+    "control_rps": 22.535082119273778,
+    "index_rps": 23.621750825570558,
+    "rps_change_pct": 4.82,
+    "control_p50_ms": 44.393494,
+    "index_p50_ms": 42.759784,
+    "p50_ms_change_pct": -3.68,
+    "control_p99_ms": 49.843144,
+    "index_p99_ms": 45.961054000000004,
+    "p99_ms_change_pct": -7.79
+   },
+   {
+    "pair": "stock",
+    "case": "count",
+    "c": 8,
+    "rep": 0,
+    "control": "alerta-4x4-pgb-pgt",
+    "index": "alerta-4x4-pgb-idx-pgt",
+    "index_ran_first": false,
+    "control_rps": 88.86041377981218,
+    "index_rps": 86.62989014372954,
+    "rps_change_pct": -2.51,
+    "control_p50_ms": 87.980958,
+    "index_p50_ms": 91.90620200000001,
+    "p50_ms_change_pct": 4.46,
+    "control_p99_ms": 146.818328,
+    "index_p99_ms": 143.35191,
+    "p99_ms_change_pct": -2.36
+   },
+   {
+    "pair": "stock",
+    "case": "count",
+    "c": 8,
+    "rep": 1,
+    "control": "alerta-4x4-pgb-pgt",
+    "index": "alerta-4x4-pgb-idx-pgt",
+    "index_ran_first": true,
+    "control_rps": 88.29012525121091,
+    "index_rps": 86.48160646375005,
+    "rps_change_pct": -2.05,
+    "control_p50_ms": 90.986919,
+    "index_p50_ms": 92.202194,
+    "p50_ms_change_pct": 1.34,
+    "control_p99_ms": 130.284432,
+    "index_p99_ms": 132.015277,
+    "p99_ms_change_pct": 1.33
+   },
+   {
+    "pair": "stock",
+    "case": "count",
+    "c": 8,
+    "rep": 2,
+    "control": "alerta-4x4-pgb-pgt",
+    "index": "alerta-4x4-pgb-idx-pgt",
+    "index_ran_first": false,
+    "control_rps": 84.60600029699732,
+    "index_rps": 91.56524589778228,
+    "rps_change_pct": 8.23,
+    "control_p50_ms": 94.816569,
+    "index_p50_ms": 87.998563,
+    "p50_ms_change_pct": -7.19,
+    "control_p99_ms": 134.00356,
+    "index_p99_ms": 128.01958499999998,
+    "p99_ms_change_pct": -4.47
+   },
+   {
+    "pair": "stock",
+    "case": "list",
+    "c": 1,
+    "rep": 0,
+    "control": "alerta-4x4-pgb-pgt",
+    "index": "alerta-4x4-pgb-idx-pgt",
+    "index_ran_first": false,
+    "control_rps": 14.891167259905044,
+    "index_rps": 14.719699013896431,
+    "rps_change_pct": -1.15,
+    "control_p50_ms": 66.805222,
+    "index_p50_ms": 67.891637,
+    "p50_ms_change_pct": 1.63,
+    "control_p99_ms": 77.82182399999999,
+    "index_p99_ms": 71.958563,
+    "p99_ms_change_pct": -7.53
+   },
+   {
+    "pair": "stock",
+    "case": "list",
+    "c": 1,
+    "rep": 1,
+    "control": "alerta-4x4-pgb-pgt",
+    "index": "alerta-4x4-pgb-idx-pgt",
+    "index_ran_first": true,
+    "control_rps": 14.565156658374665,
+    "index_rps": 14.572402913542467,
+    "rps_change_pct": 0.05,
+    "control_p50_ms": 68.622856,
+    "index_p50_ms": 68.497207,
+    "p50_ms_change_pct": -0.18,
+    "control_p99_ms": 71.134413,
+    "index_p99_ms": 71.370762,
+    "p99_ms_change_pct": 0.33
+   },
+   {
+    "pair": "stock",
+    "case": "list",
+    "c": 1,
+    "rep": 2,
+    "control": "alerta-4x4-pgb-pgt",
+    "index": "alerta-4x4-pgb-idx-pgt",
+    "index_ran_first": false,
+    "control_rps": 14.193601572669287,
+    "index_rps": 14.86049496143913,
+    "rps_change_pct": 4.7,
+    "control_p50_ms": 70.273822,
+    "index_p50_ms": 67.057812,
+    "p50_ms_change_pct": -4.58,
+    "control_p99_ms": 74.5386,
+    "index_p99_ms": 69.795468,
+    "p99_ms_change_pct": -6.36
+   },
+   {
+    "pair": "stock",
+    "case": "list",
+    "c": 8,
+    "rep": 0,
+    "control": "alerta-4x4-pgb-pgt",
+    "index": "alerta-4x4-pgb-idx-pgt",
+    "index_ran_first": false,
+    "control_rps": 21.986570284425976,
+    "index_rps": 22.525208925341456,
+    "rps_change_pct": 2.45,
+    "control_p50_ms": 339.021654,
+    "index_p50_ms": 337.42578699999996,
+    "p50_ms_change_pct": -0.47,
+    "control_p99_ms": 597.262584,
+    "index_p99_ms": 594.6442589999999,
+    "p99_ms_change_pct": -0.44
+   },
+   {
+    "pair": "stock",
+    "case": "list",
+    "c": 8,
+    "rep": 1,
+    "control": "alerta-4x4-pgb-pgt",
+    "index": "alerta-4x4-pgb-idx-pgt",
+    "index_ran_first": true,
+    "control_rps": 21.9014126564276,
+    "index_rps": 22.028939530585994,
+    "rps_change_pct": 0.58,
+    "control_p50_ms": 348.991668,
+    "index_p50_ms": 342.461275,
+    "p50_ms_change_pct": -1.87,
+    "control_p99_ms": 602.645222,
+    "index_p99_ms": 598.0873330000001,
+    "p99_ms_change_pct": -0.76
+   },
+   {
+    "pair": "stock",
+    "case": "list",
+    "c": 8,
+    "rep": 2,
+    "control": "alerta-4x4-pgb-pgt",
+    "index": "alerta-4x4-pgb-idx-pgt",
+    "index_ran_first": false,
+    "control_rps": 21.797293543498824,
+    "index_rps": 22.354634013000112,
+    "rps_change_pct": 2.56,
+    "control_p50_ms": 346.431394,
+    "index_p50_ms": 337.56926300000003,
+    "p50_ms_change_pct": -2.56,
+    "control_p99_ms": 585.071586,
+    "index_p99_ms": 597.348467,
+    "p99_ms_change_pct": 2.1
+   },
+   {
+    "pair": "stock",
+    "case": "write-dup",
+    "c": 1,
+    "rep": 0,
+    "control": "alerta-4x4-pgb-pgt",
+    "index": "alerta-4x4-pgb-idx-pgt",
+    "index_ran_first": false,
+    "control_rps": 33.00311546708544,
+    "index_rps": 126.19557249796635,
+    "rps_change_pct": 282.37,
+    "control_p50_ms": 30.148162,
+    "index_p50_ms": 8.10689,
+    "p50_ms_change_pct": -73.11,
+    "control_p99_ms": 33.90179,
+    "index_p99_ms": 9.260561000000001,
+    "p99_ms_change_pct": -72.68,
+    "control_timed_wal_per_write": 1042.9,
+    "index_timed_wal_per_write": 788.9,
+    "timed_wal_per_write_change_pct": -24.36
+   },
+   {
+    "pair": "stock",
+    "case": "write-dup",
+    "c": 1,
+    "rep": 1,
+    "control": "alerta-4x4-pgb-pgt",
+    "index": "alerta-4x4-pgb-idx-pgt",
+    "index_ran_first": true,
+    "control_rps": 35.12185962354885,
+    "index_rps": 126.1345170972696,
+    "rps_change_pct": 259.13,
+    "control_p50_ms": 29.408521,
+    "index_p50_ms": 8.262533000000001,
+    "p50_ms_change_pct": -71.9,
+    "control_p99_ms": 32.604108,
+    "index_p99_ms": 9.577337,
+    "p99_ms_change_pct": -70.63,
+    "control_timed_wal_per_write": 791.0,
+    "index_timed_wal_per_write": 788.8,
+    "timed_wal_per_write_change_pct": -0.28
+   },
+   {
+    "pair": "stock",
+    "case": "write-dup",
+    "c": 1,
+    "rep": 2,
+    "control": "alerta-4x4-pgb-pgt",
+    "index": "alerta-4x4-pgb-idx-pgt",
+    "index_ran_first": false,
+    "control_rps": 35.085459658688755,
+    "index_rps": 126.18939941678148,
+    "rps_change_pct": 259.66,
+    "control_p50_ms": 29.738514000000002,
+    "index_p50_ms": 8.2821,
+    "p50_ms_change_pct": -72.15,
+    "control_p99_ms": 32.498051,
+    "index_p99_ms": 8.961467,
+    "p99_ms_change_pct": -72.42,
+    "control_timed_wal_per_write": 833.6,
+    "index_timed_wal_per_write": 788.9,
+    "timed_wal_per_write_change_pct": -5.36
+   },
+   {
+    "pair": "stock",
+    "case": "write-dup",
+    "c": 8,
+    "rep": 0,
+    "control": "alerta-4x4-pgb-pgt",
+    "index": "alerta-4x4-pgb-idx-pgt",
+    "index_ran_first": false,
+    "control_rps": 93.87624944791024,
+    "index_rps": 311.8145986748454,
+    "rps_change_pct": 232.15,
+    "control_p50_ms": 84.888694,
+    "index_p50_ms": 25.382558,
+    "p50_ms_change_pct": -70.1,
+    "control_p99_ms": 143.28466600000002,
+    "index_p99_ms": 38.547917,
+    "p99_ms_change_pct": -73.1,
+    "control_timed_wal_per_write": 1112.9,
+    "index_timed_wal_per_write": 1094.3,
+    "timed_wal_per_write_change_pct": -1.67
+   },
+   {
+    "pair": "stock",
+    "case": "write-dup",
+    "c": 8,
+    "rep": 1,
+    "control": "alerta-4x4-pgb-pgt",
+    "index": "alerta-4x4-pgb-idx-pgt",
+    "index_ran_first": true,
+    "control_rps": 99.44969306675037,
+    "index_rps": 302.95382572164857,
+    "rps_change_pct": 204.63,
+    "control_p50_ms": 77.449348,
+    "index_p50_ms": 25.866775,
+    "p50_ms_change_pct": -66.6,
+    "control_p99_ms": 142.215239,
+    "index_p99_ms": 42.964470999999996,
+    "p99_ms_change_pct": -69.79,
+    "control_timed_wal_per_write": 1282.6,
+    "index_timed_wal_per_write": 979.1,
+    "timed_wal_per_write_change_pct": -23.66
+   },
+   {
+    "pair": "stock",
+    "case": "write-dup",
+    "c": 8,
+    "rep": 2,
+    "control": "alerta-4x4-pgb-pgt",
+    "index": "alerta-4x4-pgb-idx-pgt",
+    "index_ran_first": false,
+    "control_rps": 106.55869243218758,
+    "index_rps": 312.70932286199513,
+    "rps_change_pct": 193.46,
+    "control_p50_ms": 72.827133,
+    "index_p50_ms": 25.265961,
+    "p50_ms_change_pct": -65.31,
+    "control_p99_ms": 125.08306599999999,
+    "index_p99_ms": 38.865966,
+    "p99_ms_change_pct": -68.93,
+    "control_timed_wal_per_write": 1129.6,
+    "index_timed_wal_per_write": 1069.5,
+    "timed_wal_per_write_change_pct": -5.32
+   },
+   {
+    "pair": "safe",
+    "case": "count",
+    "c": 1,
+    "rep": 0,
+    "control": "alerta-4x4-pgb-safe-pgt",
+    "index": "alerta-4x4-pgb-safe-idx-pgt",
+    "index_ran_first": true,
+    "control_rps": 67.82219773601336,
+    "index_rps": 65.08792469493876,
+    "rps_change_pct": -4.03,
+    "control_p50_ms": 14.61072,
+    "index_p50_ms": 15.196299,
+    "p50_ms_change_pct": 4.01,
+    "control_p99_ms": 16.420803000000003,
+    "index_p99_ms": 17.196941,
+    "p99_ms_change_pct": 4.73
+   },
+   {
+    "pair": "safe",
+    "case": "count",
+    "c": 1,
+    "rep": 1,
+    "control": "alerta-4x4-pgb-safe-pgt",
+    "index": "alerta-4x4-pgb-safe-idx-pgt",
+    "index_ran_first": false,
+    "control_rps": 61.55866767607399,
+    "index_rps": 63.559973699788976,
+    "rps_change_pct": 3.25,
+    "control_p50_ms": 16.27947,
+    "index_p50_ms": 15.700638999999999,
+    "p50_ms_change_pct": -3.56,
+    "control_p99_ms": 18.015453,
+    "index_p99_ms": 17.065642,
+    "p99_ms_change_pct": -5.27
+   },
+   {
+    "pair": "safe",
+    "case": "count",
+    "c": 1,
+    "rep": 2,
+    "control": "alerta-4x4-pgb-safe-pgt",
+    "index": "alerta-4x4-pgb-safe-idx-pgt",
+    "index_ran_first": true,
+    "control_rps": 69.27103258756624,
+    "index_rps": 65.59931255063886,
+    "rps_change_pct": -5.3,
+    "control_p50_ms": 14.320196000000001,
+    "index_p50_ms": 14.485701,
+    "p50_ms_change_pct": 1.16,
+    "control_p99_ms": 16.173724,
+    "index_p99_ms": 18.617257000000002,
+    "p99_ms_change_pct": 15.11
+   },
+   {
+    "pair": "safe",
+    "case": "count",
+    "c": 8,
+    "rep": 0,
+    "control": "alerta-4x4-pgb-safe-pgt",
+    "index": "alerta-4x4-pgb-safe-idx-pgt",
+    "index_ran_first": true,
+    "control_rps": 110.18590070227647,
+    "index_rps": 108.9563510396197,
+    "rps_change_pct": -1.12,
+    "control_p50_ms": 70.15793400000001,
+    "index_p50_ms": 70.76570699999999,
+    "p50_ms_change_pct": 0.87,
+    "control_p99_ms": 121.480879,
+    "index_p99_ms": 119.99310100000001,
+    "p99_ms_change_pct": -1.22
+   },
+   {
+    "pair": "safe",
+    "case": "count",
+    "c": 8,
+    "rep": 1,
+    "control": "alerta-4x4-pgb-safe-pgt",
+    "index": "alerta-4x4-pgb-safe-idx-pgt",
+    "index_ran_first": false,
+    "control_rps": 114.83147902806432,
+    "index_rps": 108.07291292685687,
+    "rps_change_pct": -5.89,
+    "control_p50_ms": 66.896072,
+    "index_p50_ms": 71.26018,
+    "p50_ms_change_pct": 6.52,
+    "control_p99_ms": 114.00215800000001,
+    "index_p99_ms": 118.432382,
+    "p99_ms_change_pct": 3.89
+   },
+   {
+    "pair": "safe",
+    "case": "count",
+    "c": 8,
+    "rep": 2,
+    "control": "alerta-4x4-pgb-safe-pgt",
+    "index": "alerta-4x4-pgb-safe-idx-pgt",
+    "index_ran_first": true,
+    "control_rps": 119.20267414718383,
+    "index_rps": 119.79968145281987,
+    "rps_change_pct": 0.5,
+    "control_p50_ms": 63.87508999999999,
+    "index_p50_ms": 64.298473,
+    "p50_ms_change_pct": 0.66,
+    "control_p99_ms": 112.28953,
+    "index_p99_ms": 108.619574,
+    "p99_ms_change_pct": -3.27
+   },
+   {
+    "pair": "safe",
+    "case": "list",
+    "c": 1,
+    "rep": 0,
+    "control": "alerta-4x4-pgb-safe-pgt",
+    "index": "alerta-4x4-pgb-safe-idx-pgt",
+    "index_ran_first": true,
+    "control_rps": 19.37283950503041,
+    "index_rps": 19.09328011348453,
+    "rps_change_pct": -1.44,
+    "control_p50_ms": 51.537292,
+    "index_p50_ms": 52.301753,
+    "p50_ms_change_pct": 1.48,
+    "control_p99_ms": 53.993027,
+    "index_p99_ms": 55.130772,
+    "p99_ms_change_pct": 2.11
+   },
+   {
+    "pair": "safe",
+    "case": "list",
+    "c": 1,
+    "rep": 1,
+    "control": "alerta-4x4-pgb-safe-pgt",
+    "index": "alerta-4x4-pgb-safe-idx-pgt",
+    "index_ran_first": false,
+    "control_rps": 18.713759647735355,
+    "index_rps": 19.574253811708026,
+    "rps_change_pct": 4.6,
+    "control_p50_ms": 53.342180000000006,
+    "index_p50_ms": 51.111864,
+    "p50_ms_change_pct": -4.18,
+    "control_p99_ms": 55.903932000000005,
+    "index_p99_ms": 54.561226999999995,
+    "p99_ms_change_pct": -2.4
+   },
+   {
+    "pair": "safe",
+    "case": "list",
+    "c": 1,
+    "rep": 2,
+    "control": "alerta-4x4-pgb-safe-pgt",
+    "index": "alerta-4x4-pgb-safe-idx-pgt",
+    "index_ran_first": true,
+    "control_rps": 20.225004866329105,
+    "index_rps": 18.87781504478192,
+    "rps_change_pct": -6.66,
+    "control_p50_ms": 49.372391,
+    "index_p50_ms": 52.909997,
+    "p50_ms_change_pct": 7.17,
+    "control_p99_ms": 52.290203,
+    "index_p99_ms": 54.448903,
+    "p99_ms_change_pct": 4.13
+   },
+   {
+    "pair": "safe",
+    "case": "list",
+    "c": 8,
+    "rep": 0,
+    "control": "alerta-4x4-pgb-safe-pgt",
+    "index": "alerta-4x4-pgb-safe-idx-pgt",
+    "index_ran_first": true,
+    "control_rps": 27.87802445158036,
+    "index_rps": 27.738400460883764,
+    "rps_change_pct": -0.5,
+    "control_p50_ms": 260.79571699999997,
+    "index_p50_ms": 267.986293,
+    "p50_ms_change_pct": 2.76,
+    "control_p99_ms": 494.11886,
+    "index_p99_ms": 509.412105,
+    "p99_ms_change_pct": 3.1
+   },
+   {
+    "pair": "safe",
+    "case": "list",
+    "c": 8,
+    "rep": 1,
+    "control": "alerta-4x4-pgb-safe-pgt",
+    "index": "alerta-4x4-pgb-safe-idx-pgt",
+    "index_ran_first": false,
+    "control_rps": 27.224057351836617,
+    "index_rps": 27.621426803060658,
+    "rps_change_pct": 1.46,
+    "control_p50_ms": 268.493392,
+    "index_p50_ms": 264.55251200000004,
+    "p50_ms_change_pct": -1.47,
+    "control_p99_ms": 514.977176,
+    "index_p99_ms": 504.324099,
+    "p99_ms_change_pct": -2.07
+   },
+   {
+    "pair": "safe",
+    "case": "list",
+    "c": 8,
+    "rep": 2,
+    "control": "alerta-4x4-pgb-safe-pgt",
+    "index": "alerta-4x4-pgb-safe-idx-pgt",
+    "index_ran_first": true,
+    "control_rps": 28.78303172423363,
+    "index_rps": 27.357689330090274,
+    "rps_change_pct": -4.95,
+    "control_p50_ms": 248.467407,
+    "index_p50_ms": 268.405956,
+    "p50_ms_change_pct": 8.02,
+    "control_p99_ms": 497.119437,
+    "index_p99_ms": 534.9667139999999,
+    "p99_ms_change_pct": 7.61
+   },
+   {
+    "pair": "safe",
+    "case": "write-dup",
+    "c": 1,
+    "rep": 0,
+    "control": "alerta-4x4-pgb-safe-pgt",
+    "index": "alerta-4x4-pgb-safe-idx-pgt",
+    "index_ran_first": true,
+    "control_rps": 37.008988877942045,
+    "index_rps": 229.2701369459533,
+    "rps_change_pct": 519.5,
+    "control_p50_ms": 26.967859,
+    "index_p50_ms": 4.480186,
+    "p50_ms_change_pct": -83.39,
+    "control_p99_ms": 30.178269,
+    "index_p99_ms": 6.209851,
+    "p99_ms_change_pct": -79.42,
+    "control_timed_wal_per_write": 791.2,
+    "index_timed_wal_per_write": 788.5,
+    "timed_wal_per_write_change_pct": -0.34
+   },
+   {
+    "pair": "safe",
+    "case": "write-dup",
+    "c": 1,
+    "rep": 1,
+    "control": "alerta-4x4-pgb-safe-pgt",
+    "index": "alerta-4x4-pgb-safe-idx-pgt",
+    "index_ran_first": false,
+    "control_rps": 44.686125025102335,
+    "index_rps": 243.39358083164427,
+    "rps_change_pct": 444.67,
+    "control_p50_ms": 20.638452,
+    "index_p50_ms": 3.9090879999999997,
+    "p50_ms_change_pct": -81.06,
+    "control_p99_ms": 28.903395,
+    "index_p99_ms": 5.733538,
+    "p99_ms_change_pct": -80.16,
+    "control_timed_wal_per_write": 861.1,
+    "index_timed_wal_per_write": 788.4,
+    "timed_wal_per_write_change_pct": -8.44
+   },
+   {
+    "pair": "safe",
+    "case": "write-dup",
+    "c": 1,
+    "rep": 2,
+    "control": "alerta-4x4-pgb-safe-pgt",
+    "index": "alerta-4x4-pgb-safe-idx-pgt",
+    "index_ran_first": true,
+    "control_rps": 51.21634432411926,
+    "index_rps": 245.19115397006098,
+    "rps_change_pct": 378.74,
+    "control_p50_ms": 18.276038,
+    "index_p50_ms": 3.8624509999999996,
+    "p50_ms_change_pct": -78.87,
+    "control_p99_ms": 28.279022,
+    "index_p99_ms": 5.71877,
+    "p99_ms_change_pct": -79.78,
+    "control_timed_wal_per_write": 790.5,
+    "index_timed_wal_per_write": 788.4,
+    "timed_wal_per_write_change_pct": -0.27
+   },
+   {
+    "pair": "safe",
+    "case": "write-dup",
+    "c": 8,
+    "rep": 0,
+    "control": "alerta-4x4-pgb-safe-pgt",
+    "index": "alerta-4x4-pgb-safe-idx-pgt",
+    "index_ran_first": true,
+    "control_rps": 107.45214238857021,
+    "index_rps": 601.1365893514966,
+    "rps_change_pct": 459.45,
+    "control_p50_ms": 70.370612,
+    "index_p50_ms": 13.205847,
+    "p50_ms_change_pct": -81.23,
+    "control_p99_ms": 140.73734800000003,
+    "index_p99_ms": 20.365151,
+    "p99_ms_change_pct": -85.53,
+    "control_timed_wal_per_write": 1252.7,
+    "index_timed_wal_per_write": 1068.4,
+    "timed_wal_per_write_change_pct": -14.71
+   },
+   {
+    "pair": "safe",
+    "case": "write-dup",
+    "c": 8,
+    "rep": 1,
+    "control": "alerta-4x4-pgb-safe-pgt",
+    "index": "alerta-4x4-pgb-safe-idx-pgt",
+    "index_ran_first": false,
+    "control_rps": 117.74714438848417,
+    "index_rps": 589.5388863805248,
+    "rps_change_pct": 400.68,
+    "control_p50_ms": 64.976458,
+    "index_p50_ms": 13.473983,
+    "p50_ms_change_pct": -79.26,
+    "control_p99_ms": 127.65758799999999,
+    "index_p99_ms": 21.6816,
+    "p99_ms_change_pct": -83.02,
+    "control_timed_wal_per_write": 1139.5,
+    "index_timed_wal_per_write": 1114.6,
+    "timed_wal_per_write_change_pct": -2.19
+   },
+   {
+    "pair": "safe",
+    "case": "write-dup",
+    "c": 8,
+    "rep": 2,
+    "control": "alerta-4x4-pgb-safe-pgt",
+    "index": "alerta-4x4-pgb-safe-idx-pgt",
+    "index_ran_first": true,
+    "control_rps": 121.79636836985654,
+    "index_rps": 627.1298084889887,
+    "rps_change_pct": 414.9,
+    "control_p50_ms": 65.008152,
+    "index_p50_ms": 12.530498,
+    "p50_ms_change_pct": -80.72,
+    "control_p99_ms": 110.995705,
+    "index_p99_ms": 18.277425,
+    "p99_ms_change_pct": -83.53,
+    "control_timed_wal_per_write": 1168.1,
+    "index_timed_wal_per_write": 1106.0,
+    "timed_wal_per_write_change_pct": -5.32
+   }
+  ]
+ },
+ "cell_gate": {
+  "expected": 72,
+  "missing": [],
+  "invalid": [],
+  "ok": true
+ }
+}
