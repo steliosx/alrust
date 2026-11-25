@@ -78,3 +78,35 @@ Report: [2026-11-22-savedq-load.md](2026-11-22-savedq-load.md).
   asynchronous promotion trials measured acknowledged loss at some lag thresholds; they are not
   one of the reports here.
 - Synchronous replication, real networks, larger tables.
+
+## 5. Day-to-day reporting: a mention, not a finding
+
+Reports such as alerts by service, by severity or by week read a large part of the `alerts`
+table. On the primary they compete with Alerta's own reads and writes. This project has measured
+none of the options below for Alerta; the list only says where to look.
+
+- **A streaming standby** (with Patroni, a replica that is already there) takes reporting
+  queries off the primary with no new software. Answers are behind the primary by the
+  replication lag.
+- **[Mason](https://github.com/embeddable-hq/mason-data)** (Apache-2.0, self-hosted or as its
+  maker's hosted service) is a read replica for analytics: it copies chosen PostgreSQL tables
+  into DuckDB's columnar storage and answers PostgreSQL SQL from there, so tools such as Grafana
+  or Metabase connect to it as to PostgreSQL. **Not tested by this project.** What follows is
+  its maker's own account, from the project's README as read on 24 November 2026:
+  - counts and a join over 10 million rows, at 1 and at 10 clients: 16 to 214 times faster
+    than PostgreSQL;
+  - lookups by primary key 2.7 to 6.2 times slower than PostgreSQL ("Mason is for scans and
+    aggregates"), so it is for reports, and Alerta itself stays on PostgreSQL;
+  - of 8,323 test queries it answers 94% exactly as PostgreSQL does, answers 1% differently
+    and refuses 6% with an error;
+  - it is pre-1.0, and a release may rename a command, a key or a setting;
+  - continuous sync needs logical replication on the source (`wal_level = logical`, a
+    replication user and a publication); from a standby that needs PostgreSQL 16 or newer.
+    The other mode reads each whole table again at every poll.
+
+  With the hosted service the chosen tables are copied to the maker's machines, and the
+  database's address and login go to that service. Alerts can hold host names, customer names
+  and message text: decide that with whoever owns the data.
+
+A comparison of reporting queries on the primary, on a standby and on such a replica is a
+possible later lab; no result exists.
