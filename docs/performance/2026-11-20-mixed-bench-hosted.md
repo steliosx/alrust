@@ -117,9 +117,9 @@ Rates in each repetition (`-` where the cell has no such class):
 
 Medians of each run, and the change from 17 to 20 November. The 17 November medians are those of
 [its report](2026-11-17-mixed-bench.md). Both runs used the same harness on runners of the same
-type, not the same machine. Every percentage on this page is computed from the unrounded medians
-of the two results files and then rounded to one decimal, so a few differ by 0.1 from what the
-rounded table values give.
+type, not the same machine. Every cross-date percentage change is computed from the unrounded
+medians of the two results files and then rounded to one decimal, so a few differ by 0.1 from what
+the rounded table values give.
 
 | case | arm | writes/s 17 Nov | writes/s 20 Nov | change | reads/s 17 Nov | reads/s 20 Nov | change |
 |---|---|---:|---:|---:|---:|---:|---:|
