@@ -1,0 +1,111 @@
+# The opt-in `alertlinks` and `fastdates` patches of scripts/bench/alerta_fast.py
+# (an add-on for stock Alerta 9.1.0) checked byte for byte against Alerta's
+# own answers: scripts/bench/pages_check.py, on one GitHub-hosted runner with
+# PostgreSQL 18.7 and the reference Alerta environment of
+# scripts/bench/setup.sh. Synthetic data only. The CPU numbers in the result
+# are in-process and relative to the runner: not a benchmark (DECISIONS
+# Y69). Not a required check.
+name: addon pages check
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/bench/alerta_fast.py
+      - scripts/bench/pages_check.py
+      - scripts/bench/setup.sh
+      - .github/workflows/addon-pages.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: addon-pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: alertlinks and fastdates, byte for byte (PostgreSQL 18.7)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
+        with:
+          # The reference Alerta is installed from the pinned submodule.
+          submodules: true
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0 (Node24)
+        with:
+          python-version: "3.12"
+      - name: PostgreSQL 18.7 and the reference Alerta environment
+        timeout-minutes: 10
+        run: scripts/bench/setup.sh
+      - name: pages check
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/pages-out"
+          mkdir -- "$out"
+          # The throwaway cluster of setup.sh: its password is public text.
+          PGPASSWORD=postgres "$BENCH_PG_BIN/psql" -h 127.0.0.1 -p 5432 -U postgres -d postgres \
+            -v ON_ERROR_STOP=1 -c 'CREATE DATABASE pages_check'
+          cd "$BENCH_WORK"
+          env -i PATH="$BENCH_ALERTA_VENV/bin:/usr/bin:/bin" HOME="$BENCH_WORK" \
+            DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/pages_check \
+            SECRET_KEY=bench-not-secret LOG_LEVEL=WARNING \
+            "$BENCH_ALERTA_VENV/bin/python" -I "$GITHUB_WORKSPACE/scripts/bench/pages_check.py" \
+            "$out/pages-check.json" 2>&1 | tee "$out/pages-check.log"
+      - name: The same check on two changed copies of the add-on (each must fail)
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/pages-out"
+          n=0
+          for change in 's/value.isoformat("T", "milliseconds") + "Z"/value.isoformat("T", "microseconds") + "Z"/' \
+                        's/return saved\[1\] + path\[7:\]/return saved[1] + path[8:]/'; do
+            n=$((n + 1))
+            copy="$RUNNER_TEMP/addon-changed-$n"
+            mkdir -- "$copy"
+            sed -e "$change" "$GITHUB_WORKSPACE/scripts/bench/alerta_fast.py" > "$copy/alerta_fast.py"
+            # The change must have happened, once.
+            [ "$(diff "$GITHUB_WORKSPACE/scripts/bench/alerta_fast.py" "$copy/alerta_fast.py" | grep -c '^>')" = 1 ]
+            PGPASSWORD=postgres "$BENCH_PG_BIN/psql" -h 127.0.0.1 -p 5432 -U postgres -d postgres \
+              -v ON_ERROR_STOP=1 -c "CREATE DATABASE pages_changed_$n"
+            status=0
+            (cd "$BENCH_WORK" && env -i PATH="$BENCH_ALERTA_VENV/bin:/usr/bin:/bin" HOME="$BENCH_WORK" \
+              PAGES_ADDON_DIR="$copy" \
+              DATABASE_URL="postgresql://postgres:postgres@127.0.0.1:5432/pages_changed_$n" \
+              SECRET_KEY=bench-not-secret LOG_LEVEL=WARNING \
+              "$BENCH_ALERTA_VENV/bin/python" -I "$GITHUB_WORKSPACE/scripts/bench/pages_check.py" \
+              "$out/pages-changed-$n.json" > "$out/pages-changed-$n.log" 2>&1) || status=$?
+            tail -n 3 -- "$out/pages-changed-$n.log"
+            [ "$status" = 1 ] || { echo "changed copy $n was not caught"; exit 1; }
+            # Caught for the change itself: a complete run with no setup or
+            # reader problem, and differences only where the change is.
+            python3 -I -c 'import json, sys
+          n, d = sys.argv[1], json.load(open(sys.argv[2]))
+          pages = [r for r in d["results"] if r["part"] == "pages" and r["problems"]]
+          enc = [r for r in d["results"] if r["part"] == "encoder" and r["problems"]]
+          fields = set(f for r in pages for f in r.get("differs_in", ["?"]))
+          fast = {"naive, 0 us", "naive, 999 us", "naive, 999999 us", "year 1000", "year 9999", "nested"}
+          checks = [("no setup or reader problem", d["problems"] == []),
+                    ("78 page pairs and 224 encoder cases", d["pages"] == 78 and d["encoder_cases"] == 224),
+                    ("some pages differ", bool(pages))]
+          if n == "1":  # fastdates with microseconds
+              checks += [("only time fields differ in pages", bool(fields) and all(f.endswith("Time") for f in fields)),
+                         ("encoder cases differ, only for the app provider and the values it writes",
+                          bool(enc) and all(r["provider"].startswith("the app") and r["value"] in fast for r in enc))]
+          else:  # alertlinks cutting one character
+              checks += [("only href differs in pages", fields == {"href"}), ("no encoder case differs", not enc)]
+          bad = [what for what, ok in checks if not ok]
+          print(f"changed copy {n}: fields {sorted(fields)}, {len(pages)} pages, {len(enc)} encoder cases;",
+                "caught for its change" if not bad else f"NOT as expected: {bad}")
+          sys.exit(1 if bad else 0)' "$n" "$out/pages-changed-$n.json"
+          done
+          echo "both changed copies were caught for their changes"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1 (Node24)
+        if: always()
+        with:
+          name: addon-pages-check
+          path: ${{ runner.temp }}/pages-out/
+          if-no-files-found: warn
