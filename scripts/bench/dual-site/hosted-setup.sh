@@ -33,4 +33,4 @@ SUMS
 /usr/sbin/varnishd -V
 "$BENCH_ALERTA_VENV/bin/patroni" --version
 # The add-on is main's scripts/bench/alerta_fast.py (placement.py checks the same blob).
-[[ $(git hash-object scripts/bench/alerta_fast.py) == c858e28004376b33163c26d3040ce2c1afead7f7 ]]
+[[ $(git hash-object scripts/bench/alerta_fast.py) == a8ea47300222215a40b17b8b9b44f796e5b9affb ]]
