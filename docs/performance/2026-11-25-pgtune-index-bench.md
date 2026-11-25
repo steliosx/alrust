@@ -10,8 +10,12 @@ about more than one site.
 
 With Alerta's default `PLUGINS`, the `forwarder` plugin returns the alert from `post_receive`,
 and Alerta then writes the alert's tags and attributes again on every receive: two `UPDATE`
-statements with `WHERE id=... OR id LIKE ...`. The primary key's index cannot serve the `LIKE`
-half under a collation other than `C`, so PostgreSQL reads the whole table, twice per receive.
+statements with `WHERE id=... OR id LIKE ...`. This run did not capture the plans of those
+`UPDATE` statements. Its plan probes ran simplified statements with the same predicates on this
+fixture, whose database collation is `C.UTF-8`: without the index, each predicate got a
+sequential scan (see the checks below). The explanation that this supports, and that the
+end-to-end results fit, is that each of the two statements reads the whole table, because the
+primary key's index does not serve the `LIKE` half in this setup.
 The [21 November run](2026-11-21-fastpath-bench.md) measured the index at 1,000 alerts, where a
 whole-table read is cheap: 3% to 5% at 1 client and no gain at 8. This run asks the same question
 where the table is 100 times larger.
@@ -30,10 +34,11 @@ where the table is 100 times larger.
   9.1.0 from the pinned `reference/alerta` submodule (`f4312727`), gunicorn with the gthread
   worker, load tool oha 1.17.0. The add-on is `scripts/bench/alerta_fast.py` at that commit,
   blob `99adfccf560c6b162ad7e86b1796817d19602ba5`; the file on `main` is newer.
-- **Data:** a template of 100,000 alerts (76,054,528 bytes of `alerts`), copied for every cell, made from the 1,000
+- **Data:** a template of 100,000 alerts (76,054,528 bytes of `alerts`), made from the 1,000
   seeded alerts in SQL with new UUID ids, then `VACUUM (ANALYZE)` once. Database collation
   `C.UTF-8` (provider `c`), `alerts.id` with the default collation. The 50 newest alerts are
-  the seeded ones.
+  the seeded ones. Each of the 24 write cells used its own new copy of the template. The 48
+  read cells shared four copies, one per arm.
 - **Shape:** 4 arms, 3 cases, 1 and 8 clients, 3 repetitions: 72 cells. Warm-up 5 s, timed
   15 s. The tables of medians show the median of the three repetitions.
 - **Results file:** [2026-11-25-pgtune-index-bench-results.json](2026-11-25-pgtune-index-bench-results.json),
@@ -108,7 +113,8 @@ The index arm against its control, repetition by repetition:
   p50 latency fell by 79% to 83%.
 - The gain has the same sign and a similar size in all 12 pairs, whichever member ran first.
 - PostgreSQL CPU per duplicate fell from about 19 to 22 ms to about 1.4 to 2.3 ms. Commits per
-  request did not change: the index removes no statement; it makes two of them cheap.
+  request stayed similar (the PostgreSQL counters vary from cell to cell). The experiment
+  changed only the index; Alerta's statements were the same in both members of a pair.
 - The control's rate rose from repetition to repetition in three of the four groups (for
   example `safe` at 1 client: 37.0, 44.7, 51.2 per second, +38% from first to last). The index
   arms moved much less (`safe-idx` at 1 client: 229.3, 243.4, 245.2, +7%). So the percentage
@@ -205,8 +211,8 @@ writes shows more of it per write.
 
 ## What this supports, and what it does not
 
-- **Supported:** on this runner, with Alerta's default plugins and 100,000 alerts under a
-  collation other than `C`, the index made duplicate writes about 3 to 4 times faster on stock
+- **Supported:** on this runner, with Alerta's default plugins and 100,000 alerts in a
+  database with collation `C.UTF-8`, the index made duplicate writes about 3 to 4 times faster on stock
   Alerta and about 5 to 6 times faster with the add-on's `safe` patches. Reads showed no clear
   change.
 - **Why the two baselines differ (a likely reason, not measured):** `safe` removes other costs
