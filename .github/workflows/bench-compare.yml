@@ -12,7 +12,9 @@
 # (scripts/bench/cache_suite.py). The pg19 suite runs Alerta on PostgreSQL
 # 18.7 and 19 side by side (scripts/bench/pg_suite.py). The fastpath
 # suite measures the write path with Alerta's default plugins, with and
-# without the add-on's `noecho` patch (the top of bench_compare.py).
+# without the add-on's `noecho` patch (the top of bench_compare.py). The
+# pgtune suite measures PostgreSQL changes one at a time; step 1 is the ID
+# prefix index alone, at 1,000 or 100,000 alerts (scripts/bench/pgtune_suite.py).
 name: bench compare
 
 on:
@@ -24,10 +26,15 @@ on:
         options: [full, quick]
         default: full
       suite:
-        description: "compare (the four arms), mixed (writers and readers together; pool and key-use sweeps), both, tuning (Alerta deployment settings), addon (alerta_fast.py patches), fastpath (the write path with Alerta's default plugins), cache (a response cache in front of Alerta), pg19 (Alerta on PostgreSQL 18.7 and 19) or all (quick mode only)"
+        description: "compare (the four arms), mixed (writers and readers together; pool and key-use sweeps), both, tuning (Alerta deployment settings), addon (alerta_fast.py patches), fastpath (the write path with Alerta's default plugins), cache (a response cache in front of Alerta), pg19 (Alerta on PostgreSQL 18.7 and 19), pgtune (PostgreSQL changes; step 1: the ID prefix index) or all (quick mode only)"
         type: choice
-        options: [compare, mixed, both, tuning, addon, fastpath, cache, pg19, all]
+        options: [compare, mixed, both, tuning, addon, fastpath, cache, pg19, pgtune, all]
         default: compare
+      pgtune_rows:
+        description: "pgtune suite only: alerts in every pgtune copy (pull requests use 100000)"
+        type: choice
+        options: ["100000", "1000"]
+        default: "100000"
       occupy_5433:
         description: "regression check, quick compare only: another process holds port 5433 during the setup"
         type: boolean
@@ -55,7 +62,7 @@ jobs:
       - name: Refuse full mode with suite all
         if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full' && inputs.suite == 'all'
         run: |
-          echo "::error::suite 'all' is for quick mode only. Start one full run for each of compare, mixed, both, tuning, addon, fastpath, cache or pg19."
+          echo "::error::suite 'all' is for quick mode only. Start one full run for each of compare, mixed, both, tuning, addon, fastpath, cache, pg19 or pgtune."
           exit 1
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
         with:
@@ -89,6 +96,9 @@ jobs:
       - name: Mixed suite gate tests (no server)
         timeout-minutes: 2
         run: python3 -I scripts/bench/test_mixed_checks.py
+      - name: pgtune suite self-test (no server)
+        timeout-minutes: 2
+        run: python3 -I -B scripts/bench/pgtune_suite.py
       # A suite without PostgreSQL 19 must not care about port 5433. Only
       # the regression check asks for this (input occupy_5433, quick compare):
       # no other run binds or looks at the port. The process holds the port
@@ -139,12 +149,15 @@ jobs:
       - name: Benchmark
         # The tuning suite has six arms: about 45 minutes in full mode. The
         # pg19 suite has three arms on two versions: about 50 minutes. The
-        # fastpath suite has five arms: about 40 minutes.
+        # fastpath suite has five arms: about 40 minutes. The pgtune suite has
+        # four arms: about 35 minutes at 100,000 alerts (an estimate).
         timeout-minutes: 70
         env:
           BENCH_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'quick' }}
           # A pull request checks the plumbing of every suite.
           BENCH_SUITE: ${{ github.event_name == 'workflow_dispatch' && inputs.suite || 'all' }}
+          # A pull request runs the pgtune suite's 100,000-alert path.
+          PGTUNE_ROWS: ${{ github.event_name == 'workflow_dispatch' && inputs.pgtune_rows || '100000' }}
         run: |
           set -euo pipefail
           echo "BENCH_OUT=$RUNNER_TEMP/bench-out" >> "$GITHUB_ENV"
