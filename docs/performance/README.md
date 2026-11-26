@@ -31,12 +31,15 @@ all of these tests) and shows them in a web console. This project did not change
 measured Alerta 9.1.0 as released, found where a request spends its time, and tested changes
 that an operator can make without a fork.
 
-A request to Alerta is one of two kinds:
+These tests measured three kinds of request:
 
-- **A write:** a monitoring system sends an alert. Most of the write tests here send a
-  *duplicate*, because monitoring systems often send the same alert again while the problem is
-  still open.
-- **A read:** a person or a dashboard asks for a list of alerts or for a count.
+- **Receive (a write):** a monitoring system sends an alert. Most of the write tests here send
+  a *duplicate*, because monitoring systems often send the same alert again while the problem
+  is still open.
+- **List and count (reads):** a person or a dashboard asks for a list of alerts or for a count.
+
+Alerta has other requests, for example a change of an alert's status or a read of one alert.
+They were not measured here.
 
 The findings are in three groups, and each has a section below:
 
@@ -48,8 +51,8 @@ The findings are in three groups, and each has a section below:
 
 | Word | Meaning |
 |---|---|
-| Duplicate | An alert that Alerta already has, with the same resource, event, environment and severity. Alerta updates the stored alert (count and last receive time); it does not make a new one |
-| Stock Alerta | Alerta 9.1.0 as released, with its default settings and plugins |
+| Duplicate | An alert that Alerta already has, with the same environment, resource, event, severity and customer (or with no customer on both). Alerta updates the stored alert (count and last receive time); it does not make a new one |
+| Stock Alerta | Upstream Alerta 9.1.0 without the add-on. The number of workers, PgBouncer and the plugin settings differ from test to test; each report names them |
 | Plugin | Code that Alerta runs for each alert that it receives. `PLUGINS` in Alerta's configuration lists the active ones |
 | `forwarder` | One of Alerta's default plugins. It sends alerts to another Alerta. It is active even when no destination is set |
 | The add-on | One file of this project, [`alerta_fast.py`](../../scripts/bench/alerta_fast.py). It replaces a few of Alerta's functions when the server starts. Alerta's own files stay as released |
@@ -212,7 +215,7 @@ without the index, in three repetitions. The table shows the medians.
   `safe`, in each of the 12 pairs, whichever member ran first.
 - **PostgreSQL CPU per duplicate** fell from about 19 to 22 ms to about 1.4 to 2.3 ms.
 - **Reads** (alert list and count) showed no clear change: −6.7% to +8.2%, in both directions.
-- **Without the index, the table size sets the rate:** `safe` wrote 737.7 duplicates per
+- **Rates without the index in the two runs:** `safe` wrote 737.7 duplicates per
   second at 8 clients on 1,000 alerts in the 21 November run, and 117.7 here on 100,000. Those
   runs differ in more than the table (PgBouncer is in the path here), so this is context, not
   a measured comparison.
@@ -266,8 +269,8 @@ Report: [2026-11-22-savedq-load.md](2026-11-22-savedq-load.md).
   with no added delay; only etcd peer traffic uses the emulated link. The two-site results so far
   measure Patroni with a near-zero round trip to etcd. A change that sends Patroni's etcd
   traffic through the emulated links is in preparation.
-- **Large tables.** One run used 100,000 alerts (the index run of ②). Every other finished run
-  used about 1,000 alerts or fewer.
+- **Large tables.** The index run of ② measured one fixture of 100,000 alerts. It gives no
+  curve of how the rates change with the table size.
 - **One machine.** Servers, PostgreSQL and the load tool share one runner. There is no real
   network.
 
