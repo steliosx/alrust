@@ -127,6 +127,19 @@ independent run on an 8-vCPU machine
 ([#255](https://github.com/steliosx/alrust/pull/255)) measured similar
 single-client ratios.
 
+### Making stock Alerta faster
+
+The project also measures how far Alerta 9.1.0 as released can be sped up, with configuration,
+PostgreSQL and one add-on file, at one site and at two data sites. The findings, with charts,
+are on one page: [Making Alerta faster: what we measured](docs/performance/README.md). For
+example, at two sites with a 50 ms link, site B's requests were much faster when HAProxy sent
+them to the Alerta at the PostgreSQL primary's site:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/performance/assets/two-site-placement-dark.svg">
+  <img alt="Site B median time per request with a 50 ms link. Site B's own Alerta: list 459 to 464 ms, count 410 to 414 ms, duplicate write 971 to 977 ms. Alerta at the primary's site: list 103 to 104 ms, count 56 ms, duplicate write 61 to 63 ms." src="docs/performance/assets/two-site-placement-light.svg" width="860">
+</picture>
+
 ## Architecture
 
 `alrust-engine` is a pure library with no I/O: it computes lifecycle
