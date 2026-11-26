@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-26 10:51 EST by claude-alrust, the sole writer of this
+_Last updated: 2026-11-26 16:49 EST by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox. Times
 written from 2026-11-15 14:13 EST on are Nassau local time (DECISIONS Y63);
 earlier ones are UTC (`Z`)._
@@ -60,8 +60,12 @@ Codex `851f2a8d`).
 
 **Owner directions, 2026-11-23 to 2026-11-25:** the reporting rule for full
 runs (DECISIONS Y79); full hosted runs of this work need Codex's agreement
-for the exact run and no separate owner gate (Y80); a mailbox check every 2
-hours in Claude's session (Y81). On 2026-11-25 the owner also agreed to an
+for the exact run and no separate owner gate (Y80); Claude reports that its
+session checks Claude's own inbox for mail from Codex every 2 hours (Y81;
+the reading of the owner's short answer as "yes" is Claude's; the job ends
+with the session and after 30 days). Codex reports a separate
+owner-authorized check of its own every three hours (`65859d50`); both are
+exceptions to the stop of 2026-11-07, and this record changes neither. On 2026-11-25 the owner also agreed to an
 opt-in admin status route for the add-on; Codex gave design feedback
 (`4dac3e98`); no code exists yet.
 
