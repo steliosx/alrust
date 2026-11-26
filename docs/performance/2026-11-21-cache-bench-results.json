@@ -1,0 +1,6888 @@
+{
+ "mode": "full",
+ "suite": "cache",
+ "arms": [],
+ "reps": 3,
+ "warm_s": 5,
+ "timed_s": 15,
+ "concurrency": [
+  1,
+  8
+ ],
+ "vcpus": 4,
+ "checks": [],
+ "cells": [],
+ "mixed_arms": [],
+ "mixed_cells": [],
+ "mixed": {
+  "writers": 8,
+  "readers": 16,
+  "identities_per_writer": 1000,
+  "arm_env": {
+   "alrust-p16": {
+    "ALRUST_DB_MAX_CONNECTIONS": "16",
+    "ALRUST_KEY_USAGE_IMMEDIATE": "false"
+   },
+   "alrust-p32": {
+    "ALRUST_DB_MAX_CONNECTIONS": "32",
+    "ALRUST_KEY_USAGE_IMMEDIATE": "false"
+   },
+   "alrust-p64": {
+    "ALRUST_DB_MAX_CONNECTIONS": "64",
+    "ALRUST_KEY_USAGE_IMMEDIATE": "false"
+   },
+   "alrust-p16-immediate": {
+    "ALRUST_DB_MAX_CONNECTIONS": "16",
+    "ALRUST_KEY_USAGE_IMMEDIATE": "true"
+   }
+  }
+ },
+ "env": {
+  "postgres": "PostgreSQL 18.7 (Ubuntu 18.7-1.pgdg24.04+2) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+  "pgbouncer": "PgBouncer 1.26.1\nlibevent 2.1.12-stable\nadns: c-ares 1.27.0\ntls: OpenSSL 3.0.13 30 Jan 2024\nsystemd: yes",
+  "oha": "oha 1.17.0",
+  "alrust_sha256": "974cfb4728738e8b00718e1ae2a18295d2421cc184b280d9d9b27ae78832f6b0",
+  "alrust_commit": "0579d64c313eef50f8cb002319516047d23c6419",
+  "alerta_commit": "f4312727783dad64198b62ed778bbca98a5144a3",
+  "runner": "Linux ubuntu24 20261116.133.1",
+  "headers": {
+   "Authorization": "Key <bench key>",
+   "Accept": "application/json",
+   "Accept-Encoding": "identity"
+  }
+ },
+ "seed": {
+  "alerts": 1000
+ },
+ "cache": {
+  "arms": [
+   "alrust",
+   "alerta",
+   "alerta-cache-1s",
+   "alerta-cache-2s",
+   "alerta-cache-5s"
+  ],
+  "few_arms": [
+   "alrust",
+   "alerta",
+   "alerta-cache-2s"
+  ],
+  "ttls_s": [
+   1,
+   2,
+   5
+  ],
+  "concurrency": [
+   8,
+   32
+  ],
+  "alerta_per_stack": "2x4-pgbu-nofwd",
+  "varnish": "varnishd (varnish-7.1.1 revision 7cee1c581bead20e88d101ab3d72afb29f14d87a)",
+  "haproxy": "HAProxy version 2.8.30-0ubuntu0.24.04.2 2026/10/27 - https://haproxy.org/",
+  "routes": "^/alerts/count$|^/alerts\\?page-size=50&sort-by=lastReceiveTime(&_=[0-9a-z]{1,16})?$",
+  "credentials": "the two synthetic keys, whole",
+  "stale_margin_s": 0.75,
+  "gate_self_test": [
+   {
+    "case": "complete record",
+    "gate_must_pass": true,
+    "gate_passed": true
+   },
+   {
+    "case": "an expiry's check record removed",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "an expiry's checks not passed",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "oracle removed",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "isolation removed",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "separation removed",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "staleness removed",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "burst removed",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "revocation removed",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "oracle not passed",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "isolation not passed",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "separation not passed",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "staleness not passed",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "burst not passed",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "revocation not passed",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "isolation on one cache only",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "isolation with no hit on a cache",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "the X-API-Key list steps removed on one cache",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "one X-API-Key list step removed",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "the third key's step removed",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "the third key answered from the cache",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "the third key refused by Alerta",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "a hit that reached Alerta",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "an answer that differs from Alerta's",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "revocation without its observations",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "revocation with no first 401 on a target",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "staleness without a target",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "revocation without a target",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "a data check removed",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "a data check not passed",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "a data check without a known hit",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "a cell removed",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "a cell not valid",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "a cell twice",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "a cell without counters",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "a cell with one cache's counters",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "a cell without its backend requests",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "counters: writes all passed",
+    "gate_must_pass": true,
+    "gate_passed": true
+   },
+   {
+    "case": "counters: one write not passed",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "counters: one backend request more than writes",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "counters: new URLs all fetched",
+    "gate_must_pass": true,
+    "gate_passed": true
+   },
+   {
+    "case": "counters: one new URL not fetched",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "counters: a repeated URL from the cache",
+    "gate_must_pass": true,
+    "gate_passed": true
+   },
+   {
+    "case": "counters: a repeated URL fetched too often",
+    "gate_must_pass": false,
+    "gate_passed": false
+   },
+   {
+    "case": "counters: a counter that went down",
+    "gate_must_pass": false,
+    "gate_passed": false
+   }
+  ],
+  "probes": [
+   {
+    "ttl_s": 1,
+    "ok": true,
+    "problems": [],
+    "oracle": {
+     "problems": [],
+     "answers": [
+      {
+       "ask": "admin count",
+       "total": 1000,
+       "equals_database": true
+      },
+      {
+       "ask": "admin list",
+       "total": 1000,
+       "equals_database": true
+      },
+      {
+       "ask": "customer count",
+       "total": 7,
+       "equals_database": true
+      },
+      {
+       "ask": "customer list",
+       "total": 7,
+       "equals_database": true
+      },
+      {
+       "ask": "customer count, X-API-Key",
+       "total": 7,
+       "equals_database": true
+      }
+     ],
+     "ok": true
+    },
+    "isolation": {
+     "problems": [],
+     "nodes": [
+      {
+       "cache": 0,
+       "attempts": 1,
+       "steps": [
+        {
+         "ask": "admin, Authorization, count",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, Authorization, count",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, count",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, Authorization, count",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, X-API-Key, count",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, X-API-Key, count",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, X-API-Key, count",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, X-API-Key, count",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, Authorization, list",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, list",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, Authorization, list",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, list",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, X-API-Key, list",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, X-API-Key, list",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, X-API-Key, list",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, X-API-Key, list",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, Authorization, count",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, Authorization, count",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, X-API-Key, count",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, X-API-Key, count",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, Authorization, list",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, Authorization, list",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, api-key parameter",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, api-key parameter",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin Authorization with customer X-API-Key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin Authorization with customer X-API-Key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, with a cookie",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, with a cookie",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, a route not measured",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, a route not measured",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "wrong key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 401,
+         "equals_direct": true
+        },
+        {
+         "ask": "wrong key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 401,
+         "equals_direct": true
+        },
+        {
+         "ask": "no key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 401,
+         "equals_direct": true
+        },
+        {
+         "ask": "no key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 401,
+         "equals_direct": true
+        }
+       ],
+       "hits": 8
+      },
+      {
+       "cache": 1,
+       "attempts": 1,
+       "steps": [
+        {
+         "ask": "admin, Authorization, count",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, Authorization, count",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, count",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, Authorization, count",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, X-API-Key, count",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, X-API-Key, count",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, X-API-Key, count",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, X-API-Key, count",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, Authorization, list",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, list",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, Authorization, list",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, list",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, X-API-Key, list",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, X-API-Key, list",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, X-API-Key, list",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, X-API-Key, list",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, Authorization, count",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, Authorization, count",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, X-API-Key, count",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, X-API-Key, count",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, Authorization, list",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, Authorization, list",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, api-key parameter",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, api-key parameter",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin Authorization with customer X-API-Key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin Authorization with customer X-API-Key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, with a cookie",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, with a cookie",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, a route not measured",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, a route not measured",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "wrong key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 401,
+         "equals_direct": true
+        },
+        {
+         "ask": "wrong key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 401,
+         "equals_direct": true
+        },
+        {
+         "ask": "no key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 401,
+         "equals_direct": true
+        },
+        {
+         "ask": "no key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 401,
+         "equals_direct": true
+        }
+       ],
+       "hits": 8
+      }
+     ],
+     "ok": true
+    },
+    "separation": {
+     "problems": [],
+     "asks": [
+      "admin, Authorization",
+      "customer, Authorization",
+      "admin, X-API-Key",
+      "customer, X-API-Key",
+      "customer, api-key parameter",
+      "wrong key",
+      "no key"
+     ],
+     "totals_direct": [
+      [
+       1000
+      ],
+      [
+       7
+      ],
+      [
+       1000
+      ],
+      [
+       7
+      ],
+      [
+       7
+      ],
+      [],
+      []
+     ],
+     "cache_hits": 4,
+     "ok": true
+    },
+    "staleness": {
+     "problems": [],
+     "limit_s": 1.75,
+     "targets": {
+      "cache 0": {
+       "observations": 53,
+       "old_answers": 8,
+       "last_old_s": 0.3987708350000503,
+       "new_after_s": 0.4527732560000004
+      },
+      "cache 1": {
+       "observations": 53,
+       "old_answers": 13,
+       "last_old_s": 0.657910687000026,
+       "new_after_s": 0.7119932400000266
+      },
+      "front": {
+       "observations": 53,
+       "old_answers": 8,
+       "last_old_s": 0.3994121160000077,
+       "new_after_s": 0.45348223600001347
+      }
+     },
+     "write_status": 201,
+     "total_before": 1000,
+     "total_after": 1001,
+     "ok": true
+    },
+    "burst": {
+     "requests": 32,
+     "backend_requests": 1,
+     "backend_requests_by_cache": [
+      1,
+      0
+     ],
+     "answers_equal_200": true,
+     "problems": [],
+     "ok": true
+    },
+    "revocation": {
+     "problems": [],
+     "limit_s": 1.75,
+     "targets": {
+      "cache 0": {
+       "observations": 49,
+       "old_answers": 20,
+       "last_old_s": 0.9859147949999851,
+       "new_after_s": 1.0454649839999774
+      },
+      "cache 1": {
+       "observations": 49,
+       "old_answers": 20,
+       "last_old_s": 0.9863040669999918,
+       "new_after_s": 1.0534171310000033
+      },
+      "front": {
+       "observations": 49,
+       "old_answers": 20,
+       "last_old_s": 0.9867088039999885,
+       "new_after_s": 1.0616115369999761
+      }
+     },
+     "observed": {
+      "cache 0": {
+       "last_200_s": 0.9859147949999851,
+       "first_401_s": 1.0454649839999774
+      },
+      "cache 1": {
+       "last_200_s": 0.9863040669999918,
+       "first_401_s": 1.0534171310000033
+      },
+      "front": {
+       "last_200_s": 0.9867088039999885,
+       "first_401_s": 1.0616115369999761
+      }
+     },
+     "ok": true
+    }
+   },
+   {
+    "ttl_s": 2,
+    "ok": true,
+    "problems": [],
+    "oracle": {
+     "problems": [],
+     "answers": [
+      {
+       "ask": "admin count",
+       "total": 1000,
+       "equals_database": true
+      },
+      {
+       "ask": "admin list",
+       "total": 1000,
+       "equals_database": true
+      },
+      {
+       "ask": "customer count",
+       "total": 7,
+       "equals_database": true
+      },
+      {
+       "ask": "customer list",
+       "total": 7,
+       "equals_database": true
+      },
+      {
+       "ask": "customer count, X-API-Key",
+       "total": 7,
+       "equals_database": true
+      }
+     ],
+     "ok": true
+    },
+    "isolation": {
+     "problems": [],
+     "nodes": [
+      {
+       "cache": 0,
+       "attempts": 1,
+       "steps": [
+        {
+         "ask": "admin, Authorization, count",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, Authorization, count",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, count",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, Authorization, count",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, X-API-Key, count",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, X-API-Key, count",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, X-API-Key, count",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, X-API-Key, count",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, Authorization, list",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, list",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, Authorization, list",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, list",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, X-API-Key, list",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, X-API-Key, list",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, X-API-Key, list",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, X-API-Key, list",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, Authorization, count",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, Authorization, count",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, X-API-Key, count",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, X-API-Key, count",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, Authorization, list",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, Authorization, list",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, api-key parameter",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, api-key parameter",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin Authorization with customer X-API-Key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin Authorization with customer X-API-Key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, with a cookie",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, with a cookie",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, a route not measured",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, a route not measured",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "wrong key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 401,
+         "equals_direct": true
+        },
+        {
+         "ask": "wrong key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 401,
+         "equals_direct": true
+        },
+        {
+         "ask": "no key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 401,
+         "equals_direct": true
+        },
+        {
+         "ask": "no key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 401,
+         "equals_direct": true
+        }
+       ],
+       "hits": 8
+      },
+      {
+       "cache": 1,
+       "attempts": 1,
+       "steps": [
+        {
+         "ask": "admin, Authorization, count",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, Authorization, count",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, count",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, Authorization, count",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, X-API-Key, count",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, X-API-Key, count",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, X-API-Key, count",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, X-API-Key, count",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, Authorization, list",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, list",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, Authorization, list",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, list",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, X-API-Key, list",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, X-API-Key, list",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, X-API-Key, list",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, X-API-Key, list",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, Authorization, count",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, Authorization, count",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, X-API-Key, count",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, X-API-Key, count",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, Authorization, list",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, Authorization, list",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, api-key parameter",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, api-key parameter",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin Authorization with customer X-API-Key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin Authorization with customer X-API-Key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, with a cookie",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, with a cookie",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, a route not measured",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, a route not measured",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "wrong key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 401,
+         "equals_direct": true
+        },
+        {
+         "ask": "wrong key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 401,
+         "equals_direct": true
+        },
+        {
+         "ask": "no key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 401,
+         "equals_direct": true
+        },
+        {
+         "ask": "no key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 401,
+         "equals_direct": true
+        }
+       ],
+       "hits": 8
+      }
+     ],
+     "ok": true
+    },
+    "separation": {
+     "problems": [],
+     "asks": [
+      "admin, Authorization",
+      "customer, Authorization",
+      "admin, X-API-Key",
+      "customer, X-API-Key",
+      "customer, api-key parameter",
+      "wrong key",
+      "no key"
+     ],
+     "totals_direct": [
+      [
+       1000
+      ],
+      [
+       7
+      ],
+      [
+       1000
+      ],
+      [
+       7
+      ],
+      [
+       7
+      ],
+      [],
+      []
+     ],
+     "cache_hits": 4,
+     "ok": true
+    },
+    "staleness": {
+     "problems": [],
+     "limit_s": 2.75,
+     "targets": {
+      "cache 0": {
+       "observations": 92,
+       "old_answers": 27,
+       "last_old_s": 1.3731516210000336,
+       "new_after_s": 1.4290783000000147
+      },
+      "cache 1": {
+       "observations": 92,
+       "old_answers": 32,
+       "last_old_s": 1.635045826999999,
+       "new_after_s": 1.6900885329999937
+      },
+      "front": {
+       "observations": 92,
+       "old_answers": 27,
+       "last_old_s": 1.3739684050000278,
+       "new_after_s": 1.4297388809999916
+      }
+     },
+     "write_status": 201,
+     "total_before": 1000,
+     "total_after": 1001,
+     "ok": true
+    },
+    "burst": {
+     "requests": 32,
+     "backend_requests": 1,
+     "backend_requests_by_cache": [
+      1,
+      0
+     ],
+     "answers_equal_200": true,
+     "problems": [],
+     "ok": true
+    },
+    "revocation": {
+     "problems": [],
+     "limit_s": 2.75,
+     "targets": {
+      "cache 0": {
+       "observations": 81,
+       "old_answers": 39,
+       "last_old_s": 1.961379308000005,
+       "new_after_s": 2.0210542629999964
+      },
+      "cache 1": {
+       "observations": 81,
+       "old_answers": 39,
+       "last_old_s": 1.9618601720000015,
+       "new_after_s": 2.0292271609999943
+      },
+      "front": {
+       "observations": 81,
+       "old_answers": 39,
+       "last_old_s": 1.9621775809999917,
+       "new_after_s": 2.037140610999984
+      }
+     },
+     "observed": {
+      "cache 0": {
+       "last_200_s": 1.961379308000005,
+       "first_401_s": 2.0210542629999964
+      },
+      "cache 1": {
+       "last_200_s": 1.9618601720000015,
+       "first_401_s": 2.0292271609999943
+      },
+      "front": {
+       "last_200_s": 1.9621775809999917,
+       "first_401_s": 2.037140610999984
+      }
+     },
+     "ok": true
+    }
+   },
+   {
+    "ttl_s": 5,
+    "ok": true,
+    "problems": [],
+    "oracle": {
+     "problems": [],
+     "answers": [
+      {
+       "ask": "admin count",
+       "total": 1000,
+       "equals_database": true
+      },
+      {
+       "ask": "admin list",
+       "total": 1000,
+       "equals_database": true
+      },
+      {
+       "ask": "customer count",
+       "total": 7,
+       "equals_database": true
+      },
+      {
+       "ask": "customer list",
+       "total": 7,
+       "equals_database": true
+      },
+      {
+       "ask": "customer count, X-API-Key",
+       "total": 7,
+       "equals_database": true
+      }
+     ],
+     "ok": true
+    },
+    "isolation": {
+     "problems": [],
+     "nodes": [
+      {
+       "cache": 0,
+       "attempts": 1,
+       "steps": [
+        {
+         "ask": "admin, Authorization, count",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, Authorization, count",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, count",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, Authorization, count",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, X-API-Key, count",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, X-API-Key, count",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, X-API-Key, count",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, X-API-Key, count",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, Authorization, list",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, list",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, Authorization, list",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, list",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, X-API-Key, list",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, X-API-Key, list",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, X-API-Key, list",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, X-API-Key, list",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, Authorization, count",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, Authorization, count",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, X-API-Key, count",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, X-API-Key, count",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, Authorization, list",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, Authorization, list",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, api-key parameter",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, api-key parameter",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin Authorization with customer X-API-Key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin Authorization with customer X-API-Key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, with a cookie",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, with a cookie",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, a route not measured",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, a route not measured",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "wrong key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 401,
+         "equals_direct": true
+        },
+        {
+         "ask": "wrong key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 401,
+         "equals_direct": true
+        },
+        {
+         "ask": "no key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 401,
+         "equals_direct": true
+        },
+        {
+         "ask": "no key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 401,
+         "equals_direct": true
+        }
+       ],
+       "hits": 8
+      },
+      {
+       "cache": 1,
+       "attempts": 1,
+       "steps": [
+        {
+         "ask": "admin, Authorization, count",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, Authorization, count",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, count",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, Authorization, count",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, X-API-Key, count",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, X-API-Key, count",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, X-API-Key, count",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, X-API-Key, count",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, Authorization, list",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, list",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, Authorization, list",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, list",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, X-API-Key, list",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, X-API-Key, list",
+         "expected": "miss",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, X-API-Key, list",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, X-API-Key, list",
+         "expected": "hit",
+         "backend_requests": 0,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, Authorization, count",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, Authorization, count",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, X-API-Key, count",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, X-API-Key, count",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, Authorization, list",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "third valid key, Authorization, list",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, api-key parameter",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "customer, api-key parameter",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin Authorization with customer X-API-Key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin Authorization with customer X-API-Key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, with a cookie",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, with a cookie",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, a route not measured",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "admin, Authorization, a route not measured",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 200,
+         "equals_direct": true
+        },
+        {
+         "ask": "wrong key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 401,
+         "equals_direct": true
+        },
+        {
+         "ask": "wrong key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 401,
+         "equals_direct": true
+        },
+        {
+         "ask": "no key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 401,
+         "equals_direct": true
+        },
+        {
+         "ask": "no key",
+         "expected": "pass",
+         "backend_requests": 1,
+         "status": 401,
+         "equals_direct": true
+        }
+       ],
+       "hits": 8
+      }
+     ],
+     "ok": true
+    },
+    "separation": {
+     "problems": [],
+     "asks": [
+      "admin, Authorization",
+      "customer, Authorization",
+      "admin, X-API-Key",
+      "customer, X-API-Key",
+      "customer, api-key parameter",
+      "wrong key",
+      "no key"
+     ],
+     "totals_direct": [
+      [
+       1000
+      ],
+      [
+       7
+      ],
+      [
+       1000
+      ],
+      [
+       7
+      ],
+      [
+       7
+      ],
+      [],
+      []
+     ],
+     "cache_hits": 4,
+     "ok": true
+    },
+    "staleness": {
+     "problems": [],
+     "limit_s": 5.75,
+     "targets": {
+      "cache 0": {
+       "observations": 209,
+       "old_answers": 86,
+       "last_old_s": 4.401523177000001,
+       "new_after_s": 4.457512823999991
+      },
+      "cache 1": {
+       "observations": 209,
+       "old_answers": 91,
+       "last_old_s": 4.662504057999968,
+       "new_after_s": 4.717224255000019
+      },
+      "front": {
+       "observations": 209,
+       "old_answers": 86,
+       "last_old_s": 4.402116626000009,
+       "new_after_s": 4.45815374
+      }
+     },
+     "write_status": 201,
+     "total_before": 1000,
+     "total_after": 1001,
+     "ok": true
+    },
+    "burst": {
+     "requests": 32,
+     "backend_requests": 1,
+     "backend_requests_by_cache": [
+      1,
+      0
+     ],
+     "answers_equal_200": true,
+     "problems": [],
+     "ok": true
+    },
+    "revocation": {
+     "problems": [],
+     "limit_s": 5.75,
+     "targets": {
+      "cache 0": {
+       "observations": 181,
+       "old_answers": 98,
+       "last_old_s": 4.987075905999973,
+       "new_after_s": 5.047399716999962
+      },
+      "cache 1": {
+       "observations": 181,
+       "old_answers": 98,
+       "last_old_s": 4.987513468999964,
+       "new_after_s": 5.056078588999981
+      },
+      "front": {
+       "observations": 181,
+       "old_answers": 98,
+       "last_old_s": 4.987838819999979,
+       "new_after_s": 5.064537250000001
+      }
+     },
+     "observed": {
+      "cache 0": {
+       "last_200_s": 4.987075905999973,
+       "first_401_s": 5.047399716999962
+      },
+      "cache 1": {
+       "last_200_s": 4.987513468999964,
+       "first_401_s": 5.056078588999981
+      },
+      "front": {
+       "last_200_s": 4.987838819999979,
+       "first_401_s": 5.064537250000001
+      }
+     },
+     "ok": true
+    }
+   }
+  ],
+  "checks": [
+   {
+    "arm": "alrust",
+    "rep": 0,
+    "ok": true,
+    "problems": [],
+    "known_hits": null,
+    "attempts": 1
+   },
+   {
+    "arm": "alerta",
+    "rep": 0,
+    "ok": true,
+    "problems": [],
+    "known_hits": null,
+    "attempts": 1
+   },
+   {
+    "arm": "alerta-cache-1s",
+    "rep": 0,
+    "ok": true,
+    "problems": [],
+    "known_hits": 3,
+    "attempts": 1
+   },
+   {
+    "arm": "alerta-cache-2s",
+    "rep": 0,
+    "ok": true,
+    "problems": [],
+    "known_hits": 3,
+    "attempts": 1
+   },
+   {
+    "arm": "alerta-cache-5s",
+    "rep": 0,
+    "ok": true,
+    "problems": [],
+    "known_hits": 3,
+    "attempts": 1
+   },
+   {
+    "arm": "alerta",
+    "rep": 1,
+    "ok": true,
+    "problems": [],
+    "known_hits": null,
+    "attempts": 1
+   },
+   {
+    "arm": "alerta-cache-1s",
+    "rep": 1,
+    "ok": true,
+    "problems": [],
+    "known_hits": 3,
+    "attempts": 1
+   },
+   {
+    "arm": "alerta-cache-2s",
+    "rep": 1,
+    "ok": true,
+    "problems": [],
+    "known_hits": 3,
+    "attempts": 1
+   },
+   {
+    "arm": "alerta-cache-5s",
+    "rep": 1,
+    "ok": true,
+    "problems": [],
+    "known_hits": 3,
+    "attempts": 1
+   },
+   {
+    "arm": "alrust",
+    "rep": 1,
+    "ok": true,
+    "problems": [],
+    "known_hits": null,
+    "attempts": 1
+   },
+   {
+    "arm": "alerta-cache-1s",
+    "rep": 2,
+    "ok": true,
+    "problems": [],
+    "known_hits": 3,
+    "attempts": 1
+   },
+   {
+    "arm": "alerta-cache-2s",
+    "rep": 2,
+    "ok": true,
+    "problems": [],
+    "known_hits": 3,
+    "attempts": 1
+   },
+   {
+    "arm": "alerta-cache-5s",
+    "rep": 2,
+    "ok": true,
+    "problems": [],
+    "known_hits": 3,
+    "attempts": 1
+   },
+   {
+    "arm": "alrust",
+    "rep": 2,
+    "ok": true,
+    "problems": [],
+    "known_hits": null,
+    "attempts": 1
+   },
+   {
+    "arm": "alerta",
+    "rep": 2,
+    "ok": true,
+    "problems": [],
+    "known_hits": null,
+    "attempts": 1
+   }
+  ],
+  "cells": [
+   {
+    "rps": 6749.743963689742,
+    "p50_ms": 1.150683,
+    "p99_ms": 2.1096719999999998,
+    "requests": 101255,
+    "non_2xx": 0,
+    "ok": 101255,
+    "errors": 0,
+    "size_per_request": 173,
+    "warm": {
+     "rps": 6763.836542357885,
+     "p50_ms": 1.143685,
+     "p99_ms": 2.08078,
+     "requests": 33831,
+     "non_2xx": 0,
+     "ok": 33831,
+     "errors": 0,
+     "size_per_request": 173
+    },
+    "arm": "alrust",
+    "case": "count",
+    "c": 8,
+    "rep": 0,
+    "db": "bench_cache_read",
+    "wall_s": 15.030913931999976,
+    "alive": true,
+    "server_cpu_ms_per_request": 0.12137672213717841,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.031010814280776258,
+    "postgres_cpu_ms_per_request": 0.33973630931805837,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 7887.708369119328,
+    "p50_ms": 4.017777000000001,
+    "p99_ms": 5.986959,
+    "requests": 118351,
+    "non_2xx": 0,
+    "ok": 118351,
+    "errors": 0,
+    "size_per_request": 173,
+    "warm": {
+     "rps": 7796.701529788918,
+     "p50_ms": 4.04779,
+     "p99_ms": 6.15273,
+     "requests": 39015,
+     "non_2xx": 0,
+     "ok": 39015,
+     "errors": 0,
+     "size_per_request": 173
+    },
+    "arm": "alrust",
+    "case": "count",
+    "c": 32,
+    "rep": 0,
+    "db": "bench_cache_read",
+    "wall_s": 15.038380750999977,
+    "alive": true,
+    "server_cpu_ms_per_request": 0.10528005678025534,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.02450338400182508,
+    "postgres_cpu_ms_per_request": 0.3348514165490786,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 1328.1616216325867,
+    "p50_ms": 5.9113500000000005,
+    "p99_ms": 10.019952,
+    "requests": 19933,
+    "non_2xx": 0,
+    "ok": 19933,
+    "errors": 0,
+    "size_per_request": 41148,
+    "warm": {
+     "rps": 1317.6391936554894,
+     "p50_ms": 5.939559,
+     "p99_ms": 10.091706,
+     "requests": 6596,
+     "non_2xx": 0,
+     "ok": 6596,
+     "errors": 0,
+     "size_per_request": 41148
+    },
+    "arm": "alrust",
+    "case": "list",
+    "c": 8,
+    "rep": 0,
+    "db": "bench_cache_read",
+    "wall_s": 15.018002345000014,
+    "alive": true,
+    "server_cpu_ms_per_request": 1.1287814177494606,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.06220839813374806,
+    "postgres_cpu_ms_per_request": 1.466914162444188,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 1406.0106781404897,
+    "p50_ms": 22.569954,
+    "p99_ms": 31.481991,
+    "requests": 21120,
+    "non_2xx": 0,
+    "ok": 21120,
+    "errors": 0,
+    "size_per_request": 41148,
+    "warm": {
+     "rps": 1410.701638419964,
+     "p50_ms": 22.496660000000002,
+     "p99_ms": 31.467516,
+     "requests": 7085,
+     "non_2xx": 0,
+     "ok": 7085,
+     "errors": 0,
+     "size_per_request": 41148
+    },
+    "arm": "alrust",
+    "case": "list",
+    "c": 32,
+    "rep": 0,
+    "db": "bench_cache_read",
+    "wall_s": 15.031373199999962,
+    "alive": true,
+    "server_cpu_ms_per_request": 1.1420454545454546,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.056818181818181816,
+    "postgres_cpu_ms_per_request": 1.472064393939394,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 1318.5536877034272,
+    "p50_ms": 5.9417029999999995,
+    "p99_ms": 10.076112,
+    "requests": 19788,
+    "non_2xx": 0,
+    "ok": 19788,
+    "errors": 0,
+    "size_per_request": 41148,
+    "warm": {
+     "rps": 1314.9259640971613,
+     "p50_ms": 5.973247,
+     "p99_ms": 10.185407,
+     "requests": 6584,
+     "non_2xx": 0,
+     "ok": 6584,
+     "errors": 0,
+     "size_per_request": 41148
+    },
+    "arm": "alrust",
+    "case": "list-unique",
+    "c": 8,
+    "rep": 0,
+    "db": "bench_cache_read",
+    "wall_s": 15.017268339999987,
+    "alive": true,
+    "server_cpu_ms_per_request": 1.131493834647261,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.06316959773600161,
+    "postgres_cpu_ms_per_request": 1.4650293106933494,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 2876.6055022800942,
+    "p50_ms": 2.772789,
+    "p99_ms": 3.063873,
+    "requests": 43160,
+    "non_2xx": 0,
+    "ok": 43160,
+    "errors": 0,
+    "size_per_request": 1128,
+    "warm": {
+     "rps": 2807.017428853158,
+     "p50_ms": 2.8247609999999996,
+     "p99_ms": 3.200536,
+     "requests": 14045,
+     "non_2xx": 0,
+     "ok": 14045,
+     "errors": 0,
+     "size_per_request": 1127
+    },
+    "arm": "alrust",
+    "case": "write-dup",
+    "c": 8,
+    "rep": 0,
+    "db": "bench_cache_write_alrust_r0",
+    "wall_s": 15.018862060000004,
+    "alive": true,
+    "server_cpu_ms_per_request": 0.3148748841519926,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.051899907321594066,
+    "postgres_cpu_ms_per_request": 0.31163113994439295,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 1006.3947916314158,
+    "p50_ms": 7.850849,
+    "p99_ms": 11.634689999999999,
+    "requests": 15103,
+    "non_2xx": 0,
+    "ok": 15103,
+    "errors": 0,
+    "size_per_request": 194,
+    "warm": {
+     "rps": 998.5646879318393,
+     "p50_ms": 7.881628,
+     "p99_ms": 12.125364,
+     "requests": 4998,
+     "non_2xx": 0,
+     "ok": 4998,
+     "errors": 0,
+     "size_per_request": 194
+    },
+    "arm": "alerta",
+    "case": "count",
+    "c": 8,
+    "rep": 0,
+    "db": "bench_cache_read",
+    "wall_s": 15.015544841999997,
+    "alive": true,
+    "server_cpu_ms_per_request": 1.761239488843276,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.08011653313911143,
+    "postgres_cpu_ms_per_request": 1.2103555584983117,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 1046.866304869188,
+    "p50_ms": 28.364846999999997,
+    "p99_ms": 58.988226999999995,
+    "requests": 15730,
+    "non_2xx": 0,
+    "ok": 15730,
+    "errors": 0,
+    "size_per_request": 194,
+    "warm": {
+     "rps": 1039.2721463989544,
+     "p50_ms": 30.773248,
+     "p99_ms": 53.645124,
+     "requests": 5223,
+     "non_2xx": 0,
+     "ok": 5223,
+     "errors": 0,
+     "size_per_request": 194
+    },
+    "arm": "alerta",
+    "case": "count",
+    "c": 32,
+    "rep": 0,
+    "db": "bench_cache_read",
+    "wall_s": 15.034340297999961,
+    "alive": true,
+    "server_cpu_ms_per_request": 1.7387158296249206,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.080737444373808,
+    "postgres_cpu_ms_per_request": 1.3674507310870947,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 407.9473842398237,
+    "p50_ms": 19.448098,
+    "p99_ms": 32.793345,
+    "requests": 6125,
+    "non_2xx": 0,
+    "ok": 6125,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 424.0888529389207,
+     "p50_ms": 18.766731,
+     "p99_ms": 31.20957,
+     "requests": 2126,
+     "non_2xx": 0,
+     "ok": 2126,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta",
+    "case": "list",
+    "c": 8,
+    "rep": 0,
+    "db": "bench_cache_read",
+    "wall_s": 15.020322061999991,
+    "alive": true,
+    "server_cpu_ms_per_request": 4.546938775510204,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.0946938775510204,
+    "postgres_cpu_ms_per_request": 2.608979591836735,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 443.9425921547355,
+    "p50_ms": 50.099394,
+    "p99_ms": 173.230874,
+    "requests": 6700,
+    "non_2xx": 0,
+    "ok": 6700,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 443.7463882528954,
+     "p50_ms": 59.392358,
+     "p99_ms": 160.567301,
+     "requests": 2249,
+     "non_2xx": 0,
+     "ok": 2249,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta",
+    "case": "list",
+    "c": 32,
+    "rep": 0,
+    "db": "bench_cache_read",
+    "wall_s": 15.098983388999955,
+    "alive": true,
+    "server_cpu_ms_per_request": 4.6985074626865675,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.10298507462686567,
+    "postgres_cpu_ms_per_request": 2.734328358208955,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 408.85480345849464,
+    "p50_ms": 19.093443,
+    "p99_ms": 34.58198,
+    "requests": 6141,
+    "non_2xx": 0,
+    "ok": 6141,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 402.65970788327417,
+     "p50_ms": 19.193761,
+     "p99_ms": 37.796978,
+     "requests": 2022,
+     "non_2xx": 0,
+     "ok": 2022,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta",
+    "case": "list-unique",
+    "c": 8,
+    "rep": 0,
+    "db": "bench_cache_read",
+    "wall_s": 15.02657750100002,
+    "alive": true,
+    "server_cpu_ms_per_request": 4.616511968734733,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.09933235629376323,
+    "postgres_cpu_ms_per_request": 2.6217228464419478,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 716.0633467076743,
+    "p50_ms": 11.063771,
+    "p99_ms": 15.527569,
+    "requests": 10747,
+    "non_2xx": 0,
+    "ok": 10747,
+    "errors": 0,
+    "size_per_request": 1229,
+    "warm": {
+     "rps": 708.9347227984338,
+     "p50_ms": 11.106874,
+     "p99_ms": 16.580012,
+     "requests": 3551,
+     "non_2xx": 0,
+     "ok": 3551,
+     "errors": 0,
+     "size_per_request": 1228
+    },
+    "arm": "alerta",
+    "case": "write-dup",
+    "c": 8,
+    "rep": 0,
+    "db": "bench_cache_write_alerta_r0",
+    "wall_s": 15.015092144999926,
+    "alive": true,
+    "server_cpu_ms_per_request": 2.7198287894296085,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.08746626965664837,
+    "postgres_cpu_ms_per_request": 1.4943705220061412,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 74429.33974231516,
+    "p50_ms": 0.09904299999999999,
+    "p99_ms": 0.217979,
+    "requests": 1116644,
+    "non_2xx": 0,
+    "ok": 1116644,
+    "errors": 0,
+    "size_per_request": 194,
+    "warm": {
+     "rps": 75097.7566499166,
+     "p50_ms": 0.098644,
+     "p99_ms": 0.21353,
+     "requests": 375630,
+     "non_2xx": 0,
+     "ok": 375630,
+     "errors": 0,
+     "size_per_request": 194
+    },
+    "arm": "alerta-cache-1s",
+    "case": "count",
+    "c": 8,
+    "rep": 0,
+    "db": "bench_cache_read",
+    "wall_s": 15.375378117999958,
+    "alive": true,
+    "server_cpu_ms_per_request": 4.477702830982838e-05,
+    "cache_cpu_ms_per_request": 0.017633193748410415,
+    "front_cpu_ms_per_request": 0.019433230286465517,
+    "postgres_cpu_ms_per_request": 3.58216226478627e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 375629,
+       "cache_miss": 7,
+       "s_pass": 2,
+       "backend_req": 9
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 1492258,
+       "cache_miss": 22,
+       "s_pass": 2,
+       "backend_req": 24
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 1116629,
+       "cache_miss": 15,
+       "backend_req": 15,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 15,
+    "hit_ratio": 0.999986566891507,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 82683.50802156022,
+    "p50_ms": 0.366093,
+    "p99_ms": 0.88869,
+    "requests": 1240640,
+    "non_2xx": 0,
+    "ok": 1240640,
+    "errors": 0,
+    "size_per_request": 194,
+    "warm": {
+     "rps": 84786.97736963537,
+     "p50_ms": 0.35970199999999997,
+     "p99_ms": 0.794273,
+     "requests": 424092,
+     "non_2xx": 0,
+     "ok": 424092,
+     "errors": 0,
+     "size_per_request": 194
+    },
+    "arm": "alerta-cache-1s",
+    "case": "count",
+    "c": 32,
+    "rep": 0,
+    "db": "bench_cache_read",
+    "wall_s": 15.370637184999964,
+    "alive": true,
+    "server_cpu_ms_per_request": 2.4181067835955634e-05,
+    "cache_cpu_ms_per_request": 0.018377611555326284,
+    "front_cpu_ms_per_request": 0.017474851689450607,
+    "postgres_cpu_ms_per_request": 5.642249161722982e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 1916345,
+       "cache_miss": 27,
+       "s_pass": 2,
+       "backend_req": 29
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 3156970,
+       "cache_miss": 42,
+       "s_pass": 2,
+       "backend_req": 44
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 1240625,
+       "cache_miss": 15,
+       "backend_req": 15,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 15,
+    "hit_ratio": 0.9999879094660821,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 48557.3598736817,
+    "p50_ms": 0.15342,
+    "p99_ms": 0.32445999999999997,
+    "requests": 728508,
+    "non_2xx": 0,
+    "ok": 728508,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 47879.17998526439,
+     "p50_ms": 0.156379,
+     "p99_ms": 0.320441,
+     "requests": 239492,
+     "non_2xx": 0,
+     "ok": 239492,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta-cache-1s",
+    "case": "list",
+    "c": 8,
+    "rep": 0,
+    "db": "bench_cache_read",
+    "wall_s": 15.219062389999976,
+    "alive": true,
+    "server_cpu_ms_per_request": 0.00012354016702630582,
+    "cache_cpu_ms_per_request": 0.023651078642924993,
+    "front_cpu_ms_per_request": 0.03181845635188632,
+    "postgres_cpu_ms_per_request": 8.236011135087055e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 3396457,
+       "cache_miss": 47,
+       "s_pass": 2,
+       "backend_req": 49
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 4124950,
+       "cache_miss": 62,
+       "s_pass": 2,
+       "backend_req": 64
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 728493,
+       "cache_miss": 15,
+       "backend_req": 15,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 15,
+    "hit_ratio": 0.9999794099721623,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 50808.10773233821,
+    "p50_ms": 0.6042489999999999,
+    "p99_ms": 1.304254,
+    "requests": 762251,
+    "non_2xx": 0,
+    "ok": 762251,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 50768.440968467905,
+     "p50_ms": 0.609514,
+     "p99_ms": 1.22082,
+     "requests": 254008,
+     "non_2xx": 0,
+     "ok": 254008,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta-cache-1s",
+    "case": "list",
+    "c": 32,
+    "rep": 0,
+    "db": "bench_cache_read",
+    "wall_s": 15.221524112999987,
+    "alive": true,
+    "server_cpu_ms_per_request": 9.183326751949161e-05,
+    "cache_cpu_ms_per_request": 0.025372219911813824,
+    "front_cpu_ms_per_request": 0.032141643631822064,
+    "postgres_cpu_ms_per_request": 7.871422930242138e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 4378953,
+       "cache_miss": 67,
+       "s_pass": 2,
+       "backend_req": 69
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 5141189,
+       "cache_miss": 82,
+       "s_pass": 2,
+       "backend_req": 84
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 762236,
+       "cache_miss": 15,
+       "backend_req": 15,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 15,
+    "hit_ratio": 0.9999803214426743,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 75639.83748829557,
+    "p50_ms": 0.098244,
+    "p99_ms": 0.207085,
+    "requests": 1134795,
+    "non_2xx": 0,
+    "ok": 1134795,
+    "errors": 0,
+    "size_per_request": 194,
+    "warm": {
+     "rps": 75788.47289259004,
+     "p50_ms": 0.09793199999999999,
+     "p99_ms": 0.209644,
+     "requests": 379207,
+     "non_2xx": 0,
+     "ok": 379207,
+     "errors": 0,
+     "size_per_request": 194
+    },
+    "arm": "alerta-cache-2s",
+    "case": "count",
+    "c": 8,
+    "rep": 0,
+    "db": "bench_cache_read",
+    "wall_s": 15.354175391000012,
+    "alive": true,
+    "server_cpu_ms_per_request": 1.7624328623231508e-05,
+    "cache_cpu_ms_per_request": 0.017818196238087055,
+    "front_cpu_ms_per_request": 0.019210518199322346,
+    "postgres_cpu_ms_per_request": 3.5248657246463016e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 379208,
+       "cache_miss": 5,
+       "s_pass": 2,
+       "backend_req": 7
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 1513995,
+       "cache_miss": 13,
+       "s_pass": 2,
+       "backend_req": 15
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 1134787,
+       "cache_miss": 8,
+       "backend_req": 8,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 8,
+    "hit_ratio": 0.9999929502685507,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 83875.6765227131,
+    "p50_ms": 0.36143,
+    "p99_ms": 0.839546,
+    "requests": 1258534,
+    "non_2xx": 0,
+    "ok": 1258534,
+    "errors": 0,
+    "size_per_request": 194,
+    "warm": {
+     "rps": 82546.54581246019,
+     "p50_ms": 0.368034,
+     "p99_ms": 0.868232,
+     "requests": 412955,
+     "non_2xx": 0,
+     "ok": 412955,
+     "errors": 0,
+     "size_per_request": 194
+    },
+    "arm": "alerta-cache-2s",
+    "case": "count",
+    "c": 32,
+    "rep": 0,
+    "db": "bench_cache_read",
+    "wall_s": 15.484802102000003,
+    "alive": true,
+    "server_cpu_ms_per_request": 2.3837258270336757e-05,
+    "cache_cpu_ms_per_request": 0.01832290585713219,
+    "front_cpu_ms_per_request": 0.017671354131076317,
+    "postgres_cpu_ms_per_request": 3.972876378389459e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 1926947,
+       "cache_miss": 16,
+       "s_pass": 2,
+       "backend_req": 18
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 3185473,
+       "cache_miss": 24,
+       "s_pass": 2,
+       "backend_req": 26
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 1258526,
+       "cache_miss": 8,
+       "backend_req": 8,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 8,
+    "hit_ratio": 0.9999936433977946,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 48654.777387595386,
+    "p50_ms": 0.15333,
+    "p99_ms": 0.32496,
+    "requests": 729949,
+    "non_2xx": 0,
+    "ok": 729949,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 47368.48568062714,
+     "p50_ms": 0.157949,
+     "p99_ms": 0.32873,
+     "requests": 236952,
+     "non_2xx": 0,
+     "ok": 236952,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta-cache-2s",
+    "case": "list",
+    "c": 8,
+    "rep": 0,
+    "db": "bench_cache_read",
+    "wall_s": 15.260949067999945,
+    "alive": true,
+    "server_cpu_ms_per_request": 8.21975233886203e-05,
+    "cache_cpu_ms_per_request": 0.02386468095716276,
+    "front_cpu_ms_per_request": 0.03183784072585893,
+    "postgres_cpu_ms_per_request": 2.7399174462873435e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 3422422,
+       "cache_miss": 27,
+       "s_pass": 2,
+       "backend_req": 29
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 4152363,
+       "cache_miss": 35,
+       "s_pass": 2,
+       "backend_req": 37
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 729941,
+       "cache_miss": 8,
+       "backend_req": 8,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 8,
+    "hit_ratio": 0.9999890403302149,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 50725.51929002987,
+    "p50_ms": 0.606614,
+    "p99_ms": 1.287162,
+    "requests": 761054,
+    "non_2xx": 0,
+    "ok": 761054,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 50884.45548677748,
+     "p50_ms": 0.601948,
+     "p99_ms": 1.311786,
+     "requests": 254567,
+     "non_2xx": 0,
+     "ok": 254567,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta-cache-2s",
+    "case": "list",
+    "c": 32,
+    "rep": 0,
+    "db": "bench_cache_read",
+    "wall_s": 15.282228238000016,
+    "alive": true,
+    "server_cpu_ms_per_request": 5.2558688345373655e-05,
+    "cache_cpu_ms_per_request": 0.02559608122419697,
+    "front_cpu_ms_per_request": 0.03274406283916779,
+    "postgres_cpu_ms_per_request": 6.569836043171707e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 4406927,
+       "cache_miss": 38,
+       "s_pass": 2,
+       "backend_req": 40
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 5167973,
+       "cache_miss": 46,
+       "s_pass": 2,
+       "backend_req": 48
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 761046,
+       "cache_miss": 8,
+       "backend_req": 8,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 8,
+    "hit_ratio": 0.9999894882623309,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 419.82538767945834,
+    "p50_ms": 18.824935,
+    "p99_ms": 29.407652,
+    "requests": 6303,
+    "non_2xx": 0,
+    "ok": 6303,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 407.2650882908428,
+     "p50_ms": 19.211092999999998,
+     "p99_ms": 33.060732,
+     "requests": 2041,
+     "non_2xx": 0,
+     "ok": 2041,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta-cache-2s",
+    "case": "list-unique",
+    "c": 8,
+    "rep": 0,
+    "db": "bench_cache_read",
+    "wall_s": 15.019721774000004,
+    "alive": true,
+    "server_cpu_ms_per_request": 4.756465175313343,
+    "cache_cpu_ms_per_request": 0.25384737426622245,
+    "front_cpu_ms_per_request": 0.09519276534983341,
+    "postgres_cpu_ms_per_request": 2.6495319689036965,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 5167973,
+       "cache_miss": 2087,
+       "s_pass": 2,
+       "backend_req": 2089
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 5167973,
+       "cache_miss": 4244,
+       "s_pass": 2,
+       "backend_req": 8392
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 0,
+       "cache_miss": 2157,
+       "backend_req": 6303,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 6303,
+    "hit_ratio": 0.0,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 696.5501531998231,
+    "p50_ms": 11.389446,
+    "p99_ms": 15.622537000000001,
+    "requests": 10454,
+    "non_2xx": 0,
+    "ok": 10454,
+    "errors": 0,
+    "size_per_request": 1229,
+    "warm": {
+     "rps": 693.1630805660076,
+     "p50_ms": 11.385732,
+     "p99_ms": 16.074130999999998,
+     "requests": 3472,
+     "non_2xx": 0,
+     "ok": 3472,
+     "errors": 0,
+     "size_per_request": 1228
+    },
+    "arm": "alerta-cache-2s",
+    "case": "write-dup",
+    "c": 8,
+    "rep": 0,
+    "db": "bench_cache_write_alerta_cache_2s_r0",
+    "wall_s": 15.015336473000048,
+    "alive": true,
+    "server_cpu_ms_per_request": 2.718576621388942,
+    "cache_cpu_ms_per_request": 0.17792232638224603,
+    "front_cpu_ms_per_request": 0.07939544671895925,
+    "postgres_cpu_ms_per_request": 1.4779031949493018,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 3475,
+       "backend_req": 3475
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 3483,
+       "backend_req": 13929
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 10454,
+       "s_pass": 8
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 10454,
+    "hit_ratio": 0.0,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 75029.34800758776,
+    "p50_ms": 0.099036,
+    "p99_ms": 0.21296600000000002,
+    "requests": 1125624,
+    "non_2xx": 0,
+    "ok": 1125624,
+    "errors": 0,
+    "size_per_request": 194,
+    "warm": {
+     "rps": 75182.92548425795,
+     "p50_ms": 0.09965,
+     "p99_ms": 0.212129,
+     "requests": 376181,
+     "non_2xx": 0,
+     "ok": 376181,
+     "errors": 0,
+     "size_per_request": 194
+    },
+    "arm": "alerta-cache-5s",
+    "case": "count",
+    "c": 8,
+    "rep": 0,
+    "db": "bench_cache_read",
+    "wall_s": 15.40203627699998,
+    "alive": true,
+    "server_cpu_ms_per_request": 0.0,
+    "cache_cpu_ms_per_request": 0.017892297960953214,
+    "front_cpu_ms_per_request": 0.01923377610996212,
+    "postgres_cpu_ms_per_request": 3.5535845006858415e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 376183,
+       "cache_miss": 4,
+       "s_pass": 2,
+       "backend_req": 6
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 1501804,
+       "cache_miss": 7,
+       "s_pass": 2,
+       "backend_req": 9
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 1125621,
+       "cache_miss": 3,
+       "backend_req": 3,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 3,
+    "hit_ratio": 0.9999973348116244,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 83933.10290389055,
+    "p50_ms": 0.35963599999999996,
+    "p99_ms": 0.87858,
+    "requests": 1259260,
+    "non_2xx": 0,
+    "ok": 1259260,
+    "errors": 0,
+    "size_per_request": 194,
+    "warm": {
+     "rps": 84431.51324468646,
+     "p50_ms": 0.358144,
+     "p99_ms": 0.83727,
+     "requests": 422363,
+     "non_2xx": 0,
+     "ok": 422363,
+     "errors": 0,
+     "size_per_request": 194
+    },
+    "arm": "alerta-cache-5s",
+    "case": "count",
+    "c": 32,
+    "rep": 0,
+    "db": "bench_cache_read",
+    "wall_s": 15.454109427000049,
+    "alive": true,
+    "server_cpu_ms_per_request": 1.5882343598621413e-05,
+    "cache_cpu_ms_per_request": 0.018058224671632546,
+    "front_cpu_ms_per_request": 0.017557930848275973,
+    "postgres_cpu_ms_per_request": 3.9705858996553535e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 1924166,
+       "cache_miss": 8,
+       "s_pass": 2,
+       "backend_req": 10
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 3183423,
+       "cache_miss": 11,
+       "s_pass": 2,
+       "backend_req": 13
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 1259257,
+       "cache_miss": 3,
+       "backend_req": 3,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 3,
+    "hit_ratio": 0.9999976176484602,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 49197.91150126418,
+    "p50_ms": 0.151564,
+    "p99_ms": 0.328656,
+    "requests": 738084,
+    "non_2xx": 0,
+    "ok": 738084,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 48210.473152275736,
+     "p50_ms": 0.155649,
+     "p99_ms": 0.325701,
+     "requests": 241180,
+     "non_2xx": 0,
+     "ok": 241180,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta-cache-5s",
+    "case": "list",
+    "c": 8,
+    "rep": 0,
+    "db": "bench_cache_read",
+    "wall_s": 15.195930382000029,
+    "alive": true,
+    "server_cpu_ms_per_request": 4.06457801551043e-05,
+    "cache_cpu_ms_per_request": 0.023439066556110146,
+    "front_cpu_ms_per_request": 0.0315275768069759,
+    "postgres_cpu_ms_per_request": 2.709718677006953e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 3424602,
+       "cache_miss": 12,
+       "s_pass": 2,
+       "backend_req": 14
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 4162683,
+       "cache_miss": 15,
+       "s_pass": 2,
+       "backend_req": 17
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 738081,
+       "cache_miss": 3,
+       "backend_req": 3,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 3,
+    "hit_ratio": 0.9999959354219845,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 51095.71642317356,
+    "p50_ms": 0.607109,
+    "p99_ms": 1.246395,
+    "requests": 766603,
+    "non_2xx": 0,
+    "ok": 766603,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 51842.07925004245,
+     "p50_ms": 0.594816,
+     "p99_ms": 1.2206299999999999,
+     "requests": 259397,
+     "non_2xx": 0,
+     "ok": 259397,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta-cache-5s",
+    "case": "list",
+    "c": 32,
+    "rep": 0,
+    "db": "bench_cache_read",
+    "wall_s": 15.257169955999984,
+    "alive": true,
+    "server_cpu_ms_per_request": 0.0,
+    "cache_cpu_ms_per_request": 0.025332538484717643,
+    "front_cpu_ms_per_request": 0.03223311153230551,
+    "postgres_cpu_ms_per_request": 2.608912305326225e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 4422079,
+       "cache_miss": 16,
+       "s_pass": 2,
+       "backend_req": 18
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 5188679,
+       "cache_miss": 19,
+       "s_pass": 2,
+       "backend_req": 21
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 766600,
+       "cache_miss": 3,
+       "backend_req": 3,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 3,
+    "hit_ratio": 0.999996086631542,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 998.5310808123396,
+    "p50_ms": 7.910484,
+    "p99_ms": 12.021927999999999,
+    "requests": 14984,
+    "non_2xx": 0,
+    "ok": 14984,
+    "errors": 0,
+    "size_per_request": 194,
+    "warm": {
+     "rps": 1000.9369618722519,
+     "p50_ms": 7.843557,
+     "p99_ms": 12.406553,
+     "requests": 5012,
+     "non_2xx": 0,
+     "ok": 5012,
+     "errors": 0,
+     "size_per_request": 194
+    },
+    "arm": "alerta",
+    "case": "count",
+    "c": 8,
+    "rep": 1,
+    "db": "bench_cache_read",
+    "wall_s": 15.015252849000035,
+    "alive": true,
+    "server_cpu_ms_per_request": 1.761211959423385,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.08275493860117458,
+    "postgres_cpu_ms_per_request": 1.2086225306994127,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 1040.5207343181319,
+    "p50_ms": 28.940123000000003,
+    "p99_ms": 59.202119999999994,
+    "requests": 15637,
+    "non_2xx": 0,
+    "ok": 15637,
+    "errors": 0,
+    "size_per_request": 194,
+    "warm": {
+     "rps": 1032.8250659232606,
+     "p50_ms": 23.613830999999998,
+     "p99_ms": 70.409896,
+     "requests": 5195,
+     "non_2xx": 0,
+     "ok": 5195,
+     "errors": 0,
+     "size_per_request": 194
+    },
+    "arm": "alerta",
+    "case": "count",
+    "c": 32,
+    "rep": 1,
+    "db": "bench_cache_read",
+    "wall_s": 15.037327725999944,
+    "alive": true,
+    "server_cpu_ms_per_request": 1.740103600434866,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.07929909829251135,
+    "postgres_cpu_ms_per_request": 1.3583168126878558,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 425.7707793592834,
+    "p50_ms": 18.452247,
+    "p99_ms": 30.573401999999998,
+    "requests": 6394,
+    "non_2xx": 0,
+    "ok": 6394,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 418.96293543050945,
+     "p50_ms": 18.781769999999998,
+     "p99_ms": 31.136011,
+     "requests": 2101,
+     "non_2xx": 0,
+     "ok": 2101,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta",
+    "case": "list",
+    "c": 8,
+    "rep": 1,
+    "db": "bench_cache_read",
+    "wall_s": 15.023801333000051,
+    "alive": true,
+    "server_cpu_ms_per_request": 4.632467938692524,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.09383797309978105,
+    "postgres_cpu_ms_per_request": 2.619643415702221,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 432.24914921201304,
+    "p50_ms": 89.605134,
+    "p99_ms": 117.201239,
+    "requests": 6516,
+    "non_2xx": 0,
+    "ok": 6516,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 447.4742170764499,
+     "p50_ms": 70.30597800000001,
+     "p99_ms": 139.072722,
+     "requests": 2267,
+     "non_2xx": 0,
+     "ok": 2267,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta",
+    "case": "list",
+    "c": 32,
+    "rep": 1,
+    "db": "bench_cache_read",
+    "wall_s": 15.081132085999911,
+    "alive": true,
+    "server_cpu_ms_per_request": 4.611724984653161,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.10128913443830571,
+    "postgres_cpu_ms_per_request": 2.6841620626151013,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 383.3351389326165,
+    "p50_ms": 20.601518,
+    "p99_ms": 34.880100999999996,
+    "requests": 5757,
+    "non_2xx": 0,
+    "ok": 5757,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 390.83160822808486,
+     "p50_ms": 20.344717,
+     "p99_ms": 35.606809000000005,
+     "requests": 1959,
+     "non_2xx": 0,
+     "ok": 1959,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta",
+    "case": "list-unique",
+    "c": 8,
+    "rep": 1,
+    "db": "bench_cache_read",
+    "wall_s": 15.024623520999967,
+    "alive": true,
+    "server_cpu_ms_per_request": 4.464130623588675,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.09553586937641133,
+    "postgres_cpu_ms_per_request": 2.589890568004169,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 712.859077997384,
+    "p50_ms": 10.986077,
+    "p99_ms": 17.190730000000002,
+    "requests": 10698,
+    "non_2xx": 0,
+    "ok": 10698,
+    "errors": 0,
+    "size_per_request": 1229,
+    "warm": {
+     "rps": 697.7576859404023,
+     "p50_ms": 11.227284000000001,
+     "p99_ms": 17.912763,
+     "requests": 3494,
+     "non_2xx": 0,
+     "ok": 3494,
+     "errors": 0,
+     "size_per_request": 1228
+    },
+    "arm": "alerta",
+    "case": "write-dup",
+    "c": 8,
+    "rep": 1,
+    "db": "bench_cache_write_alerta_r1",
+    "wall_s": 15.013874649999934,
+    "alive": true,
+    "server_cpu_ms_per_request": 2.6948962422882783,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.08786689100766498,
+    "postgres_cpu_ms_per_request": 1.4750420639371846,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 75979.92178049685,
+    "p50_ms": 0.097625,
+    "p99_ms": 0.206343,
+    "requests": 1139939,
+    "non_2xx": 0,
+    "ok": 1139939,
+    "errors": 0,
+    "size_per_request": 194,
+    "warm": {
+     "rps": 75763.46566463326,
+     "p50_ms": 0.09798,
+     "p99_ms": 0.207951,
+     "requests": 379026,
+     "non_2xx": 0,
+     "ok": 379026,
+     "errors": 0,
+     "size_per_request": 194
+    },
+    "arm": "alerta-cache-1s",
+    "case": "count",
+    "c": 8,
+    "rep": 1,
+    "db": "bench_cache_read",
+    "wall_s": 15.302113904999942,
+    "alive": true,
+    "server_cpu_ms_per_request": 3.508959689948322e-05,
+    "cache_cpu_ms_per_request": 0.017729018833463894,
+    "front_cpu_ms_per_request": 0.019264188697816285,
+    "postgres_cpu_ms_per_request": 2.6317197674612412e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 379025,
+       "cache_miss": 7,
+       "s_pass": 2,
+       "backend_req": 9
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 1518949,
+       "cache_miss": 22,
+       "s_pass": 2,
+       "backend_req": 24
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 1139924,
+       "cache_miss": 15,
+       "backend_req": 15,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 15,
+    "hit_ratio": 0.9999868414011627,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 82482.57515213535,
+    "p50_ms": 0.36249,
+    "p99_ms": 0.931241,
+    "requests": 1237656,
+    "non_2xx": 0,
+    "ok": 1237656,
+    "errors": 0,
+    "size_per_request": 194,
+    "warm": {
+     "rps": 83280.07474425732,
+     "p50_ms": 0.365494,
+     "p99_ms": 0.850589,
+     "requests": 416693,
+     "non_2xx": 0,
+     "ok": 416693,
+     "errors": 0,
+     "size_per_request": 194
+    },
+    "arm": "alerta-cache-1s",
+    "case": "count",
+    "c": 32,
+    "rep": 1,
+    "db": "bench_cache_read",
+    "wall_s": 15.426151147999917,
+    "alive": true,
+    "server_cpu_ms_per_request": 3.2319158150568494e-05,
+    "cache_cpu_ms_per_request": 0.018009850879404293,
+    "front_cpu_ms_per_request": 0.017371547505930566,
+    "postgres_cpu_ms_per_request": 4.0398947688210616e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 1935637,
+       "cache_miss": 27,
+       "s_pass": 2,
+       "backend_req": 29
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 3173278,
+       "cache_miss": 42,
+       "s_pass": 2,
+       "backend_req": 44
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 1237641,
+       "cache_miss": 15,
+       "backend_req": 15,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 15,
+    "hit_ratio": 0.9999878803156935,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 48521.068199422734,
+    "p50_ms": 0.15283000000000002,
+    "p99_ms": 0.32946000000000003,
+    "requests": 727877,
+    "non_2xx": 0,
+    "ok": 727877,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 47742.40266283427,
+     "p50_ms": 0.156582,
+     "p99_ms": 0.326019,
+     "requests": 238809,
+     "non_2xx": 0,
+     "ok": 238809,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta-cache-1s",
+    "case": "list",
+    "c": 8,
+    "rep": 1,
+    "db": "bench_cache_read",
+    "wall_s": 15.186882462999847,
+    "alive": true,
+    "server_cpu_ms_per_request": 8.243150971936193e-05,
+    "cache_cpu_ms_per_request": 0.02353419602487783,
+    "front_cpu_ms_per_request": 0.03128275793849785,
+    "postgres_cpu_ms_per_request": 8.243150971936193e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 3412082,
+       "cache_miss": 47,
+       "s_pass": 2,
+       "backend_req": 49
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 4139944,
+       "cache_miss": 62,
+       "s_pass": 2,
+       "backend_req": 64
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 727862,
+       "cache_miss": 15,
+       "backend_req": 15,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 15,
+    "hit_ratio": 0.9999793921225701,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 50859.43958440136,
+    "p50_ms": 0.608523,
+    "p99_ms": 1.225451,
+    "requests": 763090,
+    "non_2xx": 0,
+    "ok": 763090,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 51311.27890236692,
+     "p50_ms": 0.596788,
+     "p99_ms": 1.284818,
+     "requests": 256690,
+     "non_2xx": 0,
+     "ok": 256690,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta-cache-1s",
+    "case": "list",
+    "c": 32,
+    "rep": 1,
+    "db": "bench_cache_read",
+    "wall_s": 15.239673046000007,
+    "alive": true,
+    "server_cpu_ms_per_request": 0.00010483691307709444,
+    "cache_cpu_ms_per_request": 0.02539674219292613,
+    "front_cpu_ms_per_request": 0.03146417853726297,
+    "postgres_cpu_ms_per_request": 7.862768480782083e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 4396629,
+       "cache_miss": 67,
+       "s_pass": 2,
+       "backend_req": 69
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 5159704,
+       "cache_miss": 82,
+       "s_pass": 2,
+       "backend_req": 84
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 763075,
+       "cache_miss": 15,
+       "backend_req": 15,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 15,
+    "hit_ratio": 0.999980343078798,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 76061.30079406746,
+    "p50_ms": 0.097632,
+    "p99_ms": 0.207631,
+    "requests": 1141223,
+    "non_2xx": 0,
+    "ok": 1141223,
+    "errors": 0,
+    "size_per_request": 194,
+    "warm": {
+     "rps": 75884.44415192727,
+     "p50_ms": 0.098092,
+     "p99_ms": 0.208938,
+     "requests": 379653,
+     "non_2xx": 0,
+     "ok": 379653,
+     "errors": 0,
+     "size_per_request": 194
+    },
+    "arm": "alerta-cache-2s",
+    "case": "count",
+    "c": 8,
+    "rep": 1,
+    "db": "bench_cache_read",
+    "wall_s": 15.328997891999961,
+    "alive": true,
+    "server_cpu_ms_per_request": 2.6287587964841227e-05,
+    "cache_cpu_ms_per_request": 0.01758639634847878,
+    "front_cpu_ms_per_request": 0.019119838979761185,
+    "postgres_cpu_ms_per_request": 0.00010515035185936491,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 379654,
+       "cache_miss": 5,
+       "s_pass": 2,
+       "backend_req": 7
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 1520869,
+       "cache_miss": 13,
+       "s_pass": 2,
+       "backend_req": 15
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 1141215,
+       "cache_miss": 8,
+       "backend_req": 8,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 8,
+    "hit_ratio": 0.9999929899765427,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 84461.51955956063,
+    "p50_ms": 0.35738000000000003,
+    "p99_ms": 0.848582,
+    "requests": 1267301,
+    "non_2xx": 0,
+    "ok": 1267301,
+    "errors": 0,
+    "size_per_request": 194,
+    "warm": {
+     "rps": 84668.00520925388,
+     "p50_ms": 0.356041,
+     "p99_ms": 0.859706,
+     "requests": 423563,
+     "non_2xx": 0,
+     "ok": 423563,
+     "errors": 0,
+     "size_per_request": 194
+    },
+    "arm": "alerta-cache-2s",
+    "case": "count",
+    "c": 32,
+    "rep": 1,
+    "db": "bench_cache_read",
+    "wall_s": 15.439835219000088,
+    "alive": true,
+    "server_cpu_ms_per_request": 1.578157043985604e-05,
+    "cache_cpu_ms_per_request": 0.018101461294514877,
+    "front_cpu_ms_per_request": 0.017399181409941285,
+    "postgres_cpu_ms_per_request": 1.578157043985604e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 1944429,
+       "cache_miss": 16,
+       "s_pass": 2,
+       "backend_req": 18
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 3211722,
+       "cache_miss": 24,
+       "s_pass": 2,
+       "backend_req": 26
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 1267293,
+       "cache_miss": 8,
+       "backend_req": 8,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 8,
+    "hit_ratio": 0.999993687371824,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 48614.02720700558,
+    "p50_ms": 0.152981,
+    "p99_ms": 0.331049,
+    "requests": 729358,
+    "non_2xx": 0,
+    "ok": 729358,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 48204.38633904851,
+     "p50_ms": 0.15539699999999998,
+     "p99_ms": 0.326345,
+     "requests": 241181,
+     "non_2xx": 0,
+     "ok": 241181,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta-cache-2s",
+    "case": "list",
+    "c": 8,
+    "rep": 1,
+    "db": "bench_cache_read",
+    "wall_s": 15.192255918,
+    "alive": true,
+    "server_cpu_ms_per_request": 8.226412817848025e-05,
+    "cache_cpu_ms_per_request": 0.023568672723134593,
+    "front_cpu_ms_per_request": 0.03142489696417946,
+    "postgres_cpu_ms_per_request": 4.1132064089240125e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 3452900,
+       "cache_miss": 27,
+       "s_pass": 2,
+       "backend_req": 29
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 4182250,
+       "cache_miss": 35,
+       "s_pass": 2,
+       "backend_req": 37
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 729350,
+       "cache_miss": 8,
+       "backend_req": 8,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 8,
+    "hit_ratio": 0.9999890314495762,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 51355.82009809694,
+    "p50_ms": 0.5994,
+    "p99_ms": 1.269678,
+    "requests": 770507,
+    "non_2xx": 0,
+    "ok": 770507,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 51525.19855407494,
+     "p50_ms": 0.597167,
+     "p99_ms": 1.2533889999999999,
+     "requests": 257788,
+     "non_2xx": 0,
+     "ok": 257788,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta-cache-2s",
+    "case": "list",
+    "c": 32,
+    "rep": 1,
+    "db": "bench_cache_read",
+    "wall_s": 15.215919879000012,
+    "alive": true,
+    "server_cpu_ms_per_request": 5.191386969878275e-05,
+    "cache_cpu_ms_per_request": 0.025113334466786156,
+    "front_cpu_ms_per_request": 0.032160642278395914,
+    "postgres_cpu_ms_per_request": 1.2978467424695687e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 4440035,
+       "cache_miss": 38,
+       "s_pass": 2,
+       "backend_req": 40
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 5210534,
+       "cache_miss": 46,
+       "s_pass": 2,
+       "backend_req": 48
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 770499,
+       "cache_miss": 8,
+       "backend_req": 8,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 8,
+    "hit_ratio": 0.9999896172260603,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 422.3069136593051,
+    "p50_ms": 18.788371,
+    "p99_ms": 28.959058,
+    "requests": 6342,
+    "non_2xx": 0,
+    "ok": 6342,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 415.0505951420053,
+     "p50_ms": 18.896206,
+     "p99_ms": 32.622574,
+     "requests": 2082,
+     "non_2xx": 0,
+     "ok": 2082,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta-cache-2s",
+    "case": "list-unique",
+    "c": 8,
+    "rep": 1,
+    "db": "bench_cache_read",
+    "wall_s": 15.02355565500011,
+    "alive": true,
+    "server_cpu_ms_per_request": 4.698833175654368,
+    "cache_cpu_ms_per_request": 0.2507095553453169,
+    "front_cpu_ms_per_request": 0.09145380006307159,
+    "postgres_cpu_ms_per_request": 2.631661936297698,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 5210534,
+       "cache_miss": 2128,
+       "s_pass": 2,
+       "backend_req": 2130
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 5210534,
+       "cache_miss": 4182,
+       "s_pass": 2,
+       "backend_req": 8472
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 0,
+       "cache_miss": 2054,
+       "backend_req": 6342,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 6342,
+    "hit_ratio": 0.0,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 704.5457626623231,
+    "p50_ms": 11.294801999999999,
+    "p99_ms": 15.17285,
+    "requests": 10574,
+    "non_2xx": 0,
+    "ok": 10574,
+    "errors": 0,
+    "size_per_request": 1229,
+    "warm": {
+     "rps": 696.4317677454683,
+     "p50_ms": 11.352758,
+     "p99_ms": 15.860890999999999,
+     "requests": 3488,
+     "non_2xx": 0,
+     "ok": 3488,
+     "errors": 0,
+     "size_per_request": 1228
+    },
+    "arm": "alerta-cache-2s",
+    "case": "write-dup",
+    "c": 8,
+    "rep": 1,
+    "db": "bench_cache_write_alerta_cache_2s_r1",
+    "wall_s": 15.01473337199991,
+    "alive": true,
+    "server_cpu_ms_per_request": 2.7113675052014377,
+    "cache_cpu_ms_per_request": 0.17590315869112919,
+    "front_cpu_ms_per_request": 0.0775487043692075,
+    "postgres_cpu_ms_per_request": 1.4942311329676565,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 3491,
+       "backend_req": 3490
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 3499,
+       "backend_req": 14064
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 10574,
+       "s_pass": 8
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 10574,
+    "hit_ratio": 0.0,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 76533.70254487077,
+    "p50_ms": 0.096988,
+    "p99_ms": 0.20739200000000002,
+    "requests": 1148234,
+    "non_2xx": 0,
+    "ok": 1148234,
+    "errors": 0,
+    "size_per_request": 194,
+    "warm": {
+     "rps": 76608.4962526367,
+     "p50_ms": 0.09753400000000001,
+     "p99_ms": 0.209449,
+     "requests": 383309,
+     "non_2xx": 0,
+     "ok": 383309,
+     "errors": 0,
+     "size_per_request": 194
+    },
+    "arm": "alerta-cache-5s",
+    "case": "count",
+    "c": 8,
+    "rep": 1,
+    "db": "bench_cache_read",
+    "wall_s": 15.336238732999846,
+    "alive": true,
+    "server_cpu_ms_per_request": 8.709026208943474e-06,
+    "cache_cpu_ms_per_request": 0.01752256073239427,
+    "front_cpu_ms_per_request": 0.019264365974182962,
+    "postgres_cpu_ms_per_request": 8.709026208943474e-06,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 383311,
+       "cache_miss": 4,
+       "s_pass": 2,
+       "backend_req": 6
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 1531542,
+       "cache_miss": 7,
+       "s_pass": 2,
+       "backend_req": 9
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 1148231,
+       "cache_miss": 3,
+       "backend_req": 3,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 3,
+    "hit_ratio": 0.9999973872921373,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 83481.34771767088,
+    "p50_ms": 0.364698,
+    "p99_ms": 0.87183,
+    "requests": 1252540,
+    "non_2xx": 0,
+    "ok": 1252540,
+    "errors": 0,
+    "size_per_request": 194,
+    "warm": {
+     "rps": 84239.07028719345,
+     "p50_ms": 0.36216,
+     "p99_ms": 0.8352550000000001,
+     "requests": 421452,
+     "non_2xx": 0,
+     "ok": 421452,
+     "errors": 0,
+     "size_per_request": 194
+    },
+    "arm": "alerta-cache-5s",
+    "case": "count",
+    "c": 32,
+    "rep": 1,
+    "db": "bench_cache_read",
+    "wall_s": 15.378165094999986,
+    "alive": true,
+    "server_cpu_ms_per_request": 7.9837769652067e-06,
+    "cache_cpu_ms_per_request": 0.018250914142462518,
+    "front_cpu_ms_per_request": 0.017109234036437958,
+    "postgres_cpu_ms_per_request": 3.99188848260335e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 1952993,
+       "cache_miss": 8,
+       "s_pass": 2,
+       "backend_req": 10
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 3205530,
+       "cache_miss": 11,
+       "s_pass": 2,
+       "backend_req": 13
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 1252537,
+       "cache_miss": 3,
+       "backend_req": 3,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 3,
+    "hit_ratio": 0.9999976048669105,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 49335.396696420336,
+    "p50_ms": 0.15118099999999998,
+    "p99_ms": 0.325854,
+    "requests": 740101,
+    "non_2xx": 0,
+    "ok": 740101,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 48406.052935469976,
+     "p50_ms": 0.155306,
+     "p99_ms": 0.32502699999999995,
+     "requests": 242171,
+     "non_2xx": 0,
+     "ok": 242171,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta-cache-5s",
+    "case": "list",
+    "c": 8,
+    "rep": 1,
+    "db": "bench_cache_read",
+    "wall_s": 15.21030585099993,
+    "alive": true,
+    "server_cpu_ms_per_request": 1.3511669353236923e-05,
+    "cache_cpu_ms_per_request": 0.02349679300527901,
+    "front_cpu_ms_per_request": 0.03152272460110174,
+    "postgres_cpu_ms_per_request": 4.053500805971077e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 3447700,
+       "cache_miss": 12,
+       "s_pass": 2,
+       "backend_req": 14
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 4187798,
+       "cache_miss": 15,
+       "s_pass": 2,
+       "backend_req": 17
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 740098,
+       "cache_miss": 3,
+       "backend_req": 3,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 3,
+    "hit_ratio": 0.999995946499194,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 51502.237440807476,
+    "p50_ms": 0.59899,
+    "p99_ms": 1.274512,
+    "requests": 772776,
+    "non_2xx": 0,
+    "ok": 772776,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 52032.443086223066,
+     "p50_ms": 0.591595,
+     "p99_ms": 1.234436,
+     "requests": 260296,
+     "non_2xx": 0,
+     "ok": 260296,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta-cache-5s",
+    "case": "list",
+    "c": 32,
+    "rep": 1,
+    "db": "bench_cache_read",
+    "wall_s": 15.274750826000172,
+    "alive": true,
+    "server_cpu_ms_per_request": 0.0,
+    "cache_cpu_ms_per_request": 0.025376046875161755,
+    "front_cpu_ms_per_request": 0.032247378282969454,
+    "postgres_cpu_ms_per_request": 2.588072093336232e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 4448093,
+       "cache_miss": 16,
+       "s_pass": 2,
+       "backend_req": 18
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 5220866,
+       "cache_miss": 19,
+       "s_pass": 2,
+       "backend_req": 21
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 772773,
+       "cache_miss": 3,
+       "backend_req": 3,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 3,
+    "hit_ratio": 0.99999611789186,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 6838.265819448986,
+    "p50_ms": 1.135602,
+    "p99_ms": 2.066945,
+    "requests": 102589,
+    "non_2xx": 0,
+    "ok": 102589,
+    "errors": 0,
+    "size_per_request": 173,
+    "warm": {
+     "rps": 6841.246675967538,
+     "p50_ms": 1.1302180000000002,
+     "p99_ms": 2.095365,
+     "requests": 34220,
+     "non_2xx": 0,
+     "ok": 34220,
+     "errors": 0,
+     "size_per_request": 173
+    },
+    "arm": "alrust",
+    "case": "count",
+    "c": 8,
+    "rep": 1,
+    "db": "bench_cache_read",
+    "wall_s": 15.033142037000061,
+    "alive": true,
+    "server_cpu_ms_per_request": 0.12184542202380372,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.030217664661903322,
+    "postgres_cpu_ms_per_request": 0.33629336478569827,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 7924.943665077711,
+    "p50_ms": 4.000393,
+    "p99_ms": 5.93892,
+    "requests": 118914,
+    "non_2xx": 0,
+    "ok": 118914,
+    "errors": 0,
+    "size_per_request": 173,
+    "warm": {
+     "rps": 7949.972884700561,
+     "p50_ms": 3.9815199999999997,
+     "p99_ms": 5.969916,
+     "requests": 39791,
+     "non_2xx": 0,
+     "ok": 39791,
+     "errors": 0,
+     "size_per_request": 173
+    },
+    "arm": "alrust",
+    "case": "count",
+    "c": 32,
+    "rep": 1,
+    "db": "bench_cache_read",
+    "wall_s": 15.042066206000072,
+    "alive": true,
+    "server_cpu_ms_per_request": 0.10696806095161208,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.02455556116184806,
+    "postgres_cpu_ms_per_request": 0.32964999915905613,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 1308.973642729534,
+    "p50_ms": 5.979622,
+    "p99_ms": 10.208155999999999,
+    "requests": 19646,
+    "non_2xx": 0,
+    "ok": 19646,
+    "errors": 0,
+    "size_per_request": 41148,
+    "warm": {
+     "rps": 1301.3791983395786,
+     "p50_ms": 6.039697,
+     "p99_ms": 10.242466,
+     "requests": 6517,
+     "non_2xx": 0,
+     "ok": 6517,
+     "errors": 0,
+     "size_per_request": 41148
+    },
+    "arm": "alrust",
+    "case": "list",
+    "c": 8,
+    "rep": 1,
+    "db": "bench_cache_read",
+    "wall_s": 15.018900539000015,
+    "alive": true,
+    "server_cpu_ms_per_request": 1.1478163493840985,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.06260816451185992,
+    "postgres_cpu_ms_per_request": 1.4771454749058333,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 1392.1252213792734,
+    "p50_ms": 22.742391,
+    "p99_ms": 32.123559,
+    "requests": 20912,
+    "non_2xx": 0,
+    "ok": 20912,
+    "errors": 0,
+    "size_per_request": 41148,
+    "warm": {
+     "rps": 1395.6277225139597,
+     "p50_ms": 22.707939,
+     "p99_ms": 31.574070000000003,
+     "requests": 7009,
+     "non_2xx": 0,
+     "ok": 7009,
+     "errors": 0,
+     "size_per_request": 41148
+    },
+    "arm": "alrust",
+    "case": "list",
+    "c": 32,
+    "rep": 1,
+    "db": "bench_cache_read",
+    "wall_s": 15.032158423000055,
+    "alive": true,
+    "server_cpu_ms_per_request": 1.1538829380260138,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.05929609793420046,
+    "postgres_cpu_ms_per_request": 1.4833588370313695,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 1314.3778418978159,
+    "p50_ms": 5.975085,
+    "p99_ms": 10.12361,
+    "requests": 19726,
+    "non_2xx": 0,
+    "ok": 19726,
+    "errors": 0,
+    "size_per_request": 41148,
+    "warm": {
+     "rps": 1292.6964485388114,
+     "p50_ms": 6.082838,
+     "p99_ms": 10.436847,
+     "requests": 6475,
+     "non_2xx": 0,
+     "ok": 6475,
+     "errors": 0,
+     "size_per_request": 41148
+    },
+    "arm": "alrust",
+    "case": "list-unique",
+    "c": 8,
+    "rep": 1,
+    "db": "bench_cache_read",
+    "wall_s": 15.018737386000112,
+    "alive": true,
+    "server_cpu_ms_per_request": 1.1482307614316132,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.06336814356686607,
+    "postgres_cpu_ms_per_request": 1.4701409307512927,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 2863.646341521446,
+    "p50_ms": 2.7852189999999997,
+    "p99_ms": 3.075162,
+    "requests": 42965,
+    "non_2xx": 0,
+    "ok": 42965,
+    "errors": 0,
+    "size_per_request": 1128,
+    "warm": {
+     "rps": 2834.774438425217,
+     "p50_ms": 2.793725,
+     "p99_ms": 3.263042,
+     "requests": 14181,
+     "non_2xx": 0,
+     "ok": 14181,
+     "errors": 0,
+     "size_per_request": 1127
+    },
+    "arm": "alrust",
+    "case": "write-dup",
+    "c": 8,
+    "rep": 1,
+    "db": "bench_cache_write_alrust_r1",
+    "wall_s": 15.021242088000008,
+    "alive": true,
+    "server_cpu_ms_per_request": 0.31793320144303505,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.05236820667985569,
+    "postgres_cpu_ms_per_request": 0.313278249738159,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 74191.38139675706,
+    "p50_ms": 0.099969,
+    "p99_ms": 0.2119,
+    "requests": 1113080,
+    "non_2xx": 0,
+    "ok": 1113080,
+    "errors": 0,
+    "size_per_request": 194,
+    "warm": {
+     "rps": 75145.47764830766,
+     "p50_ms": 0.098414,
+     "p99_ms": 0.212853,
+     "requests": 375970,
+     "non_2xx": 0,
+     "ok": 375970,
+     "errors": 0,
+     "size_per_request": 194
+    },
+    "arm": "alerta-cache-1s",
+    "case": "count",
+    "c": 8,
+    "rep": 2,
+    "db": "bench_cache_read",
+    "wall_s": 15.416285553999842,
+    "alive": true,
+    "server_cpu_ms_per_request": 4.492040104934057e-05,
+    "cache_cpu_ms_per_request": 0.018022064900995435,
+    "front_cpu_ms_per_request": 0.01943256549394473,
+    "postgres_cpu_ms_per_request": 3.593632083947246e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 375969,
+       "cache_miss": 7,
+       "s_pass": 2,
+       "backend_req": 9
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 1489034,
+       "cache_miss": 22,
+       "s_pass": 2,
+       "backend_req": 24
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 1113065,
+       "cache_miss": 15,
+       "backend_req": 15,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 15,
+    "hit_ratio": 0.9999865238796852,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 83501.19583786075,
+    "p50_ms": 0.36115200000000003,
+    "p99_ms": 0.874085,
+    "requests": 1252928,
+    "non_2xx": 0,
+    "ok": 1252928,
+    "errors": 0,
+    "size_per_request": 194,
+    "warm": {
+     "rps": 83343.96441220955,
+     "p50_ms": 0.364781,
+     "p99_ms": 0.844191,
+     "requests": 416948,
+     "non_2xx": 0,
+     "ok": 416948,
+     "errors": 0,
+     "size_per_request": 194
+    },
+    "arm": "alerta-cache-1s",
+    "case": "count",
+    "c": 32,
+    "rep": 2,
+    "db": "bench_cache_read",
+    "wall_s": 15.403267550999999,
+    "alive": true,
+    "server_cpu_ms_per_request": 3.192521836849364e-05,
+    "cache_cpu_ms_per_request": 0.018309112734331102,
+    "front_cpu_ms_per_request": 0.017606757930224242,
+    "postgres_cpu_ms_per_request": 4.7887827552740463e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 1905977,
+       "cache_miss": 27,
+       "s_pass": 2,
+       "backend_req": 29
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 3158890,
+       "cache_miss": 42,
+       "s_pass": 2,
+       "backend_req": 44
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 1252913,
+       "cache_miss": 15,
+       "backend_req": 15,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 15,
+    "hit_ratio": 0.9999880280431118,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 48448.98509197004,
+    "p50_ms": 0.153262,
+    "p99_ms": 0.327561,
+    "requests": 726875,
+    "non_2xx": 0,
+    "ok": 726875,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 47323.59420586767,
+     "p50_ms": 0.15817399999999998,
+     "p99_ms": 0.327256,
+     "requests": 236727,
+     "non_2xx": 0,
+     "ok": 236727,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta-cache-1s",
+    "case": "list",
+    "c": 8,
+    "rep": 2,
+    "db": "bench_cache_read",
+    "wall_s": 15.26316185099995,
+    "alive": true,
+    "server_cpu_ms_per_request": 0.00011006018916595013,
+    "cache_cpu_ms_per_request": 0.02377300085984523,
+    "front_cpu_ms_per_request": 0.031766122098022355,
+    "postgres_cpu_ms_per_request": 9.630266552020637e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 3395612,
+       "cache_miss": 47,
+       "s_pass": 2,
+       "backend_req": 49
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 4122472,
+       "cache_miss": 62,
+       "s_pass": 2,
+       "backend_req": 64
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 726860,
+       "cache_miss": 15,
+       "backend_req": 15,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 15,
+    "hit_ratio": 0.9999793637145313,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 50904.605312324646,
+    "p50_ms": 0.604866,
+    "p99_ms": 1.284054,
+    "requests": 763738,
+    "non_2xx": 0,
+    "ok": 763738,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 50384.184348299874,
+     "p50_ms": 0.615981,
+     "p99_ms": 1.186673,
+     "requests": 252041,
+     "non_2xx": 0,
+     "ok": 252041,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta-cache-1s",
+    "case": "list",
+    "c": 32,
+    "rep": 2,
+    "db": "bench_cache_read",
+    "wall_s": 15.232656127000155,
+    "alive": true,
+    "server_cpu_ms_per_request": 0.00010474796330678846,
+    "cache_cpu_ms_per_request": 0.025335913624829457,
+    "front_cpu_ms_per_request": 0.03228855968931754,
+    "postgres_cpu_ms_per_request": 6.546747706674279e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 4374508,
+       "cache_miss": 67,
+       "s_pass": 2,
+       "backend_req": 69
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 5138231,
+       "cache_miss": 82,
+       "s_pass": 2,
+       "backend_req": 84
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 763723,
+       "cache_miss": 15,
+       "backend_req": 15,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 15,
+    "hit_ratio": 0.9999803597568799,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 74604.6006603912,
+    "p50_ms": 0.099423,
+    "p99_ms": 0.211116,
+    "requests": 1119315,
+    "non_2xx": 0,
+    "ok": 1119315,
+    "errors": 0,
+    "size_per_request": 194,
+    "warm": {
+     "rps": 75527.16661646019,
+     "p50_ms": 0.098192,
+     "p99_ms": 0.21081,
+     "requests": 377911,
+     "non_2xx": 0,
+     "ok": 377911,
+     "errors": 0,
+     "size_per_request": 194
+    },
+    "arm": "alerta-cache-2s",
+    "case": "count",
+    "c": 8,
+    "rep": 2,
+    "db": "bench_cache_read",
+    "wall_s": 15.352044128999978,
+    "alive": true,
+    "server_cpu_ms_per_request": 1.7868071097054895e-05,
+    "cache_cpu_ms_per_request": 0.01831477287448127,
+    "front_cpu_ms_per_request": 0.019395791175853088,
+    "postgres_cpu_ms_per_request": 0.00012507649767938426,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 377912,
+       "cache_miss": 5,
+       "s_pass": 2,
+       "backend_req": 7
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 1497219,
+       "cache_miss": 13,
+       "s_pass": 2,
+       "backend_req": 15
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 1119307,
+       "cache_miss": 8,
+       "backend_req": 8,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 8,
+    "hit_ratio": 0.9999928527715611,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 83238.04384521885,
+    "p50_ms": 0.36279599999999995,
+    "p99_ms": 0.8771509999999999,
+    "requests": 1249171,
+    "non_2xx": 0,
+    "ok": 1249171,
+    "errors": 0,
+    "size_per_request": 194,
+    "warm": {
+     "rps": 84706.4192054178,
+     "p50_ms": 0.357133,
+     "p99_ms": 0.81658,
+     "requests": 423758,
+     "non_2xx": 0,
+     "ok": 423758,
+     "errors": 0,
+     "size_per_request": 194
+    },
+    "arm": "alerta-cache-2s",
+    "case": "count",
+    "c": 32,
+    "rep": 2,
+    "db": "bench_cache_read",
+    "wall_s": 15.403025766999917,
+    "alive": true,
+    "server_cpu_ms_per_request": 2.401592736302716e-05,
+    "cache_cpu_ms_per_request": 0.018652370251951093,
+    "front_cpu_ms_per_request": 0.017483595120283774,
+    "postgres_cpu_ms_per_request": 3.2021236484036215e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 1920974,
+       "cache_miss": 16,
+       "s_pass": 2,
+       "backend_req": 18
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 3170137,
+       "cache_miss": 24,
+       "s_pass": 2,
+       "backend_req": 26
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 1249163,
+       "cache_miss": 8,
+       "backend_req": 8,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 8,
+    "hit_ratio": 0.9999935957527032,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 48504.07089655169,
+    "p50_ms": 0.15364,
+    "p99_ms": 0.327498,
+    "requests": 727687,
+    "non_2xx": 0,
+    "ok": 727687,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 47678.38157924282,
+     "p50_ms": 0.15651900000000002,
+     "p99_ms": 0.329854,
+     "requests": 238495,
+     "non_2xx": 0,
+     "ok": 238495,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta-cache-2s",
+    "case": "list",
+    "c": 8,
+    "rep": 2,
+    "db": "bench_cache_read",
+    "wall_s": 15.240978737999967,
+    "alive": true,
+    "server_cpu_ms_per_request": 6.871086057604437e-05,
+    "cache_cpu_ms_per_request": 0.024241191611228455,
+    "front_cpu_ms_per_request": 0.03140086328325228,
+    "postgres_cpu_ms_per_request": 4.122651634562662e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 3408629,
+       "cache_miss": 27,
+       "s_pass": 2,
+       "backend_req": 29
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 4136308,
+       "cache_miss": 35,
+       "s_pass": 2,
+       "backend_req": 37
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 727679,
+       "cache_miss": 8,
+       "backend_req": 8,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 8,
+    "hit_ratio": 0.9999890062623078,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 50285.00910042426,
+    "p50_ms": 0.61645,
+    "p99_ms": 1.265903,
+    "requests": 754455,
+    "non_2xx": 0,
+    "ok": 754455,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 50679.203631243734,
+     "p50_ms": 0.601623,
+     "p99_ms": 1.316709,
+     "requests": 253563,
+     "non_2xx": 0,
+     "ok": 253563,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta-cache-2s",
+    "case": "list",
+    "c": 32,
+    "rep": 2,
+    "db": "bench_cache_read",
+    "wall_s": 15.248553220000076,
+    "alive": true,
+    "server_cpu_ms_per_request": 6.627300501686647e-05,
+    "cache_cpu_ms_per_request": 0.026111563976645394,
+    "front_cpu_ms_per_request": 0.031996606822143135,
+    "postgres_cpu_ms_per_request": 7.952760602023978e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 4389868,
+       "cache_miss": 38,
+       "s_pass": 2,
+       "backend_req": 40
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 5144315,
+       "cache_miss": 46,
+       "s_pass": 2,
+       "backend_req": 48
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 754447,
+       "cache_miss": 8,
+       "backend_req": 8,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 8,
+    "hit_ratio": 0.9999893963191973,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 410.7945551169014,
+    "p50_ms": 19.071764,
+    "p99_ms": 31.867251,
+    "requests": 6167,
+    "non_2xx": 0,
+    "ok": 6167,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 405.542666547397,
+     "p50_ms": 19.195237,
+     "p99_ms": 36.188546,
+     "requests": 2034,
+     "non_2xx": 0,
+     "ok": 2034,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta-cache-2s",
+    "case": "list-unique",
+    "c": 8,
+    "rep": 2,
+    "db": "bench_cache_read",
+    "wall_s": 15.018268816000045,
+    "alive": true,
+    "server_cpu_ms_per_request": 4.798119020593481,
+    "cache_cpu_ms_per_request": 0.2740392411221015,
+    "front_cpu_ms_per_request": 0.09891357223933842,
+    "postgres_cpu_ms_per_request": 2.63985730501054,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 5144315,
+       "cache_miss": 2080,
+       "s_pass": 2,
+       "backend_req": 2081
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 5144315,
+       "cache_miss": 4196,
+       "s_pass": 2,
+       "backend_req": 8248
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 0,
+       "cache_miss": 2116,
+       "backend_req": 6167,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 6167,
+    "hit_ratio": 0.0,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 688.1397783095246,
+    "p50_ms": 11.512216,
+    "p99_ms": 16.301099999999998,
+    "requests": 10329,
+    "non_2xx": 0,
+    "ok": 10329,
+    "errors": 0,
+    "size_per_request": 1229,
+    "warm": {
+     "rps": 694.299087779324,
+     "p50_ms": 11.396405,
+     "p99_ms": 15.945618000000001,
+     "requests": 3476,
+     "non_2xx": 0,
+     "ok": 3476,
+     "errors": 0,
+     "size_per_request": 1228
+    },
+    "arm": "alerta-cache-2s",
+    "case": "write-dup",
+    "c": 8,
+    "rep": 2,
+    "db": "bench_cache_write_alerta_cache_2s_r2",
+    "wall_s": 15.016811687999962,
+    "alive": true,
+    "server_cpu_ms_per_request": 2.7630942007938812,
+    "cache_cpu_ms_per_request": 0.18394810727079097,
+    "front_cpu_ms_per_request": 0.08035627843934554,
+    "postgres_cpu_ms_per_request": 1.5199922548165359,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 3479,
+       "backend_req": 3479
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 3487,
+       "backend_req": 13808
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 10329,
+       "s_pass": 8
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 10329,
+    "hit_ratio": 0.0,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 74765.48418688112,
+    "p50_ms": 0.09945000000000001,
+    "p99_ms": 0.211581,
+    "requests": 1121617,
+    "non_2xx": 0,
+    "ok": 1121617,
+    "errors": 0,
+    "size_per_request": 194,
+    "warm": {
+     "rps": 74759.9910690358,
+     "p50_ms": 0.09915,
+     "p99_ms": 0.216564,
+     "requests": 374072,
+     "non_2xx": 0,
+     "ok": 374072,
+     "errors": 0,
+     "size_per_request": 194
+    },
+    "arm": "alerta-cache-5s",
+    "case": "count",
+    "c": 8,
+    "rep": 2,
+    "db": "bench_cache_read",
+    "wall_s": 15.40731380300008,
+    "alive": true,
+    "server_cpu_ms_per_request": 0.0,
+    "cache_cpu_ms_per_request": 0.018116701155563797,
+    "front_cpu_ms_per_request": 0.019222247879623792,
+    "postgres_cpu_ms_per_request": 8.915699387580609e-06,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 374074,
+       "cache_miss": 4,
+       "s_pass": 2,
+       "backend_req": 6
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 1495688,
+       "cache_miss": 7,
+       "s_pass": 2,
+       "backend_req": 9
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 1121614,
+       "cache_miss": 3,
+       "backend_req": 3,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 3,
+    "hit_ratio": 0.9999973252901837,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 82800.54903486356,
+    "p50_ms": 0.36403199999999997,
+    "p99_ms": 0.900649,
+    "requests": 1242560,
+    "non_2xx": 0,
+    "ok": 1242560,
+    "errors": 0,
+    "size_per_request": 194,
+    "warm": {
+     "rps": 82927.98867276733,
+     "p50_ms": 0.36810899999999996,
+     "p99_ms": 0.8565769999999999,
+     "requests": 414892,
+     "non_2xx": 0,
+     "ok": 414892,
+     "errors": 0,
+     "size_per_request": 194
+    },
+    "arm": "alerta-cache-5s",
+    "case": "count",
+    "c": 32,
+    "rep": 2,
+    "db": "bench_cache_read",
+    "wall_s": 15.478030056999842,
+    "alive": true,
+    "server_cpu_ms_per_request": 3.219160442956477e-05,
+    "cache_cpu_ms_per_request": 0.018413597733711047,
+    "front_cpu_ms_per_request": 0.01748808910636106,
+    "postgres_cpu_ms_per_request": 4.8287406644347156e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 1910579,
+       "cache_miss": 8,
+       "s_pass": 2,
+       "backend_req": 10
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 3153136,
+       "cache_miss": 11,
+       "s_pass": 2,
+       "backend_req": 13
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 1242557,
+       "cache_miss": 3,
+       "backend_req": 3,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 3,
+    "hit_ratio": 0.9999975856296678,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 48725.317834080226,
+    "p50_ms": 0.153278,
+    "p99_ms": 0.326651,
+    "requests": 731001,
+    "non_2xx": 0,
+    "ok": 731001,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 47595.21615383308,
+     "p50_ms": 0.157858,
+     "p99_ms": 0.32803299999999996,
+     "requests": 238110,
+     "non_2xx": 0,
+     "ok": 238110,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta-cache-5s",
+    "case": "list",
+    "c": 8,
+    "rep": 2,
+    "db": "bench_cache_read",
+    "wall_s": 15.269525336000015,
+    "alive": true,
+    "server_cpu_ms_per_request": 2.7359743693921075e-05,
+    "cache_cpu_ms_per_request": 0.02393977573218094,
+    "front_cpu_ms_per_request": 0.03177834230048933,
+    "postgres_cpu_ms_per_request": 2.7359743693921075e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 3391245,
+       "cache_miss": 12,
+       "s_pass": 2,
+       "backend_req": 14
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 4122243,
+       "cache_miss": 15,
+       "s_pass": 2,
+       "backend_req": 17
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 730998,
+       "cache_miss": 3,
+       "backend_req": 3,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 3,
+    "hit_ratio": 0.999995896038446,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 50635.550774458105,
+    "p50_ms": 0.6112500000000001,
+    "p99_ms": 1.276895,
+    "requests": 759748,
+    "non_2xx": 0,
+    "ok": 759748,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 50981.13337828209,
+     "p50_ms": 0.605292,
+     "p99_ms": 1.273618,
+     "requests": 255007,
+     "non_2xx": 0,
+     "ok": 255007,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta-cache-5s",
+    "case": "list",
+    "c": 32,
+    "rep": 2,
+    "db": "bench_cache_read",
+    "wall_s": 15.244610015000035,
+    "alive": true,
+    "server_cpu_ms_per_request": 2.6324518129695636e-05,
+    "cache_cpu_ms_per_request": 0.02569272969458294,
+    "front_cpu_ms_per_request": 0.0319842895275802,
+    "postgres_cpu_ms_per_request": 2.6324518129695636e-05,
+    "cache_nodes": {
+     "before": [
+      {
+       "cache_hit": 4377249,
+       "cache_miss": 16,
+       "s_pass": 2,
+       "backend_req": 18
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "after": [
+      {
+       "cache_hit": 5136994,
+       "cache_miss": 19,
+       "s_pass": 2,
+       "backend_req": 21
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "s_pass": 1,
+       "backend_req": 1
+      }
+     ],
+     "delta": [
+      {
+       "cache_hit": 759745,
+       "cache_miss": 3,
+       "backend_req": 3,
+       "s_pass": 0
+      },
+      {
+       "cache_hit": 0,
+       "cache_miss": 0,
+       "backend_req": 0,
+       "s_pass": 0
+      }
+     ]
+    },
+    "backend_requests": 3,
+    "hit_ratio": 0.9999960513222805,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 6809.128459414265,
+    "p50_ms": 1.139441,
+    "p99_ms": 2.0770210000000002,
+    "requests": 102155,
+    "non_2xx": 0,
+    "ok": 102155,
+    "errors": 0,
+    "size_per_request": 173,
+    "warm": {
+     "rps": 6794.568339076544,
+     "p50_ms": 1.1385049999999999,
+     "p99_ms": 2.079423,
+     "requests": 33992,
+     "non_2xx": 0,
+     "ok": 33992,
+     "errors": 0,
+     "size_per_request": 173
+    },
+    "arm": "alrust",
+    "case": "count",
+    "c": 8,
+    "rep": 2,
+    "db": "bench_cache_read",
+    "wall_s": 15.039220472999887,
+    "alive": true,
+    "server_cpu_ms_per_request": 0.12246096617884587,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.030443933238705888,
+    "postgres_cpu_ms_per_request": 0.33762419852185405,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 7937.355500348322,
+    "p50_ms": 3.987779,
+    "p99_ms": 5.978449,
+    "requests": 119108,
+    "non_2xx": 0,
+    "ok": 119108,
+    "errors": 0,
+    "size_per_request": 173,
+    "warm": {
+     "rps": 7883.579446514035,
+     "p50_ms": 4.017074,
+     "p99_ms": 6.003170000000001,
+     "requests": 39458,
+     "non_2xx": 0,
+     "ok": 39458,
+     "errors": 0,
+     "size_per_request": 173
+    },
+    "arm": "alrust",
+    "case": "count",
+    "c": 32,
+    "rep": 2,
+    "db": "bench_cache_read",
+    "wall_s": 15.044015767000019,
+    "alive": true,
+    "server_cpu_ms_per_request": 0.10612217483292474,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.024599523121872587,
+    "postgres_cpu_ms_per_request": 0.3307082647681096,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 1307.0139568124655,
+    "p50_ms": 6.007513,
+    "p99_ms": 10.246768,
+    "requests": 19614,
+    "non_2xx": 0,
+    "ok": 19614,
+    "errors": 0,
+    "size_per_request": 41148,
+    "warm": {
+     "rps": 1286.6328274418331,
+     "p50_ms": 6.096844,
+     "p99_ms": 10.342059,
+     "requests": 6443,
+     "non_2xx": 0,
+     "ok": 6443,
+     "errors": 0,
+     "size_per_request": 41148
+    },
+    "arm": "alrust",
+    "case": "list",
+    "c": 8,
+    "rep": 2,
+    "db": "bench_cache_read",
+    "wall_s": 15.016716677999966,
+    "alive": true,
+    "server_cpu_ms_per_request": 1.15427755684715,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.06271030896298563,
+    "postgres_cpu_ms_per_request": 1.4805750994187825,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 1391.9910599811853,
+    "p50_ms": 22.799197,
+    "p99_ms": 31.898371,
+    "requests": 20911,
+    "non_2xx": 0,
+    "ok": 20911,
+    "errors": 0,
+    "size_per_request": 41148,
+    "warm": {
+     "rps": 1396.2217509742911,
+     "p50_ms": 22.731023999999998,
+     "p99_ms": 31.512851,
+     "requests": 7011,
+     "non_2xx": 0,
+     "ok": 7011,
+     "errors": 0,
+     "size_per_request": 41148
+    },
+    "arm": "alrust",
+    "case": "list",
+    "c": 32,
+    "rep": 2,
+    "db": "bench_cache_read",
+    "wall_s": 15.033590673999925,
+    "alive": true,
+    "server_cpu_ms_per_request": 1.1577638563435513,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.05929893357563005,
+    "postgres_cpu_ms_per_request": 1.4853426426282819,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 1309.0335486322058,
+    "p50_ms": 5.995768,
+    "p99_ms": 10.250952,
+    "requests": 19644,
+    "non_2xx": 0,
+    "ok": 19644,
+    "errors": 0,
+    "size_per_request": 41148,
+    "warm": {
+     "rps": 1301.438727412897,
+     "p50_ms": 6.019765,
+     "p99_ms": 10.142163,
+     "requests": 6517,
+     "non_2xx": 0,
+     "ok": 6517,
+     "errors": 0,
+     "size_per_request": 41148
+    },
+    "arm": "alrust",
+    "case": "list-unique",
+    "c": 8,
+    "rep": 2,
+    "db": "bench_cache_read",
+    "wall_s": 15.016112163999878,
+    "alive": true,
+    "server_cpu_ms_per_request": 1.1525147627774384,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.06465078395438811,
+    "postgres_cpu_ms_per_request": 1.4732233760944817,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 2876.585539487456,
+    "p50_ms": 2.7720230000000003,
+    "p99_ms": 3.064927,
+    "requests": 43161,
+    "non_2xx": 0,
+    "ok": 43161,
+    "errors": 0,
+    "size_per_request": 1128,
+    "warm": {
+     "rps": 2835.892630217173,
+     "p50_ms": 2.789738,
+     "p99_ms": 3.273697,
+     "requests": 14192,
+     "non_2xx": 0,
+     "ok": 14192,
+     "errors": 0,
+     "size_per_request": 1127
+    },
+    "arm": "alrust",
+    "case": "write-dup",
+    "c": 8,
+    "rep": 2,
+    "db": "bench_cache_write_alrust_r2",
+    "wall_s": 15.021815598999865,
+    "alive": true,
+    "server_cpu_ms_per_request": 0.3148675887954403,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.05236208614258243,
+    "postgres_cpu_ms_per_request": 0.30953870392252264,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 1005.1991455455137,
+    "p50_ms": 7.875306999999999,
+    "p99_ms": 11.575973,
+    "requests": 15084,
+    "non_2xx": 0,
+    "ok": 15084,
+    "errors": 0,
+    "size_per_request": 194,
+    "warm": {
+     "rps": 998.7200743958431,
+     "p50_ms": 7.8784730000000005,
+     "p99_ms": 12.034242,
+     "requests": 4999,
+     "non_2xx": 0,
+     "ok": 4999,
+     "errors": 0,
+     "size_per_request": 194
+    },
+    "arm": "alerta",
+    "case": "count",
+    "c": 8,
+    "rep": 2,
+    "db": "bench_cache_read",
+    "wall_s": 15.014427376000185,
+    "alive": true,
+    "server_cpu_ms_per_request": 1.760143198090692,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.08220631132325643,
+    "postgres_cpu_ms_per_request": 1.2079024131530098,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 1043.134027114919,
+    "p50_ms": 24.233718,
+    "p99_ms": 70.31117300000001,
+    "requests": 15682,
+    "non_2xx": 0,
+    "ok": 15682,
+    "errors": 0,
+    "size_per_request": 194,
+    "warm": {
+     "rps": 1032.24079637938,
+     "p50_ms": 30.576461,
+     "p99_ms": 64.328404,
+     "requests": 5189,
+     "non_2xx": 0,
+     "ok": 5189,
+     "errors": 0,
+     "size_per_request": 194
+    },
+    "arm": "alerta",
+    "case": "count",
+    "c": 32,
+    "rep": 2,
+    "db": "bench_cache_read",
+    "wall_s": 15.041963892999775,
+    "alive": true,
+    "server_cpu_ms_per_request": 1.7465884453513583,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.08162224206096161,
+    "postgres_cpu_ms_per_request": 1.3639841856906008,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 420.73644879845557,
+    "p50_ms": 18.732095,
+    "p99_ms": 31.301676,
+    "requests": 6317,
+    "non_2xx": 0,
+    "ok": 6317,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 416.9636050790013,
+     "p50_ms": 18.901115,
+     "p99_ms": 31.302607000000002,
+     "requests": 2092,
+     "non_2xx": 0,
+     "ok": 2092,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta",
+    "case": "list",
+    "c": 8,
+    "rep": 2,
+    "db": "bench_cache_read",
+    "wall_s": 15.020760039999914,
+    "alive": true,
+    "server_cpu_ms_per_request": 4.67310432167168,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.09973088491372487,
+    "postgres_cpu_ms_per_request": 2.645242995092607,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 446.0043450392003,
+    "p50_ms": 63.760888,
+    "p99_ms": 157.851155,
+    "requests": 6724,
+    "non_2xx": 0,
+    "ok": 6724,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 442.61802708237514,
+     "p50_ms": 63.454201000000005,
+     "p99_ms": 149.092501,
+     "requests": 2245,
+     "non_2xx": 0,
+     "ok": 2245,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta",
+    "case": "list",
+    "c": 32,
+    "rep": 2,
+    "db": "bench_cache_read",
+    "wall_s": 15.083132478000152,
+    "alive": true,
+    "server_cpu_ms_per_request": 4.7441998810232,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.10559190957763236,
+    "postgres_cpu_ms_per_request": 2.7810826888756695,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 403.57020971027595,
+    "p50_ms": 19.095292999999998,
+    "p99_ms": 38.370036000000006,
+    "requests": 6059,
+    "non_2xx": 0,
+    "ok": 6059,
+    "errors": 0,
+    "size_per_request": 44230,
+    "warm": {
+     "rps": 412.26509195951604,
+     "p50_ms": 18.91076,
+     "p99_ms": 33.988491,
+     "requests": 2065,
+     "non_2xx": 0,
+     "ok": 2065,
+     "errors": 0,
+     "size_per_request": 44230
+    },
+    "arm": "alerta",
+    "case": "list-unique",
+    "c": 8,
+    "rep": 2,
+    "db": "bench_cache_read",
+    "wall_s": 15.019720624000001,
+    "alive": true,
+    "server_cpu_ms_per_request": 4.537052318864499,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.09407492985641194,
+    "postgres_cpu_ms_per_request": 2.5961379765637895,
+    "problems": [],
+    "valid": true
+   },
+   {
+    "rps": 723.2177204434452,
+    "p50_ms": 10.941162,
+    "p99_ms": 15.098297,
+    "requests": 10855,
+    "non_2xx": 0,
+    "ok": 10855,
+    "errors": 0,
+    "size_per_request": 1229,
+    "warm": {
+     "rps": 720.6444533930421,
+     "p50_ms": 10.965799,
+     "p99_ms": 15.179312,
+     "requests": 3609,
+     "non_2xx": 0,
+     "ok": 3609,
+     "errors": 0,
+     "size_per_request": 1228
+    },
+    "arm": "alerta",
+    "case": "write-dup",
+    "c": 8,
+    "rep": 2,
+    "db": "bench_cache_write_alerta_r2",
+    "wall_s": 15.016209767999953,
+    "alive": true,
+    "server_cpu_ms_per_request": 2.6973744818056193,
+    "cache_cpu_ms_per_request": 0.0,
+    "front_cpu_ms_per_request": 0.08659603869184708,
+    "postgres_cpu_ms_per_request": 1.4933210502072778,
+    "problems": [],
+    "valid": true
+   }
+  ],
+  "gate": {
+   "expected": 78,
+   "missing": [],
+   "invalid": [],
+   "duplicate": [],
+   "missing_checks": [],
+   "ok": true
+  }
+ },
+ "cell_gate": {
+  "expected": 0,
+  "missing": [],
+  "invalid": [],
+  "ok": true
+ }
+}
