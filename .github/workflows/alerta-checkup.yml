@@ -1,0 +1,243 @@
+# The read-only checkup of docs/performance/measure-your-own-alerta.md,
+# scripts/bench/alerta_checkup.sql, run by a role that can only read, on a
+# throwaway Alerta 9.1.0 database (PostgreSQL 18.7, scripts/bench/setup.sh)
+# while stock Alerta receives a known number of duplicates. It shows that
+# every query of the file runs on 18.7 with the column grants of the guide
+# and nothing more, that the role can neither write nor read key material,
+# that the file's counts match the known traffic, that an idle interval
+# gives zeros and `undetermined` ratios, that a bad interval reads
+# nothing, and that scripts/bench/alerta_checkup_privileges.sql reports the
+# expected effective privileges for that role and the excess of a looser one. The traffic is this harness's own: the file has no hook, so the
+# job sends it while the file waits. Synthetic data only. Not a benchmark
+# and not a required check.
+name: alerta checkup sql
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/bench/alerta_checkup.sql
+      - scripts/bench/alerta_checkup_privileges.sql
+      - scripts/bench/checkup_ci.py
+      - scripts/bench/setup.sh
+      - .github/workflows/alerta-checkup.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alerta-checkup-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: read-only checkup on stock Alerta (PostgreSQL 18.7)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0 (Node24)
+        with:
+          # The reference Alerta is installed from the pinned submodule.
+          submodules: true
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0 (Node24)
+        with:
+          python-version: "3.12"
+      - name: PostgreSQL 18.7 and the reference Alerta environment
+        timeout-minutes: 10
+        run: scripts/bench/setup.sh
+      - name: checkup as a read-only role
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/checkup-out"
+          mkdir -- "$out"
+          # The throwaway cluster of setup.sh: its passwords are public text.
+          admin=("$BENCH_PG_BIN/psql" -X -h 127.0.0.1 -p 5432 -U postgres -v ON_ERROR_STOP=1)
+          PGPASSWORD=postgres "${admin[@]}" -d postgres -c 'CREATE DATABASE checkup'
+          load="$RUNNER_TEMP/checkup-load.sh"
+          cat > "$load" <<EOF
+          #!/bin/sh
+          cd "$BENCH_WORK" && exec env -i PATH="$BENCH_ALERTA_VENV/bin:/usr/bin:/bin" HOME="$BENCH_WORK" \
+            DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/checkup \
+            SECRET_KEY=bench-not-secret LOG_LEVEL=WARNING \
+            "$BENCH_ALERTA_VENV/bin/python" -I "$GITHUB_WORKSPACE/scripts/bench/checkup_ci.py" "\$1"
+          EOF
+          chmod +x -- "$load"
+          "$load" prime
+          PGPASSWORD=postgres "${admin[@]}" -d checkup <<'SQL'
+          CREATE ROLE checkup LOGIN PASSWORD 'checkup';
+          GRANT CONNECT ON DATABASE checkup TO checkup;
+          GRANT USAGE ON SCHEMA public TO checkup;
+          GRANT SELECT (id) ON alerts TO checkup;
+          GRANT SELECT ("group", name, type, count) ON metrics TO checkup;
+          SQL
+          reader=("$BENCH_PG_BIN/psql" -X -h 127.0.0.1 -p 5432 -U checkup -d checkup -v ON_ERROR_STOP=1)
+          export PGPASSWORD=checkup
+          # The role cannot write, and cannot read key material or alert content.
+          n=0
+          for sql in 'UPDATE alerts SET text = text' "INSERT INTO metrics (\"group\", name, type) VALUES ('a', 'b', 'c')" \
+                     'DELETE FROM alerts' 'SELECT key FROM keys' 'SELECT * FROM keys' 'SELECT text FROM alerts' \
+                     'SELECT * FROM users' 'CREATE TABLE checkup_probe (i int)'; do
+            n=$((n + 1))
+            if "${reader[@]}" -c "$sql" > /dev/null 2> "$out/denied-$n.err"; then
+              echo "the checkup role could run: $sql"; exit 1
+            fi
+            grep -q 'permission denied' "$out/denied-$n.err"
+          done
+          # The privileges file of the guide: exactly the expected values for the checkup role,
+          # and the excess of a login that may create in public and is a member of a key reader.
+          "${reader[@]}" -At -f scripts/bench/alerta_checkup_privileges.sql | tee "$out/privileges.txt"
+          PGPASSWORD=postgres "${admin[@]}" -d checkup <<'SQL'
+          CREATE ROLE keyreader NOLOGIN;
+          GRANT SELECT ON keys TO keyreader;
+          CREATE ROLE checkup_loose LOGIN PASSWORD 'checkup' IN ROLE keyreader;
+          GRANT CONNECT ON DATABASE checkup TO checkup_loose;
+          GRANT USAGE, CREATE ON SCHEMA public TO checkup_loose;
+          GRANT SELECT (id), UPDATE (text) ON alerts TO checkup_loose;
+          -- Only excess: one sensitive column of alerts.
+          CREATE ROLE checkup_text LOGIN PASSWORD 'checkup';
+          GRANT CONNECT ON DATABASE checkup TO checkup_text;
+          GRANT USAGE ON SCHEMA public TO checkup_text;
+          GRANT SELECT (id, text) ON alerts TO checkup_text;
+          GRANT SELECT ("group", name, type, count) ON metrics TO checkup_text;
+          -- Only fault: a required column of metrics is not granted.
+          CREATE ROLE checkup_short LOGIN PASSWORD 'checkup';
+          GRANT CONNECT ON DATABASE checkup TO checkup_short;
+          GRANT USAGE ON SCHEMA public TO checkup_short;
+          GRANT SELECT (id) ON alerts TO checkup_short;
+          GRANT SELECT ("group", name, type) ON metrics TO checkup_short;
+          SQL
+          for who in text short; do
+            "$BENCH_PG_BIN/psql" -X -h 127.0.0.1 -p 5432 -U "checkup_$who" -d checkup -v ON_ERROR_STOP=1 \
+              -At -f scripts/bench/alerta_checkup_privileges.sql | tee "$out/privileges-$who.txt"
+          done
+          "$BENCH_PG_BIN/psql" -X -h 127.0.0.1 -p 5432 -U checkup_loose -d checkup -v ON_ERROR_STOP=1 \
+            -At -f scripts/bench/alerta_checkup_privileges.sql | tee "$out/privileges-loose.txt"
+          python3 -I - "$out/privileges.txt" "$out/privileges-loose.txt" "$out/privileges-text.txt" \
+            "$out/privileges-short.txt" <<'PY'
+          import sys
+          def parts(path):
+              out, part = {}, None
+              for line in open(path).read().splitlines():
+                  if line.startswith("== "):
+                      part = line[3]
+                      out[part] = []
+                  elif line.strip() and not line.startswith("  ") and part:
+                      out[part].append(line)
+              return out
+          problems = []
+          tight = parts(sys.argv[1])
+          tables = dict(row.split("|", 1) for row in tight.get("3", []))
+          if tight.get("1") != []:
+              problems.append(f"checkup role is a member of {tight.get('1')}")
+          if tight.get("2") != ["f|f|f"]:
+              problems.append(f"checkup role: superuser/create are {tight.get('2')}")
+          for need in ("alerts", "metrics", "keys", "users"):
+              if need not in tables:
+                  problems.append(f"table {need} is missing from the privileges output")
+          EXACT = {"alerts": "f|f|id|ok", "metrics": "f|f|count, group, name, type|ok"}
+          def exact(who, got, differ=None):
+              differ = differ or {}
+              for name, flags in got.items():
+                  want = differ.get(name) or EXACT.get(name, "f|f||ok")
+                  if flags != want:
+                      problems.append(f"{who}: table {name} is {flags!r}, expected {want!r}")
+          exact("checkup role", tables)
+          loose = parts(sys.argv[2])
+          ltables = dict(row.split("|", 1) for row in loose.get("3", []))
+          if loose.get("1") != ["keyreader"]:
+              problems.append(f"loose login: member_of is {loose.get('1')}")
+          if loose.get("2") != ["f|f|t"]:
+              problems.append(f"loose login: superuser/create are {loose.get('2')}")
+          if not (ltables.get("keys") or "").startswith("f|t|") or "unexpected: " not in ltables.get("keys", ""):
+              problems.append(f"loose login: keys is {ltables.get('keys')}")
+          if ltables.get("alerts") != "t|f|id|ok":
+              problems.append(f"loose login: alerts is {ltables.get('alerts')}")
+          # A login whose only excess is one sensitive column, and one that lacks a required column:
+          # memberships and create flags are as for the checkup role; one table row differs.
+          for who, path, differ in (
+                  ("text login", sys.argv[3], {"alerts": "f|f|id, text|unexpected: text"}),
+                  ("short login", sys.argv[4], {"metrics": "f|f|group, name, type|missing: count"})):
+              other = parts(path)
+              if other.get("1") != [] or other.get("2") != ["f|f|f"]:
+                  problems.append(f"{who}: parts 1 and 2 are {other.get('1')} {other.get('2')}")
+              exact(who, dict(row.split("|", 1) for row in other.get("3", [])), differ)
+          if problems:
+              sys.exit("; ".join(problems))
+          print(f"privileges file: expected values for the checkup role ({len(tables)} tables), excess shown for the loose login")
+          PY
+          # A bad interval reads nothing; so does a command in the place of the interval.
+          for bad in 0 3601 abc '1; touch /tmp/checkup-injected' '$(touch /tmp/checkup-injected)'; do
+            "${reader[@]}" -v interval="$bad" -f scripts/bench/alerta_checkup.sql > "$out/bad.txt" 2> "$out/bad.err"
+            grep -q 'interval must be a whole number' "$out/bad.err"
+            if [ -s "$out/bad.txt" ]; then echo "interval '$bad' still read something"; exit 1; fi
+          done
+          # The checkup, with the known traffic sent by this job while the file waits. A command
+          # in an inherited variable (the name of a hook this file once had) must not run.
+          CHECKUP_WAIT="touch /tmp/checkup-injected" "${reader[@]}" -v interval=30 \
+            -f scripts/bench/alerta_checkup.sql > "$out/checkup.txt" 2> "$out/checkup.err" &
+          checkup=$!
+          for _ in $(seq 60); do
+            grep -q 'first snapshot taken' "$out/checkup.err" && break
+            sleep 0.5
+          done
+          grep -q 'first snapshot taken' "$out/checkup.err"
+          "$load" load
+          # The traffic ended before the second snapshot began.
+          if grep -q 'taking the second snapshot' "$out/checkup.err"; then
+            echo "the load did not end before the second snapshot"; exit 1
+          fi
+          wait "$checkup"
+          cat "$out/checkup.txt" "$out/checkup.err"
+          if [ -e /tmp/checkup-injected ]; then echo "a command from the environment or the interval ran"; exit 1; fi
+          # The idle baseline: the same file, nothing sent.
+          "${reader[@]}" -v interval=2 -f scripts/bench/alerta_checkup.sql | tee "$out/checkup-idle.txt"
+          python3 -I - "$out/checkup.txt" "$out/checkup-idle.txt" <<'PY'
+          import re, sys
+          def values(path):
+              text = open(path).read()
+              def value(name):
+                  m = re.search(rf"^{name}\s*\|\s*(.*?)\s*$", text, re.M)
+                  if not m:
+                      sys.exit(f"{name} is missing from {path}")
+                  return m.group(1)
+              return text, {n: value(n) for n in (
+                  "result", "seconds", "alert_receives", "alert_queries", "new_sessions",
+                  "sessions_per_receive_or_query", "alert_row_updates", "alert_row_updates_per_receive",
+                  "hot_update_percent", "alerts_inserted")}
+          problems = []
+          text, got = values(sys.argv[1])
+          print("with traffic:", got)
+          if got["result"] != "ok":
+              problems.append(f"result is {got['result']!r}")
+          if (got["alert_receives"], got["alert_queries"]) != ("20", "10"):
+              problems.append("receives or queries differ from the known traffic (20, 10)")
+          # Stock Alerta opens one PostgreSQL session per request (plus the load process's start).
+          try:
+              if not 0.95 <= float(got["sessions_per_receive_or_query"]) <= 1.2:
+                  problems.append("sessions per request are not about 1")
+          except ValueError:
+              problems.append("sessions per request are not a number")
+          # A duplicate with the default plugins: the duplicate UPDATE, then forwarder's echo of
+          # the tags and of the attributes (docs/performance/2026-11-21-fastpath-bench.md).
+          if (got["alert_row_updates"], got["alert_row_updates_per_receive"]) != ("60", "3.00"):
+              problems.append("alert row updates are not 3 per duplicate receive")
+          if got["alerts_inserted"] != "0":
+              problems.append("alerts were inserted")
+          if "QUERY PLAN" not in text or "is_standby" not in text:
+              problems.append("the plan or the standby flag is missing")
+          text, idle = values(sys.argv[2])
+          print("idle:", idle)
+          if idle["result"] != "ok":
+              problems.append(f"idle result is {idle['result']!r}")
+          for name in ("alert_receives", "alert_queries", "alert_row_updates", "alerts_inserted"):
+              if idle[name] != "0":
+                  problems.append(f"idle {name} is {idle[name]}, not 0")
+          for name in ("sessions_per_receive_or_query", "alert_row_updates_per_receive", "hot_update_percent"):
+              if idle[name] != "undetermined":
+                  problems.append(f"idle {name} is {idle[name]!r}, not undetermined")
+          if problems:
+              sys.exit("; ".join(problems))
+          print("checkup counts match the known traffic; the idle interval gives zeros and undetermined ratios")
+          PY
