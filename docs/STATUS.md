@@ -1,11 +1,76 @@
 # Status
 
-_Last updated: 2026-11-23 22:27 EST by claude-alrust, the sole writer of this
+_Last updated: 2026-11-26 10:51 EST by claude-alrust, the sole writer of this
 file and DECISIONS.md. Codex sends corrections through the mailbox. Times
 written from 2026-11-15 14:13 EST on are Nassau local time (DECISIONS Y63);
 earlier ones are UTC (`Z`)._
 
-## Alerta add-on work, 2026-11-17 to 2026-11-23 (newest first)
+## Alerta add-on work, 2026-11-17 to 2026-11-26 (newest first)
+
+**State, 2026-11-26 10:51 EST.** `main` is `3b5426a0`. Claude has no open
+pull request in the Alerta speed work. A reader with no background starts at
+`docs/performance/README.md` (the findings page, linked from the root
+README): it has a "Start here" section, the findings with their limits, and
+links to every report, to the operator guide and to
+`measure-your-own-alerta.md` (a read-only checkup of one's own installation).
+
+**Full hosted run, 2026-11-24 23:37 to 2026-11-25 00:10 EST** (one attempt,
+agreed by Codex in `09d38597`, $0): bench compare, suite `pgtune`, run
+45548068348 at `acd96318`, 100,000 synthetic alerts, the ID prefix index
+`alerts (id text_pattern_ops)` alone. 72 of 72 cells valid; 104,693 timed
+requests, 0 errors. Duplicate writes with the index against without, per
+repetition: +193% to +282% per second on stock Alerta and +379% to +520%
+with the add-on's `safe` patches. Reads: no clear change (-6.7% to +8.2%).
+Limits: one runner, a `C.UTF-8` database, the plans of Alerta's own `UPDATE`
+statements not captured, the index build on a live table and the index's
+size not measured, no curve against table size. Artifact 14994640379
+(1,017,268 bytes, SHA-256 `d8905fb9...a021775`), saved locally the same day.
+Report: `docs/performance/2026-11-25-pgtune-index-bench.md` with the
+unchanged `results.json` (#291). Codex verified the run and all 68 numeric
+rows (`2485392b`) and asked for three text corrections, which are in the
+merged head. There is no agreement for a 1,000-alert run (Codex: reserve it
+for a separate scaling question).
+
+**Merged, 2026-11-24 to 2026-11-26** (each with Codex's record for the exact
+head, the advisor consulted first with no objection, all checks green, the
+head containing `main`; each resulting tree equals the approved tree):
+#287 STATUS (2026-11-24 13:32:23 EST, `d35658df`, tree `86e2338e`; Codex
+`2b65dd5a`); #289 operator guide (2026-11-24 19:19:23 EST, `c3b1d185`, tree
+`ae498b57`; Codex `aec201fe`); #288 opt-in `alertlinks` and `fastdates`
+(2026-11-24 23:38:48 EST, `56f860a4`, tree `ab328ef1`; Codex `f25d8093`);
+#290 two-site cache stage (2026-11-25 15:24:52 EST, `aeb70f1f`, tree
+`f07343ea`; Codex `7f50dd31`; quick run 45548403508 only, no full run);
+#291 pgtune suite and the index report (2026-11-25 16:48:54 EST, `9cdc1804`,
+tree `eb496590`; Codex `4745ce31`); #297 (2026-11-25 22:47:46 EST,
+`aa27a974`, tree `e8c926a0`; Codex `327ffc16`); #295 measure your own Alerta
+(2026-11-26 04:48:24 EST, `ea316148`, tree `bacbdee2`; Codex `a6abb8dd`);
+#292 findings page (2026-11-26 10:50:33 EST, `3b5426a0`, tree `d7978d81`;
+Codex `851f2a8d`).
+- **#297 is one integration head for #293, #294 and #296** (reports of the
+  20 and 21 November full runs; the hosted mixed report; a mention of
+  day-to-day reporting options in the operator guide). Their 11 paths do not
+  overlap, and each was approved separately. Codex agreed to this one case
+  (`4745ce31`) and compared the head with the union of the approved diffs.
+  GitHub marks the three as merged. It is not a standing rule.
+- **Two checks were rerun on an unchanged head before a merge:** #291, one
+  job with a stale `in_progress` state (run 45694842526, attempt 2); #292,
+  the Compose smoke, which failed at `pull-db` on attempt 1 (run
+  45795468447, attempt 2 passed; the cause of the pull error is not
+  established).
+
+**Owner directions, 2026-11-23 to 2026-11-25:** the reporting rule for full
+runs (DECISIONS Y79); full hosted runs of this work need Codex's agreement
+for the exact run and no separate owner gate (Y80); a mailbox check every 2
+hours in Claude's session (Y81). On 2026-11-25 the owner also agreed to an
+opt-in admin status route for the add-on; Codex gave design feedback
+(`4dac3e98`); no code exists yet.
+
+**Next (Claude):** the opt-in admin status route; later steps of the
+PostgreSQL tuning suite, one at a time; the recovery and etcd-routing
+proposal for the two-site lab.
+
+_The paragraphs below were written on 2026-11-23 and are kept as the record
+of that date; where they say "open", the block above is current._
 
 **Owner direction, 2026-11-21:** for 30 days (to about 2026-12-21), Alerta
 only: the `alerta_fast.py` add-on for stock Alerta (no fork), PostgreSQL
