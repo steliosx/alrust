@@ -33,7 +33,8 @@ Report: [2026-11-22-two-site-placement.md](2026-11-22-two-site-placement.md).
   plugin forwards nothing. But its `post_receive` returns the alert, so Alerta writes the alert's
   tags and attributes again on every receive. On one site, with 8 clients and the add-on's default (`safe`) patches in
   both arms, removing it gave 39% to 45% more duplicate writes per second, in each repetition.
-  That run did not measure the removal on Alerta without the add-on.
+  On stock Alerta (no add-on), the 20 November tuning run measured about 8% to 11% more, at 1
+  and at 8 clients, with reads unchanged.
 - **If you need `forwarder`, the add-on's opt-in `noecho` leaves out the writes that change
   nothing.** On one site, with 8 clients sending one fixed duplicate, beside the `safe` patches: 21% to 31%
   more duplicate writes per second. At two sites, alert-row updates fell from 116 to 36 per run in the placement
@@ -43,13 +44,40 @@ Report: [2026-11-22-two-site-placement.md](2026-11-22-two-site-placement.md).
   the add-on's file header says changes when a write is left out: the stored tag order, a change
   that another request commits at the same time, other alerts whose id begins with this id (ids
   that a client chose), and your own UPDATE triggers on `alerts`.
+- **On a large `alerts` table, test the ID prefix index on a copy first:**
+  `CREATE INDEX alerts_id_pattern ON alerts (id text_pattern_ops)`. With `forwarder` in
+  `PLUGINS`, Alerta's tag and attribute writes use `WHERE id=… OR id LIKE …`. On one hosted
+  runner with 100,000 synthetic alerts in a database with collation `C.UTF-8`, the index gave
+  193% to 282% more duplicate writes per second on stock Alerta and 379% to 520% more with the
+  `safe` patches, in each of 12 pairs; reads showed no clear change. At 1,000 alerts it gave 3%
+  to 5% at 1 client and nothing at 8. Not measured: the cost of building it on a live table
+  (`CREATE INDEX` blocks writes while it runs; `CREATE INDEX CONCURRENTLY` does not, and takes
+  longer), its size, and other table sizes. A database with collation `C` may not need it. If
+  you remove `forwarder` or use `noecho`, the two statements go away; the run did not compare
+  the index with those. The read-only checkup in
+  [Measure your own Alerta, safely](measure-your-own-alerta.md) shows whether your plan has
+  the full scan.
 - **The opt-in `hot` patch** writes the key-use count and the timers about once a second instead
   of on each request. Use it only where those counts may be approximate.
 
 Reports: [2026-11-21-fastpath-bench.md](2026-11-21-fastpath-bench.md),
-[2026-11-22-two-site-placement.md](2026-11-22-two-site-placement.md).
+[2026-11-22-two-site-placement.md](2026-11-22-two-site-placement.md),
+[2026-11-20-tuning-bench.md](2026-11-20-tuning-bench.md),
+[2026-11-25-pgtune-index-bench.md](2026-11-25-pgtune-index-bench.md).
 
-## 3. Searches
+## 3. Database connections
+
+- **Put PgBouncer between Alerta and PostgreSQL.** In the run, each request of Alerta 9.1.0 opened a new PostgreSQL session
+  (Alerta directly on PostgreSQL); PgBouncer keeps the sessions open. On one runner with 1,000 alerts and 4
+  gunicorn workers of 4 threads, PgBouncer over TCP with SCRAM gave 18% to 39% more requests per
+  second with `forwarder` in place, and 21% to 55% with `forwarder` removed as well.
+- **A Unix socket with `trust` is not recommended.** It gave the largest gain in that run, but
+  the run changed two things at once, and `trust` lets any local process that can open the
+  socket file connect without a password.
+
+Report: [2026-11-20-tuning-bench.md](2026-11-20-tuning-bench.md).
+
+## 4. Searches
 
 - **Put parentheses around chained terms.** Alerta 9.1.0's PostgreSQL search parser keeps only the
   first two terms of an ungrouped chain: `a AND b AND c` loses `c`, and no error is shown.
@@ -66,7 +94,7 @@ Reports: [2026-11-21-fastpath-bench.md](2026-11-21-fastpath-bench.md),
 
 Report: [2026-11-22-savedq-load.md](2026-11-22-savedq-load.md).
 
-## 4. Not covered by the reports above
+## 5. Not covered by the reports above
 
 - A response cache in front of Alerta at two sites (Varnish and HAProxy) on the 22 November
   placement lab. An earlier two-site replay (20 and 21 November) measured Varnish with
@@ -77,9 +105,10 @@ Report: [2026-11-22-savedq-load.md](2026-11-22-savedq-load.md).
 - Failover and recovery with Patroni and etcd on the 22 November placement lab. Earlier
   asynchronous promotion trials measured acknowledged loss at some lag thresholds; they are not
   one of the reports here.
-- Synchronous replication, real networks, larger tables.
+- Synchronous replication, real networks. Tables larger than 1,000 alerts were measured once,
+  for the ID prefix index at 100,000 alerts (section 2); there is no curve against table size.
 
-## 5. Day-to-day reporting: a mention, not a finding
+## 6. Day-to-day reporting: a mention, not a finding
 
 Reports such as alerts by service, by severity or by week read a large part of the `alerts`
 table. On the primary they compete with Alerta's own reads and writes. This project has measured
