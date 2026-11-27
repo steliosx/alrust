@@ -34,7 +34,7 @@ Report: [2026-11-22-two-site-placement.md](2026-11-22-two-site-placement.md).
   tags and attributes again on every receive. On one site, with 8 clients and the add-on's default (`safe`) patches in
   both arms, removing it gave 39% to 45% more duplicate writes per second, in each repetition.
   On stock Alerta (no add-on), the 20 November tuning run measured about 8% to 11% more, at 1
-  and at 8 clients, with reads unchanged.
+  and at 8 clients; reads changed by no more than about 1.5%.
 - **If you need `forwarder`, the add-on's opt-in `noecho` leaves out the writes that change
   nothing.** On one site, with 8 clients sending one fixed duplicate, beside the `safe` patches: 21% to 31%
   more duplicate writes per second. At two sites, alert-row updates fell from 116 to 36 per run in the placement
