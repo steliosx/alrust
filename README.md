@@ -14,8 +14,21 @@ use it, and to run on Alerta's own database layout.**
 > Alerta server. Full parity with Alerta is not claimed; the
 > [limitations](docs/alpha.md#alpha-limitations) are listed.
 
+> **Do you run Alerta today? This project measured ways to make stock Alerta
+> 9.1.0 faster,** with configuration, PostgreSQL and one add-on file. Alerta's
+> own files stay as released. Start here:
+> - [Operator guide](docs/performance/alerta-operator-guide.md): what to
+>   change, with the measured result and the risk of each step.
+> - [Findings page](docs/performance/README.md): what was measured, with
+>   charts and limits, and a start for readers who are new to Alerta.
+> - [Measure your own Alerta, safely](docs/performance/measure-your-own-alerta.md):
+>   a read-only check that shows which findings may apply to you.
+>
+> A summary is [below](#making-stock-alerta-faster).
+
 [Project website](https://alrust.stel.chatgpt.site/) ·
 [Quick start](#quick-start) ·
+[Tuning stock Alerta](#making-stock-alerta-faster) ·
 [What works](#what-works) ·
 [Not yet](#not-yet) ·
 [Performance](#performance) ·
@@ -130,10 +143,26 @@ single-client ratios.
 ### Making stock Alerta faster
 
 The project also measures how far Alerta 9.1.0 as released can be sped up, with configuration,
-PostgreSQL and one add-on file, at one site and at two data sites. The findings, with charts,
-are on one page: [Making Alerta faster: what we measured](docs/performance/README.md). For
-example, at two sites with a 50 ms link, site B's requests were much faster when HAProxy sent
-them to the Alerta at the PostgreSQL primary's site:
+PostgreSQL and one add-on file, at one site and at two data sites. Alerta's own files stay as
+released; the add-on, [`alerta_fast.py`](scripts/bench/alerta_fast.py), replaces a few of
+Alerta's functions when the server starts. The main results so far:
+
+| If you run Alerta… | Change | Measured change | Limits | Report |
+|---|---|---|---|---|
+| With the default `PLUGINS` and no forwarding | Remove `forwarder` from `PLUGINS` | +8% to +11% duplicate writes per second on stock Alerta; +39% to +45% with the add-on's `safe` patches in both arms (8 clients) | One fixed duplicate alert was sent. Check first that `FWD_DESTINATIONS` is empty (the plugin also forwards actions and deletes), that nothing relies on its loop check (`X-Alerta-Loop`), and that no UPDATE trigger on `alerts` depends on the writes it causes | [tuning](docs/performance/2026-11-20-tuning-bench.md), [fastpath](docs/performance/2026-11-21-fastpath-bench.md) |
+| Directly on PostgreSQL | Put PgBouncer in front (TCP with SCRAM) | +18% to +39% requests per second in the tested list, count and duplicate write, against Alerta directly on PostgreSQL | 1,000 alerts, 4 workers of 4 threads, `forwarder` in place | [tuning](docs/performance/2026-11-20-tuning-bench.md) |
+| With `forwarder` and a large `alerts` table | Test the ID prefix index on a copy first | 100,000 alerts: +193% to +282% duplicate writes per second on stock Alerta; reads no clear change | A `C.UTF-8` database; building the index on a live table was not measured | [index](docs/performance/2026-11-25-pgtune-index-bench.md) |
+| At two sites with one PostgreSQL primary | Send each site's requests to the Alerta at the primary's site | Site B median duplicate write in each of three blocks, 50 ms link: 971–977 ms → 61–63 ms | The add-on's `safe` patches in both arms; site A primary and both sites healthy. Failover, fallback and recovery were not tested | [two-site](docs/performance/2026-11-22-two-site-placement.md) |
+| With dashboards that repeat searches | The add-on's opt-in `savedq` | Server CPU per request −73% for one recurring search | Only for Alerta's stock PostgreSQL search grammar: if your code changes it, leave `savedq` off, or call `alerta_fast.savedq_disable()` in each worker before its first request. +2% to 3% CPU when every search text is new | [savedq](docs/performance/2026-11-22-savedq-load.md) |
+
+These numbers come from GitHub-hosted runners with synthetic alerts (the two-site run used
+emulated links on one machine). They are diagnostic, not a capacity claim. Read the
+[operator guide](docs/performance/alerta-operator-guide.md) before you change anything, and test on a copy
+first ([Measure your own Alerta, safely](docs/performance/measure-your-own-alerta.md)). All findings, with
+charts: [Making Alerta faster: what we measured](docs/performance/README.md).
+
+For example, at two sites with a 50 ms link, site B's requests were much faster when HAProxy
+sent them to the Alerta at the PostgreSQL primary's site:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/performance/assets/two-site-placement-dark.svg">
